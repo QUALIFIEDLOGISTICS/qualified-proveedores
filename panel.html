@@ -1336,7 +1336,7 @@ function openClientModal(editId){
         <div style="display:flex;gap:10px;">
           ${editing ? `<button class="btn btn-ghost" style="color:${editing.archived?'var(--success)':'var(--danger)'};" onclick="${editing.archived?`unarchiveClient('${editing.id}')`:`archiveClient('${editing.id}')`}; closeModal();">${editing.archived?'↩ Restaurar':'🗄 Archivar'}</button>` : ''}
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitClient('${editId||''}')">${editing?'Guardar cambios':'Añadir'}</button>
+          <button class="btn btn-primary" id="cf-submit-btn" style="flex:1;justify-content:center;" onclick="submitClient('${editId||''}')">${editing?'Guardar cambios':'Añadir'}</button>
         </div>
         ${editing && editing.archived ? `<button type="button" onclick="deleteClientForever('${editing.id}')" style="width:100%;text-align:center;background:none;border:1px dashed var(--border);border-radius:6px;padding:8px;color:var(--danger);font-size:12.5px;margin-top:10px;cursor:pointer;">🗑 Eliminar definitivamente</button>` : ''}
       </div>
@@ -1379,20 +1379,37 @@ async function confirmDeleteClientForever(id){
   closeModal(); renderTab();
 }
 async function submitClient(editId){
+  const errEl = document.getElementById('cf-error');
+  const btn = document.getElementById('cf-submit-btn');
+  errEl.textContent = '';
   const name = document.getElementById('cf-name').value.trim();
-  if(!name) return;
+  if(!name){ errEl.textContent = 'Escribe el nombre del cliente.'; return; }
   const warehouseIds = [...document.querySelectorAll('.cf-warehouse:checked')].map(el=>el.value);
-  if (editId) {
-    await supabaseClient.from('clients').update({ name }).eq('id', editId);
-    await supabaseClient.from('client_warehouses').delete().eq('client_id', editId);
-    if (warehouseIds.length) await supabaseClient.from('client_warehouses').insert(warehouseIds.map(wid=>({client_id:editId, warehouse_id:wid})));
-  } else {
-    const { data, error } = await supabaseClient.from('clients').insert({ name }).select().single();
-    if (error || !data) return;
-    if (warehouseIds.length) await supabaseClient.from('client_warehouses').insert(warehouseIds.map(wid=>({client_id:data.id, warehouse_id:wid})));
+  btn.disabled = true;
+  try {
+    if (editId) {
+      let { error } = await supabaseClient.from('clients').update({ name }).eq('id', editId);
+      if (error) throw error;
+      ({ error } = await supabaseClient.from('client_warehouses').delete().eq('client_id', editId));
+      if (error) throw error;
+      if (warehouseIds.length) {
+        ({ error } = await supabaseClient.from('client_warehouses').insert(warehouseIds.map(wid=>({client_id:editId, warehouse_id:wid}))));
+        if (error) throw error;
+      }
+    } else {
+      const { data, error } = await supabaseClient.from('clients').insert({ name }).select().single();
+      if (error) throw error;
+      if (warehouseIds.length) {
+        const { error: whError } = await supabaseClient.from('client_warehouses').insert(warehouseIds.map(wid=>({client_id:data.id, warehouse_id:wid})));
+        if (whError) throw whError;
+      }
+    }
+    await loadClients();
+    closeModal(); renderTab();
+  } catch (error) {
+    errEl.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido.');
+    btn.disabled = false;
   }
-  await loadClients();
-  closeModal(); renderTab();
 }
 
 function openPalletModal(){
