@@ -98,7 +98,7 @@
   </header>
 
   <div style="display:flex;flex-wrap:wrap;">
-    <aside style="width:250px;min-width:220px;border-right:1px solid var(--border);padding:18px;">
+    <aside id="sidebar-aside" style="width:250px;min-width:220px;border-right:1px solid var(--border);padding:18px;">
       <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px;">Almacenes</div>
       <div id="warehouse-list"></div>
       <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin:22px 0 10px;">Vista</div>
@@ -261,8 +261,9 @@ async function loadProfile(){
   const { data } = await supabaseClient.auth.getUser();
   CURRENT_USER_ID = data && data.user ? data.user.id : null;
   const { data: row } = await supabaseClient.from('profiles').select('*').eq('id', CURRENT_USER_ID).maybeSingle();
-  PROFILE = row ? { isAdmin: row.is_admin, allowedTabs: row.allowed_tabs || [] } : { isAdmin: false, allowedTabs: [] };
+  PROFILE = row ? { isAdmin: row.is_admin, allowedTabs: row.allowed_tabs || [], driverId: row.driver_id || null } : { isAdmin: false, allowedTabs: [], driverId: null };
 }
+function isDriverOnlyAccount(){ return !!PROFILE.driverId && !PROFILE.isAdmin; }
 function visibleTabs(){
   return PROFILE.isAdmin ? TABS : TABS.filter(t => PROFILE.allowedTabs.includes(t.id));
 }
@@ -2449,7 +2450,7 @@ function tplKiosk(){
 
   const shell = (inner) => `
     <div style="max-width:420px;margin:0 auto;">
-      <button onclick="closeKiosk()" style="background:none;border:none;color:var(--mutedFaint);font-size:13px;margin-bottom:18px;cursor:pointer;">✕ Salir de la pantalla de fichaje</button>
+      ${isDriverOnlyAccount() ? '' : `<button onclick="closeKiosk()" style="background:none;border:none;color:var(--mutedFaint);font-size:13px;margin-bottom:18px;cursor:pointer;">✕ Salir de la pantalla de fichaje</button>`}
       <div style="text-align:center;margin-bottom:24px;">
         <div style="font-family:var(--display);font-size:22px;text-transform:uppercase;letter-spacing:.3px;">${esc(d.name)}</div>
         <div style="font-size:13px;color:var(--muted);">${new Date().toLocaleDateString('es-ES',{weekday:'long', day:'2-digit', month:'long'})}</div>
@@ -2724,7 +2725,14 @@ async function confirmDeleteWeekEntry(id){
 let ALL_PROFILES = [];
 async function loadAllProfiles(){
   const { data } = await supabaseClient.from('profiles').select('*').order('email');
-  ALL_PROFILES = (data||[]).map(p => ({ id: p.id, email: p.email, isAdmin: p.is_admin, allowedTabs: p.allowed_tabs || [] }));
+  ALL_PROFILES = (data||[]).map(p => ({ id: p.id, email: p.email, isAdmin: p.is_admin, allowedTabs: p.allowed_tabs || [], driverId: p.driver_id || null }));
+}
+async function setProfileDriver(userId, driverId){
+  await supabaseClient.from('profiles').update({ driver_id: driverId || null }).eq('id', userId);
+  const p = ALL_PROFILES.find(x=>x.id===userId);
+  if (p) p.driverId = driverId || null;
+  if (userId === CURRENT_USER_ID) PROFILE.driverId = driverId || null;
+  renderTab();
 }
 async function toggleProfileAdmin(userId, checked){
   await supabaseClient.from('profiles').update({ is_admin: checked }).eq('id', userId);
@@ -2743,22 +2751,31 @@ async function toggleProfileTab(userId, tabId, checked){
   renderTab();
 }
 function tabLabelShort(t){ return t.label.replace(/^[^\wÁ-ÿ]+/,''); }
+function driverLabel(d){ const co = companies.find(c=>c.id===d.companyId); return `${d.name}${co?' · '+co.name:''}`; }
 function tplAdmin(){
   return `
     <div style="font-size:12.5px;color:var(--muted);margin-bottom:16px;line-height:1.5;">
-      Para dar de alta un proveedor nuevo, créalo en <strong>Supabase → Authentication → Users</strong> — en cuanto exista, aparecerá aquí para asignarle qué pestañas puede ver. Las cuentas nuevas ven todo por defecto; quítales acceso aquí si hace falta. Un administrador ve siempre todas las pestañas, aunque no estén marcadas.
+      Para dar de alta un proveedor nuevo, créalo en <strong>Supabase → Authentication → Users</strong> — en cuanto exista, aparecerá aquí para asignarle qué pestañas puede ver. Las cuentas nuevas ven todo por defecto; quítales acceso aquí si hace falta. Un administrador ve siempre todas las pestañas, aunque no estén marcadas.<br>
+      <strong>Conductor vinculado:</strong> si vinculas una cuenta a un conductor, esa cuenta entra directo a la pantalla de fichaje de ese conductor y no puede ver nada más de la app (ignora las pestañas marcadas arriba).
     </div>
     <div class="card" style="padding:0;overflow-x:auto;">
       <table><thead><tr>
         <th>Correo</th><th style="text-align:center;">Admin</th>
         ${TABS.map(t=>`<th style="text-align:center;">${esc(tabLabelShort(t))}</th>`).join('')}
+        <th>Conductor vinculado</th>
       </tr></thead><tbody>
         ${ALL_PROFILES.map(p => `
           <tr>
             <td>${esc(p.email)}${p.id===CURRENT_USER_ID?' <span style="color:var(--mutedFaint);font-size:11px;">(tú)</span>':''}</td>
             <td style="text-align:center;"><input type="checkbox" ${p.isAdmin?'checked':''} onchange="toggleProfileAdmin('${p.id}', this.checked)" style="width:auto;" /></td>
             ${TABS.map(t=>`<td style="text-align:center;"><input type="checkbox" ${(p.isAdmin || p.allowedTabs.includes(t.id))?'checked':''} ${p.isAdmin?'disabled':''} onchange="toggleProfileTab('${p.id}','${t.id}', this.checked)" style="width:auto;" /></td>`).join('')}
-          </tr>`).join('') || `<tr><td colspan="${2+TABS.length}" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin usuarios todavía</td></tr>`}
+            <td>
+              <select onchange="setProfileDriver('${p.id}', this.value)" style="min-width:170px;">
+                <option value="">— Ninguno —</option>
+                ${drivers.map(d=>`<option value="${d.id}" ${p.driverId===d.id?'selected':''}>${esc(driverLabel(d))}</option>`).join('')}
+              </select>
+            </td>
+          </tr>`).join('') || `<tr><td colspan="${3+TABS.length}" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin usuarios todavía</td></tr>`}
       </tbody></table>
     </div>`;
 }
@@ -2780,6 +2797,18 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   if (!session) { window.location.href = 'index.html'; return; }
   document.getElementById('current-user-email').textContent = session.user.email;
   await loadProfile();
+
+  if (isDriverOnlyAccount()) {
+    document.getElementById('sidebar-aside').style.display = 'none';
+    await Promise.all([loadDrivers(), loadDailyEntries()]);
+    document.getElementById('app-root').style.display = '';
+    document.getElementById('wh-title').textContent = '';
+    document.getElementById('wh-sub').textContent = '';
+    currentTab = 'autonomos';
+    openKiosk(PROFILE.driverId);
+    return;
+  }
+
   await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData()]);
   const allowed = visibleTabs().map(t=>t.id);
   if (!allowed.includes(currentTab)) currentTab = allowed[0] || null;
