@@ -83,11 +83,21 @@
   <script>
     // Si el enlace de recuperación de contraseña aterriza aquí en vez de en
     // reset-password.html (p.ej. por caché o configuración de Site URL),
-    // reenviamos ahí mismo con el token intacto en vez de dejar que
-    // redirectIfLoggedIn() nos meta directo en el panel.
-    if (window.location.hash.includes('type=recovery')) {
-      window.location.replace('reset-password.html' + window.location.hash);
+    // reenviamos ahí mismo en vez de dejar que redirectIfLoggedIn() nos
+    // meta directo en el panel. Dos comprobaciones porque Supabase puede
+    // usar formatos distintos de enlace (#access_token=... o ?code=...):
+    // una rápida mirando la URL, y otra fiable escuchando el evento real
+    // que dispara el SDK al reconocer un enlace de recuperación.
+    let isRecoveryFlow = window.location.hash.includes('type=recovery') || window.location.search.includes('code=');
+    if (isRecoveryFlow) {
+      window.location.replace('reset-password.html' + window.location.search + window.location.hash);
     }
+    supabaseClient.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        isRecoveryFlow = true;
+        window.location.href = 'reset-password.html';
+      }
+    });
 
     async function attemptLogin(){
       const email = document.getElementById('login-email').value.trim();
@@ -140,7 +150,9 @@
     document.getElementById('recover-btn').addEventListener('click', attemptRecover);
 
     (async function redirectIfLoggedIn(){
+      if (isRecoveryFlow) return;
       const session = await getCurrentSession();
+      if (isRecoveryFlow) return;
       if (session) window.location.href = 'panel.html';
     })();
   </script>
