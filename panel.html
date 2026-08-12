@@ -254,6 +254,19 @@ const TABS = [
   {id:'trafico', label:'📊 Dashboard Tráfico'},
   {id:'autonomos', label:'🧾 Panel de Control Autónomos'},
 ];
+const ADMIN_TAB = {id:'admin', label:'⚙️ Administración'};
+
+let PROFILE = null;
+let CURRENT_USER_ID = null;
+async function loadProfile(){
+  const { data } = await supabaseClient.auth.getUser();
+  CURRENT_USER_ID = data && data.user ? data.user.id : null;
+  const { data: row } = await supabaseClient.from('profiles').select('*').eq('id', CURRENT_USER_ID).maybeSingle();
+  PROFILE = row ? { isAdmin: row.is_admin, allowedTabs: row.allowed_tabs || [] } : { isAdmin: false, allowedTabs: [] };
+}
+function visibleTabs(){
+  return PROFILE.isAdmin ? TABS : TABS.filter(t => PROFILE.allowedTabs.includes(t.id));
+}
 
 function currentWh(){ return WAREHOUSES.find(w=>w.id===currentWarehouseId); }
 function clientName(cid){ return (clients.find(c=>c.id===cid)||{}).name || '—'; }
@@ -263,7 +276,14 @@ function switchWarehouse(id){
   currentWarehouseId = id; window.__invSearch='';
   renderSidebar(); renderHeader(); renderTab();
 }
-function setTab(id){ currentTab = id; renderSidebar(); renderHeader(); renderTab(); }
+async function setTab(id){
+  const allowed = visibleTabs().map(t=>t.id);
+  if (id !== 'admin' && !allowed.includes(id)) return;
+  if (id === 'admin' && !PROFILE.isAdmin) return;
+  currentTab = id;
+  if (id === 'admin') await loadAllProfiles();
+  renderSidebar(); renderHeader(); renderTab();
+}
 
 function renderSidebar(){
   document.getElementById('warehouse-list').innerHTML = WAREHOUSES.map(w => `
@@ -274,11 +294,20 @@ function renderSidebar(){
       </div>
       <div style="font-size:11.5px;color:var(--muted);margin-top:4px;margin-left:16px;">${esc(w.subtitle)}</div>
     </button>`).join('');
-  document.getElementById('tab-list').innerHTML = TABS.map(t => `
+  const tabs = visibleTabs();
+  document.getElementById('tab-list').innerHTML = tabs.map(t => `
     ${t.id==='trafico' ? `<div style="height:1px;background:var(--border);margin:12px 0;"></div><div style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Empresa</div>` : ''}
-    <button class="tab-btn ${t.id===currentTab?'active':''}" onclick="setTab('${t.id}')">${esc(t.label)}</button>`).join('');
+    <button class="tab-btn ${t.id===currentTab?'active':''}" onclick="setTab('${t.id}')">${esc(t.label)}</button>`).join('')
+    + (PROFILE.isAdmin ? `
+    <div style="height:1px;background:var(--border);margin:12px 0;"></div>
+    <button class="tab-btn ${currentTab==='admin'?'active':''}" onclick="setTab('admin')">${esc(ADMIN_TAB.label)}</button>` : '');
 }
 function renderHeader(){
+  if (currentTab === 'admin') {
+    document.getElementById('wh-title').textContent = 'Administración';
+    document.getElementById('wh-sub').textContent = 'Usuarios y pestañas visibles para cada uno · Qualified Logistics';
+    return;
+  }
   if (currentTab === 'trafico') {
     document.getElementById('wh-title').textContent = 'Dashboard Tráfico';
     document.getElementById('wh-sub').textContent = 'Estado semanal de km y horas de cada autónomo, para decidir hoy · Qualified Logistics';
@@ -304,6 +333,7 @@ function renderTab(){
   if (currentTab === 'documentos') el.innerHTML = tplDocumentos();
   if (currentTab === 'autonomos') el.innerHTML = tplAutonomos();
   if (currentTab === 'trafico') el.innerHTML = tplTrafico();
+  if (currentTab === 'admin') el.innerHTML = tplAdmin();
 }
 
 function tplResumen(){
@@ -2674,6 +2704,49 @@ async function confirmDeleteWeekEntry(id){
   closeModal(); renderTab();
 }
 
+/* ============================= ADMINISTRACIÓN ============================= */
+let ALL_PROFILES = [];
+async function loadAllProfiles(){
+  const { data } = await supabaseClient.from('profiles').select('*').order('email');
+  ALL_PROFILES = (data||[]).map(p => ({ id: p.id, email: p.email, isAdmin: p.is_admin, allowedTabs: p.allowed_tabs || [] }));
+}
+async function toggleProfileAdmin(userId, checked){
+  await supabaseClient.from('profiles').update({ is_admin: checked }).eq('id', userId);
+  const p = ALL_PROFILES.find(x=>x.id===userId);
+  if (p) p.isAdmin = checked;
+  if (userId === CURRENT_USER_ID) { PROFILE.isAdmin = checked; renderSidebar(); }
+  renderTab();
+}
+async function toggleProfileTab(userId, tabId, checked){
+  const p = ALL_PROFILES.find(x=>x.id===userId);
+  if (!p) return;
+  const newTabs = checked ? [...new Set([...p.allowedTabs, tabId])] : p.allowedTabs.filter(t=>t!==tabId);
+  await supabaseClient.from('profiles').update({ allowed_tabs: newTabs }).eq('id', userId);
+  p.allowedTabs = newTabs;
+  if (userId === CURRENT_USER_ID) { PROFILE.allowedTabs = newTabs; renderSidebar(); }
+  renderTab();
+}
+function tabLabelShort(t){ return t.label.replace(/^[^\wÁ-ÿ]+/,''); }
+function tplAdmin(){
+  return `
+    <div style="font-size:12.5px;color:var(--muted);margin-bottom:16px;line-height:1.5;">
+      Para dar de alta un proveedor nuevo, créalo en <strong>Supabase → Authentication → Users</strong> — en cuanto exista, aparecerá aquí para asignarle qué pestañas puede ver. Las cuentas nuevas ven todo por defecto; quítales acceso aquí si hace falta. Un administrador ve siempre todas las pestañas, aunque no estén marcadas.
+    </div>
+    <div class="card" style="padding:0;overflow-x:auto;">
+      <table><thead><tr>
+        <th>Correo</th><th style="text-align:center;">Admin</th>
+        ${TABS.map(t=>`<th style="text-align:center;">${esc(tabLabelShort(t))}</th>`).join('')}
+      </tr></thead><tbody>
+        ${ALL_PROFILES.map(p => `
+          <tr>
+            <td>${esc(p.email)}${p.id===CURRENT_USER_ID?' <span style="color:var(--mutedFaint);font-size:11px;">(tú)</span>':''}</td>
+            <td style="text-align:center;"><input type="checkbox" ${p.isAdmin?'checked':''} onchange="toggleProfileAdmin('${p.id}', this.checked)" style="width:auto;" /></td>
+            ${TABS.map(t=>`<td style="text-align:center;"><input type="checkbox" ${(p.isAdmin || p.allowedTabs.includes(t.id))?'checked':''} ${p.isAdmin?'disabled':''} onchange="toggleProfileTab('${p.id}','${t.id}', this.checked)" style="width:auto;" /></td>`).join('')}
+          </tr>`).join('') || `<tr><td colspan="${2+TABS.length}" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin usuarios todavía</td></tr>`}
+      </tbody></table>
+    </div>`;
+}
+
 /* ============================= INICIO ============================= */
 async function loadWarehouseModuleData(){
   await Promise.all([loadClients(), loadPallets(), loadMovements(), loadAppointments(), loadUnscheduled(), loadSchedules()]);
@@ -2690,9 +2763,13 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   if (isRecoveryFlow) return;
   if (!session) { window.location.href = 'index.html'; return; }
   document.getElementById('current-user-email').textContent = session.user.email;
+  await loadProfile();
   await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData()]);
+  const allowed = visibleTabs().map(t=>t.id);
+  if (!allowed.includes(currentTab)) currentTab = allowed[0] || null;
   document.getElementById('app-root').style.display = '';
-  renderSidebar(); renderHeader(); renderTab();
+  if (currentTab) { renderSidebar(); renderHeader(); renderTab(); }
+  else { document.getElementById('tab-content').innerHTML = '<div class="card" style="text-align:center;color:var(--mutedFaint);padding:32px;">Tu cuenta todavía no tiene ninguna pestaña activada. Contacta con el administrador.</div>'; renderSidebar(); }
 })();
 
 supabaseClient.auth.onAuthStateChange((event) => {
