@@ -265,7 +265,7 @@ async function loadProfile(){
   const { data } = await supabaseClient.auth.getUser();
   CURRENT_USER_ID = data && data.user ? data.user.id : null;
   const { data: row } = await supabaseClient.from('profiles').select('*').eq('id', CURRENT_USER_ID).maybeSingle();
-  PROFILE = row ? { isAdmin: row.is_admin, allowedTabs: row.allowed_tabs || [], driverId: row.driver_id || null } : { isAdmin: false, allowedTabs: [], driverId: null };
+  PROFILE = row ? { isAdmin: row.is_admin, allowedTabs: row.allowed_tabs || [], driverId: row.driver_id || null, canEditSchedule: row.can_edit_schedule || false } : { isAdmin: false, allowedTabs: [], driverId: null, canEditSchedule: false };
 }
 function isDriverOnlyAccount(){ return !!PROFILE.driverId && !PROFILE.isAdmin; }
 function visibleTabs(){
@@ -519,7 +519,7 @@ function tplCitas(){
       <button class="btn btn-ghost" onclick="changeCitasDate(1)">Día siguiente →</button>
       <button class="btn btn-ghost" onclick="jumpToDate(today())">Hoy</button>
       <div style="flex:1;"></div>
-      ${PROFILE.isAdmin ? `<button class="btn btn-ghost" onclick="openScheduleModal()">⚙ Horario del almacén</button>` : ''}
+      ${(PROFILE.isAdmin || PROFILE.canEditSchedule) ? `<button class="btn btn-ghost" onclick="openScheduleModal()">⚙ Horario del almacén</button>` : ''}
       <button class="btn btn-primary" onclick="openAppointmentModal()" ${sched.open?'':'disabled'}>+ Nueva reserva</button>
       ${window.__calOpen ? `<div onclick="window.__calOpen=false; renderTab();" style="position:fixed;inset:0;z-index:39;"></div>` + calendarPopoverHtml() : ''}
     </div>
@@ -770,7 +770,7 @@ function calendarPopoverHtml(){
 }
 
 function openScheduleModal(){
-  if (!PROFILE.isAdmin) return;
+  if (!PROFILE.isAdmin && !PROFILE.canEditSchedule) return;
   window.__schedDraft = JSON.parse(JSON.stringify(schedules[currentWarehouseId]));
   renderScheduleModal();
 }
@@ -821,7 +821,7 @@ function removeScheduleRange(day, idx){
   renderScheduleModal();
 }
 async function submitSchedule(){
-  if (!PROFILE.isAdmin) return;
+  if (!PROFILE.isAdmin && !PROFILE.canEditSchedule) return;
   const errEl = document.getElementById('sch-error');
   const draft = window.__schedDraft;
   for (const day of WEEK_ORDER) {
@@ -2728,10 +2728,27 @@ async function confirmDeleteWeekEntry(id){
 }
 
 /* ============================= ADMINISTRACIÓN ============================= */
+const ROLE_PRESETS = {
+  admin:       { label: 'Administrador',      isAdmin: true,  allowedTabs: ['clientes','citas','documentos','trafico','autonomos'], canEditSchedule: true },
+  organizador: { label: 'Organizador',         isAdmin: false, allowedTabs: ['clientes','citas','documentos','trafico','autonomos'], canEditSchedule: true },
+  operario:    { label: 'Operario de almacén', isAdmin: false, allowedTabs: ['citas','documentos'], canEditSchedule: false },
+  conductor:   { label: 'Conductor',           isAdmin: false, allowedTabs: [], canEditSchedule: false },
+};
+function detectRole(p){
+  if (p.driverId) return 'conductor';
+  for (const key of Object.keys(ROLE_PRESETS)) {
+    if (key === 'conductor') continue;
+    const preset = ROLE_PRESETS[key];
+    if (preset.isAdmin === p.isAdmin && preset.canEditSchedule === p.canEditSchedule
+        && preset.allowedTabs.length === p.allowedTabs.length
+        && preset.allowedTabs.every(t => p.allowedTabs.includes(t))) return key;
+  }
+  return 'personalizado';
+}
 let ALL_PROFILES = [];
 async function loadAllProfiles(){
   const { data } = await supabaseClient.from('profiles').select('*').order('email');
-  ALL_PROFILES = (data||[]).map(p => ({ id: p.id, email: p.email, isAdmin: p.is_admin, allowedTabs: p.allowed_tabs || [], driverId: p.driver_id || null }));
+  ALL_PROFILES = (data||[]).map(p => ({ id: p.id, email: p.email, isAdmin: p.is_admin, allowedTabs: p.allowed_tabs || [], driverId: p.driver_id || null, canEditSchedule: p.can_edit_schedule || false }));
 }
 async function setProfileDriver(userId, driverId){
   await supabaseClient.from('profiles').update({ driver_id: driverId || null }).eq('id', userId);
@@ -2756,32 +2773,72 @@ async function toggleProfileTab(userId, tabId, checked){
   if (userId === CURRENT_USER_ID) { PROFILE.allowedTabs = newTabs; renderSidebar(); }
   renderTab();
 }
+async function toggleProfileSchedule(userId, checked){
+  await supabaseClient.from('profiles').update({ can_edit_schedule: checked }).eq('id', userId);
+  const p = ALL_PROFILES.find(x=>x.id===userId);
+  if (p) p.canEditSchedule = checked;
+  if (userId === CURRENT_USER_ID) PROFILE.canEditSchedule = checked;
+  renderTab();
+}
+async function applyRolePreset(userId, roleKey){
+  const p = ALL_PROFILES.find(x=>x.id===userId);
+  if (!p) return;
+  if (roleKey === 'personalizado') { p.__customizing = true; renderTab(); return; }
+  p.__customizing = false;
+  if (roleKey === 'conductor') {
+    const update = { is_admin: false, allowed_tabs: [], can_edit_schedule: false };
+    await supabaseClient.from('profiles').update(update).eq('id', userId);
+    Object.assign(p, { isAdmin: false, allowedTabs: [], canEditSchedule: false });
+    if (userId === CURRENT_USER_ID) Object.assign(PROFILE, { isAdmin: false, allowedTabs: [], canEditSchedule: false });
+    renderTab();
+    return;
+  }
+  const preset = ROLE_PRESETS[roleKey];
+  const update = { is_admin: preset.isAdmin, allowed_tabs: preset.allowedTabs, can_edit_schedule: preset.canEditSchedule, driver_id: null };
+  await supabaseClient.from('profiles').update(update).eq('id', userId);
+  Object.assign(p, { isAdmin: preset.isAdmin, allowedTabs: preset.allowedTabs, canEditSchedule: preset.canEditSchedule, driverId: null });
+  if (userId === CURRENT_USER_ID) {
+    Object.assign(PROFILE, { isAdmin: preset.isAdmin, allowedTabs: preset.allowedTabs, canEditSchedule: preset.canEditSchedule, driverId: null });
+    renderSidebar();
+  }
+  renderTab();
+}
 function tabLabelShort(t){ return t.label.replace(/^[^\wÁ-ÿ]+/,''); }
 function driverLabel(d){ const co = companies.find(c=>c.id===d.companyId); return `${d.name}${co?' · '+co.name:''}`; }
 function tplAdmin(){
   return `
     <div style="font-size:12.5px;color:var(--muted);margin-bottom:16px;line-height:1.5;">
-      Para dar de alta un proveedor nuevo, créalo en <strong>Supabase → Authentication → Users</strong> — en cuanto exista, aparecerá aquí para asignarle qué pestañas puede ver. Las cuentas nuevas ven todo por defecto; quítales acceso aquí si hace falta. Un administrador ve siempre todas las pestañas, aunque no estén marcadas.<br>
-      <strong>Conductor vinculado:</strong> si vinculas una cuenta a un conductor, esa cuenta entra directo a la pantalla de fichaje de ese conductor y no puede ver nada más de la app (ignora las pestañas marcadas arriba).
+      Para dar de alta un proveedor nuevo, créalo en <strong>Supabase → Authentication → Users</strong> — en cuanto exista, aparecerá aquí para asignarle un rol. Elige <strong>Conductor</strong> para que solo pueda fichar su jornada (vinculado a un conductor concreto), o <strong>Personalizado</strong> para marcar el acceso pestaña por pestaña a mano.
     </div>
     <div class="card" style="padding:0;overflow-x:auto;">
       <table><thead><tr>
-        <th>Correo</th><th style="text-align:center;">Admin</th>
-        ${TABS.map(t=>`<th style="text-align:center;">${esc(tabLabelShort(t))}</th>`).join('')}
-        <th>Conductor vinculado</th>
+        <th>Correo</th><th>Rol</th><th>Detalle</th>
       </tr></thead><tbody>
-        ${ALL_PROFILES.map(p => `
+        ${ALL_PROFILES.map(p => {
+          const role = p.__customizing ? 'personalizado' : detectRole(p);
+          return `
           <tr>
             <td>${esc(p.email)}${p.id===CURRENT_USER_ID?' <span style="color:var(--mutedFaint);font-size:11px;">(tú)</span>':''}</td>
-            <td style="text-align:center;"><input type="checkbox" ${p.isAdmin?'checked':''} onchange="toggleProfileAdmin('${p.id}', this.checked)" style="width:auto;" /></td>
-            ${TABS.map(t=>`<td style="text-align:center;"><input type="checkbox" ${(p.isAdmin || p.allowedTabs.includes(t.id))?'checked':''} ${p.isAdmin?'disabled':''} onchange="toggleProfileTab('${p.id}','${t.id}', this.checked)" style="width:auto;" /></td>`).join('')}
             <td>
-              <select onchange="setProfileDriver('${p.id}', this.value)" style="min-width:170px;">
-                <option value="">— Ninguno —</option>
-                ${drivers.map(d=>`<option value="${d.id}" ${p.driverId===d.id?'selected':''}>${esc(driverLabel(d))}</option>`).join('')}
+              <select onchange="applyRolePreset('${p.id}', this.value)" style="min-width:180px;">
+                ${Object.keys(ROLE_PRESETS).map(key=>`<option value="${key}" ${role===key?'selected':''}>${esc(ROLE_PRESETS[key].label)}</option>`).join('')}
+                <option value="personalizado" ${role==='personalizado'?'selected':''}>Personalizado…</option>
               </select>
             </td>
-          </tr>`).join('') || `<tr><td colspan="${3+TABS.length}" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin usuarios todavía</td></tr>`}
+            <td>
+              ${role==='conductor' ? `
+                <select onchange="setProfileDriver('${p.id}', this.value)" style="min-width:190px;">
+                  <option value="">— Elige un conductor —</option>
+                  ${drivers.map(d=>`<option value="${d.id}" ${p.driverId===d.id?'selected':''}>${esc(driverLabel(d))}</option>`).join('')}
+                </select>` : role==='personalizado' ? `
+                <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;font-size:12px;">
+                  <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" ${p.isAdmin?'checked':''} onchange="toggleProfileAdmin('${p.id}', this.checked)" /> Admin</label>
+                  ${TABS.map(t=>`<label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" ${(p.isAdmin||p.allowedTabs.includes(t.id))?'checked':''} ${p.isAdmin?'disabled':''} onchange="toggleProfileTab('${p.id}','${t.id}', this.checked)" /> ${esc(tabLabelShort(t))}</label>`).join('')}
+                  <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" ${(p.isAdmin||p.canEditSchedule)?'checked':''} ${p.isAdmin?'disabled':''} onchange="toggleProfileSchedule('${p.id}', this.checked)" /> Horario almacén</label>
+                </div>` : `<span style="color:var(--mutedFaint);font-size:12px;">—</span>`}
+            </td>
+          </tr>`;
+        }).join('') || `<tr><td colspan="3" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin usuarios todavía</td></tr>`}
       </tbody></table>
     </div>`;
 }
