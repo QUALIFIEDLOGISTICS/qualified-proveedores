@@ -262,6 +262,7 @@ const TABS = [
   {id:'documentos', label:'Control Documentos Almacén'},
   {id:'trafico', label:'📊 Dashboard Tráfico'},
   {id:'autonomos', label:'🧾 Panel de Control Autónomos'},
+  {id:'fichajes', label:'🕐 Fichajes'},
 ];
 const ADMIN_TAB = {id:'admin', label:'⚙️ Administración'};
 
@@ -330,6 +331,11 @@ function renderHeader(){
     document.getElementById('wh-sub').textContent = 'Empresas colaboradoras y liquidación semanal · Qualified Logistics';
     return;
   }
+  if (currentTab === 'fichajes') {
+    titleRow.innerHTML = `<div style="${PLAIN_TITLE_STYLE}">Fichajes</div>`;
+    document.getElementById('wh-sub').textContent = 'Jornadas fichadas por cada conductor, con opción de corregirlas · Qualified Logistics';
+    return;
+  }
   const wh = currentWh();
   titleRow.innerHTML = `
     <select onchange="switchWarehouse(this.value)" style="${PLAIN_TITLE_STYLE}font-size:20px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:6px 12px;color:var(--text);cursor:pointer;max-width:100%;">
@@ -340,6 +346,7 @@ function renderHeader(){
 
 function renderTab(){
   const el = document.getElementById('tab-content');
+  if (window.__kioskMode) { el.innerHTML = tplKiosk(); return; }
   if (currentTab === 'resumen') el.innerHTML = tplResumen();
   if (currentTab === 'mercancia') el.innerHTML = tplMercancia();
   if (currentTab === 'clientes') el.innerHTML = tplClientes();
@@ -349,6 +356,7 @@ function renderTab(){
   if (currentTab === 'autonomos') el.innerHTML = tplAutonomos();
   if (currentTab === 'trafico') el.innerHTML = tplTrafico();
   if (currentTab === 'admin') el.innerHTML = tplAdmin();
+  if (currentTab === 'fichajes') el.innerHTML = tplFichajes();
 }
 
 function tplResumen(){
@@ -1886,7 +1894,6 @@ async function deleteRate(id){
 }
 
 function tplAutonomos(){
-  if (window.__kioskMode) return tplKiosk();
   if (window.__autonomosView === 'detalle' && window.__autonomosDriverId) return tplDriverDetail();
   return tplDriversList();
 }
@@ -2247,32 +2254,8 @@ function tplDriverDetail(){
       `}
     </div>
 
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
-      <div style="font-family:var(--display);text-transform:uppercase;font-size:13px;color:var(--muted);letter-spacing:.4px;">Fichajes diarios${month!=='todos' ? ' — '+MONTH_NAMES[month]+' '+year : ' ('+year+')'}</div>
-      <div style="flex:1;"></div>
-      <button class="btn btn-ghost" onclick="recalcWeeksFromFichajes('${d.id}', ${year})">🔄 Recalcular semanas desde fichajes</button>
-      <button class="btn btn-primary" onclick="openKiosk('${d.id}')">📱 Pantalla de fichaje</button>
-    </div>
-    <div class="card" style="padding:0;overflow:hidden;margin-bottom:22px;">
-      <table><thead><tr><th>Fecha</th><th>Estado</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km inicial</th><th>Km final</th><th>Km recorridos</th><th>Foto inicio</th><th>Foto cierre</th><th></th></tr></thead><tbody>
-        ${dailyEntries.filter(f=>f.driverId===d.id && f.date.startsWith(String(year)) && (month==='todos' || Number(f.date.slice(5,7))-1===Number(month))).sort((a,b)=>b.date.localeCompare(a.date)).map(f => `
-          <tr>
-            <td>${fmtDate(f.date)}</td>
-            <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}</td>
-            <td style="color:var(--muted);">${f.timeIn}</td>
-            <td style="color:var(--muted);">${f.timeOut||'—'}</td>
-            <td>${f.timeOut ? fichajeHours(f)+' h' : '—'}</td>
-            <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmStart ?? '—'}</td>
-            <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmEnd ?? '—'}</td>
-            <td style="font-weight:600;">${f.km!=null ? f.km+' km' : '—'}</td>
-            <td>${photoThumb(f.photoIn)}</td>
-            <td>${photoThumb(f.photoOut)}</td>
-            <td><button onclick="deleteFichaje('${f.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button></td>
-          </tr>`).join('') || `<tr><td colspan="11" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin fichajes registrados en ${year}</td></tr>`}
-      </tbody></table>
-    </div>
-
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+      <div style="font-size:11.5px;color:var(--mutedFaint);">Los fichajes diarios y su corrección viven ahora en la pestaña 🕐 Fichajes.</div>
       <div style="flex:1;"></div>
       <button class="btn btn-primary" onclick="openWeekModal('${d.id}')">+ Añadir semana manual</button>
     </div>
@@ -2460,7 +2443,7 @@ function openTodayEntry(driverId){
 }
 function tplKiosk(){
   const d = drivers.find(x=>x.id===window.__kioskDriverId);
-  if (!d) { window.__kioskMode=false; return tplAutonomos(); }
+  if (!d) { window.__kioskMode=false; return `<div class="card" style="text-align:center;color:var(--mutedFaint);padding:32px;">Conductor no encontrado.</div>`; }
   const openEntry = openTodayEntry(d.id);
   const closedToday = dailyEntries.find(f=>f.driverId===d.id && f.date===today() && f.status==='cerrada');
   const step = window.__kioskStep || 'home';
@@ -2477,6 +2460,25 @@ function tplKiosk(){
 
   if (step === 'start') return shell(tplKioskForm('start', d));
   if (step === 'close') return shell(tplKioskForm('close', openEntry ? d : d));
+  if (step === 'history') {
+    const closedEntries = dailyEntries.filter(f=>f.driverId===d.id && f.status==='cerrada').sort((a,b)=>b.date.localeCompare(a.date));
+    return shell(`
+      <button onclick="window.__kioskStep='home'; renderTab();" style="background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;padding:0;margin-bottom:14px;">← Volver</button>
+      <div class="card" style="padding:0;overflow-x:auto;">
+        <table><thead><tr><th>Fecha</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km</th></tr></thead><tbody>
+          ${closedEntries.map(f => `
+            <tr>
+              <td>${fmtDate(f.date)}</td>
+              <td style="color:var(--muted);">${f.timeIn}</td>
+              <td style="color:var(--muted);">${f.timeOut}</td>
+              <td>${fichajeHours(f)} h</td>
+              <td style="font-weight:600;">${f.km} km</td>
+            </tr>`).join('') || `<tr><td colspan="5" style="color:var(--mutedFaint);text-align:center;padding:20px;">Todavía no tienes jornadas cerradas.</td></tr>`}
+        </tbody></table>
+      </div>`);
+  }
+
+  const historyLink = `<div style="text-align:center;margin-top:16px;"><button onclick="window.__kioskStep='history'; renderTab();" style="background:none;border:none;color:var(--primary);font-size:12.5px;cursor:pointer;padding:0;">Ver mi historial →</button></div>`;
 
   // HOME: un único botón grande según el estado del día
   if (closedToday && !openEntry) {
@@ -2486,7 +2488,7 @@ function tplKiosk(){
         <div style="font-family:var(--display);font-size:18px;text-transform:uppercase;letter-spacing:.3px;">Jornada de hoy ya fichada</div>
         <div style="font-size:12.5px;color:var(--muted);margin-top:8px;">${closedToday.timeIn} – ${closedToday.timeOut} · ${closedToday.km} km</div>
         <div style="font-size:12px;color:var(--mutedFaint);margin-top:10px;">Vuelve mañana para iniciar la siguiente jornada.</div>
-      </div>`);
+      </div>` + historyLink);
   }
   if (!openEntry) {
     return shell(`
@@ -2495,7 +2497,7 @@ function tplKiosk(){
         <div style="font-size:40px;margin-bottom:10px;">▶</div>
         <div style="font-family:var(--display);font-size:20px;text-transform:uppercase;letter-spacing:.4px;">Iniciar jornada</div>
         <div style="font-size:12.5px;opacity:.85;margin-top:6px;">Foto del tacógrafo + km inicial</div>
-      </button>`);
+      </button>` + historyLink);
   } else {
     return shell(`
       <div class="card" style="margin-bottom:18px;text-align:center;">
@@ -2508,7 +2510,7 @@ function tplKiosk(){
         <div style="font-size:40px;margin-bottom:10px;">⏹</div>
         <div style="font-family:var(--display);font-size:20px;text-transform:uppercase;letter-spacing:.4px;">Cerrar jornada</div>
         <div style="font-size:12.5px;opacity:.85;margin-top:6px;">Foto del tacógrafo + km final</div>
-      </button>`);
+      </button>` + historyLink);
   }
 }
 function tplKioskForm(mode, driver){
@@ -2603,6 +2605,141 @@ async function deleteFichaje(id){
     await recalcWeeksFromFichajes(f.driverId, year);
   }
   renderTab();
+}
+
+/* ============================= FICHAJES (pestaña independiente) ============================= */
+function openFichajesDriverDetail(id){ window.__fichajesView='detalle'; window.__fichajesDriverId=id; window.__fichajesYear = window.__fichajesYear || new Date().getFullYear(); renderTab(); }
+function backToFichajesDriversList(){ window.__fichajesView='lista'; window.__fichajesDriverId=null; renderTab(); }
+function tplFichajes(){
+  if (window.__fichajesView === 'detalle' && window.__fichajesDriverId) return tplFichajesDriverDetail();
+  return tplFichajesDriversList();
+}
+function tplFichajesDriversList(){
+  const activeDrivers = drivers.filter(d=>!d.archived);
+  return `
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      ${activeDrivers.map(d => {
+        const co = companies.find(c=>c.id===d.companyId);
+        const count = dailyEntries.filter(f=>f.driverId===d.id).length;
+        const openNow = openTodayEntry(d.id);
+        return `
+        <div class="card" style="cursor:pointer;" onclick="openFichajesDriverDetail('${d.id}')">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <div style="width:38px;height:38px;border-radius:99px;background:var(--primary);color:var(--primary-text);display:flex;align-items:center;justify-content:center;font-family:var(--display);font-size:15px;flex-shrink:0;">${esc((d.name||'?').trim().charAt(0).toUpperCase())}</div>
+              <div>
+                <div style="font-family:var(--display);font-size:15.5px;">${esc(d.name)}</div>
+                <div style="font-size:11.5px;color:var(--mutedFaint);">${esc(co?co.name:'')}${openNow?' · <span style="color:#D9A72C;font-weight:600;">jornada abierta</span>':''}</div>
+              </div>
+            </div>
+            <span style="font-size:12px;color:var(--muted);">${count} fichaje${count!==1?'s':''}</span>
+          </div>
+        </div>`;
+      }).join('') || `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Sin conductores activos todavía.</div>`}
+    </div>`;
+}
+function tplFichajesDriverDetail(){
+  const d = drivers.find(x=>x.id===window.__fichajesDriverId);
+  if (!d) { window.__fichajesView='lista'; return tplFichajesDriversList(); }
+  const year = window.__fichajesYear || new Date().getFullYear();
+  const years = [...new Set(dailyEntries.filter(f=>f.driverId===d.id).map(f=>Number(f.date.slice(0,4))).concat([year, new Date().getFullYear()]))].sort();
+  const entries = dailyEntries.filter(f=>f.driverId===d.id && f.date.startsWith(String(year))).sort((a,b)=>b.date.localeCompare(a.date));
+  return `
+    <button class="btn btn-ghost" onclick="backToFichajesDriversList()" style="margin-bottom:16px;">← Volver a conductores</button>
+    <div class="card" style="margin-bottom:18px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div style="width:44px;height:44px;border-radius:99px;background:var(--primary);color:var(--primary-text);display:flex;align-items:center;justify-content:center;font-family:var(--display);font-size:17px;flex-shrink:0;">${esc((d.name||'?').trim().charAt(0).toUpperCase())}</div>
+          <div style="font-family:var(--display);font-size:19px;">${esc(d.name)}</div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <select onchange="window.__fichajesYear=Number(this.value); renderTab();" style="width:100px;">
+            ${years.map(y=>`<option value="${y}" ${y===year?'selected':''}>${y}</option>`).join('')}
+          </select>
+          <button class="btn btn-ghost" onclick="recalcWeeksFromFichajes('${d.id}', ${year})">🔄 Recalcular semanas</button>
+          <button class="btn btn-primary" onclick="openKiosk('${d.id}')">📱 Pantalla de fichaje</button>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="padding:0;overflow-x:auto;">
+      <table><thead><tr><th>Fecha</th><th>Estado</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km inicial</th><th>Km final</th><th>Km recorridos</th><th>Foto inicio</th><th>Foto cierre</th><th></th></tr></thead><tbody>
+        ${entries.map(f => `
+          <tr>
+            <td>${fmtDate(f.date)}</td>
+            <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}</td>
+            <td style="color:var(--muted);">${f.timeIn}</td>
+            <td style="color:var(--muted);">${f.timeOut||'—'}</td>
+            <td>${f.timeOut ? fichajeHours(f)+' h' : '—'}</td>
+            <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmStart ?? '—'}</td>
+            <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmEnd ?? '—'}</td>
+            <td style="font-weight:600;">${f.km!=null ? f.km+' km' : '—'}</td>
+            <td>${photoThumb(f.photoIn)}</td>
+            <td>${photoThumb(f.photoOut)}</td>
+            <td style="white-space:nowrap;">
+              <button onclick="openEditFichajeModal('${f.id}')" title="Corregir" style="background:none;border:none;color:var(--primary);">✏️</button>
+              <button onclick="deleteFichaje('${f.id}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>
+            </td>
+          </tr>`).join('') || `<tr><td colspan="11" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin fichajes registrados en ${year}</td></tr>`}
+      </tbody></table>
+    </div>`;
+}
+function openEditFichajeModal(id){
+  const f = dailyEntries.find(x=>x.id===id);
+  if (!f) return;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+          <h3 class="modal-title">Corregir fichaje — ${fmtDate(f.date)}</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Hora de entrada</label><input id="ef-timein" type="time" value="${esc(f.timeIn||'')}" /></div>
+          <div class="field" style="flex:1;"><label>Hora de salida</label><input id="ef-timeout" type="time" value="${esc(f.timeOut||'')}" /></div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Km inicial</label><input id="ef-kmstart" type="number" step="0.1" value="${f.kmStart??''}" /></div>
+          <div class="field" style="flex:1;"><label>Km final</label><input id="ef-kmend" type="number" step="0.1" value="${f.kmEnd??''}" /></div>
+        </div>
+        <div style="font-size:11.5px;color:var(--mutedFaint);margin-bottom:10px;">Deja la hora/km de salida en blanco si esa jornada debe quedar como abierta.</div>
+        <div id="ef-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" id="ef-submit-btn" style="flex:1;justify-content:center;" onclick="submitEditFichaje('${id}')">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+}
+async function submitEditFichaje(id){
+  const errEl = document.getElementById('ef-error');
+  const btn = document.getElementById('ef-submit-btn');
+  errEl.textContent = '';
+  const f = dailyEntries.find(x=>x.id===id);
+  if (!f) return;
+  const timeIn = document.getElementById('ef-timein').value;
+  const timeOut = document.getElementById('ef-timeout').value || null;
+  const kmStartRaw = document.getElementById('ef-kmstart').value;
+  const kmEndRaw = document.getElementById('ef-kmend').value;
+  if (!timeIn) { errEl.textContent = 'Indica la hora de entrada.'; return; }
+  if (kmStartRaw === '') { errEl.textContent = 'Indica el km inicial.'; return; }
+  const kmStart = Number(kmStartRaw);
+  const kmEnd = kmEndRaw === '' ? null : Number(kmEndRaw);
+  if (kmEnd != null && kmEnd < kmStart) { errEl.textContent = 'El km final no puede ser menor que el inicial.'; return; }
+  const km = kmEnd != null ? Math.round((kmEnd - kmStart)*10)/10 : null;
+  const status = (timeOut && kmEnd != null) ? 'cerrada' : 'abierta';
+  btn.disabled = true;
+  try {
+    const { error } = await supabaseClient.from('daily_entries').update({
+      time_in: timeIn, time_out: timeOut, km_start: kmStart, km_end: kmEnd, km, status,
+    }).eq('id', id);
+    if (error) throw error;
+    Object.assign(f, { timeIn, timeOut, kmStart, kmEnd, km, status });
+    const { year } = getISOWeek(f.date);
+    closeModal();
+    await recalcWeeksFromFichajes(f.driverId, year);
+  } catch (error) {
+    errEl.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido.');
+    btn.disabled = false;
+  }
 }
 async function recalcWeeksFromFichajes(driverId, year){
   const fichajes = dailyEntries.filter(f=>f.driverId===driverId && f.status==='cerrada');
