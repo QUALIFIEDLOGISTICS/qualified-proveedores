@@ -2784,10 +2784,26 @@ async function toggleProfileSchedule(userId, checked){
 }
 function tabLabelShort(t){ return t.label.replace(/^[^\wÁ-ÿ]+/,''); }
 function driverLabel(d){ const co = companies.find(c=>c.id===d.companyId); return `${d.name}${co?' · '+co.name:''}`; }
+// Sub-permisos anidados por pestaña: cada entrada añade un icono ⚙ junto a
+// la casilla de esa pestaña que abre un mini-panel flotante con sus propias
+// casillas. Añadir aquí una pestaña nueva es lo único que hace falta cuando
+// surja otro sub-permiso (p.ej. Documentos → subir archivos).
+const TAB_SUBPERMS = {
+  citas: (p) => `
+    <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;white-space:nowrap;">
+      <input type="checkbox" ${(p.isAdmin||p.canEditSchedule)?'checked':''} ${(p.isAdmin || !p.allowedTabs.includes('citas'))?'disabled':''} onchange="toggleProfileSchedule('${p.id}', this.checked)" />
+      Puede editar el horario del almacén
+    </label>`,
+};
+function toggleSubpanel(userId, tabId){
+  const key = userId+':'+tabId;
+  window.__openSubpanel = (window.__openSubpanel === key) ? null : key;
+  renderTab();
+}
 function tplAdmin(){
   return `
     <div style="font-size:12.5px;color:var(--muted);margin-bottom:16px;line-height:1.5;">
-      Para dar de alta un proveedor nuevo, créalo en <strong>Supabase → Authentication → Users</strong> — en cuanto exista, aparecerá aquí para marcarle qué pestañas ve. Dentro de "Reserva Franjas Horarias" puedes darle además permiso para cambiar el horario del almacén. Para que una cuenta solo pueda fichar su jornada, vincúlala a un conductor en la última columna (ignora las pestañas marcadas).
+      Para dar de alta un proveedor nuevo, créalo en <strong>Supabase → Authentication → Users</strong> — en cuanto exista, aparecerá aquí para marcarle qué pestañas ve. Las pestañas con un icono ⚙ tienen sub-permisos propios — pulsa el icono para abrirlos. Para que una cuenta solo pueda fichar su jornada, vincúlala a un conductor en la última columna (ignora las pestañas marcadas).
     </div>
     <div class="card" style="padding:0;overflow-x:auto;">
       <table><thead><tr>
@@ -2799,15 +2815,19 @@ function tplAdmin(){
           <tr>
             <td>${esc(p.email)}${p.id===CURRENT_USER_ID?' <span style="color:var(--mutedFaint);font-size:11px;">(tú)</span>':''}</td>
             <td style="text-align:center;"><input type="checkbox" ${p.isAdmin?'checked':''} onchange="toggleProfileAdmin('${p.id}', this.checked)" /></td>
-            ${TABS.map(t => t.id === 'citas' ? `
-              <td style="text-align:center;">
-                <input type="checkbox" ${(p.isAdmin||p.allowedTabs.includes('citas'))?'checked':''} ${p.isAdmin?'disabled':''} onchange="toggleProfileTab('${p.id}','citas', this.checked)" />
-                <label style="display:flex;align-items:center;justify-content:center;gap:3px;margin-top:5px;font-size:10px;color:var(--muted);white-space:nowrap;">
-                  <input type="checkbox" ${(p.isAdmin||p.canEditSchedule)?'checked':''} ${(p.isAdmin || !p.allowedTabs.includes('citas'))?'disabled':''} onchange="toggleProfileSchedule('${p.id}', this.checked)" style="width:12px;height:12px;" />
-                  ↳ horario
-                </label>
-              </td>` : `
-              <td style="text-align:center;"><input type="checkbox" ${(p.isAdmin||p.allowedTabs.includes(t.id))?'checked':''} ${p.isAdmin?'disabled':''} onchange="toggleProfileTab('${p.id}','${t.id}', this.checked)" /></td>`
+            ${TABS.map(t => `
+              <td style="text-align:center;position:relative;">
+                <input type="checkbox" ${(p.isAdmin||p.allowedTabs.includes(t.id))?'checked':''} ${p.isAdmin?'disabled':''} onchange="toggleProfileTab('${p.id}','${t.id}', this.checked)" />
+                ${TAB_SUBPERMS[t.id] ? `
+                  <button type="button" onclick="toggleSubpanel('${p.id}','${t.id}')" title="Sub-permisos de ${esc(tabLabelShort(t))}" style="background:none;border:none;color:var(--muted);font-size:11px;cursor:pointer;vertical-align:middle;margin-left:2px;padding:2px;">⚙</button>
+                  ${window.__openSubpanel === (p.id+':'+t.id) ? `
+                    <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;text-align:left;margin-top:6px;">
+                      <div style="font-size:10px;color:var(--mutedFaint);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;white-space:nowrap;">Sub-permisos de ${esc(tabLabelShort(t))}</div>
+                      ${TAB_SUBPERMS[t.id](p)}
+                      <button type="button" onclick="toggleSubpanel('${p.id}','${t.id}')" style="display:block;margin-top:10px;background:none;border:none;color:var(--primary);font-size:11.5px;cursor:pointer;padding:0;">Cerrar</button>
+                    </div>` : ''}
+                ` : ''}
+              </td>`
             ).join('')}
             <td>
               <select onchange="setProfileDriver('${p.id}', this.value)" style="min-width:170px;">
