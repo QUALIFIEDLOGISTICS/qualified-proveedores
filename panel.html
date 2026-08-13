@@ -2788,54 +2788,78 @@ function driverLabel(d){ const co = companies.find(c=>c.id===d.companyId); retur
 // la casilla de esa pestaña que abre un mini-panel flotante con sus propias
 // casillas. Añadir aquí una pestaña nueva es lo único que hace falta cuando
 // surja otro sub-permiso (p.ej. Documentos → subir archivos).
+// Sub-permisos anidados por pestaña: cada entrada aparece dentro del modal
+// de permisos, justo debajo de la pestaña a la que pertenece, solo cuando
+// esa pestaña está marcada. Añadir aquí una pestaña nueva es lo único que
+// hace falta cuando surja otro sub-permiso (p.ej. Documentos → subir).
 const TAB_SUBPERMS = {
   citas: (p) => `
-    <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;white-space:nowrap;">
-      <input type="checkbox" ${(p.isAdmin||p.canEditSchedule)?'checked':''} ${(p.isAdmin || !p.allowedTabs.includes('citas'))?'disabled':''} onchange="toggleProfileSchedule('${p.id}', this.checked)" />
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);">
+      <input type="checkbox" ${(p.isAdmin||p.canEditSchedule)?'checked':''} ${p.isAdmin?'disabled':''} onchange="toggleProfileSchedule('${p.id}', this.checked); renderProfileModal();" style="width:auto;" />
       Puede editar el horario del almacén
     </label>`,
 };
-function toggleSubpanel(userId, tabId){
-  const key = userId+':'+tabId;
-  window.__openSubpanel = (window.__openSubpanel === key) ? null : key;
-  renderTab();
+function profileSummary(p){
+  if (p.driverId) {
+    const d = drivers.find(x=>x.id===p.driverId);
+    return d ? `Conductor: ${driverLabel(d)}` : 'Conductor (sin vincular todavía)';
+  }
+  if (p.isAdmin) return 'Administrador — acceso completo';
+  if (!p.allowedTabs.length) return 'Sin acceso a ninguna pestaña';
+  return TABS.filter(t=>p.allowedTabs.includes(t.id)).map(tabLabelShort).join(', ');
+}
+function openProfilePermissionsModal(userId){
+  window.__editingProfileId = userId;
+  renderProfileModal();
+}
+function renderProfileModal(){
+  const p = ALL_PROFILES.find(x=>x.id===window.__editingProfileId);
+  if (!p) return;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+          <h3 class="modal-title">Permisos</h3><button class="close-x" onclick="closeModal(); renderTab();">✕</button>
+        </div>
+        <div style="font-size:12.5px;color:var(--muted);margin-bottom:16px;">${esc(p.email)}</div>
+        <label style="display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--border);margin-bottom:12px;font-weight:600;font-size:13.5px;">
+          <input type="checkbox" ${p.isAdmin?'checked':''} onchange="toggleProfileAdmin('${p.id}', this.checked); renderProfileModal();" style="width:auto;" />
+          Administrador (acceso completo a todo)
+        </label>
+        <div style="${p.isAdmin?'opacity:.4;pointer-events:none;':''}">
+          ${TABS.map(t => `
+            <div style="padding:9px 0;border-bottom:1px solid var(--border);">
+              <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer;">
+                <input type="checkbox" ${p.allowedTabs.includes(t.id)?'checked':''} onchange="toggleProfileTab('${p.id}','${t.id}', this.checked); renderProfileModal();" style="width:auto;" />
+                ${esc(t.label)}
+              </label>
+              ${TAB_SUBPERMS[t.id] && p.allowedTabs.includes(t.id) ? `<div style="margin:8px 0 0 26px;">${TAB_SUBPERMS[t.id](p)}</div>` : ''}
+            </div>`).join('')}
+        </div>
+        <div class="field" style="margin-top:16px;">
+          <label>Conductor vinculado (solo fichaje — ignora lo de arriba)</label>
+          <select onchange="setProfileDriver('${p.id}', this.value); renderProfileModal();">
+            <option value="">— Ninguno —</option>
+            ${drivers.map(d=>`<option value="${d.id}" ${p.driverId===d.id?'selected':''}>${esc(driverLabel(d))}</option>`).join('')}
+          </select>
+        </div>
+        <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:18px;" onclick="closeModal(); renderTab();">Listo</button>
+      </div>
+    </div>`;
 }
 function tplAdmin(){
   return `
     <div style="font-size:12.5px;color:var(--muted);margin-bottom:16px;line-height:1.5;">
-      Para dar de alta un proveedor nuevo, créalo en <strong>Supabase → Authentication → Users</strong> — en cuanto exista, aparecerá aquí para marcarle qué pestañas ve. Las pestañas con un icono ⚙ tienen sub-permisos propios — pulsa el icono para abrirlos. Para que una cuenta solo pueda fichar su jornada, vincúlala a un conductor en la última columna (ignora las pestañas marcadas).
+      Para dar de alta un proveedor nuevo, créalo en <strong>Supabase → Authentication → Users</strong> — en cuanto exista, aparecerá aquí. Pulsa dentro de una fila para elegir qué ve cada uno.
     </div>
-    <div class="card" style="padding:0;overflow-x:auto;">
-      <table><thead><tr>
-        <th>Correo</th><th style="text-align:center;">Admin</th>
-        ${TABS.map(t=>`<th style="text-align:center;">${esc(tabLabelShort(t))}</th>`).join('')}
-        <th>Conductor vinculado</th>
-      </tr></thead><tbody>
+    <div class="card" style="padding:0;overflow:hidden;">
+      <table><thead><tr><th>Correo</th><th>Acceso actual</th><th></th></tr></thead><tbody>
         ${ALL_PROFILES.map(p => `
-          <tr>
+          <tr onclick="openProfilePermissionsModal('${p.id}')" style="cursor:pointer;">
             <td>${esc(p.email)}${p.id===CURRENT_USER_ID?' <span style="color:var(--mutedFaint);font-size:11px;">(tú)</span>':''}</td>
-            <td style="text-align:center;"><input type="checkbox" ${p.isAdmin?'checked':''} onchange="toggleProfileAdmin('${p.id}', this.checked)" /></td>
-            ${TABS.map(t => `
-              <td style="text-align:center;position:relative;">
-                <input type="checkbox" ${(p.isAdmin||p.allowedTabs.includes(t.id))?'checked':''} ${p.isAdmin?'disabled':''} onchange="toggleProfileTab('${p.id}','${t.id}', this.checked)" />
-                ${TAB_SUBPERMS[t.id] ? `
-                  <button type="button" onclick="toggleSubpanel('${p.id}','${t.id}')" title="Sub-permisos de ${esc(tabLabelShort(t))}" style="background:none;border:none;color:var(--muted);font-size:11px;cursor:pointer;vertical-align:middle;margin-left:2px;padding:2px;">⚙</button>
-                  ${window.__openSubpanel === (p.id+':'+t.id) ? `
-                    <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;text-align:left;margin-top:6px;">
-                      <div style="font-size:10px;color:var(--mutedFaint);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;white-space:nowrap;">Sub-permisos de ${esc(tabLabelShort(t))}</div>
-                      ${TAB_SUBPERMS[t.id](p)}
-                      <button type="button" onclick="toggleSubpanel('${p.id}','${t.id}')" style="display:block;margin-top:10px;background:none;border:none;color:var(--primary);font-size:11.5px;cursor:pointer;padding:0;">Cerrar</button>
-                    </div>` : ''}
-                ` : ''}
-              </td>`
-            ).join('')}
-            <td>
-              <select onchange="setProfileDriver('${p.id}', this.value)" style="min-width:170px;">
-                <option value="">— Ninguno —</option>
-                ${drivers.map(d=>`<option value="${d.id}" ${p.driverId===d.id?'selected':''}>${esc(driverLabel(d))}</option>`).join('')}
-              </select>
-            </td>
-          </tr>`).join('') || `<tr><td colspan="${3+TABS.length}" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin usuarios todavía</td></tr>`}
+            <td style="color:var(--muted);">${esc(profileSummary(p))}</td>
+            <td style="color:var(--primary);font-size:12.5px;white-space:nowrap;">Editar →</td>
+          </tr>`).join('') || `<tr><td colspan="3" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin usuarios todavía</td></tr>`}
       </tbody></table>
     </div>`;
 }
