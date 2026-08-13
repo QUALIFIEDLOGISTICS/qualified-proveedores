@@ -2657,6 +2657,7 @@ function tplFichajesDriverDetail(){
             ${years.map(y=>`<option value="${y}" ${y===year?'selected':''}>${y}</option>`).join('')}
           </select>
           <button class="btn btn-ghost" onclick="recalcWeeksFromFichajes('${d.id}', ${year})">🔄 Recalcular semanas</button>
+          <button class="btn btn-ghost" onclick="openAddFichajeModal('${d.id}')">+ Añadir fichaje manual</button>
           <button class="btn btn-primary" onclick="openKiosk('${d.id}')">📱 Pantalla de fichaje</button>
         </div>
       </div>
@@ -2682,6 +2683,68 @@ function tplFichajesDriverDetail(){
           </tr>`).join('') || `<tr><td colspan="11" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin fichajes registrados en ${year}</td></tr>`}
       </tbody></table>
     </div>`;
+}
+function openAddFichajeModal(driverId){
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+          <h3 class="modal-title">Añadir fichaje manual</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div class="field"><label>Fecha</label><input id="af-date" type="date" value="${today()}" /></div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Hora de entrada</label><input id="af-timein" type="time" /></div>
+          <div class="field" style="flex:1;"><label>Hora de salida</label><input id="af-timeout" type="time" /></div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Km inicial</label><input id="af-kmstart" type="number" step="0.1" /></div>
+          <div class="field" style="flex:1;"><label>Km final</label><input id="af-kmend" type="number" step="0.1" /></div>
+        </div>
+        <div style="font-size:11.5px;color:var(--mutedFaint);margin-bottom:10px;">Deja la hora/km de salida en blanco si la jornada debe quedar como abierta.</div>
+        <div id="af-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" id="af-submit-btn" style="flex:1;justify-content:center;" onclick="submitAddFichaje('${driverId}')">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+}
+async function submitAddFichaje(driverId){
+  const errEl = document.getElementById('af-error');
+  const btn = document.getElementById('af-submit-btn');
+  errEl.textContent = '';
+  const date = document.getElementById('af-date').value;
+  const timeIn = document.getElementById('af-timein').value;
+  const timeOut = document.getElementById('af-timeout').value || null;
+  const kmStartRaw = document.getElementById('af-kmstart').value;
+  const kmEndRaw = document.getElementById('af-kmend').value;
+  if (!date) { errEl.textContent = 'Indica la fecha.'; return; }
+  if (!timeIn) { errEl.textContent = 'Indica la hora de entrada.'; return; }
+  if (kmStartRaw === '') { errEl.textContent = 'Indica el km inicial.'; return; }
+  if (dailyEntries.some(f=>f.driverId===driverId && f.date===date)) { errEl.textContent = 'Ya existe un fichaje de este conductor en esa fecha. Corrígelo desde la tabla en vez de crear otro.'; return; }
+  const kmStart = Number(kmStartRaw);
+  const kmEnd = kmEndRaw === '' ? null : Number(kmEndRaw);
+  if (kmEnd != null && kmEnd < kmStart) { errEl.textContent = 'El km final no puede ser menor que el inicial.'; return; }
+  const km = kmEnd != null ? Math.round((kmEnd - kmStart)*10)/10 : null;
+  const status = (timeOut && kmEnd != null) ? 'cerrada' : 'abierta';
+  btn.disabled = true;
+  try {
+    const { data, error } = await supabaseClient.from('daily_entries').insert({
+      driver_id: driverId, date, status, time_in: timeIn, time_out: timeOut,
+      km_start: kmStart, km_end: kmEnd, km,
+    }).select().single();
+    if (error) throw error;
+    dailyEntries.push({
+      id: data.id, driverId, date, status, timeIn, timeOut,
+      kmStart, kmEnd, km, photoIn: null, photoOut: null,
+    });
+    const { year } = getISOWeek(date);
+    closeModal();
+    await recalcWeeksFromFichajes(driverId, year);
+  } catch (error) {
+    errEl.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido.');
+    btn.disabled = false;
+  }
 }
 function openEditFichajeModal(id){
   const f = dailyEntries.find(x=>x.id===id);
