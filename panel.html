@@ -280,6 +280,19 @@ async function moveWarehouseTaskDay(id, delta){
 }
 function moveWarehouseTaskToNextDay(id){ return moveWarehouseTaskDay(id, 1); }
 function moveWarehouseTaskToPrevDay(id){ return moveWarehouseTaskDay(id, -1); }
+function startEditWarehouseTask(id){ window.__editingTaskId = id; renderTab(); }
+function cancelEditWarehouseTask(){ window.__editingTaskId = null; renderTab(); }
+async function saveWarehouseTaskEdit(id){
+  const input = document.getElementById('wt-edit-input');
+  const text = input.value.trim();
+  if (!text) return;
+  const t = warehouseTasks[currentWarehouseId].find(x=>x.id===id);
+  if (!t) return;
+  await supabaseClient.from('warehouse_tasks').update({ text }).eq('id', id);
+  t.text = text;
+  window.__editingTaskId = null;
+  renderTab();
+}
 function tplWarehouseTasks(){
   const list = (warehouseTasks[currentWarehouseId]||[]).filter(t => t.date === window.__citasDate);
   return `
@@ -289,14 +302,23 @@ function tplWarehouseTasks(){
         <input id="wt-input" placeholder="Escribe una tarea y pulsa Añadir…" onkeydown="if(event.key==='Enter'){event.preventDefault(); addWarehouseTask();}" style="flex:1;" />
         <button class="btn btn-primary" onclick="addWarehouseTask()">+ Añadir</button>
       </div>
-      ${list.length === 0 ? `<div style="color:var(--mutedFaint);font-size:12.5px;">Sin tareas apuntadas para este día.</div>` : list.map(t => `
+      ${list.length === 0 ? `<div style="color:var(--mutedFaint);font-size:12.5px;">Sin tareas apuntadas para este día.</div>` : list.map(t => {
+        if (window.__editingTaskId === t.id) return `
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border);">
+          <input id="wt-edit-input" value="${esc(t.text)}" onkeydown="if(event.key==='Enter'){event.preventDefault(); saveWarehouseTaskEdit('${t.id}');} if(event.key==='Escape'){cancelEditWarehouseTask();}" style="flex:1;" />
+          <button class="btn btn-primary" onclick="saveWarehouseTaskEdit('${t.id}')">Guardar</button>
+          <button class="btn btn-ghost" onclick="cancelEditWarehouseTask()">Cancelar</button>
+        </div>`;
+        return `
         <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border);">
           <input type="checkbox" ${t.done?'checked':''} onchange="toggleWarehouseTask('${t.id}')" />
           <div style="flex:1;font-size:13px;${t.done?'text-decoration:line-through;color:var(--mutedFaint);':''}">${esc(t.text)}</div>
+          <button title="Editar" onclick="startEditWarehouseTask('${t.id}')" style="background:none;border:none;color:var(--muted);">✏️</button>
           <button title="Mover al día anterior" onclick="moveWarehouseTaskToPrevDay('${t.id}')" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--muted);font-size:12.5px;padding:5px 10px;">← Ayer</button>
           <button title="Mover al día siguiente" onclick="moveWarehouseTaskToNextDay('${t.id}')" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--muted);font-size:12.5px;padding:5px 10px;">→ Mañana</button>
           <button onclick="deleteWarehouseTask('${t.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>
-        </div>`).join('')}
+        </div>`;
+      }).join('')}
     </div>`;
 }
 
