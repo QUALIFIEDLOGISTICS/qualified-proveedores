@@ -2407,6 +2407,7 @@ function tplDriverDetail(){
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;margin-top:22px;flex-wrap:wrap;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Fichajes diarios de ${month==='todos' ? year : MONTH_NAMES[month].charAt(0).toUpperCase()+MONTH_NAMES[month].slice(1)+' '+year}</div>
       <div style="flex:1;"></div>
+      <button class="btn btn-ghost" onclick="confirmRecalcWeeks('${d.id}', ${year})">🔄 Recalcular semanas</button>
       <button class="btn btn-ghost" onclick="openAddFichajeModal('${d.id}')">+ Añadir fichaje diario manual</button>
     </div>
     <div class="card" style="padding:0;overflow-x:auto;margin-bottom:14px;">
@@ -2829,7 +2830,7 @@ function tplFichajesDriverDetail(){
           <select onchange="window.__fichajesYear=Number(this.value); renderTab();" style="width:100px;">
             ${years.map(y=>`<option value="${y}" ${y===year?'selected':''}>${y}</option>`).join('')}
           </select>
-          <button class="btn btn-ghost" onclick="recalcWeeksFromFichajes('${d.id}', ${year})">🔄 Recalcular semanas</button>
+          <button class="btn btn-ghost" onclick="confirmRecalcWeeks('${d.id}', ${year})">🔄 Recalcular semanas</button>
           <button class="btn btn-ghost" onclick="openAddFichajeModal('${d.id}')">+ Añadir fichaje manual</button>
           <button class="btn btn-primary" onclick="openKiosk('${d.id}')">📱 Pantalla de fichaje</button>
         </div>
@@ -2999,9 +3000,35 @@ async function recalcWeeksFromFichajes(driverId, year, touchedWeek){
     await supabaseClient.from('weekly_entries').delete()
       .eq('driver_id', driverId).eq('year', touchedWeek.year).eq('week', touchedWeek.week);
   }
+  // Sin semana concreta (botón "Recalcular semanas"): repaso completo
+  // del año — cualquier semana ya guardada que ya no tenga ningún
+  // fichaje cerrado detrás se borra, para limpiar restos fantasma
+  // acumulados antes de este arreglo.
+  if (!touchedWeek) {
+    const orphaned = weeklyEntries.filter(e => e.driverId===driverId && e.year===year && !byWeek[e.year+'-'+e.week]);
+    for (const e of orphaned) {
+      await supabaseClient.from('weekly_entries').delete()
+        .eq('driver_id', driverId).eq('year', e.year).eq('week', e.week);
+    }
+  }
   await loadWeeklyEntries();
   window.__autonomosYear = year;
   renderTab();
+}
+function confirmRecalcWeeks(driverId, year){
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:400px;">
+        <h3 class="modal-title" style="margin-bottom:10px;">Recalcular semanas de ${year}</h3>
+        <div style="font-size:13.5px;color:var(--muted);margin-bottom:20px;">
+          Se recalculan todas las semanas de ${year} a partir de los fichajes diarios actuales. Si alguna semana guardada ya no tiene ningún fichaje cerrado detrás, se elimina de la tabla resumen. Esta acción no se puede deshacer.
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="closeModal(); recalcWeeksFromFichajes('${driverId}', ${year});">Sí, recalcular</button>
+        </div>
+      </div>
+    </div>`;
 }
 function openWeekModal(driverId, editId){
   const editing = weeklyEntries.find(e=>e.id===editId);
