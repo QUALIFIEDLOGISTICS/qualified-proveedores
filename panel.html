@@ -232,6 +232,56 @@ function weekdayKey(dateStr){ return WEEKDAY_KEYS[new Date(dateStr+'T00:00:00').
 function daySchedule(warehouseId, dateStr){ return schedules[warehouseId][weekdayKey(dateStr)]; }
 function scheduleLabel(sched){ return sched.ranges.map(r=>`${r.start}–${r.end}`).join(', '); }
 
+let warehouseTasks = {};
+async function loadWarehouseTasks(){
+  const { data } = await supabaseClient.from('warehouse_tasks').select('*').order('created_at');
+  warehouseTasks = {}; WAREHOUSES.forEach(w => warehouseTasks[w.id] = []);
+  (data||[]).forEach(t => warehouseTasks[t.warehouse_id].push({
+    id: t.id, date: t.date, text: t.text, done: t.done,
+  }));
+}
+async function addWarehouseTask(){
+  const input = document.getElementById('wt-input');
+  const text = input.value.trim();
+  if (!text) return;
+  const { data, error } = await supabaseClient.from('warehouse_tasks').insert({
+    warehouse_id: currentWarehouseId, date: window.__citasDate, text,
+  }).select().single();
+  if (error || !data) return;
+  warehouseTasks[currentWarehouseId].push({ id: data.id, date: window.__citasDate, text, done: false });
+  renderTab();
+}
+async function toggleWarehouseTask(id){
+  const t = warehouseTasks[currentWarehouseId].find(x=>x.id===id);
+  if (!t) return;
+  const done = !t.done;
+  await supabaseClient.from('warehouse_tasks').update({ done }).eq('id', id);
+  t.done = done;
+  renderTab();
+}
+async function deleteWarehouseTask(id){
+  await supabaseClient.from('warehouse_tasks').delete().eq('id', id);
+  warehouseTasks[currentWarehouseId] = warehouseTasks[currentWarehouseId].filter(x=>x.id!==id);
+  renderTab();
+}
+function tplWarehouseTasks(){
+  const list = (warehouseTasks[currentWarehouseId]||[]).filter(t => t.date === window.__citasDate);
+  return `
+    <div class="card" style="margin-top:14px;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);margin-bottom:10px;">Tareas del almacén — recordatorio</div>
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <input id="wt-input" placeholder="Escribe una tarea y pulsa Añadir…" onkeydown="if(event.key==='Enter'){event.preventDefault(); addWarehouseTask();}" style="flex:1;" />
+        <button class="btn btn-primary" onclick="addWarehouseTask()">+ Añadir</button>
+      </div>
+      ${list.length === 0 ? `<div style="color:var(--mutedFaint);font-size:12.5px;">Sin tareas apuntadas para este día.</div>` : list.map(t => `
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border);">
+          <input type="checkbox" ${t.done?'checked':''} onchange="toggleWarehouseTask('${t.id}')" />
+          <div style="flex:1;font-size:13px;${t.done?'text-decoration:line-through;color:var(--mutedFaint);':''}">${esc(t.text)}</div>
+          <button onclick="deleteWarehouseTask('${t.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>
+        </div>`).join('')}
+    </div>`;
+}
+
 let unscheduled = {};
 async function loadUnscheduled(){
   const { data } = await supabaseClient.from('unscheduled_trucks').select('*');
@@ -552,7 +602,8 @@ function tplCitas(){
     <div class="card" style="text-align:center;color:var(--mutedFaint);padding:32px;">
       No se pueden reservar franjas este día. Cámbialo en "⚙ Horario del almacén" si es necesario.
     </div>`}
-    ${tplUnscheduled()}`;
+    ${tplUnscheduled()}
+    ${tplWarehouseTasks()}`;
 }
 
 function tplUnscheduled(){
@@ -3080,7 +3131,7 @@ function tplAdmin(){
 
 /* ============================= INICIO ============================= */
 async function loadWarehouseModuleData(){
-  await Promise.all([loadClients(), loadPallets(), loadMovements(), loadAppointments(), loadUnscheduled(), loadSchedules()]);
+  await Promise.all([loadClients(), loadPallets(), loadMovements(), loadAppointments(), loadUnscheduled(), loadSchedules(), loadWarehouseTasks()]);
 }
 async function loadAutonomosModuleData(){
   await Promise.all([loadCompanies(), loadDrivers(), loadDriverRates(), loadWeeklyEntries(), loadFuelEntries(), loadSupplementEntries(), loadExpenseEntries(), loadIndexationEntries(), loadDailyEntries()]);
