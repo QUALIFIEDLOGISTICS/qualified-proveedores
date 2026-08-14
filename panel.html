@@ -724,10 +724,11 @@ async function loadFuelEntries(){
   const { data } = await supabaseClient.from('fuel_entries').select('*');
   fuelEntries = (data||[]).map(f => ({ id: f.id, driverId: f.driver_id, date: f.date, liters: Number(f.liters), pricePerLiter: Number(f.price_per_liter) }));
 }
-function computeSupplementsForWeek(driverId, year, week){
+function computeSupplementsForWeek(driverId, year, week, month){
   return supplementEntries
     .filter(s => s.driverId===driverId)
     .filter(s => { const w = getISOWeek(s.date); return w.year===year && w.week===week; })
+    .filter(s => month===undefined || Number(s.date.slice(5,7))-1===month)
     .reduce((sum,s) => sum + Number(s.amount||0), 0);
 }
 let supplementEntries = [];
@@ -735,10 +736,11 @@ async function loadSupplementEntries(){
   const { data } = await supabaseClient.from('supplement_entries').select('*');
   supplementEntries = (data||[]).map(s => ({ id: s.id, driverId: s.driver_id, date: s.date, amount: Number(s.amount), reason: s.reason }));
 }
-function computeExpenseForWeek(driverId, year, week, kind){
+function computeExpenseForWeek(driverId, year, week, kind, month){
   return expenseEntries
     .filter(x => x.driverId===driverId && x.kind===kind)
     .filter(x => { const w = getISOWeek(x.date); return w.year===year && w.week===week; })
+    .filter(x => month===undefined || Number(x.date.slice(5,7))-1===month)
     .reduce((sum,x) => sum + Number(x.amount||0), 0);
 }
 let expenseEntries = []; // { id, driverId, date, kind: 'peaje'|'otro', amount, reason }
@@ -797,10 +799,11 @@ function fichajeHours(f){
   return Math.round((mins/60) * 100) / 100;
 }
 
-function computeGasoilForWeek(driverId, year, week){
+function computeGasoilForWeek(driverId, year, week, month){
   return fuelEntries
     .filter(f => f.driverId===driverId)
     .filter(f => { const w = getISOWeek(f.date); return w.year===year && w.week===week; })
+    .filter(f => month===undefined || Number(f.date.slice(5,7))-1===month)
     .reduce((s,f) => s + Number(f.liters||0)*Number(f.pricePerLiter||0), 0);
 }
 
@@ -2217,6 +2220,45 @@ function driversListBodyHtml(){
     }).join('') || `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Sin empresas todavía. Empieza dando de alta una.</div>`}`;
 }
 
+// Semanas que cruzan de mes: si hay fichajes diarios de respaldo, se
+// reparte esa semana en un trozo por mes (días, km y horas SOLO de
+// ese mes; el máximo de km/horas extra se prorratea a esos días, no a
+// la semana completa) para que la liquidación mensual sea correcta.
+// Si no hay fichajes de respaldo (semana metida a mano) no hay manera
+// de saber qué días caen en qué mes, así que se deja como hasta ahora
+// (la semana entera cuenta para el mes del jueves de esa semana).
+function buildMonthRows(driverId, year, month){
+  const weeksForYear = weeklyEntries.filter(e=>e.driverId===driverId && e.year===year);
+  if (month === 'todos') return weeksForYear.slice().sort((a,b)=>a.week-b.week);
+  const targetMonth = Number(month);
+  const rows = [];
+  weeksForYear.forEach(e => {
+    const { monday, sunday } = weekDateRange(e.year, e.week);
+    const mondayMonth = new Date(monday+'T00:00:00').getMonth();
+    const sundayMonth = new Date(sunday+'T00:00:00').getMonth();
+    if (mondayMonth === sundayMonth) {
+      if (mondayMonth === targetMonth) rows.push(e);
+      return;
+    }
+    const weekFichajes = dailyEntries.filter(f => f.driverId===driverId && f.status==='cerrada' && f.date>=monday && f.date<=sunday);
+    if (weekFichajes.length === 0) {
+      if (weekMonth(e.year, e.week) === targetMonth) rows.push(e);
+      return;
+    }
+    const monthFichajes = weekFichajes.filter(f => Number(f.date.slice(5,7))-1 === targetMonth).sort((a,b)=>a.date.localeCompare(b.date));
+    if (monthFichajes.length === 0) return;
+    rows.push({
+      ...e,
+      daysWorked: monthFichajes.length,
+      km: Math.round(monthFichajes.reduce((s,f)=>s+Number(f.km||0),0)*10)/10,
+      hours: Math.round(monthFichajes.reduce((s,f)=>s+fichajeHours(f),0)*100)/100,
+      _splitMonth: targetMonth,
+      _rateDate: monthFichajes[0].date,
+    });
+  });
+  return rows.sort((a,b)=>a.week-b.week);
+}
+
 /* ============================= AUTÓNOMOS: FICHA DETALLE ============================= */
 function openDriverDetail(id){ currentTab='autonomos'; window.__autonomosView='detalle'; window.__autonomosDriverId=id; window.__autonomosYear = window.__autonomosYear || new Date().getFullYear(); renderSidebar(); renderHeader(); renderTab(); }
 function backToDriversList(){ window.__autonomosView='lista'; window.__autonomosDriverId=null; renderTab(); }
@@ -2235,16 +2277,15 @@ function tplDriverDetail(){
   ])];
   years.sort();
 
-  let entries = weeklyEntries.filter(e=>e.driverId===d.id && e.year===year);
-  if (month !== 'todos') entries = entries.filter(e => weekMonth(e.year, e.week) === Number(month));
-  entries = entries.sort((a,b)=>a.week-b.week);
+  let entries = buildMonthRows(d.id, year, month).map(e => ({ ...e }));
   entries.forEach(e => {
-    e.gasoil = Math.round(computeGasoilForWeek(d.id, e.year, e.week) * 100) / 100;
-    e.supplements = Math.round(computeSupplementsForWeek(d.id, e.year, e.week) * 100) / 100;
-    e.peajes = Math.round(computeExpenseForWeek(d.id, e.year, e.week, 'peaje') * 100) / 100;
-    e.otros = Math.round(computeExpenseForWeek(d.id, e.year, e.week, 'otro') * 100) / 100;
+    const m = e._splitMonth;
+    e.gasoil = Math.round(computeGasoilForWeek(d.id, e.year, e.week, m) * 100) / 100;
+    e.supplements = Math.round(computeSupplementsForWeek(d.id, e.year, e.week, m) * 100) / 100;
+    e.peajes = Math.round(computeExpenseForWeek(d.id, e.year, e.week, 'peaje', m) * 100) / 100;
+    e.otros = Math.round(computeExpenseForWeek(d.id, e.year, e.week, 'otro', m) * 100) / 100;
   });
-  const rows = entries.map(e => ({ e, c: computeWeek(getRatesForDate(d.id, weekDateRange(e.year,e.week).monday), e) }));
+  const rows = entries.map(e => ({ e, c: computeWeek(getRatesForDate(d.id, e._rateDate || weekDateRange(e.year,e.week).monday), e) }));
 
   const sum = (key) => rows.reduce((s,r)=> s + (typeof r.e[key]==='number'?r.e[key]:0), 0);
   const sumC = (key) => rows.reduce((s,r)=> s + r.c[key], 0);
@@ -2253,7 +2294,7 @@ function tplDriverDetail(){
   const totalIngreso = sumC('totalIngreso');
   const totalGastos = sumC('gastosTotal');
   const indexAmount = rows.reduce((s,r) => {
-    const m = weekMonth(r.e.year, r.e.week);
+    const m = r.e._splitMonth !== undefined ? r.e._splitMonth : weekMonth(r.e.year, r.e.week);
     return s + r.c.dayAmount * (getIndexPercent(d.id, r.e.year, m)/100);
   }, 0);
   const totalNeto = totalIngreso - totalGastos + indexAmount;
@@ -2436,12 +2477,12 @@ function tplDriverDetail(){
         </thead>
         <tbody>
           ${rows.map(({e,c}) => {
-            const idxPct = getIndexPercent(d.id, e.year, weekMonth(e.year, e.week));
+            const idxPct = getIndexPercent(d.id, e.year, e._splitMonth !== undefined ? e._splitMonth : weekMonth(e.year, e.week));
             const idxAmount = c.dayAmount * (idxPct/100);
             const rowNeto = c.neto + idxAmount;
             return `
             <tr class="fin-row" onclick="openWeekModal('${d.id}','${e.id}')" style="cursor:pointer;">
-              <td class="fin-first fin-center" style="font-weight:600;">${e.week}</td>
+              <td class="fin-first fin-center" style="font-weight:600;" ${e._splitMonth!==undefined?`title="Semana repartida entre dos meses — aquí solo se cuentan los días de ${MONTH_NAMES[e._splitMonth]}."`:''}>${e.week}${e._splitMonth!==undefined?' ✂️':''}</td>
               <td class="fin-num fin-center" style="color:var(--muted);" onclick="event.stopPropagation();">${e.daysWorked}</td>
               <td class="fin-num" style="color:var(--muted);" onclick="event.stopPropagation();">${e.km}</td>
               <td class="fin-num" style="color:var(--muted);" onclick="event.stopPropagation();">${e.hours}</td>
