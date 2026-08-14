@@ -2774,8 +2774,8 @@ async function deleteFichaje(id){
   await supabaseClient.from('daily_entries').delete().eq('id', id);
   dailyEntries = dailyEntries.filter(f=>f.id!==id);
   if (f) {
-    const { year } = getISOWeek(f.date);
-    await recalcWeeksFromFichajes(f.driverId, year);
+    const { year, week } = getISOWeek(f.date);
+    await recalcWeeksFromFichajes(f.driverId, year, { year, week });
   }
   renderTab();
 }
@@ -2965,15 +2965,15 @@ async function submitEditFichaje(id){
     }).eq('id', id);
     if (error) throw error;
     Object.assign(f, { timeIn, timeOut, kmStart, kmEnd, km, status });
-    const { year } = getISOWeek(f.date);
+    const { year, week } = getISOWeek(f.date);
     closeModal();
-    await recalcWeeksFromFichajes(f.driverId, year);
+    await recalcWeeksFromFichajes(f.driverId, year, { year, week });
   } catch (error) {
     errEl.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido.');
     btn.disabled = false;
   }
 }
-async function recalcWeeksFromFichajes(driverId, year){
+async function recalcWeeksFromFichajes(driverId, year, touchedWeek){
   const fichajes = dailyEntries.filter(f=>f.driverId===driverId && f.status==='cerrada');
   const byWeek = {};
   fichajes.forEach(f => {
@@ -2990,6 +2990,14 @@ async function recalcWeeksFromFichajes(driverId, year){
   }));
   if (rows.length) {
     await supabaseClient.from('weekly_entries').upsert(rows, { onConflict: 'driver_id,year,week' });
+  }
+  // Si la semana que se acaba de tocar (borrar/editar un fichaje) se ha
+  // quedado sin ningún fichaje cerrado, su fila en weekly_entries no
+  // aparece en byWeek y el upsert de arriba nunca la toca — se queda
+  // como un resto fantasma con datos viejos si no se borra aquí.
+  if (touchedWeek && !byWeek[touchedWeek.year+'-'+touchedWeek.week]) {
+    await supabaseClient.from('weekly_entries').delete()
+      .eq('driver_id', driverId).eq('year', touchedWeek.year).eq('week', touchedWeek.week);
   }
   await loadWeeklyEntries();
   window.__autonomosYear = year;
