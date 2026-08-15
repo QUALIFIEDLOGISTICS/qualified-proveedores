@@ -861,7 +861,7 @@ async function loadMonthlyBillingEntries(){
   const { data } = await supabaseClient.from('monthly_billing_entries').select('*');
   monthlyBillingEntries = (data||[]).map(e => ({
     id: e.id, driverId: e.driver_id, year: e.year, month: e.month,
-    billingAmount: Number(e.billing_amount),
+    billingAmount: Number(e.billing_amount), km: Number(e.km||0),
   }));
 }
 
@@ -2733,11 +2733,14 @@ function tplPisoMovilDetail(d){
   const rows = entries.map(e => {
     const commissionPercent = getCommissionForDate(d.id, `${e.year}-${String(e.month+1).padStart(2,'0')}-01`);
     const commission = e.billingAmount * (commissionPercent/100);
-    return { e, commissionPercent, commission, total: e.billingAmount - commission };
+    const eurPerKm = e.km ? e.billingAmount / e.km : null;
+    return { e, commissionPercent, commission, total: e.billingAmount - commission, eurPerKm };
   });
   const totalBilling = rows.reduce((s,r)=>s+r.e.billingAmount, 0);
   const totalCommission = rows.reduce((s,r)=>s+r.commission, 0);
   const totalToPay = rows.reduce((s,r)=>s+r.total, 0);
+  const totalKm = rows.reduce((s,r)=>s+r.e.km, 0);
+  const avgEurPerKm = totalKm ? totalBilling / totalKm : null;
 
   return `
     <button class="btn btn-ghost" onclick="backToDriversList()" style="margin-bottom:16px;">← Volver a conductores</button>
@@ -2808,19 +2811,23 @@ function tplPisoMovilDetail(d){
       ${kpi('Facturación', eur2(totalBilling), null, true)}
       ${kpi('Comisión', totalCommission ? '−'+eur2(totalCommission) : '—', null, true)}
       ${kpi('Total a cobrar', eur2(totalToPay), null, true)}
+      ${kpi('Km realizados', totalKm.toLocaleString('es-ES'), null, true)}
+      ${kpi('€/Km', avgEurPerKm!=null ? eur2(avgEurPerKm) : '—', null, true)}
     </div>
 
     <div class="card" style="padding:0;overflow-x:auto;margin-bottom:22px;">
-      <table><thead><tr><th>Mes</th><th>Facturación</th><th>% Comisión</th><th>Comisión</th><th>Total a cobrar</th><th></th></tr></thead><tbody>
-        ${rows.map(({e,commissionPercent,commission,total}) => `
+      <table><thead><tr><th>Mes</th><th>Facturación</th><th>Km</th><th>€/Km</th><th>% Comisión</th><th>Comisión</th><th>Total a cobrar</th><th></th></tr></thead><tbody>
+        ${rows.map(({e,commissionPercent,commission,total,eurPerKm}) => `
           <tr onclick="openBillingModal('${d.id}','${e.id}')" style="cursor:pointer;">
             <td style="text-transform:capitalize;">${MONTH_NAMES[e.month]} ${e.year}</td>
             <td>${eur2(e.billingAmount)}</td>
+            <td>${e.km ? e.km.toLocaleString('es-ES')+' km' : '—'}</td>
+            <td>${eurPerKm!=null ? eur2(eurPerKm) : '—'}</td>
             <td>${commissionPercent}%</td>
             <td style="color:var(--danger);">−${eur2(commission)}</td>
             <td style="font-weight:700;">${eur2(total)}</td>
             <td><button onclick="event.stopPropagation(); deleteBilling('${e.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button></td>
-          </tr>`).join('') || `<tr><td colspan="6" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin facturación registrada en este periodo.</td></tr>`}
+          </tr>`).join('') || `<tr><td colspan="8" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin facturación registrada en este periodo.</td></tr>`}
       </tbody></table>
     </div>
 
@@ -2845,8 +2852,11 @@ function openBillingModal(driverId, editId){
             </select>
           </div>
         </div>
-        <div class="field"><label>Facturación (€)</label><input id="bill-amount" type="number" step="0.01" value="${editing?editing.billingAmount:''}" /></div>
-        <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:10px;">Total a cobrar = facturación − facturación × % comisión vigente ese mes (histórico de comisión, más abajo).</div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Facturación (€)</label><input id="bill-amount" type="number" step="0.01" value="${editing?editing.billingAmount:''}" /></div>
+          <div class="field" style="flex:1;"><label>Km realizados</label><input id="bill-km" type="number" step="0.1" value="${editing?editing.km||'':''}" /></div>
+        </div>
+        <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:10px;">Total a cobrar = facturación − facturación × % comisión vigente ese mes (histórico de comisión, más abajo). €/Km = facturación ÷ km.</div>
         <div id="bill-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
         <div style="display:flex;gap:10px;">
           ${editing ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="deleteBilling('${editing.id}')">Eliminar</button>` : ''}
@@ -2861,11 +2871,12 @@ async function submitBilling(driverId, editId){
   const year = Number(document.getElementById('bill-year').value||0);
   const month = Number(document.getElementById('bill-month').value);
   const billingAmount = Number(document.getElementById('bill-amount').value||0);
+  const km = Number(document.getElementById('bill-km').value||0);
   if (!year) { errEl.textContent = 'Indica el año.'; return; }
   const dup = monthlyBillingEntries.find(e=>e.driverId===driverId && e.year===year && e.month===month && e.id!==editId);
   if (dup) { errEl.textContent = 'Ya hay una facturación para ese mes. Edítala en vez de duplicarla.'; return; }
-  const data = { driverId, year, month, billingAmount };
-  const dbData = { driver_id: driverId, year, month, billing_amount: billingAmount };
+  const data = { driverId, year, month, billingAmount, km };
+  const dbData = { driver_id: driverId, year, month, billing_amount: billingAmount, km };
   if (editId) {
     await supabaseClient.from('monthly_billing_entries').update(dbData).eq('id', editId);
     const idx = monthlyBillingEntries.findIndex(e=>e.id===editId);
