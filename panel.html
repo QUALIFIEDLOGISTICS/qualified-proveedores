@@ -734,14 +734,14 @@ async function loadDriverRates(){
   rateHistory = (data||[]).map(r => ({
     id: r.id, driverId: r.driver_id, validFrom: r.valid_from,
     priceDay: Number(r.price_day), priceKmExtra: Number(r.price_km_extra), priceHourExtra: Number(r.price_hour_extra),
-    maxKmDay: Number(r.max_km_day), maxHoursDay: Number(r.max_hours_day),
+    maxKmDay: Number(r.max_km_day), maxHoursDay: Number(r.max_hours_day), hasIndexation: r.has_indexation !== false,
   }));
 }
 function getRatesForDate(driverId, dateStr){
   const applicable = rateHistory.filter(r=>r.driverId===driverId && r.validFrom<=dateStr).sort((a,b)=> b.validFrom.localeCompare(a.validFrom));
   if (applicable.length) return applicable[0];
   const all = rateHistory.filter(r=>r.driverId===driverId).sort((a,b)=> a.validFrom.localeCompare(b.validFrom));
-  return all[0] || { priceDay:0, priceKmExtra:0, priceHourExtra:0, maxKmDay:0, maxHoursDay:0 };
+  return all[0] || { priceDay:0, priceKmExtra:0, priceHourExtra:0, maxKmDay:0, maxHoursDay:0, hasIndexation:true };
 }
 let weeklyEntries = [];
 async function loadWeeklyEntries(){
@@ -2002,6 +2002,10 @@ function openRateModal(driverId, editId){
           <div class="field" style="flex:1;"><label>Máx. km/día</label><input id="rt-maxkm" type="number" value="${src.maxKmDay}" /></div>
           <div class="field" style="flex:1;"><label>Máx. horas/día</label><input id="rt-maxhours" type="number" value="${src.maxHoursDay}" /></div>
         </div>
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:13px;">
+          <input id="rt-indexation" type="checkbox" ${src.hasIndexation!==false?'checked':''} style="width:auto;" />
+          Lleva indexación mensual
+        </label>
         <div id="rt-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
         <div style="display:flex;gap:10px;">
           ${editing ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="deleteRate('${editing.id}')">Eliminar</button>` : ''}
@@ -2024,10 +2028,12 @@ async function submitRate(driverId, editId){
     priceHourExtra: Number(document.getElementById('rt-pricehour').value||0),
     maxKmDay: Number(document.getElementById('rt-maxkm').value||0),
     maxHoursDay: Number(document.getElementById('rt-maxhours').value||0),
+    hasIndexation: document.getElementById('rt-indexation').checked,
   };
   const dbData = {
     valid_from: data.validFrom, price_day: data.priceDay, price_km_extra: data.priceKmExtra,
     price_hour_extra: data.priceHourExtra, max_km_day: data.maxKmDay, max_hours_day: data.maxHoursDay,
+    has_indexation: data.hasIndexation,
   };
   if (editId) {
     await supabaseClient.from('driver_rates').update(dbData).eq('id', editId);
@@ -2313,6 +2319,7 @@ function tplDriverDetail(){
   const d = drivers.find(x=>x.id===window.__autonomosDriverId);
   if (!d) { window.__autonomosView='lista'; return tplDriversList(); }
   const co = companies.find(c=>c.id===d.companyId);
+  const driverIndexed = getRatesForDate(d.id, today()).hasIndexation !== false;
   const year = window.__autonomosYear;
   const month = window.__autonomosMonth === undefined ? 'todos' : window.__autonomosMonth;
   const systemYear = new Date().getFullYear();
@@ -2342,10 +2349,10 @@ function tplDriverDetail(){
   const totalDiaAmount = sumC('dayAmount');
   const totalIngreso = sumC('totalIngreso');
   const totalGastos = sumC('gastosTotal');
-  const indexAmount = rows.reduce((s,r) => {
+  const indexAmount = driverIndexed ? rows.reduce((s,r) => {
     const m = r.e._splitMonth !== undefined ? r.e._splitMonth : weekMonth(r.e.year, r.e.week);
     return s + r.c.dayAmount * (getIndexPercent(d.id, r.e.year, m)/100);
-  }, 0);
+  }, 0) : 0;
   const totalNeto = totalIngreso - totalGastos + indexAmount;
 
   return `
@@ -2378,6 +2385,7 @@ function tplDriverDetail(){
             ['€/hora extra', eur2(r.priceHourExtra)],
             ['Máx. km/día', r.maxKmDay],
             ['Máx. h/día', r.maxHoursDay],
+            ['Indexación', r.hasIndexation!==false ? 'Sí' : 'No'],
           ].map(([label,val]) => `
             <div style="background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 14px;min-width:90px;">
               <div style="font-size:10px;color:var(--mutedFaint);text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px;">${label}</div>
@@ -2394,7 +2402,7 @@ function tplDriverDetail(){
       </div>
       <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:10px;">Cada tarifa se aplica desde su fecha en adelante, hasta que empiece la siguiente. Así, si cambias un precio, las semanas ya pasadas no se recalculan con el precio nuevo.</div>
       <div class="card" style="padding:0;overflow:hidden;">
-        <table><thead><tr><th>Vigente desde</th><th>€/día</th><th>€/km extra</th><th>€/h extra</th><th>Máx km/día</th><th>Máx h/día</th><th></th></tr></thead><tbody>
+        <table><thead><tr><th>Vigente desde</th><th>€/día</th><th>€/km extra</th><th>€/h extra</th><th>Máx km/día</th><th>Máx h/día</th><th>Indexación</th><th></th></tr></thead><tbody>
           ${rateHistory.filter(r=>r.driverId===d.id).sort((a,b)=>b.validFrom.localeCompare(a.validFrom)).map(r => `
             <tr onclick="openRateModal('${d.id}','${r.id}')" style="cursor:pointer;">
               <td>${fmtDate(r.validFrom)}</td>
@@ -2403,8 +2411,9 @@ function tplDriverDetail(){
               <td>${eur2(r.priceHourExtra)}</td>
               <td>${r.maxKmDay}</td>
               <td>${r.maxHoursDay}</td>
+              <td>${r.hasIndexation!==false ? '<span class="badge" style="background:#3F8F5F;">Sí</span>' : '<span class="badge" style="background:var(--mutedFaint);">No</span>'}</td>
               <td><button onclick="event.stopPropagation(); deleteRate('${r.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button></td>
-            </tr>`).join('') || `<tr><td colspan="7" style="color:var(--mutedFaint);text-align:center;padding:16px;">Sin tarifas registradas</td></tr>`}
+            </tr>`).join('') || `<tr><td colspan="8" style="color:var(--mutedFaint);text-align:center;padding:16px;">Sin tarifas registradas</td></tr>`}
         </tbody></table>
       </div>
     </div>
@@ -2430,6 +2439,7 @@ function tplDriverDetail(){
       </div>
     </div>
 
+    ${driverIndexed ? `
     <div class="card" style="margin-bottom:22px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
         <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Indexación mensual — ${month==='todos' ? year : MONTH_NAMES[month].charAt(0).toUpperCase()+MONTH_NAMES[month].slice(1)+' '+year}</div>
@@ -2457,6 +2467,7 @@ function tplDriverDetail(){
       </div>
       `}
     </div>
+    ` : ''}
 
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;margin-top:22px;flex-wrap:wrap;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Fichajes diarios de ${month==='todos' ? year : MONTH_NAMES[month].charAt(0).toUpperCase()+MONTH_NAMES[month].slice(1)+' '+year}</div>
@@ -2496,7 +2507,7 @@ function tplDriverDetail(){
       ${kpi('Horas trabajadas', fmtHoursMin(totalHoras), null, true)}
       ${kpi('Ingresos', eur2(totalIngreso), null, true)}
       ${kpi('Gastos', totalGastos ? '−'+eur2(totalGastos) : '—', null, true)}
-      ${kpi('Indexación', indexAmount ? eurSigned(indexAmount) : '—', null, true)}
+      ${driverIndexed ? kpi('Indexación', indexAmount ? eurSigned(indexAmount) : '—', null, true) : ''}
       ${kpi('Neto', eur2(totalNeto), null, true)}
     </div>
 
@@ -2508,7 +2519,7 @@ function tplDriverDetail(){
             <th colspan="5" class="fin-g-jornada">Jornada</th>
             <th colspan="4" class="fin-g-ingresos">Ingresos</th>
             <th colspan="4" class="fin-g-gastos">Gastos</th>
-            <th class="fin-g-ajustes">Ajustes</th>
+            ${driverIndexed ? `<th class="fin-g-ajustes">Ajustes</th>` : ''}
             <th class="fin-neto">Neto</th>
           </tr>
           <tr class="fin-col-row">
@@ -2526,14 +2537,14 @@ function tplDriverDetail(){
             <th class="fin-num fin-g-gastos" title="Suma de los peajes registrados esa semana (fecha, importe y motivo). Haz clic para ver el detalle. Se descuenta del ingreso.">Peajes</th>
             <th class="fin-num fin-g-gastos" title="Suma de otros gastos registrados esa semana (fecha, importe y motivo). Haz clic para ver el detalle. Se descuenta del ingreso.">Otros</th>
             <th class="fin-num fin-g-gastos" title="Gasoil + Peajes + Otros. Se descuenta del ingreso.">Total</th>
-            <th class="fin-num fin-g-ajustes fin-g-start" title="Importe por días × % de indexación del mes al que pertenece esa semana. Puede subir o bajar el neto.">Indexación</th>
+            ${driverIndexed ? `<th class="fin-num fin-g-ajustes fin-g-start" title="Importe por días × % de indexación del mes al que pertenece esa semana. Puede subir o bajar el neto.">Indexación</th>` : ''}
             <th class="fin-num fin-neto" title="Ingreso − Gastos + Indexación. Lo que queda finalmente esa semana.">Neto</th>
           </tr>
         </thead>
         <tbody>
           ${rows.map(({e,c}) => {
-            const idxPct = getIndexPercent(d.id, e.year, e._splitMonth !== undefined ? e._splitMonth : weekMonth(e.year, e.week));
-            const idxAmount = c.dayAmount * (idxPct/100);
+            const idxPct = driverIndexed ? getIndexPercent(d.id, e.year, e._splitMonth !== undefined ? e._splitMonth : weekMonth(e.year, e.week)) : 0;
+            const idxAmount = driverIndexed ? c.dayAmount * (idxPct/100) : 0;
             const rowNeto = c.neto + idxAmount;
             return `
             <tr class="fin-row">
@@ -2551,10 +2562,10 @@ function tplDriverDetail(){
               <td class="fin-num fin-g-gastos" style="color:${e.peajes?'var(--danger)':'var(--mutedFaint)'};text-decoration:underline;cursor:pointer;" onclick="event.stopPropagation(); openExpenseModal('${d.id}', ${e.year}, ${e.week}, 'peaje');">${e.peajes ? eur2(e.peajes) : '—'}</td>
               <td class="fin-num fin-g-gastos" style="color:${e.otros?'var(--danger)':'var(--mutedFaint)'};text-decoration:underline;cursor:pointer;" onclick="event.stopPropagation(); openExpenseModal('${d.id}', ${e.year}, ${e.week}, 'otro');">${e.otros ? eur2(e.otros) : '—'}</td>
               <td class="fin-num fin-g-gastos" style="color:${c.gastosTotal?'var(--danger)':'var(--mutedFaint)'};font-weight:600;" onclick="event.stopPropagation();">${c.gastosTotal ? '−'+eur2(c.gastosTotal) : '—'}</td>
-              <td class="fin-num fin-g-ajustes fin-g-start" style="color:${idxAmount<0?'var(--danger)':idxAmount>0?'var(--success)':'var(--mutedFaint)'};font-weight:600;" title="${idxPct}% sobre ${eur2(c.dayAmount)}" onclick="event.stopPropagation();">${idxAmount ? eurSigned(idxAmount) : '—'}</td>
+              ${driverIndexed ? `<td class="fin-num fin-g-ajustes fin-g-start" style="color:${idxAmount<0?'var(--danger)':idxAmount>0?'var(--success)':'var(--mutedFaint)'};font-weight:600;" title="${idxPct}% sobre ${eur2(c.dayAmount)}" onclick="event.stopPropagation();">${idxAmount ? eurSigned(idxAmount) : '—'}</td>` : ''}
               <td class="fin-num fin-neto" style="font-weight:800;color:var(--primary);font-size:15px;" onclick="event.stopPropagation();">${eur2(rowNeto)}</td>
             </tr>`;
-          }).join('') || `<tr><td colspan="16" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin semanas registradas en ${year}</td></tr>`}
+          }).join('') || `<tr><td colspan="${driverIndexed?16:15}" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin semanas registradas en ${year}</td></tr>`}
         </tbody>
         ${rows.length ? `
         <tfoot>
@@ -2569,7 +2580,7 @@ function tplDriverDetail(){
             <td class="fin-num">${eur2(totalIngreso)}</td>
             <td></td><td></td><td></td>
             <td class="fin-num">${totalGastos ? '−'+eur2(totalGastos) : '—'}</td>
-            <td class="fin-num">${indexAmount ? eurSigned(indexAmount) : '—'}</td>
+            ${driverIndexed ? `<td class="fin-num">${indexAmount ? eurSigned(indexAmount) : '—'}</td>` : ''}
             <td class="fin-num fin-neto" style="color:var(--primary);font-size:16px;font-weight:800;">${eur2(totalNeto)}</td>
           </tr>
         </tfoot>` : ''}
