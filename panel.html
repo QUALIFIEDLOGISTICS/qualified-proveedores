@@ -804,6 +804,36 @@ function getIndexPercent(driverId, year, month){
   return e ? e.percent : 0;
 }
 
+const INCIDENT_TYPE_LABELS = { averia: 'Avería', km_error: 'Km de más por error', otro: 'Otro' };
+let dailyIncidents = [];
+async function loadDailyIncidents(){
+  const { data } = await supabaseClient.from('daily_incidents').select('*').order('created_at');
+  dailyIncidents = (data||[]).map(x => ({
+    id: x.id, driverId: x.driver_id, date: x.date, type: x.type,
+    hoursExcluded: Number(x.hours_excluded||0), kmExcluded: Number(x.km_excluded||0),
+    note: x.note,
+  }));
+}
+function incidentsForDay(driverId, date){
+  return dailyIncidents.filter(x=>x.driverId===driverId && x.date===date);
+}
+function excludedForDay(driverId, date){
+  return incidentsForDay(driverId, date).reduce((acc,x) => ({
+    hours: acc.hours + x.hoursExcluded, km: acc.km + x.kmExcluded,
+  }), { hours: 0, km: 0 });
+}
+// Horas/km "efectivos" de un fichaje ya cerrado, después de restar lo
+// excluido por incidencias de ese día (averías, km de más por error…).
+// Nunca en negativo. Se usan para el cálculo de km/horas extra y las
+// alertas del Dashboard Tráfico — el fichaje en sí no se toca.
+function effectiveDayValues(f){
+  const excl = excludedForDay(f.driverId, f.date);
+  return {
+    hours: Math.max(0, fichajeHours(f) - excl.hours),
+    km: Math.max(0, Number(f.km||0) - excl.km),
+  };
+}
+
 let dailyEntries = [];
 async function loadDailyEntries(){
   const { data } = await supabaseClient.from('daily_entries').select('*');
@@ -2074,8 +2104,8 @@ function driverWeekStatus(d){
   const { year, week } = getISOWeek(today());
   const closedThisWeek = dailyEntries.filter(f => f.driverId===d.id && f.status==='cerrada' && (()=>{ const w=getISOWeek(f.date); return w.year===year && w.week===week; })());
   const daysSoFar = closedThisWeek.length;
-  const kmSoFar = closedThisWeek.reduce((s,f)=> s + Number(f.km||0), 0);
-  const hoursSoFar = closedThisWeek.reduce((s,f)=> s + fichajeHours(f), 0);
+  const kmSoFar = closedThisWeek.reduce((s,f)=> s + effectiveDayValues(f).km, 0);
+  const hoursSoFar = closedThisWeek.reduce((s,f)=> s + effectiveDayValues(f).hours, 0);
   const allowedKm = rates.maxKmDay * daysSoFar;
   const allowedHours = rates.maxHoursDay * daysSoFar;
   const kmDelta = kmSoFar - allowedKm;   // positivo = ya pasado en el acumulado
@@ -2086,8 +2116,8 @@ function driverWeekStatus(d){
   // Días sueltos que se pasaron de su propio máximo diario, aunque el acumulado de la semana
   // no lo refleje todavía (un día muy cargado se puede "esconder" si otros días compensan a la baja).
   const heavyDays = closedThisWeek
-    .map(f => ({ date: f.date, km: Number(f.km||0), hours: fichajeHours(f),
-      kmOver: Number(f.km||0) - rates.maxKmDay, hoursOver: fichajeHours(f) - rates.maxHoursDay }))
+    .map(f => { const eff = effectiveDayValues(f); return { date: f.date, km: eff.km, hours: eff.hours,
+      kmOver: eff.km - rates.maxKmDay, hoursOver: eff.hours - rates.maxHoursDay }; })
     .filter(x => x.kmOver > 0 || x.hoursOver > 0);
 
   let level = 'sin-actividad', reasons = [];
@@ -2488,8 +2518,8 @@ function tplDriverDetail(){
       <button class="btn btn-ghost" onclick="openAddFichajeModal('${d.id}')">+ Añadir fichaje diario manual</button>
     </div>
     <div class="card" style="padding:0;overflow-x:auto;margin-bottom:14px;">
-      <table><thead><tr><th>Fecha</th><th>Estado</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km inicial</th><th>Km final</th><th>Km recorridos</th><th>Foto inicio</th><th>Foto cierre</th><th></th></tr></thead><tbody>
-        ${dailyEntries.filter(f=>f.driverId===d.id && f.date.startsWith(String(year)) && (month==='todos' || Number(f.date.slice(5,7))-1===Number(month))).sort((a,b)=>a.date.localeCompare(b.date)).map(f => `
+      <table><thead><tr><th>Fecha</th><th>Estado</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km inicial</th><th>Km final</th><th>Km recorridos</th><th>Incidencias</th><th>Foto inicio</th><th>Foto cierre</th><th></th></tr></thead><tbody>
+        ${dailyEntries.filter(f=>f.driverId===d.id && f.date.startsWith(String(year)) && (month==='todos' || Number(f.date.slice(5,7))-1===Number(month))).sort((a,b)=>a.date.localeCompare(b.date)).map(f => { const inc = incidentsForDay(d.id, f.date); return `
           <tr>
             <td>${fmtDate(f.date)}</td>
             <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}</td>
@@ -2499,13 +2529,16 @@ function tplDriverDetail(){
             <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmStart ?? '—'}</td>
             <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmEnd ?? '—'}</td>
             <td style="font-weight:600;">${f.km!=null ? f.km+' km' : '—'}</td>
+            <td>
+              <button onclick="openIncidentsModal('${d.id}', '${f.date}')" title="Ver o añadir incidencias de este día" style="background:none;border:1px solid var(--border);border-radius:5px;color:${inc.length?'var(--danger)':'var(--muted)'};font-size:10.5px;padding:3px 7px;white-space:nowrap;">${inc.length ? '⚠ '+inc.length : '+ Incidencia'}</button>
+            </td>
             <td>${photoThumb(f.photoIn)}</td>
             <td>${photoThumb(f.photoOut)}</td>
             <td style="white-space:nowrap;">
               <button onclick="openEditFichajeModal('${f.id}')" title="Corregir" style="background:none;border:none;color:var(--primary);">✏️</button>
               <button onclick="deleteFichaje('${f.id}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>
             </td>
-          </tr>`).join('') || `<tr><td colspan="11" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin fichajes registrados en ${year}</td></tr>`}
+          </tr>`; }).join('') || `<tr><td colspan="12" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin fichajes registrados en ${year}</td></tr>`}
       </tbody></table>
     </div>
 
@@ -3051,6 +3084,81 @@ async function submitEditFichaje(id){
     btn.disabled = false;
   }
 }
+function openIncidentsModal(driverId, date){
+  const list = incidentsForDay(driverId, date);
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <h3 class="modal-title">Incidencias — ${fmtDate(date)}</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="font-size:11.5px;color:var(--mutedFaint);margin-bottom:14px;">Las horas/km marcados como "excluir del cálculo" no cuentan para el máximo diario/semanal ni para el km/horas extra que se paga esa semana. El fichaje en sí no se toca.</div>
+        ${list.length ? list.map(x => `
+        <div style="background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+            <div>
+              <div style="font-weight:600;font-size:13px;">${esc(INCIDENT_TYPE_LABELS[x.type]||x.type)}</div>
+              ${(x.hoursExcluded || x.kmExcluded) ? `<div style="font-size:11.5px;color:var(--muted);margin-top:2px;">Excluye: ${x.hoursExcluded?fmtHoursMin(x.hoursExcluded):''}${x.hoursExcluded && x.kmExcluded?' · ':''}${x.kmExcluded?x.kmExcluded+' km':''}</div>` : ''}
+              ${x.note ? `<div style="font-size:12.5px;color:var(--text);margin-top:4px;">${esc(x.note)}</div>` : ''}
+            </div>
+            <button onclick="deleteIncident('${x.id}','${driverId}','${date}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);flex-shrink:0;">🗑</button>
+          </div>
+        </div>`).join('') : `<div style="font-size:12.5px;color:var(--mutedFaint);margin-bottom:14px;">Sin incidencias registradas este día.</div>`}
+        <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:4px;">
+          <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;">Añadir incidencia</div>
+          <div class="field"><label>Tipo</label>
+            <select id="inc-type">
+              <option value="averia">Avería</option>
+              <option value="km_error">Km de más por error</option>
+              <option value="otro">Otro</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:10px;">
+            <div class="field" style="flex:1;"><label>Horas a excluir</label><input id="inc-hours" type="number" step="0.1" min="0" placeholder="0" /></div>
+            <div class="field" style="flex:1;"><label>Km a excluir</label><input id="inc-km" type="number" step="0.1" min="0" placeholder="0" /></div>
+          </div>
+          <div class="field"><label>Nota</label><textarea id="inc-note" placeholder="Qué ha pasado…"></textarea></div>
+          <div id="inc-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
+          <div style="display:flex;gap:10px;">
+            <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cerrar</button>
+            <button class="btn btn-primary" id="inc-submit-btn" style="flex:1;justify-content:center;" onclick="submitIncident('${driverId}','${date}')">Añadir</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+async function submitIncident(driverId, date){
+  const errEl = document.getElementById('inc-error');
+  const btn = document.getElementById('inc-submit-btn');
+  errEl.textContent = '';
+  const type = document.getElementById('inc-type').value;
+  const hoursExcluded = Number(document.getElementById('inc-hours').value||0);
+  const kmExcluded = Number(document.getElementById('inc-km').value||0);
+  const note = document.getElementById('inc-note').value.trim();
+  if (hoursExcluded < 0 || kmExcluded < 0) { errEl.textContent = 'Las horas y los km a excluir no pueden ser negativos.'; return; }
+  if (!hoursExcluded && !kmExcluded && !note) { errEl.textContent = 'Indica horas/km a excluir, o al menos una nota.'; return; }
+  btn.disabled = true;
+  try {
+    const { data, error } = await supabaseClient.from('daily_incidents').insert({
+      driver_id: driverId, date, type, hours_excluded: hoursExcluded, km_excluded: kmExcluded, note: note||null,
+    }).select().single();
+    if (error || !data) throw error || new Error('sin datos');
+    dailyIncidents.push({ id: data.id, driverId, date, type, hoursExcluded, kmExcluded, note: note||null });
+    const { year, week } = getISOWeek(date);
+    await recalcWeeksFromFichajes(driverId, year, { year, week });
+    openIncidentsModal(driverId, date);
+  } catch (error) {
+    errEl.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido.');
+    btn.disabled = false;
+  }
+}
+async function deleteIncident(id, driverId, date){
+  await supabaseClient.from('daily_incidents').delete().eq('id', id);
+  dailyIncidents = dailyIncidents.filter(x=>x.id!==id);
+  const { year, week } = getISOWeek(date);
+  await recalcWeeksFromFichajes(driverId, year, { year, week });
+  openIncidentsModal(driverId, date);
+}
 async function recalcWeeksFromFichajes(driverId, year, touchedWeek){
   const fichajes = dailyEntries.filter(f=>f.driverId===driverId && f.status==='cerrada');
   const byWeek = {};
@@ -3058,9 +3166,10 @@ async function recalcWeeksFromFichajes(driverId, year, touchedWeek){
     const { year: y, week } = getISOWeek(f.date);
     const key = y+'-'+week;
     if (!byWeek[key]) byWeek[key] = { year: y, week, days: 0, km: 0, hours: 0 };
+    const eff = effectiveDayValues(f);
     byWeek[key].days += 1;
-    byWeek[key].km += Number(f.km||0);
-    byWeek[key].hours += fichajeHours(f);
+    byWeek[key].km += eff.km;
+    byWeek[key].hours += eff.hours;
   });
   const rows = Object.values(byWeek).map(w => ({
     driver_id: driverId, year: w.year, week: w.week,
@@ -3214,7 +3323,7 @@ async function loadWarehouseModuleData(){
   await Promise.all([loadClients(), loadPallets(), loadMovements(), loadAppointments(), loadUnscheduled(), loadSchedules(), loadWarehouseTasks()]);
 }
 async function loadAutonomosModuleData(){
-  await Promise.all([loadCompanies(), loadDrivers(), loadDriverRates(), loadWeeklyEntries(), loadFuelEntries(), loadSupplementEntries(), loadExpenseEntries(), loadIndexationEntries(), loadDailyEntries()]);
+  await Promise.all([loadCompanies(), loadDrivers(), loadDriverRates(), loadWeeklyEntries(), loadFuelEntries(), loadSupplementEntries(), loadExpenseEntries(), loadIndexationEntries(), loadDailyEntries(), loadDailyIncidents()]);
 }
 let isRecoveryFlow = window.location.hash.includes('type=recovery') || window.location.search.includes('code=');
 if (isRecoveryFlow) window.location.replace('reset-password.html' + window.location.search + window.location.hash);
