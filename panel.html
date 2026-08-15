@@ -738,7 +738,7 @@ async function loadCompanies(){
 let drivers = [];
 async function loadDrivers(){
   const { data } = await supabaseClient.from('drivers').select('*').order('name');
-  drivers = (data||[]).map(d => ({ id: d.id, companyId: d.company_id, name: d.name, dni: d.dni, fleetNumber: d.fleet_number, archived: d.archived }));
+  drivers = (data||[]).map(d => ({ id: d.id, companyId: d.company_id, name: d.name, dni: d.dni, fleetNumber: d.fleet_number, archived: d.archived, modality: d.modality || 'plaza' }));
 }
 let rateHistory = [];
 async function loadDriverRates(){
@@ -838,6 +838,15 @@ let driverNotes = [];
 async function loadDriverNotes(){
   const { data } = await supabaseClient.from('driver_notes').select('*').order('date', { ascending: false }).order('created_at', { ascending: false });
   driverNotes = (data||[]).map(x => ({ id: x.id, driverId: x.driver_id, date: x.date, note: x.note }));
+}
+
+let monthlyBillingEntries = [];
+async function loadMonthlyBillingEntries(){
+  const { data } = await supabaseClient.from('monthly_billing_entries').select('*');
+  monthlyBillingEntries = (data||[]).map(e => ({
+    id: e.id, driverId: e.driver_id, year: e.year, month: e.month,
+    billingAmount: Number(e.billing_amount), commissionPercent: Number(e.commission_percent),
+  }));
 }
 
 let dailyEntries = [];
@@ -2249,7 +2258,14 @@ function refreshDriversListBody(){
   const el = document.getElementById('drivers-list-body');
   if (el) el.innerHTML = driversListBodyHtml();
 }
+function billingTotalForDriverYear(driverId, year){
+  return monthlyBillingEntries
+    .filter(e=>e.driverId===driverId && e.year===year)
+    .reduce((s,e) => s + e.billingAmount + e.billingAmount*(e.commissionPercent/100), 0);
+}
 function netoForDriverYear(driverId, year){
+  const d = drivers.find(x=>x.id===driverId);
+  if (d && d.modality === 'piso_movil') return billingTotalForDriverYear(driverId, year);
   return weeklyEntries
     .filter(e=>e.driverId===driverId && e.year===year)
     .reduce((s,e) => {
@@ -2260,6 +2276,8 @@ function netoForDriverYear(driverId, year){
     }, 0);
 }
 function brutoForDriverYear(driverId, year){
+  const d = drivers.find(x=>x.id===driverId);
+  if (d && d.modality === 'piso_movil') return billingTotalForDriverYear(driverId, year);
   return weeklyEntries
     .filter(e=>e.driverId===driverId && e.year===year)
     .reduce((s,e) => {
@@ -2288,11 +2306,16 @@ function driversListBodyHtml(){
         </div>` : `
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;">
           ${list.map(d => {
-            const entries = weeklyEntries.filter(e=>e.driverId===d.id);
+            const isPisoMovil = d.modality === 'piso_movil';
             const ytdNeto = netoForDriverYear(d.id, currentYear);
-            const r = getRatesForDate(d.id, today());
-            const openNow = openTodayEntry(d.id);
+            const openNow = !isPisoMovil && openTodayEntry(d.id);
             const initial = (d.name||'?').trim().charAt(0).toUpperCase();
+            const midLine = isPisoMovil
+              ? `<span style="font-size:11px;font-weight:600;color:#8A4A35;background:rgba(138,74,53,0.08);border-radius:999px;padding:2px 9px;">Piso Móvil</span>`
+              : (() => { const r = getRatesForDate(d.id, today()); return `${eur2(r.priceDay)}/día · máx ${r.maxKmDay}km · máx ${r.maxHoursDay}h`; })();
+            const bottomLabel = isPisoMovil
+              ? (() => { const n = monthlyBillingEntries.filter(e=>e.driverId===d.id && e.year===currentYear).length; return `${n} mes${n!==1?'es':''} facturado${n!==1?'s':''} · ${currentYear}`; })()
+              : (() => { const n = weeklyEntries.filter(e=>e.driverId===d.id).length; return `${n} semana${n!==1?'s':''} · ${currentYear}`; })();
             return `
             <div class="card" style="cursor:pointer;position:relative;padding:16px;" onclick="openDriverDetail('${d.id}')">
               ${openNow ? `<span class="badge" style="position:absolute;top:14px;right:14px;background:#D9A72C;">Jornada abierta</span>` : ''}
@@ -2303,9 +2326,9 @@ function driversListBodyHtml(){
                   <div style="font-size:11.5px;color:var(--mutedFaint);font-family:var(--mono);">${esc(d.dni||'—')}${d.fleetNumber?' · Flota '+esc(d.fleetNumber):''}</div>
                 </div>
               </div>
-              <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">${eur2(r.priceDay)}/día · máx ${r.maxKmDay}km · máx ${r.maxHoursDay}h</div>
+              <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">${midLine}</div>
               <div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid var(--border);">
-                <span style="font-size:11.5px;color:var(--mutedFaint);">${entries.length} semana${entries.length!==1?'s':''} · ${currentYear}</span>
+                <span style="font-size:11.5px;color:var(--mutedFaint);">${bottomLabel}</span>
                 <span style="font-family:var(--display);font-size:15px;color:var(--primary);font-weight:700;">${eur2(ytdNeto)}</span>
               </div>
             </div>`;
@@ -2366,6 +2389,7 @@ function backToDriversList(){ window.__autonomosView='lista'; window.__autonomos
 function tplDriverDetail(){
   const d = drivers.find(x=>x.id===window.__autonomosDriverId);
   if (!d) { window.__autonomosView='lista'; return tplDriversList(); }
+  if (d.modality === 'piso_movil') return tplPisoMovilDetail(d);
   const co = companies.find(c=>c.id===d.companyId);
   const driverIndexed = getRatesForDate(d.id, today()).hasIndexation !== false;
   const year = window.__autonomosYear;
@@ -2638,6 +2662,13 @@ function tplDriverDetail(){
       </table>
     </div>
 
+    ${tplAnotacionesSection(d.id, driverNotes.filter(n=>n.driverId===d.id && n.date.startsWith(String(year))
+        && (month==='todos' || Number(n.date.slice(5,7))-1===Number(month))
+        && (weekFilter==='todas' || getISOWeek(n.date).week===Number(weekFilter))
+      ))}`;
+}
+function tplAnotacionesSection(driverId, filteredNotes){
+  return `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;margin-top:22px;flex-wrap:wrap;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Anotaciones</div>
       <div style="font-size:11.5px;color:var(--mutedFaint);">— para dejar constancia de lo que sea, en el día que quieras. No afecta a ningún cálculo.</div>
@@ -2645,24 +2676,167 @@ function tplDriverDetail(){
     <div class="card" style="margin-bottom:14px;">
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
         <div class="field" style="flex:0 0 160px;margin-bottom:0;"><label>Fecha</label><input id="note-date" type="date" value="${today()}" /></div>
-        <div class="field" style="flex:1 1 260px;margin-bottom:0;"><label>Nota</label><input id="note-text" placeholder="Escribe una anotación…" onkeydown="if(event.key==='Enter'){event.preventDefault(); addDriverNote('${d.id}');}" /></div>
-        <button class="btn btn-primary" onclick="addDriverNote('${d.id}')">+ Añadir</button>
+        <div class="field" style="flex:1 1 260px;margin-bottom:0;"><label>Nota</label><input id="note-text" placeholder="Escribe una anotación…" onkeydown="if(event.key==='Enter'){event.preventDefault(); addDriverNote('${driverId}');}" /></div>
+        <button class="btn btn-primary" onclick="addDriverNote('${driverId}')">+ Añadir</button>
       </div>
       <div id="note-error" style="color:var(--danger);font-size:12.5px;margin-top:8px;"></div>
     </div>
     <div style="display:flex;flex-direction:column;gap:8px;">
-      ${driverNotes.filter(n=>n.driverId===d.id && n.date.startsWith(String(year))
-          && (month==='todos' || Number(n.date.slice(5,7))-1===Number(month))
-          && (weekFilter==='todas' || getISOWeek(n.date).week===Number(weekFilter))
-        ).map(n => `
+      ${filteredNotes.map(n => `
         <div class="card" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
           <div>
             <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:2px;">${fmtDate(n.date)}</div>
             <div style="font-size:13.5px;">${esc(n.note)}</div>
           </div>
-          <button onclick="deleteDriverNote('${n.id}', '${d.id}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);flex-shrink:0;">🗑</button>
+          <button onclick="deleteDriverNote('${n.id}', '${driverId}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);flex-shrink:0;">🗑</button>
         </div>`).join('') || `<div style="color:var(--mutedFaint);font-size:12.5px;">Sin anotaciones en este periodo.</div>`}
     </div>`;
+}
+
+/* ============================= AUTÓNOMOS: FICHA DETALLE (PISO MÓVIL) =============================
+   Modalidad distinta a Plaza: no ficha, no tiene tarifa por día/km/hora.
+   Cada mes se apunta la facturación de sus viajes y se le suma un %
+   de comisión sobre esa facturación — nada de fichajes, semanas,
+   km/horas extra ni indexación. */
+function tplPisoMovilDetail(d){
+  const co = companies.find(c=>c.id===d.companyId);
+  const year = window.__autonomosYear;
+  const month = window.__autonomosMonth === undefined ? 'todos' : window.__autonomosMonth;
+  const systemYear = new Date().getFullYear();
+  const years = [...new Set([
+    ...monthlyBillingEntries.filter(e=>e.driverId===d.id).map(e=>e.year),
+    year, systemYear, systemYear + 1,
+  ])];
+  years.sort();
+
+  const entries = monthlyBillingEntries.filter(e=>e.driverId===d.id && e.year===year && (month==='todos' || e.month===Number(month))).sort((a,b)=>b.month-a.month);
+  const rows = entries.map(e => {
+    const commission = e.billingAmount * (e.commissionPercent/100);
+    return { e, commission, total: e.billingAmount + commission };
+  });
+  const totalBilling = rows.reduce((s,r)=>s+r.e.billingAmount, 0);
+  const totalCommission = rows.reduce((s,r)=>s+r.commission, 0);
+  const totalToPay = rows.reduce((s,r)=>s+r.total, 0);
+
+  return `
+    <button class="btn btn-ghost" onclick="backToDriversList()" style="margin-bottom:16px;">← Volver a conductores</button>
+    <div class="card" style="margin-bottom:18px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:14px;">
+        <div style="display:flex;align-items:center;gap:14px;">
+          <div style="width:52px;height:52px;border-radius:99px;background:var(--primary);color:var(--primary-text);display:flex;align-items:center;justify-content:center;font-family:var(--display);font-size:20px;flex-shrink:0;">${esc((d.name||'?').trim().charAt(0).toUpperCase())}</div>
+          <div>
+            <div style="font-family:var(--display);font-size:21px;line-height:1.2;">${esc(d.name)}</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap;">
+              <span style="font-size:12px;color:var(--mutedFaint);font-family:var(--mono);">${esc(d.dni||'—')}</span>
+              ${d.fleetNumber ? `<span style="font-size:11px;font-weight:600;color:var(--primary);background:rgba(27,58,107,0.08);border-radius:999px;padding:2px 9px;">🚚 Flota ${esc(d.fleetNumber)}</span>` : ''}
+              <span style="font-size:11px;font-weight:600;color:var(--muted);background:var(--panel2);border:1px solid var(--border);border-radius:999px;padding:2px 9px;">${esc(co?co.name:'')}</span>
+              <span style="font-size:11px;font-weight:600;color:#8A4A35;background:rgba(138,74,53,0.08);border-radius:999px;padding:2px 9px;">Piso Móvil</span>
+            </div>
+          </div>
+        </div>
+        <button class="btn btn-ghost" onclick="openDriverModal('${d.id}')">✏️ Editar conductor</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:22px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <label style="font-size:12.5px;color:var(--muted);font-weight:600;">📅 Ver:</label>
+        <label style="font-size:12.5px;color:var(--muted);">Año</label>
+        <select onchange="window.__autonomosYear=Number(this.value); renderTab();" style="width:100px;">
+          ${years.map(y=>`<option value="${y}" ${y===year?'selected':''}>${y}</option>`).join('')}
+        </select>
+        <label style="font-size:12.5px;color:var(--muted);">Mes</label>
+        <select onchange="window.__autonomosMonth=this.value==='todos'?'todos':Number(this.value); renderTab();" style="width:150px;">
+          <option value="todos" ${month==='todos'?'selected':''}>Todos los meses</option>
+          ${MONTH_NAMES.map((mn,i)=>`<option value="${i}" ${month===i?'selected':''}>${mn.charAt(0).toUpperCase()+mn.slice(1)}</option>`).join('')}
+        </select>
+        <div style="flex:1;"></div>
+        <button class="btn btn-primary" onclick="openBillingModal('${d.id}')">+ Añadir facturación mensual</button>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+      ${kpi('Facturación', eur2(totalBilling), null, true)}
+      ${kpi('Comisión', eur2(totalCommission), null, true)}
+      ${kpi('Total a cobrar', eur2(totalToPay), null, true)}
+    </div>
+
+    <div class="card" style="padding:0;overflow-x:auto;margin-bottom:22px;">
+      <table><thead><tr><th>Mes</th><th>Facturación</th><th>% Comisión</th><th>Comisión</th><th>Total a cobrar</th><th></th></tr></thead><tbody>
+        ${rows.map(({e,commission,total}) => `
+          <tr onclick="openBillingModal('${d.id}','${e.id}')" style="cursor:pointer;">
+            <td style="text-transform:capitalize;">${MONTH_NAMES[e.month]} ${e.year}</td>
+            <td>${eur2(e.billingAmount)}</td>
+            <td>${e.commissionPercent}%</td>
+            <td style="color:var(--success);">+${eur2(commission)}</td>
+            <td style="font-weight:700;">${eur2(total)}</td>
+            <td><button onclick="event.stopPropagation(); deleteBilling('${e.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button></td>
+          </tr>`).join('') || `<tr><td colspan="6" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin facturación registrada en este periodo.</td></tr>`}
+      </tbody></table>
+    </div>
+
+    ${tplAnotacionesSection(d.id, driverNotes.filter(n=>n.driverId===d.id && n.date.startsWith(String(year))
+        && (month==='todos' || Number(n.date.slice(5,7))-1===Number(month))
+      ))}`;
+}
+function openBillingModal(driverId, editId){
+  const editing = editId ? monthlyBillingEntries.find(e=>e.id===editId) : null;
+  const defaultMonth = window.__autonomosMonth==='todos' || window.__autonomosMonth===undefined ? new Date().getMonth() : window.__autonomosMonth;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+          <h3 class="modal-title">${editing?'Editar facturación':'Añadir facturación mensual'}</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Año</label><input id="bill-year" type="number" value="${editing?editing.year:window.__autonomosYear}" /></div>
+          <div class="field" style="flex:1;"><label>Mes</label>
+            <select id="bill-month">
+              ${MONTH_NAMES.map((mn,i)=>`<option value="${i}" ${(editing?editing.month:defaultMonth)===i?'selected':''}>${mn.charAt(0).toUpperCase()+mn.slice(1)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Facturación (€)</label><input id="bill-amount" type="number" step="0.01" value="${editing?editing.billingAmount:''}" /></div>
+          <div class="field" style="flex:1;"><label>% Comisión</label><input id="bill-commission" type="number" step="0.01" value="${editing?editing.commissionPercent:''}" /></div>
+        </div>
+        <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:10px;">Total a cobrar = facturación + facturación × comisión / 100.</div>
+        <div id="bill-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
+        <div style="display:flex;gap:10px;">
+          ${editing ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="deleteBilling('${editing.id}')">Eliminar</button>` : ''}
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitBilling('${driverId}','${editId||''}')">${editing?'Guardar':'Añadir'}</button>
+        </div>
+      </div>
+    </div>`;
+}
+async function submitBilling(driverId, editId){
+  const errEl = document.getElementById('bill-error');
+  const year = Number(document.getElementById('bill-year').value||0);
+  const month = Number(document.getElementById('bill-month').value);
+  const billingAmount = Number(document.getElementById('bill-amount').value||0);
+  const commissionPercent = Number(document.getElementById('bill-commission').value||0);
+  if (!year) { errEl.textContent = 'Indica el año.'; return; }
+  const dup = monthlyBillingEntries.find(e=>e.driverId===driverId && e.year===year && e.month===month && e.id!==editId);
+  if (dup) { errEl.textContent = 'Ya hay una facturación para ese mes. Edítala en vez de duplicarla.'; return; }
+  const data = { driverId, year, month, billingAmount, commissionPercent };
+  const dbData = { driver_id: driverId, year, month, billing_amount: billingAmount, commission_percent: commissionPercent };
+  if (editId) {
+    await supabaseClient.from('monthly_billing_entries').update(dbData).eq('id', editId);
+    const idx = monthlyBillingEntries.findIndex(e=>e.id===editId);
+    monthlyBillingEntries[idx] = { id: editId, ...data };
+  } else {
+    const { data: row, error } = await supabaseClient.from('monthly_billing_entries').insert(dbData).select().single();
+    if (error || !row) { errEl.textContent = 'No se pudo guardar.'; return; }
+    monthlyBillingEntries.push({ id: row.id, ...data });
+  }
+  window.__autonomosYear = year;
+  closeModal(); renderTab();
+}
+async function deleteBilling(id){
+  await supabaseClient.from('monthly_billing_entries').delete().eq('id', id);
+  monthlyBillingEntries = monthlyBillingEntries.filter(e=>e.id!==id);
+  closeModal(); renderTab();
 }
 
 /* ============================= AUTÓNOMOS: MODALES ============================= */
@@ -2706,7 +2880,14 @@ function openDriverModal(editId){
           <div class="field" style="flex:1;"><label>DNI</label><input id="dr-dni" value="${esc(editing?editing.dni:'')}" /></div>
           <div class="field" style="flex:1;"><label>Nº Flota</label><input id="dr-fleet" value="${esc(editing?editing.fleetNumber:'')}" /></div>
         </div>
-        ${!editing ? `<div style="font-size:11.5px;color:var(--muted);margin-bottom:14px;">Después de crearlo, añade su primera tarifa desde la ficha del conductor.</div>` : ''}
+        <div class="field">
+          <label>Modalidad</label>
+          <select id="dr-modality">
+            <option value="plaza" ${(!editing||editing.modality==='plaza')?'selected':''}>Plaza</option>
+            <option value="piso_movil" ${editing&&editing.modality==='piso_movil'?'selected':''}>Piso Móvil</option>
+          </select>
+        </div>
+        ${!editing ? `<div style="font-size:11.5px;color:var(--muted);margin-bottom:14px;">Después de crearlo, añade su primera tarifa (o su primera facturación, si es Piso Móvil) desde la ficha del conductor.</div>` : ''}
         <div style="display:flex;gap:10px;">
           ${editing ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="archiveDriver('${editing.id}')">🗄 Archivar</button>` : ''}
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
@@ -2723,8 +2904,9 @@ async function submitDriver(editId){
     companyId: document.getElementById('dr-company').value,
     dni: document.getElementById('dr-dni').value.trim(),
     fleetNumber: document.getElementById('dr-fleet').value.trim(),
+    modality: document.getElementById('dr-modality').value,
   };
-  const dbData = { name: data.name, company_id: data.companyId, dni: data.dni, fleet_number: data.fleetNumber };
+  const dbData = { name: data.name, company_id: data.companyId, dni: data.dni, fleet_number: data.fleetNumber, modality: data.modality };
   if (editId) {
     await supabaseClient.from('drivers').update(dbData).eq('id', editId);
     const idx = drivers.findIndex(d=>d.id===editId);
@@ -3378,7 +3560,7 @@ async function loadWarehouseModuleData(){
   await Promise.all([loadClients(), loadPallets(), loadMovements(), loadAppointments(), loadUnscheduled(), loadSchedules(), loadWarehouseTasks()]);
 }
 async function loadAutonomosModuleData(){
-  await Promise.all([loadCompanies(), loadDrivers(), loadDriverRates(), loadWeeklyEntries(), loadFuelEntries(), loadSupplementEntries(), loadExpenseEntries(), loadIndexationEntries(), loadDailyEntries(), loadDailyIncidents(), loadDriverNotes()]);
+  await Promise.all([loadCompanies(), loadDrivers(), loadDriverRates(), loadWeeklyEntries(), loadFuelEntries(), loadSupplementEntries(), loadExpenseEntries(), loadIndexationEntries(), loadDailyEntries(), loadDailyIncidents(), loadDriverNotes(), loadMonthlyBillingEntries()]);
 }
 let isRecoveryFlow = window.location.hash.includes('type=recovery') || window.location.search.includes('code=');
 if (isRecoveryFlow) window.location.replace('reset-password.html' + window.location.search + window.location.hash);
