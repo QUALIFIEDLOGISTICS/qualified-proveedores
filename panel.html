@@ -755,6 +755,22 @@ function getRatesForDate(driverId, dateStr){
   const all = rateHistory.filter(r=>r.driverId===driverId).sort((a,b)=> a.validFrom.localeCompare(b.validFrom));
   return all[0] || { priceDay:0, priceKmExtra:0, priceHourExtra:0, maxKmDay:0, maxHoursDay:0, hasIndexation:true };
 }
+
+let mobileCommissionRates = [];
+async function loadMobileCommissionRates(){
+  const { data } = await supabaseClient.from('mobile_commission_rates').select('*');
+  mobileCommissionRates = (data||[]).map(r => ({ id: r.id, driverId: r.driver_id, validFrom: r.valid_from, commissionPercent: Number(r.commission_percent) }));
+}
+// Igual que getRatesForDate: la comisión vigente es la última cuyo
+// "desde" sea anterior o igual a la fecha — si no hay ninguna que
+// aplique todavía, se usa la más antigua registrada.
+function getCommissionForDate(driverId, dateStr){
+  const applicable = mobileCommissionRates.filter(r=>r.driverId===driverId && r.validFrom<=dateStr).sort((a,b)=> b.validFrom.localeCompare(a.validFrom));
+  if (applicable.length) return applicable[0].commissionPercent;
+  const all = mobileCommissionRates.filter(r=>r.driverId===driverId).sort((a,b)=> a.validFrom.localeCompare(b.validFrom));
+  return all[0] ? all[0].commissionPercent : 0;
+}
+
 let weeklyEntries = [];
 async function loadWeeklyEntries(){
   const { data } = await supabaseClient.from('weekly_entries').select('*');
@@ -845,7 +861,7 @@ async function loadMonthlyBillingEntries(){
   const { data } = await supabaseClient.from('monthly_billing_entries').select('*');
   monthlyBillingEntries = (data||[]).map(e => ({
     id: e.id, driverId: e.driver_id, year: e.year, month: e.month,
-    billingAmount: Number(e.billing_amount), commissionPercent: Number(e.commission_percent),
+    billingAmount: Number(e.billing_amount),
   }));
 }
 
@@ -2261,7 +2277,10 @@ function refreshDriversListBody(){
 function billingTotalForDriverYear(driverId, year){
   return monthlyBillingEntries
     .filter(e=>e.driverId===driverId && e.year===year)
-    .reduce((s,e) => s + e.billingAmount + e.billingAmount*(e.commissionPercent/100), 0);
+    .reduce((s,e) => {
+      const pct = getCommissionForDate(driverId, `${e.year}-${String(e.month+1).padStart(2,'0')}-01`);
+      return s + e.billingAmount + e.billingAmount*(pct/100);
+    }, 0);
 }
 function netoForDriverYear(driverId, year){
   const d = drivers.find(x=>x.id===driverId);
@@ -2712,8 +2731,9 @@ function tplPisoMovilDetail(d){
 
   const entries = monthlyBillingEntries.filter(e=>e.driverId===d.id && e.year===year && (month==='todos' || e.month===Number(month))).sort((a,b)=>b.month-a.month);
   const rows = entries.map(e => {
-    const commission = e.billingAmount * (e.commissionPercent/100);
-    return { e, commission, total: e.billingAmount + commission };
+    const commissionPercent = getCommissionForDate(d.id, `${e.year}-${String(e.month+1).padStart(2,'0')}-01`);
+    const commission = e.billingAmount * (commissionPercent/100);
+    return { e, commissionPercent, commission, total: e.billingAmount + commission };
   });
   const totalBilling = rows.reduce((s,r)=>s+r.e.billingAmount, 0);
   const totalCommission = rows.reduce((s,r)=>s+r.commission, 0);
@@ -2736,6 +2756,34 @@ function tplPisoMovilDetail(d){
           </div>
         </div>
         <button class="btn btn-ghost" onclick="openDriverModal('${d.id}')">✏️ Editar conductor</button>
+      </div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          <span style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);">Comisión vigente hoy</span>
+          <span style="width:5px;height:5px;border-radius:99px;background:var(--success);display:inline-block;"></span>
+        </div>
+        <div style="background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 14px;min-width:90px;display:inline-block;">
+          <div style="font-size:10px;color:var(--mutedFaint);text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px;">% Comisión</div>
+          <div style="font-family:var(--display);font-size:16px;color:var(--text);">${getCommissionForDate(d.id, today())}%</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:22px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Histórico de comisión</div>
+        <button class="btn btn-ghost" onclick="openCommissionModal('${d.id}')">+ Nueva comisión desde una fecha</button>
+      </div>
+      <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:10px;">Cada comisión se aplica desde su fecha en adelante, hasta que empiece la siguiente. Así, si cambias el %, los meses ya pasados no se recalculan con el nuevo.</div>
+      <div class="card" style="padding:0;overflow:hidden;">
+        <table><thead><tr><th>Vigente desde</th><th>% Comisión</th><th></th></tr></thead><tbody>
+          ${mobileCommissionRates.filter(r=>r.driverId===d.id).sort((a,b)=>b.validFrom.localeCompare(a.validFrom)).map(r => `
+            <tr onclick="openCommissionModal('${d.id}','${r.id}')" style="cursor:pointer;">
+              <td>${fmtDate(r.validFrom)}</td>
+              <td>${r.commissionPercent}%</td>
+              <td><button onclick="event.stopPropagation(); deleteCommissionRate('${r.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button></td>
+            </tr>`).join('') || `<tr><td colspan="3" style="color:var(--mutedFaint);text-align:center;padding:16px;">Sin comisión registrada — se usará 0%.</td></tr>`}
+        </tbody></table>
       </div>
     </div>
 
@@ -2764,11 +2812,11 @@ function tplPisoMovilDetail(d){
 
     <div class="card" style="padding:0;overflow-x:auto;margin-bottom:22px;">
       <table><thead><tr><th>Mes</th><th>Facturación</th><th>% Comisión</th><th>Comisión</th><th>Total a cobrar</th><th></th></tr></thead><tbody>
-        ${rows.map(({e,commission,total}) => `
+        ${rows.map(({e,commissionPercent,commission,total}) => `
           <tr onclick="openBillingModal('${d.id}','${e.id}')" style="cursor:pointer;">
             <td style="text-transform:capitalize;">${MONTH_NAMES[e.month]} ${e.year}</td>
             <td>${eur2(e.billingAmount)}</td>
-            <td>${e.commissionPercent}%</td>
+            <td>${commissionPercent}%</td>
             <td style="color:var(--success);">+${eur2(commission)}</td>
             <td style="font-weight:700;">${eur2(total)}</td>
             <td><button onclick="event.stopPropagation(); deleteBilling('${e.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button></td>
@@ -2797,11 +2845,8 @@ function openBillingModal(driverId, editId){
             </select>
           </div>
         </div>
-        <div style="display:flex;gap:10px;">
-          <div class="field" style="flex:1;"><label>Facturación (€)</label><input id="bill-amount" type="number" step="0.01" value="${editing?editing.billingAmount:''}" /></div>
-          <div class="field" style="flex:1;"><label>% Comisión</label><input id="bill-commission" type="number" step="0.01" value="${editing?editing.commissionPercent:''}" /></div>
-        </div>
-        <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:10px;">Total a cobrar = facturación + facturación × comisión / 100.</div>
+        <div class="field"><label>Facturación (€)</label><input id="bill-amount" type="number" step="0.01" value="${editing?editing.billingAmount:''}" /></div>
+        <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:10px;">Total a cobrar = facturación + facturación × % comisión vigente ese mes (histórico de comisión, más abajo).</div>
         <div id="bill-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
         <div style="display:flex;gap:10px;">
           ${editing ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="deleteBilling('${editing.id}')">Eliminar</button>` : ''}
@@ -2816,12 +2861,11 @@ async function submitBilling(driverId, editId){
   const year = Number(document.getElementById('bill-year').value||0);
   const month = Number(document.getElementById('bill-month').value);
   const billingAmount = Number(document.getElementById('bill-amount').value||0);
-  const commissionPercent = Number(document.getElementById('bill-commission').value||0);
   if (!year) { errEl.textContent = 'Indica el año.'; return; }
   const dup = monthlyBillingEntries.find(e=>e.driverId===driverId && e.year===year && e.month===month && e.id!==editId);
   if (dup) { errEl.textContent = 'Ya hay una facturación para ese mes. Edítala en vez de duplicarla.'; return; }
-  const data = { driverId, year, month, billingAmount, commissionPercent };
-  const dbData = { driver_id: driverId, year, month, billing_amount: billingAmount, commission_percent: commissionPercent };
+  const data = { driverId, year, month, billingAmount };
+  const dbData = { driver_id: driverId, year, month, billing_amount: billingAmount };
   if (editId) {
     await supabaseClient.from('monthly_billing_entries').update(dbData).eq('id', editId);
     const idx = monthlyBillingEntries.findIndex(e=>e.id===editId);
@@ -2837,6 +2881,51 @@ async function submitBilling(driverId, editId){
 async function deleteBilling(id){
   await supabaseClient.from('monthly_billing_entries').delete().eq('id', id);
   monthlyBillingEntries = monthlyBillingEntries.filter(e=>e.id!==id);
+  closeModal(); renderTab();
+}
+function openCommissionModal(driverId, editId){
+  const editing = editId ? mobileCommissionRates.find(r=>r.id===editId) : null;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <h3 class="modal-title">${editing?'Editar comisión':'Nueva comisión'}</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="font-size:11.5px;color:var(--mutedFaint);margin-bottom:14px;">Se aplicará a todos los meses a partir de la fecha indicada, sin tocar los anteriores.</div>
+        <div class="field"><label>Vigente desde</label><input id="cm-from" type="date" value="${editing?editing.validFrom:today()}" /></div>
+        <div class="field"><label>% Comisión</label><input id="cm-percent" type="number" step="0.01" value="${editing?editing.commissionPercent:''}" /></div>
+        <div id="cm-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
+        <div style="display:flex;gap:10px;">
+          ${editing ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="deleteCommissionRate('${editing.id}')">Eliminar</button>` : ''}
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitCommissionRate('${driverId}','${editId||''}')">${editing?'Guardar':'Añadir'}</button>
+        </div>
+      </div>
+    </div>`;
+}
+async function submitCommissionRate(driverId, editId){
+  const validFrom = document.getElementById('cm-from').value;
+  const errEl = document.getElementById('cm-error');
+  if (!validFrom) { errEl.textContent = 'Indica la fecha desde la que se aplica.'; return; }
+  const commissionPercent = Number(document.getElementById('cm-percent').value||0);
+  const dup = mobileCommissionRates.find(r=>r.driverId===driverId && r.validFrom===validFrom && r.id!==editId);
+  if (dup) { errEl.textContent = 'Ya hay una comisión que empieza justo ese día. Edítala en vez de duplicarla.'; return; }
+  const data = { validFrom, commissionPercent };
+  const dbData = { valid_from: validFrom, commission_percent: commissionPercent };
+  if (editId) {
+    await supabaseClient.from('mobile_commission_rates').update(dbData).eq('id', editId);
+    const idx = mobileCommissionRates.findIndex(r=>r.id===editId);
+    mobileCommissionRates[idx] = { ...mobileCommissionRates[idx], ...data };
+  } else {
+    const { data: row, error } = await supabaseClient.from('mobile_commission_rates').insert({ driver_id: driverId, ...dbData }).select().single();
+    if (error || !row) { errEl.textContent = 'No se pudo guardar.'; return; }
+    mobileCommissionRates.push({ id: row.id, driverId, ...data });
+  }
+  closeModal(); renderTab();
+}
+async function deleteCommissionRate(id){
+  await supabaseClient.from('mobile_commission_rates').delete().eq('id', id);
+  mobileCommissionRates = mobileCommissionRates.filter(r=>r.id!==id);
   closeModal(); renderTab();
 }
 
@@ -3561,7 +3650,7 @@ async function loadWarehouseModuleData(){
   await Promise.all([loadClients(), loadPallets(), loadMovements(), loadAppointments(), loadUnscheduled(), loadSchedules(), loadWarehouseTasks()]);
 }
 async function loadAutonomosModuleData(){
-  await Promise.all([loadCompanies(), loadDrivers(), loadDriverRates(), loadWeeklyEntries(), loadFuelEntries(), loadSupplementEntries(), loadExpenseEntries(), loadIndexationEntries(), loadDailyEntries(), loadDailyIncidents(), loadDriverNotes(), loadMonthlyBillingEntries()]);
+  await Promise.all([loadCompanies(), loadDrivers(), loadDriverRates(), loadWeeklyEntries(), loadFuelEntries(), loadSupplementEntries(), loadExpenseEntries(), loadIndexationEntries(), loadDailyEntries(), loadDailyIncidents(), loadDriverNotes(), loadMonthlyBillingEntries(), loadMobileCommissionRates()]);
 }
 let isRecoveryFlow = window.location.hash.includes('type=recovery') || window.location.search.includes('code=');
 if (isRecoveryFlow) window.location.replace('reset-password.html' + window.location.search + window.location.hash);
