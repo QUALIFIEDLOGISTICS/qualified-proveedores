@@ -834,6 +834,12 @@ function effectiveDayValues(f){
   };
 }
 
+let driverNotes = [];
+async function loadDriverNotes(){
+  const { data } = await supabaseClient.from('driver_notes').select('*').order('date', { ascending: false }).order('created_at', { ascending: false });
+  driverNotes = (data||[]).map(x => ({ id: x.id, driverId: x.driver_id, date: x.date, note: x.note }));
+}
+
 let dailyEntries = [];
 async function loadDailyEntries(){
   const { data } = await supabaseClient.from('daily_entries').select('*');
@@ -2630,6 +2636,29 @@ function tplDriverDetail(){
           </tr>
         </tfoot>` : ''}
       </table>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;margin-top:22px;flex-wrap:wrap;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Anotaciones</div>
+      <div style="font-size:11.5px;color:var(--mutedFaint);">— para dejar constancia de lo que sea, en el día que quieras. No afecta a ningún cálculo.</div>
+    </div>
+    <div class="card" style="margin-bottom:14px;">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+        <div class="field" style="flex:0 0 160px;margin-bottom:0;"><label>Fecha</label><input id="note-date" type="date" value="${today()}" /></div>
+        <div class="field" style="flex:1 1 260px;margin-bottom:0;"><label>Nota</label><input id="note-text" placeholder="Escribe una anotación…" onkeydown="if(event.key==='Enter'){event.preventDefault(); addDriverNote('${d.id}');}" /></div>
+        <button class="btn btn-primary" onclick="addDriverNote('${d.id}')">+ Añadir</button>
+      </div>
+      <div id="note-error" style="color:var(--danger);font-size:12.5px;margin-top:8px;"></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      ${driverNotes.filter(n=>n.driverId===d.id).map(n => `
+        <div class="card" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+          <div>
+            <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:2px;">${fmtDate(n.date)}</div>
+            <div style="font-size:13.5px;">${esc(n.note)}</div>
+          </div>
+          <button onclick="deleteDriverNote('${n.id}', '${d.id}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);flex-shrink:0;">🗑</button>
+        </div>`).join('') || `<div style="color:var(--mutedFaint);font-size:12.5px;">Sin anotaciones todavía.</div>`}
     </div>`;
 }
 
@@ -3159,6 +3188,29 @@ async function deleteIncident(id, driverId, date){
   await recalcWeeksFromFichajes(driverId, year, { year, week });
   openIncidentsModal(driverId, date);
 }
+async function addDriverNote(driverId){
+  const errEl = document.getElementById('note-error');
+  errEl.textContent = '';
+  const date = document.getElementById('note-date').value;
+  const note = document.getElementById('note-text').value.trim();
+  if (!date) { errEl.textContent = 'Indica la fecha.'; return; }
+  if (!note) { errEl.textContent = 'Escribe algo antes de añadir.'; return; }
+  try {
+    const { data, error } = await supabaseClient.from('driver_notes').insert({ driver_id: driverId, date, note }).select().single();
+    if (error || !data) throw error || new Error('sin datos');
+    driverNotes.unshift({ id: data.id, driverId, date, note });
+    driverNotes.sort((a,b)=> b.date.localeCompare(a.date));
+    document.getElementById('note-text').value = '';
+    renderTab();
+  } catch (error) {
+    errEl.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido.');
+  }
+}
+async function deleteDriverNote(id, driverId){
+  await supabaseClient.from('driver_notes').delete().eq('id', id);
+  driverNotes = driverNotes.filter(x=>x.id!==id);
+  renderTab();
+}
 async function recalcWeeksFromFichajes(driverId, year, touchedWeek){
   const fichajes = dailyEntries.filter(f=>f.driverId===driverId && f.status==='cerrada');
   const byWeek = {};
@@ -3323,7 +3375,7 @@ async function loadWarehouseModuleData(){
   await Promise.all([loadClients(), loadPallets(), loadMovements(), loadAppointments(), loadUnscheduled(), loadSchedules(), loadWarehouseTasks()]);
 }
 async function loadAutonomosModuleData(){
-  await Promise.all([loadCompanies(), loadDrivers(), loadDriverRates(), loadWeeklyEntries(), loadFuelEntries(), loadSupplementEntries(), loadExpenseEntries(), loadIndexationEntries(), loadDailyEntries(), loadDailyIncidents()]);
+  await Promise.all([loadCompanies(), loadDrivers(), loadDriverRates(), loadWeeklyEntries(), loadFuelEntries(), loadSupplementEntries(), loadExpenseEntries(), loadIndexationEntries(), loadDailyEntries(), loadDailyIncidents(), loadDriverNotes()]);
 }
 let isRecoveryFlow = window.location.hash.includes('type=recovery') || window.location.search.includes('code=');
 if (isRecoveryFlow) window.location.replace('reset-password.html' + window.location.search + window.location.hash);
