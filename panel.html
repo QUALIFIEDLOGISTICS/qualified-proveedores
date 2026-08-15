@@ -2529,7 +2529,7 @@ function tplDriverDetail(){
             const idxAmount = c.dayAmount * (idxPct/100);
             const rowNeto = c.neto + idxAmount;
             return `
-            <tr class="fin-row" onclick="openWeekModal('${d.id}','${e.id}')" style="cursor:pointer;">
+            <tr class="fin-row">
               <td class="fin-first fin-center" style="font-weight:600;" ${e._splitMonth!==undefined?`title="Semana repartida entre dos meses — aquí solo se cuentan los días de ${MONTH_NAMES[e._splitMonth]}."`:''}>${e.week}${e._splitMonth!==undefined?' ✂️':''}</td>
               <td class="fin-num fin-center fin-g-jornada fin-g-start" style="color:var(--muted);" onclick="event.stopPropagation();">${e.daysWorked}</td>
               <td class="fin-num fin-g-jornada" style="color:var(--muted);" onclick="event.stopPropagation();">${e.km}</td>
@@ -3077,111 +3077,6 @@ function confirmRecalcWeeks(driverId, year){
       </div>
     </div>`;
 }
-function openWeekModal(driverId, editId){
-  const editing = weeklyEntries.find(e=>e.id===editId);
-  if (!editing) return;
-  const fromFichajes = dailyEntries.some(f => f.driverId===driverId && f.status==='cerrada' && (()=>{ const w=getISOWeek(f.date); return w.year===editing.year && w.week===editing.week; })());
-  const lockedStyle = 'background:var(--panel);color:var(--mutedFaint);cursor:not-allowed;';
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
-          <h3 class="modal-title">Editar semana</h3><button class="close-x" onclick="closeModal()">✕</button>
-        </div>
-        <div style="display:flex;gap:10px;">
-          <div class="field" style="flex:1;"><label>Año</label><input id="wk-year" type="number" value="${editing.year}" /></div>
-          <div class="field" style="flex:1;"><label>Nº semana</label><input id="wk-week" type="number" min="1" max="53" value="${editing.week}" /></div>
-        </div>
-        ${fromFichajes ? `<div style="font-size:11.5px;color:var(--muted);background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:14px;">🔒 Días, km y horas vienen de los fichajes diarios de esta semana — se editan desde <strong>Fichajes diarios</strong>, no aquí.</div>` : ''}
-        <div style="display:flex;gap:10px;">
-          <div class="field" style="flex:1;"><label>Días trabajados</label><input id="wk-days" type="number" value="${editing.daysWorked}" ${fromFichajes?'disabled':''} style="${fromFichajes?lockedStyle:''}" /></div>
-          <div class="field" style="flex:1;"><label>Km totales</label><input id="wk-km" type="number" step="0.1" value="${editing.km}" ${fromFichajes?'disabled':''} style="${fromFichajes?lockedStyle:''}" /></div>
-          <div class="field" style="flex:1;"><label>Horas totales</label><input id="wk-hours" type="number" step="0.5" value="${editing.hours}" ${fromFichajes?'disabled':''} style="${fromFichajes?lockedStyle:''}" /></div>
-        </div>
-        <div class="field">
-          <label>Suplementos (€)</label>
-          <input type="text" value="${eur2(editing.supplements)}" disabled style="${lockedStyle}" />
-          <button type="button" onclick="closeModal(); openSupplementModal('${driverId}', ${editing.year}, ${editing.week});" style="background:none;border:none;color:var(--primary);font-size:11px;padding:2px 0;cursor:pointer;">🔒 Gestionar suplementos →</button>
-        </div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Gastos que se descuentan de lo que cobra:</div>
-        <div style="display:flex;gap:10px;">
-          <div class="field" style="flex:1;">
-            <label>Gasoil (€)</label>
-            <input type="text" value="${eur2(editing.gasoil)}" disabled style="${lockedStyle}" />
-            <button type="button" onclick="closeModal(); openFuelModal('${driverId}', ${editing.year}, ${editing.week});" style="background:none;border:none;color:var(--primary);font-size:11px;padding:2px 0;cursor:pointer;">🔒 Gestionar repostajes →</button>
-          </div>
-          <div class="field" style="flex:1;">
-            <label>Peajes (€)</label>
-            <input type="text" value="${eur2(editing.peajes)}" disabled style="${lockedStyle}" />
-            <button type="button" onclick="closeModal(); openExpenseModal('${driverId}', ${editing.year}, ${editing.week}, 'peaje');" style="background:none;border:none;color:var(--primary);font-size:11px;padding:2px 0;cursor:pointer;">🔒 Gestionar peajes →</button>
-          </div>
-          <div class="field" style="flex:1;">
-            <label>Otros (€)</label>
-            <input type="text" value="${eur2(editing.otros)}" disabled style="${lockedStyle}" />
-            <button type="button" onclick="closeModal(); openExpenseModal('${driverId}', ${editing.year}, ${editing.week}, 'otro');" style="background:none;border:none;color:var(--primary);font-size:11px;padding:2px 0;cursor:pointer;">🔒 Gestionar otros →</button>
-          </div>
-        </div>
-        <div id="wk-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
-        <div style="display:flex;gap:10px;">
-          <button class="btn btn-ghost" style="color:var(--danger);" onclick="deleteWeekEntry('${editing.id}')">Eliminar</button>
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitWeek('${driverId}','${editId}')">Guardar cambios</button>
-        </div>
-      </div>
-    </div>`;
-}
-async function submitWeek(driverId, editId){
-  const year = Number(document.getElementById('wk-year').value||0);
-  const week = Number(document.getElementById('wk-week').value||0);
-  const errEl = document.getElementById('wk-error');
-  if (!week || week<1 || week>53) { errEl.textContent = 'Indica un número de semana válido (1-53).'; return; }
-  const dup = weeklyEntries.find(e => e.driverId===driverId && e.year===year && e.week===week && e.id!==editId);
-  if (dup) { errEl.textContent = `Ya existe una entrada para la semana ${week} de ${year} en este conductor.`; return; }
-
-  const daysInput = document.getElementById('wk-days');
-  const kmInput = document.getElementById('wk-km');
-  const hoursInput = document.getElementById('wk-hours');
-  const existing = weeklyEntries.find(e=>e.id===editId);
-  const data = {
-    driverId, year, week,
-    daysWorked: daysInput.disabled ? existing.daysWorked : Number(daysInput.value||0),
-    km: kmInput.disabled ? existing.km : Number(kmInput.value||0),
-    hours: hoursInput.disabled ? existing.hours : Number(hoursInput.value||0),
-    supplements: existing.supplements,
-    gasoil: existing.gasoil,
-    peajes: existing.peajes,
-    otros: existing.otros,
-  };
-  const dbData = { driver_id: driverId, year, week, days_worked: data.daysWorked, km: data.km, hours: data.hours };
-  await supabaseClient.from('weekly_entries').update(dbData).eq('id', editId);
-  const idx = weeklyEntries.findIndex(e=>e.id===editId);
-  weeklyEntries[idx] = { ...weeklyEntries[idx], ...data };
-  window.__autonomosYear = year;
-  closeModal(); renderTab();
-}
-function deleteWeekEntry(id){
-  const e = weeklyEntries.find(x=>x.id===id);
-  if (!e) return;
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box" style="max-width:360px;">
-        <h3 class="modal-title" style="margin-bottom:10px;">Eliminar semana</h3>
-        <div style="font-size:13.5px;color:var(--muted);margin-bottom:20px;">
-          ¿Seguro que quieres eliminar la semana ${e.week} de ${e.year} (${e.daysWorked} días, ${e.km} km)? Esta acción no se puede deshacer.
-        </div>
-        <div style="display:flex;gap:10px;">
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button class="btn btn-primary" style="flex:1;justify-content:center;background:var(--danger);" onclick="confirmDeleteWeekEntry('${id}')">Sí, eliminar</button>
-        </div>
-      </div>
-    </div>`;
-}
-async function confirmDeleteWeekEntry(id){
-  await supabaseClient.from('weekly_entries').delete().eq('id', id);
-  weeklyEntries = weeklyEntries.filter(e=>e.id!==id);
-  closeModal(); renderTab();
-}
-
 /* ============================= ADMINISTRACIÓN ============================= */
 let ALL_PROFILES = [];
 async function loadAllProfiles(){
