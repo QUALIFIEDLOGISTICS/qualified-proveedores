@@ -2382,14 +2382,24 @@ function openDriverDetail(id){
   currentTab='autonomos'; window.__autonomosView='detalle'; window.__autonomosDriverId=id;
   window.__autonomosYear = window.__autonomosYear || new Date().getFullYear();
   if (window.__autonomosMonth === undefined) window.__autonomosMonth = new Date().getMonth();
+  const d = drivers.find(x=>x.id===id);
+  // La vista que se muestra empieza en la modalidad actual del
+  // conductor, pero se puede alternar sin tocarla — así, si algún día
+  // cambia de modalidad, su histórico en la otra vista nunca se pierde.
+  window.__autonomosViewAs = d ? d.modality : 'plaza';
   renderSidebar(); renderHeader(); renderTab();
 }
 function backToDriversList(){ window.__autonomosView='lista'; window.__autonomosDriverId=null; renderTab(); }
+function toggleAutonomosViewAs(){
+  window.__autonomosViewAs = window.__autonomosViewAs === 'piso_movil' ? 'plaza' : 'piso_movil';
+  renderTab();
+}
 
 function tplDriverDetail(){
   const d = drivers.find(x=>x.id===window.__autonomosDriverId);
   if (!d) { window.__autonomosView='lista'; return tplDriversList(); }
-  if (d.modality === 'piso_movil') return tplPisoMovilDetail(d);
+  const viewAs = window.__autonomosViewAs || d.modality;
+  if (viewAs === 'piso_movil') return tplPisoMovilDetail(d);
   const co = companies.find(c=>c.id===d.companyId);
   const driverIndexed = getRatesForDate(d.id, today()).hasIndexation !== false;
   const year = window.__autonomosYear;
@@ -2439,10 +2449,14 @@ function tplDriverDetail(){
               <span style="font-size:12px;color:var(--mutedFaint);font-family:var(--mono);">${esc(d.dni||'—')}</span>
               ${d.fleetNumber ? `<span style="font-size:11px;font-weight:600;color:var(--primary);background:rgba(27,58,107,0.08);border-radius:999px;padding:2px 9px;">🚚 Flota ${esc(d.fleetNumber)}</span>` : ''}
               <span style="font-size:11px;font-weight:600;color:var(--muted);background:var(--panel2);border:1px solid var(--border);border-radius:999px;padding:2px 9px;">${esc(co?co.name:'')}</span>
+              ${viewAs!==d.modality ? `<span style="font-size:11px;font-weight:600;color:#D9A72C;background:rgba(217,167,44,0.1);border-radius:999px;padding:2px 9px;">Viendo histórico Plaza — su modalidad actual es Piso Móvil</span>` : ''}
             </div>
           </div>
         </div>
-        <button class="btn btn-ghost" onclick="openDriverModal('${d.id}')">✏️ Editar conductor</button>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost" onclick="toggleAutonomosViewAs()">Ver como Piso Móvil →</button>
+          <button class="btn btn-ghost" onclick="openDriverModal('${d.id}')">✏️ Editar conductor</button>
+        </div>
       </div>
       ${(() => { const r = getRatesForDate(d.id, today()); return `
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
@@ -2700,6 +2714,7 @@ function tplAnotacionesSection(driverId, filteredNotes){
    km/horas extra ni indexación. */
 function tplPisoMovilDetail(d){
   const co = companies.find(c=>c.id===d.companyId);
+  const viewAs = window.__autonomosViewAs || d.modality;
   const year = window.__autonomosYear;
   const month = window.__autonomosMonth === undefined ? 'todos' : window.__autonomosMonth;
   const systemYear = new Date().getFullYear();
@@ -2731,10 +2746,14 @@ function tplPisoMovilDetail(d){
               ${d.fleetNumber ? `<span style="font-size:11px;font-weight:600;color:var(--primary);background:rgba(27,58,107,0.08);border-radius:999px;padding:2px 9px;">🚚 Flota ${esc(d.fleetNumber)}</span>` : ''}
               <span style="font-size:11px;font-weight:600;color:var(--muted);background:var(--panel2);border:1px solid var(--border);border-radius:999px;padding:2px 9px;">${esc(co?co.name:'')}</span>
               <span style="font-size:11px;font-weight:600;color:#8A4A35;background:rgba(138,74,53,0.08);border-radius:999px;padding:2px 9px;">Piso Móvil</span>
+              ${viewAs!==d.modality ? `<span style="font-size:11px;font-weight:600;color:#D9A72C;background:rgba(217,167,44,0.1);border-radius:999px;padding:2px 9px;">Viendo histórico Piso Móvil — su modalidad actual es Plaza</span>` : ''}
             </div>
           </div>
         </div>
-        <button class="btn btn-ghost" onclick="openDriverModal('${d.id}')">✏️ Editar conductor</button>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost" onclick="toggleAutonomosViewAs()">Ver como Plaza →</button>
+          <button class="btn btn-ghost" onclick="openDriverModal('${d.id}')">✏️ Editar conductor</button>
+        </div>
       </div>
     </div>
 
@@ -2911,6 +2930,9 @@ async function submitDriver(editId){
     await supabaseClient.from('drivers').update(dbData).eq('id', editId);
     const idx = drivers.findIndex(d=>d.id===editId);
     drivers[idx] = { ...drivers[idx], ...data };
+    // Si acabas de cambiar la modalidad desde su propia ficha, la vista
+    // salta a la nueva de inmediato (en vez de quedarse "viendo histórico").
+    if (window.__autonomosDriverId === editId) window.__autonomosViewAs = data.modality;
   } else {
     const { data: row, error } = await supabaseClient.from('drivers').insert({ ...dbData, archived: false }).select().single();
     if (error || !row) return;
