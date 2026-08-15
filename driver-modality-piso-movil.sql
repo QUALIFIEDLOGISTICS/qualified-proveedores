@@ -13,30 +13,33 @@ alter table public.drivers
 -- de comisión sobre esa facturación. Total a cobrar = facturación +
 -- facturación×comisión/100 — el % se guarda en cada mes (no hace
 -- falta un histórico aparte, ya es "por mes" de por sí).
-create table public.monthly_billing_entries (
+create table if not exists public.monthly_billing_entries (
   id uuid primary key default gen_random_uuid(),
   driver_id uuid not null references public.drivers(id) on delete cascade,
   year integer not null,
   month integer not null check (month between 0 and 11),
   billing_amount numeric not null default 0,
-  commission_percent numeric not null default 0,
   unique (driver_id, year, month)
 );
 
 alter table public.monthly_billing_entries enable row level security;
 
+drop policy if exists monthly_billing_entries_select on public.monthly_billing_entries;
 create policy monthly_billing_entries_select on public.monthly_billing_entries for select using (
   exists (select 1 from public.profiles p where p.id = auth.uid()
     and (p.is_admin or p.allowed_tabs ?| array['trafico','autonomos']))
 );
+drop policy if exists monthly_billing_entries_insert on public.monthly_billing_entries;
 create policy monthly_billing_entries_insert on public.monthly_billing_entries for insert with check (
   exists (select 1 from public.profiles p where p.id = auth.uid()
     and (p.is_admin or p.allowed_tabs ?| array['autonomos']))
 );
+drop policy if exists monthly_billing_entries_update on public.monthly_billing_entries;
 create policy monthly_billing_entries_update on public.monthly_billing_entries for update using (
   exists (select 1 from public.profiles p where p.id = auth.uid()
     and (p.is_admin or p.allowed_tabs ?| array['autonomos']))
 );
+drop policy if exists monthly_billing_entries_delete on public.monthly_billing_entries;
 create policy monthly_billing_entries_delete on public.monthly_billing_entries for delete using (
   exists (select 1 from public.profiles p where p.id = auth.uid()
     and (p.is_admin or p.allowed_tabs ?| array['autonomos']))
