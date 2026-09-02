@@ -781,6 +781,7 @@ async function loadWeeklyEntries(){
   weeklyEntries = (data||[]).map(e => ({
     id: e.id, driverId: e.driver_id, year: e.year, week: e.week,
     daysWorked: Number(e.days_worked), km: Number(e.km), hours: Number(e.hours),
+    manualAmount: Number(e.manual_amount||0),
     supplements: 0, gasoil: 0, peajes: 0, otros: 0,
   }));
 }
@@ -880,6 +881,7 @@ async function loadDailyEntries(){
       id: f.id, driverId: f.driver_id, date: f.date, status: f.status, timeIn: f.time_in, timeOut: f.time_out,
       kmStart: f.km_start!=null?Number(f.km_start):null, kmEnd: f.km_end!=null?Number(f.km_end):null, km: f.km!=null?Number(f.km):null,
       photoIn, photoOut,
+      excludedFromCalc: !!f.excluded_from_calc, manualAmount: Number(f.manual_amount||0),
     });
   }
 }
@@ -935,10 +937,11 @@ function computeWeek(driver, e){
   const hoursExtraAmount = hoursExtra * driver.priceHourExtra;
   const extraCharge = Math.max(kmExtraAmount, hoursExtraAmount, 0);
   const supplements = Number(e.supplements||0);
-  const totalIngreso = dayAmount + extraCharge + supplements;
+  const manualAmount = Number(e.manualAmount||0);
+  const totalIngreso = dayAmount + extraCharge + supplements + manualAmount;
   const gastosTotal = Number(e.gasoil||0) + Number(e.peajes||0) + Number(e.otros||0);
   const neto = totalIngreso - gastosTotal;
-  return { maxKm, maxHours, kmExtra, hoursExtra, dayAmount, kmExtraAmount, hoursExtraAmount, extraCharge, totalIngreso, gastosTotal, neto };
+  return { maxKm, maxHours, kmExtra, hoursExtra, dayAmount, kmExtraAmount, hoursExtraAmount, extraCharge, manualAmount, totalIngreso, gastosTotal, neto };
 }
 function eur2(n){ return Number(n||0).toLocaleString('es-ES', { style:'currency', currency:'EUR' }); }
 function eurSigned(n){
@@ -2386,15 +2389,18 @@ function buildMonthRows(driverId, year, month){
       if (weekMonth(e.year, e.week) === targetMonth) rows.push(e);
       return;
     }
-    const monthFichajes = weekFichajes.filter(f => Number(f.date.slice(5,7))-1 === targetMonth).sort((a,b)=>a.date.localeCompare(b.date));
-    if (monthFichajes.length === 0) return;
+    const monthAllFichajes = weekFichajes.filter(f => Number(f.date.slice(5,7))-1 === targetMonth).sort((a,b)=>a.date.localeCompare(b.date));
+    if (monthAllFichajes.length === 0) return;
+    const monthFichajes = monthAllFichajes.filter(f => !f.excludedFromCalc);
+    const monthManual = monthAllFichajes.filter(f => f.excludedFromCalc).reduce((s,f)=>s+Number(f.manualAmount||0),0);
     rows.push({
       ...e,
       daysWorked: monthFichajes.length,
       km: Math.round(monthFichajes.reduce((s,f)=>s+Number(f.km||0),0)*10)/10,
       hours: Math.round(monthFichajes.reduce((s,f)=>s+fichajeHours(f),0)*100)/100,
+      manualAmount: Math.round(monthManual*100)/100,
       _splitMonth: targetMonth,
-      _rateDate: monthFichajes[0].date,
+      _rateDate: monthAllFichajes[0].date,
     });
   });
   return rows.sort((a,b)=>a.week-b.week);
@@ -2446,6 +2452,7 @@ function tplDriverDetail(){
   const sumC = (key) => rows.reduce((s,r)=> s + r.c[key], 0);
   const totalDias = sum('daysWorked'), totalKm = sum('km'), totalHoras = sum('hours');
   const totalDiaAmount = sumC('dayAmount');
+  const totalManual = sumC('manualAmount');
   const totalIngreso = sumC('totalIngreso');
   const totalGastos = sumC('gastosTotal');
   const indexAmount = driverIndexed ? rows.reduce((s,r) => {
@@ -2576,7 +2583,7 @@ function tplDriverDetail(){
       <button class="btn btn-ghost" onclick="openAddFichajeModal('${d.id}')">+ Añadir fichaje diario manual</button>
     </div>
     <div class="card" style="padding:0;overflow-x:auto;margin-bottom:14px;">
-      <table><thead><tr><th>Fecha</th><th>Estado</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km inicial</th><th>Km final</th><th>Km recorridos</th><th>Incidencias</th><th>Foto inicio</th><th>Foto cierre</th><th></th></tr></thead><tbody>
+      <table><thead><tr><th>Fecha</th><th>Estado</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km inicial</th><th>Km final</th><th>Km recorridos</th><th>Incidencias</th><th title="Excluir el día del cálculo normal (días/km/horas) y pagar un importe manual en su lugar.">Cálculo</th><th>Foto inicio</th><th>Foto cierre</th><th></th></tr></thead><tbody>
         ${dailyEntries.filter(f=>f.driverId===d.id && f.date.startsWith(String(year))
             && (month==='todos' || Number(f.date.slice(5,7))-1===Number(month))
             && (weekFilter==='todas' || getISOWeek(f.date).week===Number(weekFilter))
@@ -2586,12 +2593,15 @@ function tplDriverDetail(){
             <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}</td>
             <td style="color:var(--muted);">${f.timeIn}</td>
             <td style="color:var(--muted);">${f.timeOut||'—'}</td>
-            <td>${f.timeOut ? fmtHoursMin(fichajeHours(f)) : '—'}</td>
+            <td style="${f.excludedFromCalc?'color:var(--mutedFaint);text-decoration:line-through;':''}">${f.timeOut ? fmtHoursMin(fichajeHours(f)) : '—'}</td>
             <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmStart ?? '—'}</td>
             <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmEnd ?? '—'}</td>
-            <td style="font-weight:600;">${f.km!=null ? f.km+' km' : '—'}</td>
+            <td style="font-weight:600;${f.excludedFromCalc?'color:var(--mutedFaint);text-decoration:line-through;':''}">${f.km!=null ? f.km+' km' : '—'}</td>
             <td>
               <button onclick="openIncidentsModal('${d.id}', '${f.date}')" title="Ver o añadir incidencias de este día" style="background:none;border:1px solid var(--border);border-radius:5px;color:${inc.length?'var(--danger)':'var(--muted)'};font-size:10.5px;padding:3px 7px;white-space:nowrap;">${inc.length ? '⚠ '+inc.length : '+ Incidencia'}</button>
+            </td>
+            <td>
+              <button onclick="openExclusionModal('${f.id}')" title="Excluir este día del cálculo normal y pagar un importe manual" style="background:none;border:1px solid var(--border);border-radius:5px;color:${f.excludedFromCalc?'var(--primary)':'var(--muted)'};font-size:10.5px;padding:3px 7px;white-space:nowrap;">${f.excludedFromCalc ? '💶 '+eur2(f.manualAmount||0) : '+ Excluir'}</button>
             </td>
             <td>${photoThumb(f.photoIn)}</td>
             <td>${photoThumb(f.photoOut)}</td>
@@ -2599,7 +2609,7 @@ function tplDriverDetail(){
               <button onclick="openEditFichajeModal('${f.id}')" title="Corregir" style="background:none;border:none;color:var(--primary);">✏️</button>
               <button onclick="deleteFichaje('${f.id}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>
             </td>
-          </tr>`; }).join('') || `<tr><td colspan="12" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin fichajes registrados en ${year}</td></tr>`}
+          </tr>`; }).join('') || `<tr><td colspan="13" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin fichajes registrados en ${year}</td></tr>`}
       </tbody></table>
     </div>
 
@@ -2623,7 +2633,7 @@ function tplDriverDetail(){
           <tr class="fin-group-row">
             <th class="fin-first"></th>
             <th colspan="5" class="fin-g-jornada">Jornada</th>
-            <th colspan="4" class="fin-g-ingresos">Ingresos</th>
+            <th colspan="5" class="fin-g-ingresos">Ingresos</th>
             <th colspan="4" class="fin-g-gastos">Gastos</th>
             ${driverIndexed ? `<th class="fin-g-ajustes">Ajustes</th>` : ''}
             <th class="fin-neto">Neto</th>
@@ -2638,7 +2648,8 @@ function tplDriverDetail(){
             <th class="fin-num fin-g-ingresos fin-g-start" title="Días trabajados × precio/día de la tarifa vigente esa semana.">€/día</th>
             <th class="fin-num fin-g-ingresos" title="Se coge el valor más alto entre el importe de km extra y el de horas extra de la semana. Nunca se suman los dos, solo se cobra el mayor.">Total Extra</th>
             <th class="fin-num fin-g-ingresos" title="Suma de los suplementos registrados esa semana (fecha, importe y motivo). Haz clic para ver el detalle.">Suplem.</th>
-            <th class="fin-num fin-g-ingresos" title="€/día + Extra + Suplementos.">Ingreso</th>
+            <th class="fin-num fin-g-ingresos" title="Importe manual de los días marcados como excluidos del cálculo normal (ver Fichajes diarios). Se paga tal cual, en vez de €/día y km/h extra para esos días.">Manual</th>
+            <th class="fin-num fin-g-ingresos" title="€/día + Extra + Suplementos + Manual.">Ingreso</th>
             <th class="fin-num fin-g-gastos fin-g-start" title="Suma de los repostajes registrados esa semana (litros × precio/litro). Haz clic para ver el detalle.">Gasoil</th>
             <th class="fin-num fin-g-gastos" title="Suma de los peajes registrados esa semana (fecha, importe y motivo). Haz clic para ver el detalle. Se descuenta del ingreso.">Peajes</th>
             <th class="fin-num fin-g-gastos" title="Suma de otros gastos registrados esa semana (fecha, importe y motivo). Haz clic para ver el detalle. Se descuenta del ingreso.">Otros</th>
@@ -2663,6 +2674,7 @@ function tplDriverDetail(){
               <td class="fin-num fin-g-ingresos fin-g-start" style="color:var(--muted);" onclick="event.stopPropagation();">${eur2(c.dayAmount)}</td>
               <td class="fin-num fin-g-ingresos" onclick="event.stopPropagation();">${c.extraCharge>0 ? `<span class="fin-pill" style="background:rgba(63,143,95,0.12);color:var(--success);">+${eur2(c.extraCharge)}</span>` : `<span style="color:var(--mutedFaint);">—</span>`}</td>
               <td class="fin-num fin-g-ingresos" style="color:var(--primary);text-decoration:underline;cursor:pointer;" onclick="event.stopPropagation(); openSupplementModal('${d.id}', ${e.year}, ${e.week});">${e.supplements ? eur2(e.supplements) : '—'}</td>
+              <td class="fin-num fin-g-ingresos" style="color:${e.manualAmount?'var(--primary)':'var(--mutedFaint)'};font-weight:600;" onclick="event.stopPropagation();">${e.manualAmount ? eur2(e.manualAmount) : '—'}</td>
               <td class="fin-num fin-g-ingresos" style="font-weight:700;" onclick="event.stopPropagation();">${eur2(c.totalIngreso)}</td>
               <td class="fin-num fin-g-gastos fin-g-start" style="color:${e.gasoil?'var(--danger)':'var(--mutedFaint)'};text-decoration:underline;cursor:pointer;" onclick="event.stopPropagation(); openFuelModal('${d.id}', ${e.year}, ${e.week});">${e.gasoil ? eur2(e.gasoil) : '—'}</td>
               <td class="fin-num fin-g-gastos" style="color:${e.peajes?'var(--danger)':'var(--mutedFaint)'};text-decoration:underline;cursor:pointer;" onclick="event.stopPropagation(); openExpenseModal('${d.id}', ${e.year}, ${e.week}, 'peaje');">${e.peajes ? eur2(e.peajes) : '—'}</td>
@@ -2671,7 +2683,7 @@ function tplDriverDetail(){
               ${driverIndexed ? `<td class="fin-num fin-g-ajustes fin-g-start" style="color:${idxAmount<0?'var(--danger)':idxAmount>0?'var(--success)':'var(--mutedFaint)'};font-weight:600;" title="${idxPct}% sobre ${eur2(c.dayAmount)}" onclick="event.stopPropagation();">${idxAmount ? eurSigned(idxAmount) : '—'}</td>` : ''}
               <td class="fin-num fin-neto" style="font-weight:800;color:var(--primary);font-size:15px;" onclick="event.stopPropagation();">${eur2(rowNeto)}</td>
             </tr>`;
-          }).join('') || `<tr><td colspan="${driverIndexed?16:15}" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin semanas registradas en ${year}</td></tr>`}
+          }).join('') || `<tr><td colspan="${driverIndexed?17:16}" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin semanas registradas en ${year}</td></tr>`}
         </tbody>
         ${rows.length ? `
         <tfoot>
@@ -2682,7 +2694,8 @@ function tplDriverDetail(){
             <td class="fin-num">${fmtHoursMin(totalHoras)}</td>
             <td></td><td></td>
             <td class="fin-num">${eur2(totalDiaAmount)}</td>
-            <td></td><td></td>
+            <td></td>
+            <td class="fin-num">${totalManual ? eur2(totalManual) : '—'}</td>
             <td class="fin-num">${eur2(totalIngreso)}</td>
             <td></td><td></td><td></td>
             <td class="fin-num">${totalGastos ? '−'+eur2(totalGastos) : '—'}</td>
@@ -3410,6 +3423,53 @@ async function submitEditFichaje(id){
     btn.disabled = false;
   }
 }
+function openExclusionModal(id){
+  const f = dailyEntries.find(x=>x.id===id);
+  if (!f) return;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <h3 class="modal-title">Excluir del cálculo — ${fmtDate(f.date)}</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="font-size:11.5px;color:var(--mutedFaint);margin-bottom:14px;">Si marcas este día como excluido, no cuenta para los días/km/horas de esa semana (ni para el €/día ni el km/h extra) — en su lugar se paga directamente el importe manual que pongas aquí, sumado al ingreso de la semana. Útil para jornadas parciales (p. ej. 6h en vez de la jornada completa) que prefieres liquidar a mano.</div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:12px;">
+          <input type="checkbox" id="excl-toggle" ${f.excludedFromCalc?'checked':''} onchange="document.getElementById('excl-amount-field').style.display=this.checked?'block':'none';" />
+          Excluir este día del cálculo normal
+        </label>
+        <div class="field" id="excl-amount-field" style="display:${f.excludedFromCalc?'block':'none'};"><label>Importe manual a pagar por este día (€)</label><input id="excl-amount" type="number" step="0.01" min="0" value="${f.manualAmount||''}" placeholder="0" /></div>
+        <div id="excl-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" id="excl-submit-btn" style="flex:1;justify-content:center;" onclick="submitExclusion('${id}')">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+}
+async function submitExclusion(id){
+  const errEl = document.getElementById('excl-error');
+  const btn = document.getElementById('excl-submit-btn');
+  errEl.textContent = '';
+  const f = dailyEntries.find(x=>x.id===id);
+  if (!f) return;
+  const excludedFromCalc = document.getElementById('excl-toggle').checked;
+  const manualAmount = excludedFromCalc ? Number(document.getElementById('excl-amount').value||0) : 0;
+  if (manualAmount < 0) { errEl.textContent = 'El importe no puede ser negativo.'; return; }
+  btn.disabled = true;
+  try {
+    const { error } = await supabaseClient.from('daily_entries').update({
+      excluded_from_calc: excludedFromCalc, manual_amount: manualAmount,
+    }).eq('id', id);
+    if (error) throw error;
+    Object.assign(f, { excludedFromCalc, manualAmount });
+    const { year, week } = getISOWeek(f.date);
+    closeModal();
+    await recalcWeeksFromFichajes(f.driverId, year, { year, week });
+  } catch (error) {
+    errEl.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido.');
+    btn.disabled = false;
+  }
+}
 function openIncidentsModal(driverId, date){
   const list = incidentsForDay(driverId, date);
   document.getElementById('modal-slot').innerHTML = `
@@ -3514,7 +3574,14 @@ async function recalcWeeksFromFichajes(driverId, year, touchedWeek){
   fichajes.forEach(f => {
     const { year: y, week } = getISOWeek(f.date);
     const key = y+'-'+week;
-    if (!byWeek[key]) byWeek[key] = { year: y, week, days: 0, km: 0, hours: 0 };
+    if (!byWeek[key]) byWeek[key] = { year: y, week, days: 0, km: 0, hours: 0, manualAmount: 0 };
+    if (f.excludedFromCalc) {
+      // Día excluido del cálculo normal (p.ej. jornada parcial): no cuenta
+      // para días/km/horas ni para el km/h extra — en su lugar se paga el
+      // importe manual que se haya puesto, sumado directo al ingreso.
+      byWeek[key].manualAmount += Number(f.manualAmount||0);
+      return;
+    }
     const eff = effectiveDayValues(f);
     byWeek[key].days += 1;
     byWeek[key].km += eff.km;
@@ -3523,6 +3590,7 @@ async function recalcWeeksFromFichajes(driverId, year, touchedWeek){
   const rows = Object.values(byWeek).map(w => ({
     driver_id: driverId, year: w.year, week: w.week,
     days_worked: w.days, km: Math.round(w.km*10)/10, hours: Math.round(w.hours*100)/100,
+    manual_amount: Math.round(w.manualAmount*100)/100,
   }));
   if (rows.length) {
     await supabaseClient.from('weekly_entries').upsert(rows, { onConflict: 'driver_id,year,week' });
