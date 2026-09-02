@@ -780,7 +780,7 @@ async function loadWeeklyEntries(){
   const { data } = await supabaseClient.from('weekly_entries').select('*');
   weeklyEntries = (data||[]).map(e => ({
     id: e.id, driverId: e.driver_id, year: e.year, week: e.week,
-    daysWorked: Number(e.days_worked), km: Number(e.km), hours: Number(e.hours),
+    daysWorked: Number(e.days_worked), daysCount: Number(e.days_count!=null ? e.days_count : e.days_worked), km: Number(e.km), hours: Number(e.hours),
     manualAmount: Number(e.manual_amount||0),
     supplements: 0, gasoil: 0, peajes: 0, otros: 0,
   }));
@@ -2394,6 +2394,7 @@ function buildMonthRows(driverId, year, month){
     rows.push({
       ...e,
       daysWorked: monthAllFichajes.filter(f=>!f.excludeDays).length,
+      daysCount: monthAllFichajes.filter(f=>!f.excludeDays || f.manualAmount).length,
       km: Math.round(monthAllFichajes.reduce((s,f)=> s + (f.excludeKm ? 0 : Number(f.km||0)), 0)*10)/10,
       hours: Math.round(monthAllFichajes.reduce((s,f)=> s + (f.excludeHours ? 0 : fichajeHours(f)), 0)*100)/100,
       manualAmount: Math.round(monthAllFichajes.reduce((s,f)=>s+Number(f.manualAmount||0),0)*100)/100,
@@ -2448,7 +2449,7 @@ function tplDriverDetail(){
 
   const sum = (key) => rows.reduce((s,r)=> s + (typeof r.e[key]==='number'?r.e[key]:0), 0);
   const sumC = (key) => rows.reduce((s,r)=> s + r.c[key], 0);
-  const totalDias = sum('daysWorked'), totalKm = sum('km'), totalHoras = sum('hours');
+  const totalDias = sum('daysCount'), totalKm = sum('km'), totalHoras = sum('hours');
   const totalDiaAmount = sumC('dayAmount');
   const totalManual = sumC('manualAmount');
   const totalIngreso = sumC('totalIngreso');
@@ -2643,7 +2644,7 @@ function tplDriverDetail(){
           </tr>
           <tr class="fin-col-row">
             <th class="fin-first fin-center" title="Número de semana del año (calendario ISO).">Semana</th>
-            <th class="fin-num fin-center fin-g-jornada fin-g-start" title="Días trabajados esa semana.">Días</th>
+            <th class="fin-num fin-center fin-g-jornada fin-g-start" title="Jornadas trabajadas esa semana — incluye los días con importe manual aunque estén excluidos del €/día. El €/día se calcula solo sobre los días no excluidos.">Días</th>
             <th class="fin-num fin-g-jornada" title="Kilómetros totales recorridos esa semana.">Km</th>
             <th class="fin-num fin-g-jornada" title="Horas totales trabajadas esa semana.">Horas</th>
             <th class="fin-num fin-g-jornada" title="Km − (máx. km/día × días trabajados). Positivo si se ha superado el máximo permitido.">Km extra</th>
@@ -2669,7 +2670,7 @@ function tplDriverDetail(){
             return `
             <tr class="fin-row">
               <td class="fin-first fin-center" style="font-weight:600;" ${e._splitMonth!==undefined?`title="Semana repartida entre dos meses — aquí solo se cuentan los días de ${MONTH_NAMES[e._splitMonth]}."`:''}>${e.week}${e._splitMonth!==undefined?' ✂️':''}</td>
-              <td class="fin-num fin-center fin-g-jornada fin-g-start" style="color:var(--muted);" onclick="event.stopPropagation();">${e.daysWorked}</td>
+              <td class="fin-num fin-center fin-g-jornada fin-g-start" style="color:var(--muted);" onclick="event.stopPropagation();">${e.daysCount}</td>
               <td class="fin-num fin-g-jornada" style="color:var(--muted);" onclick="event.stopPropagation();">${e.km}</td>
               <td class="fin-num fin-g-jornada" style="color:var(--muted);" onclick="event.stopPropagation();">${fmtHoursMin(e.hours)}</td>
               <td class="fin-num fin-g-jornada" style="color:${c.extraCharge>0 && c.kmExtraAmount===c.extraCharge?'var(--success)':'var(--muted)'};font-weight:${c.extraCharge>0 && c.kmExtraAmount===c.extraCharge?'700':'400'};" onclick="event.stopPropagation();" title="${c.extraCharge>0 && c.kmExtraAmount===c.extraCharge?'Esto es lo que se está pagando en Total Extra.':''}">${c.kmExtra>0?'+':''}${c.kmExtra.toFixed(1)}</td>
@@ -3587,20 +3588,24 @@ async function recalcWeeksFromFichajes(driverId, year, touchedWeek){
   fichajes.forEach(f => {
     const { year: y, week } = getISOWeek(f.date);
     const key = y+'-'+week;
-    if (!byWeek[key]) byWeek[key] = { year: y, week, days: 0, km: 0, hours: 0, manualAmount: 0 };
+    if (!byWeek[key]) byWeek[key] = { year: y, week, days: 0, daysCount: 0, km: 0, hours: 0, manualAmount: 0 };
     // Cada día puede excluirse por partes (días trabajados, km, horas —
     // p.ej. una jornada parcial donde solo interesa excluir las horas) más
     // un importe manual opcional que se suma siempre al ingreso, se haya
-    // excluido algo o no.
+    // excluido algo o no. "days" son los días que cuentan para el €/día
+    // (los no excluidos); "daysCount" son las jornadas que se muestran como
+    // trabajadas — incluye también los días excluidos que llevan un importe
+    // manual, para que la semana refleje los días realmente trabajados.
     const eff = effectiveDayValues(f);
     if (!f.excludeDays) byWeek[key].days += 1;
+    if (!f.excludeDays || f.manualAmount) byWeek[key].daysCount += 1;
     if (!f.excludeKm) byWeek[key].km += eff.km;
     if (!f.excludeHours) byWeek[key].hours += eff.hours;
     byWeek[key].manualAmount += Number(f.manualAmount||0);
   });
   const rows = Object.values(byWeek).map(w => ({
     driver_id: driverId, year: w.year, week: w.week,
-    days_worked: w.days, km: Math.round(w.km*10)/10, hours: Math.round(w.hours*100)/100,
+    days_worked: w.days, days_count: w.daysCount, km: Math.round(w.km*10)/10, hours: Math.round(w.hours*100)/100,
     manual_amount: Math.round(w.manualAmount*100)/100,
   }));
   if (rows.length) {
