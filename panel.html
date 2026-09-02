@@ -881,7 +881,7 @@ async function loadDailyEntries(){
       id: f.id, driverId: f.driver_id, date: f.date, status: f.status, timeIn: f.time_in, timeOut: f.time_out,
       kmStart: f.km_start!=null?Number(f.km_start):null, kmEnd: f.km_end!=null?Number(f.km_end):null, km: f.km!=null?Number(f.km):null,
       photoIn, photoOut,
-      excludedFromCalc: !!f.excluded_from_calc, manualAmount: Number(f.manual_amount||0),
+      excludeDays: !!f.exclude_days, excludeKm: !!f.exclude_km, excludeHours: !!f.exclude_hours, manualAmount: Number(f.manual_amount||0),
     });
   }
 }
@@ -2391,14 +2391,12 @@ function buildMonthRows(driverId, year, month){
     }
     const monthAllFichajes = weekFichajes.filter(f => Number(f.date.slice(5,7))-1 === targetMonth).sort((a,b)=>a.date.localeCompare(b.date));
     if (monthAllFichajes.length === 0) return;
-    const monthFichajes = monthAllFichajes.filter(f => !f.excludedFromCalc);
-    const monthManual = monthAllFichajes.filter(f => f.excludedFromCalc).reduce((s,f)=>s+Number(f.manualAmount||0),0);
     rows.push({
       ...e,
-      daysWorked: monthFichajes.length,
-      km: Math.round(monthFichajes.reduce((s,f)=>s+Number(f.km||0),0)*10)/10,
-      hours: Math.round(monthFichajes.reduce((s,f)=>s+fichajeHours(f),0)*100)/100,
-      manualAmount: Math.round(monthManual*100)/100,
+      daysWorked: monthAllFichajes.filter(f=>!f.excludeDays).length,
+      km: Math.round(monthAllFichajes.reduce((s,f)=> s + (f.excludeKm ? 0 : Number(f.km||0)), 0)*10)/10,
+      hours: Math.round(monthAllFichajes.reduce((s,f)=> s + (f.excludeHours ? 0 : fichajeHours(f)), 0)*100)/100,
+      manualAmount: Math.round(monthAllFichajes.reduce((s,f)=>s+Number(f.manualAmount||0),0)*100)/100,
       _splitMonth: targetMonth,
       _rateDate: monthAllFichajes[0].date,
     });
@@ -2583,7 +2581,7 @@ function tplDriverDetail(){
       <button class="btn btn-ghost" onclick="openAddFichajeModal('${d.id}')">+ Añadir fichaje diario manual</button>
     </div>
     <div class="card" style="padding:0;overflow-x:auto;margin-bottom:14px;">
-      <table><thead><tr><th>Fecha</th><th>Estado</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km inicial</th><th>Km final</th><th>Km recorridos</th><th>Incidencias</th><th title="Excluir el día del cálculo normal (días/km/horas) y pagar un importe manual en su lugar.">Cálculo</th><th>Foto inicio</th><th>Foto cierre</th><th></th></tr></thead><tbody>
+      <table><thead><tr><th>Fecha</th><th>Estado</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km inicial</th><th>Km final</th><th>Km recorridos</th><th>Incidencias</th><th title="Excluir días/km/horas de este día del cálculo normal (a la carta) y/o pagar un importe manual.">Cálculo</th><th>Foto inicio</th><th>Foto cierre</th><th></th></tr></thead><tbody>
         ${dailyEntries.filter(f=>f.driverId===d.id && f.date.startsWith(String(year))
             && (month==='todos' || Number(f.date.slice(5,7))-1===Number(month))
             && (weekFilter==='todas' || getISOWeek(f.date).week===Number(weekFilter))
@@ -2593,15 +2591,20 @@ function tplDriverDetail(){
             <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}</td>
             <td style="color:var(--muted);">${f.timeIn}</td>
             <td style="color:var(--muted);">${f.timeOut||'—'}</td>
-            <td style="${f.excludedFromCalc?'color:var(--mutedFaint);text-decoration:line-through;':''}">${f.timeOut ? fmtHoursMin(fichajeHours(f)) : '—'}</td>
+            <td style="${f.excludeHours?'color:var(--mutedFaint);text-decoration:line-through;':''}">${f.timeOut ? fmtHoursMin(fichajeHours(f)) : '—'}</td>
             <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmStart ?? '—'}</td>
             <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmEnd ?? '—'}</td>
-            <td style="font-weight:600;${f.excludedFromCalc?'color:var(--mutedFaint);text-decoration:line-through;':''}">${f.km!=null ? f.km+' km' : '—'}</td>
+            <td style="font-weight:600;${f.excludeKm?'color:var(--mutedFaint);text-decoration:line-through;':''}">${f.km!=null ? f.km+' km' : '—'}</td>
             <td>
               <button onclick="openIncidentsModal('${d.id}', '${f.date}')" title="Ver o añadir incidencias de este día" style="background:none;border:1px solid var(--border);border-radius:5px;color:${inc.length?'var(--danger)':'var(--muted)'};font-size:10.5px;padding:3px 7px;white-space:nowrap;">${inc.length ? '⚠ '+inc.length : '+ Incidencia'}</button>
             </td>
             <td>
-              <button onclick="openExclusionModal('${f.id}')" title="Excluir este día del cálculo normal y pagar un importe manual" style="background:none;border:1px solid var(--border);border-radius:5px;color:${f.excludedFromCalc?'var(--primary)':'var(--muted)'};font-size:10.5px;padding:3px 7px;white-space:nowrap;">${f.excludedFromCalc ? '💶 '+eur2(f.manualAmount||0) : '+ Excluir'}</button>
+              ${(() => {
+                const tags = [f.excludeDays?'Días':null, f.excludeKm?'Km':null, f.excludeHours?'Horas':null].filter(Boolean);
+                const active = tags.length || f.manualAmount;
+                const label = tags.length ? '🚫 '+tags.join('+')+(f.manualAmount?' · '+eur2(f.manualAmount):'') : (f.manualAmount ? '💶 '+eur2(f.manualAmount) : '+ Ajustar');
+                return `<button onclick="openExclusionModal('${f.id}')" title="Excluir días/km/horas de este día del cálculo normal y/o pagar un importe manual" style="background:none;border:1px solid var(--border);border-radius:5px;color:${active?'var(--primary)':'var(--muted)'};font-size:10.5px;padding:3px 7px;white-space:nowrap;">${label}</button>`;
+              })()}
             </td>
             <td>${photoThumb(f.photoIn)}</td>
             <td>${photoThumb(f.photoOut)}</td>
@@ -3432,12 +3435,20 @@ function openExclusionModal(id){
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
           <h3 class="modal-title">Excluir del cálculo — ${fmtDate(f.date)}</h3><button class="close-x" onclick="closeModal()">✕</button>
         </div>
-        <div style="font-size:11.5px;color:var(--mutedFaint);margin-bottom:14px;">Si marcas este día como excluido, no cuenta para los días/km/horas de esa semana (ni para el €/día ni el km/h extra) — en su lugar se paga directamente el importe manual que pongas aquí, sumado al ingreso de la semana. Útil para jornadas parciales (p. ej. 6h en vez de la jornada completa) que prefieres liquidar a mano.</div>
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:12px;">
-          <input type="checkbox" id="excl-toggle" ${f.excludedFromCalc?'checked':''} onchange="document.getElementById('excl-amount-field').style.display=this.checked?'block':'none';" />
-          Excluir este día del cálculo normal
+        <div style="font-size:11.5px;color:var(--mutedFaint);margin-bottom:14px;">Marca lo que no quieras que cuente en el cálculo normal de esa semana de este día (puedes marcar solo km, solo horas, solo días, o cualquier combinación). Lo que quede excluido no entra ni en €/día ni en el km/h extra. El importe manual, si pones uno, se suma siempre al ingreso de la semana, se haya excluido algo o no.</div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:8px;">
+          <input type="checkbox" id="excl-days" ${f.excludeDays?'checked':''} />
+          Excluir días trabajados (no cuenta como jornada ni para €/día)
         </label>
-        <div class="field" id="excl-amount-field" style="display:${f.excludedFromCalc?'block':'none'};"><label>Importe manual a pagar por este día (€)</label><input id="excl-amount" type="number" step="0.01" min="0" value="${f.manualAmount||''}" placeholder="0" /></div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:8px;">
+          <input type="checkbox" id="excl-km" ${f.excludeKm?'checked':''} />
+          Excluir km recorridos de este día
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:12px;">
+          <input type="checkbox" id="excl-hours" ${f.excludeHours?'checked':''} />
+          Excluir horas trabajadas de este día
+        </label>
+        <div class="field"><label>Importe manual a pagar por este día (€) — opcional</label><input id="excl-amount" type="number" step="0.01" min="0" value="${f.manualAmount||''}" placeholder="0" /></div>
         <div id="excl-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
         <div style="display:flex;gap:10px;">
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
@@ -3452,16 +3463,18 @@ async function submitExclusion(id){
   errEl.textContent = '';
   const f = dailyEntries.find(x=>x.id===id);
   if (!f) return;
-  const excludedFromCalc = document.getElementById('excl-toggle').checked;
-  const manualAmount = excludedFromCalc ? Number(document.getElementById('excl-amount').value||0) : 0;
+  const excludeDays = document.getElementById('excl-days').checked;
+  const excludeKm = document.getElementById('excl-km').checked;
+  const excludeHours = document.getElementById('excl-hours').checked;
+  const manualAmount = Number(document.getElementById('excl-amount').value||0);
   if (manualAmount < 0) { errEl.textContent = 'El importe no puede ser negativo.'; return; }
   btn.disabled = true;
   try {
     const { error } = await supabaseClient.from('daily_entries').update({
-      excluded_from_calc: excludedFromCalc, manual_amount: manualAmount,
+      exclude_days: excludeDays, exclude_km: excludeKm, exclude_hours: excludeHours, manual_amount: manualAmount,
     }).eq('id', id);
     if (error) throw error;
-    Object.assign(f, { excludedFromCalc, manualAmount });
+    Object.assign(f, { excludeDays, excludeKm, excludeHours, manualAmount });
     const { year, week } = getISOWeek(f.date);
     closeModal();
     await recalcWeeksFromFichajes(f.driverId, year, { year, week });
@@ -3575,17 +3588,15 @@ async function recalcWeeksFromFichajes(driverId, year, touchedWeek){
     const { year: y, week } = getISOWeek(f.date);
     const key = y+'-'+week;
     if (!byWeek[key]) byWeek[key] = { year: y, week, days: 0, km: 0, hours: 0, manualAmount: 0 };
-    if (f.excludedFromCalc) {
-      // Día excluido del cálculo normal (p.ej. jornada parcial): no cuenta
-      // para días/km/horas ni para el km/h extra — en su lugar se paga el
-      // importe manual que se haya puesto, sumado directo al ingreso.
-      byWeek[key].manualAmount += Number(f.manualAmount||0);
-      return;
-    }
+    // Cada día puede excluirse por partes (días trabajados, km, horas —
+    // p.ej. una jornada parcial donde solo interesa excluir las horas) más
+    // un importe manual opcional que se suma siempre al ingreso, se haya
+    // excluido algo o no.
     const eff = effectiveDayValues(f);
-    byWeek[key].days += 1;
-    byWeek[key].km += eff.km;
-    byWeek[key].hours += eff.hours;
+    if (!f.excludeDays) byWeek[key].days += 1;
+    if (!f.excludeKm) byWeek[key].km += eff.km;
+    if (!f.excludeHours) byWeek[key].hours += eff.hours;
+    byWeek[key].manualAmount += Number(f.manualAmount||0);
   });
   const rows = Object.values(byWeek).map(w => ({
     driver_id: driverId, year: w.year, week: w.week,
