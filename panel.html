@@ -919,6 +919,19 @@ function fmtHoursMin(decimalHours){
   return `${sign}${h}h ${String(m).padStart(2,'0')}m`;
 }
 
+// Jornadas de esa semana: cuenta los fichajes cerrados que no estén
+// excluidos de días, más los que sí lo estén pero lleven un importe
+// manual (para que ese día siga contando como trabajado). Se calcula
+// siempre al vuelo desde los fichajes — nunca desde un valor guardado —
+// para que no se quede desactualizado si cambia algo después.
+function computeDaysCountForWeek(driverId, year, week, month){
+  return dailyEntries
+    .filter(f => f.driverId===driverId && f.status==='cerrada')
+    .filter(f => { const w = getISOWeek(f.date); return w.year===year && w.week===week; })
+    .filter(f => month===undefined || Number(f.date.slice(5,7))-1===month)
+    .filter(f => !f.excludeDays || f.manualAmount)
+    .length;
+}
 function computeGasoilForWeek(driverId, year, week, month){
   return fuelEntries
     .filter(f => f.driverId===driverId)
@@ -2444,6 +2457,10 @@ function tplDriverDetail(){
     e.supplements = Math.round(computeSupplementsForWeek(d.id, e.year, e.week, m) * 100) / 100;
     e.peajes = Math.round(computeExpenseForWeek(d.id, e.year, e.week, 'peaje', m) * 100) / 100;
     e.otros = Math.round(computeExpenseForWeek(d.id, e.year, e.week, 'otro', m) * 100) / 100;
+    // Las jornadas mostradas se recalculan siempre al vuelo desde los
+    // fichajes (no desde el valor guardado en weekly_entries), para que
+    // nunca se queden desactualizadas por una semana sin recalcular.
+    e.daysCount = computeDaysCountForWeek(d.id, e.year, e.week, m);
   });
   const rows = entries.map(e => ({ e, c: computeWeek(getRatesForDate(d.id, e._rateDate || weekDateRange(e.year,e.week).monday), e) }));
 
