@@ -2266,8 +2266,10 @@ function tplTrafico(){
 function tplDriversList(){
   const currentYear = new Date().getFullYear();
   const activeDrivers = drivers.filter(d=>!d.archived);
+  const archivedCount = drivers.filter(d=>d.archived).length;
   const openTodayCount = activeDrivers.filter(d=>openTodayEntry(d.id)).length;
   const totalBrutoYear = activeDrivers.reduce((s,d)=> s + brutoForDriverYear(d.id, currentYear), 0);
+  const view = window.__driversView || 'activos';
 
   return `
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;">
@@ -2277,15 +2279,20 @@ function tplDriversList(){
       ${kpi('Facturación ' + currentYear, eur2(totalBrutoYear))}
     </div>
 
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
       <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
         <input id="drivers-search-input" placeholder="Buscar conductor…" value="${esc(window.__driversSearch||'')}" oninput="window.__driversSearch=this.value; refreshDriversListBody();" style="padding-left:34px;" />
         <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
       </div>
       <div style="display:flex;gap:10px;">
         <button class="btn btn-ghost" onclick="openCompanyModal()">+ Nueva empresa</button>
-        <button class="btn btn-primary" onclick="openDriverModal()">+ Nuevo conductor</button>
+        ${view==='archivados' ? '' : `<button class="btn btn-primary" onclick="openDriverModal()">+ Nuevo conductor</button>`}
       </div>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;">
+      <button class="btn ${view==='activos'?'btn-primary':'btn-ghost'}" onclick="window.__driversView='activos'; renderTab();">Activos</button>
+      <button class="btn ${view==='archivados'?'btn-primary':'btn-ghost'}" onclick="window.__driversView='archivados'; renderTab();">🗄 Archivados (${archivedCount})</button>
     </div>
 
     <div id="drivers-list-body">${driversListBodyHtml()}</div>`;
@@ -2328,16 +2335,18 @@ function brutoForDriverYear(driverId, year){
 function driversListBodyHtml(){
   const search = (window.__driversSearch || '').toLowerCase();
   const currentYear = new Date().getFullYear();
+  const view = window.__driversView || 'activos';
+  const archivedView = view === 'archivados';
 
   return `${companies.map(co => {
-      const list = drivers.filter(d => d.companyId === co.id && !d.archived && d.name.toLowerCase().includes(search));
-      if (search && list.length === 0) return '';
+      const list = drivers.filter(d => d.companyId === co.id && !!d.archived === archivedView && d.name.toLowerCase().includes(search));
+      if ((search || archivedView) && list.length === 0) return '';
       const companyNeto = list.reduce((s,d)=> s + netoForDriverYear(d.id, currentYear), 0);
       return `
       <div style="margin-bottom:26px;">
         <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border);">
           <div style="font-family:var(--display);text-transform:uppercase;font-size:14px;color:var(--text);letter-spacing:.4px;">${esc(co.name)}</div>
-          <div style="font-size:11.5px;color:var(--mutedFaint);">${list.length} conductor${list.length!==1?'es':''}${list.length ? ` · Neto ${currentYear}: <strong style="color:var(--primary);">${eur2(companyNeto)}</strong>` : ''}</div>
+          <div style="font-size:11.5px;color:var(--mutedFaint);">${list.length} conductor${list.length!==1?'es':''}${list.length && !archivedView ? ` · Neto ${currentYear}: <strong style="color:var(--primary);">${eur2(companyNeto)}</strong>` : ''}</div>
         </div>
         ${list.length === 0 ? `
         <div class="card" style="color:var(--mutedFaint);font-size:12.5px;">
@@ -2347,7 +2356,7 @@ function driversListBodyHtml(){
           ${list.map(d => {
             const isPisoMovil = d.modality === 'piso_movil';
             const ytdNeto = netoForDriverYear(d.id, currentYear);
-            const openNow = !isPisoMovil && openTodayEntry(d.id);
+            const openNow = !isPisoMovil && !archivedView && openTodayEntry(d.id);
             const initial = (d.name||'?').trim().charAt(0).toUpperCase();
             const midLine = isPisoMovil
               ? `<span style="font-size:11px;font-weight:600;color:#8A4A35;background:rgba(138,74,53,0.08);border-radius:999px;padding:2px 9px;">Piso Móvil</span>`
@@ -2356,12 +2365,13 @@ function driversListBodyHtml(){
               ? (() => { const n = monthlyBillingEntries.filter(e=>e.driverId===d.id && e.year===currentYear).length; return `${n} mes${n!==1?'es':''} facturado${n!==1?'s':''} · ${currentYear}`; })()
               : (() => { const n = weeklyEntries.filter(e=>e.driverId===d.id).length; return `${n} semana${n!==1?'s':''} · ${currentYear}`; })();
             return `
-            <div class="card" style="cursor:pointer;position:relative;padding:16px;" onclick="openDriverDetail('${d.id}')">
+            <div class="card" style="cursor:pointer;position:relative;padding:16px;${archivedView?'opacity:0.7;':''}" onclick="openDriverDetail('${d.id}')">
               ${openNow ? `<span class="badge" style="position:absolute;top:14px;right:14px;background:#D9A72C;">Jornada abierta</span>` : ''}
+              ${archivedView ? `<button onclick="event.stopPropagation(); unarchiveDriver('${d.id}');" title="Restaurar conductor" style="position:absolute;top:12px;right:12px;background:none;border:1px solid var(--border);border-radius:5px;color:var(--primary);font-size:10.5px;padding:3px 7px;white-space:nowrap;">↩ Restaurar</button>` : ''}
               <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
                 <div style="width:36px;height:36px;border-radius:99px;background:var(--primary);color:var(--primary-text);display:flex;align-items:center;justify-content:center;font-family:var(--display);font-size:14px;flex-shrink:0;">${esc(initial)}</div>
                 <div style="min-width:0;">
-                  <div style="font-family:var(--display);font-size:15.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(d.name)}</div>
+                  <div style="font-family:var(--display);font-size:15.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(d.name)}${archivedView?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;">· archivado</span>':''}</div>
                   <div style="font-size:11.5px;color:var(--mutedFaint);font-family:var(--mono);">${esc(d.dni||'—')}${d.fleetNumber?' · Flota '+esc(d.fleetNumber):''}</div>
                 </div>
               </div>
@@ -2374,7 +2384,7 @@ function driversListBodyHtml(){
           }).join('')}
         </div>`}
       </div>`;
-    }).join('') || `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Sin empresas todavía. Empieza dando de alta una.</div>`}`;
+    }).join('') || `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${archivedView ? 'No hay conductores archivados.' : companies.length ? 'Ningún conductor coincide con la búsqueda.' : 'Sin empresas todavía. Empieza dando de alta una.'}</div>`}`;
 }
 
 // Semanas que cruzan de mes: si hay fichajes diarios de respaldo, se
@@ -3035,7 +3045,7 @@ function openDriverModal(editId){
         </div>
         ${!editing ? `<div style="font-size:11.5px;color:var(--muted);margin-bottom:14px;">Después de crearlo, añade su primera tarifa (o su primera facturación, si es Piso Móvil) desde la ficha del conductor.</div>` : ''}
         <div style="display:flex;gap:10px;">
-          ${editing ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="archiveDriver('${editing.id}')">🗄 Archivar</button>` : ''}
+          ${editing ? `<button class="btn btn-ghost" style="color:${editing.archived?'var(--success)':'var(--danger)'};" onclick="${editing.archived?`unarchiveDriver('${editing.id}')`:`archiveDriver('${editing.id}')`}">${editing.archived?'↩ Restaurar':'🗄 Archivar'}</button>` : ''}
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
           <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitDriver('${editId||''}')" ${companies.length?'':'disabled'}>${editing?'Guardar cambios':'Añadir'}</button>
         </div>
@@ -3069,6 +3079,12 @@ async function archiveDriver(id){
   const d = drivers.find(x=>x.id===id);
   if (d) d.archived = true;
   closeModal(); backToDriversList();
+}
+async function unarchiveDriver(id){
+  await supabaseClient.from('drivers').update({ archived: false }).eq('id', id);
+  const d = drivers.find(x=>x.id===id);
+  if (d) d.archived = false;
+  closeModal(); renderTab();
 }
 
 function openKiosk(driverId){
