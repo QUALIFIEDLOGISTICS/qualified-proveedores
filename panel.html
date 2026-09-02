@@ -2761,13 +2761,25 @@ function tplAnotacionesSection(driverId, filteredNotes){
       <div id="note-error" style="color:var(--danger);font-size:12.5px;margin-top:8px;"></div>
     </div>
     <div style="display:flex;flex-direction:column;gap:8px;">
-      ${filteredNotes.map(n => `
+      ${filteredNotes.map(n => window.__editingNoteId===n.id ? `
+        <div class="card" style="padding:10px 14px;">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+            <div class="field" style="flex:0 0 160px;margin-bottom:0;"><label>Fecha</label><input id="note-edit-date-${n.id}" type="date" value="${n.date}" /></div>
+            <div class="field" style="flex:1 1 260px;margin-bottom:0;"><label>Nota</label><input id="note-edit-text-${n.id}" value="${esc(n.note)}" onkeydown="if(event.key==='Enter'){event.preventDefault(); saveDriverNoteEdit('${n.id}','${driverId}');} if(event.key==='Escape'){window.__editingNoteId=null; renderTab();}" /></div>
+            <button class="btn btn-ghost" onclick="window.__editingNoteId=null; renderTab();">Cancelar</button>
+            <button class="btn btn-primary" onclick="saveDriverNoteEdit('${n.id}','${driverId}')">Guardar</button>
+          </div>
+          <div id="note-edit-error-${n.id}" style="color:var(--danger);font-size:12.5px;margin-top:8px;"></div>
+        </div>` : `
         <div class="card" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
           <div>
             <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:2px;">${fmtDate(n.date)}</div>
             <div style="font-size:13.5px;">${esc(n.note)}</div>
           </div>
-          <button onclick="deleteDriverNote('${n.id}', '${driverId}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);flex-shrink:0;">🗑</button>
+          <div style="display:flex;gap:4px;flex-shrink:0;">
+            <button onclick="window.__editingNoteId='${n.id}'; renderTab();" title="Editar" style="background:none;border:none;color:var(--primary);">✏️</button>
+            <button onclick="deleteDriverNote('${n.id}', '${driverId}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>
+          </div>
         </div>`).join('') || `<div style="color:var(--mutedFaint);font-size:12.5px;">Sin anotaciones en este periodo.</div>`}
     </div>`;
 }
@@ -3618,6 +3630,25 @@ async function deleteDriverNote(id, driverId){
   await supabaseClient.from('driver_notes').delete().eq('id', id);
   driverNotes = driverNotes.filter(x=>x.id!==id);
   renderTab();
+}
+async function saveDriverNoteEdit(id, driverId){
+  const errEl = document.getElementById(`note-edit-error-${id}`);
+  errEl.textContent = '';
+  const date = document.getElementById(`note-edit-date-${id}`).value;
+  const note = document.getElementById(`note-edit-text-${id}`).value.trim();
+  if (!date) { errEl.textContent = 'Indica la fecha.'; return; }
+  if (!note) { errEl.textContent = 'Escribe algo antes de guardar.'; return; }
+  try {
+    const { error } = await supabaseClient.from('driver_notes').update({ date, note }).eq('id', id);
+    if (error) throw error;
+    const n = driverNotes.find(x=>x.id===id);
+    if (n) Object.assign(n, { date, note });
+    driverNotes.sort((a,b)=> b.date.localeCompare(a.date));
+    window.__editingNoteId = null;
+    renderTab();
+  } catch (error) {
+    errEl.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido.');
+  }
 }
 async function recalcWeeksFromFichajes(driverId, year, touchedWeek){
   const fichajes = dailyEntries.filter(f=>f.driverId===driverId && f.status==='cerrada');
