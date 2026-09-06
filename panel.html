@@ -737,7 +737,7 @@ function tplUnscheduled(){
 let companies = [];
 async function loadCompanies(){
   const { data } = await supabaseClient.from('companies').select('*').order('name');
-  companies = (data||[]).map(c => ({ id: c.id, name: c.name }));
+  companies = (data||[]).map(c => ({ id: c.id, name: c.name, archived: !!c.archived }));
 }
 let drivers = [];
 async function loadDrivers(){
@@ -1575,8 +1575,8 @@ function tplMovimientos(){
     </div>`;
 }
 
-function kpi(label, value, sub, compact){
-  return `<div class="card" style="flex:1 1 ${compact?'140px':'180px'};min-width:${compact?'125px':'160px'};${compact?'padding:12px 14px;':''}">
+function kpi(label, value, sub, compact, onclick){
+  return `<div class="card" style="flex:1 1 ${compact?'140px':'180px'};min-width:${compact?'125px':'160px'};${compact?'padding:12px 14px;':''}${onclick?'cursor:pointer;':''}" ${onclick?`onclick="${onclick}"`:''}>
     <div style="font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:${compact?'6px':'10px'};">${esc(label)}</div>
     <div style="font-family:var(--display);font-size:${compact?'20px':'26px'};">${value}</div>
     ${sub?`<div style="font-size:12px;color:var(--mutedFaint);margin-top:4px;">${esc(sub)}</div>`:''}
@@ -2164,7 +2164,12 @@ async function deleteRate(id){
 
 function tplAutonomos(){
   if (window.__autonomosView === 'detalle' && window.__autonomosDriverId) return tplDriverDetail();
+  if (window.__autonomosView === 'empresas') return tplCompaniesList();
   return tplDriversList();
+}
+function openCompaniesList(){
+  window.__autonomosView = 'empresas';
+  renderSidebar(); renderHeader(); renderTab();
 }
 /* ============================= DASHBOARD TRÁFICO ============================= */
 function driverWeekStatus(d){
@@ -2290,7 +2295,7 @@ function tplDriversList(){
 
   return `
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;">
-      ${kpi('Empresas', companies.length)}
+      ${kpi('Empresas', companies.filter(c=>!c.archived).length, 'ver / archivar', false, 'openCompaniesList()')}
       ${kpi('Conductores activos', activeDrivers.length)}
       ${kpi('Jornadas abiertas hoy', openTodayCount, openTodayCount ? 'pendientes de cerrar' : 'todo cerrado')}
       ${kpi('Facturación ' + currentYear, eur2(totalBrutoYear))}
@@ -2355,14 +2360,15 @@ function driversListBodyHtml(){
   const view = window.__driversView || 'activos';
   const archivedView = view === 'archivados';
 
-  return `${companies.map(co => {
+  const companiesToShow = archivedView ? companies : companies.filter(co=>!co.archived);
+  return `${companiesToShow.map(co => {
       const list = drivers.filter(d => d.companyId === co.id && !!d.archived === archivedView && d.name.toLowerCase().includes(search));
       if ((search || archivedView) && list.length === 0) return '';
       const companyNeto = list.reduce((s,d)=> s + netoForDriverYear(d.id, currentYear), 0);
       return `
       <div style="margin-bottom:26px;">
         <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border);">
-          <div style="font-family:var(--display);text-transform:uppercase;font-size:14px;color:var(--text);letter-spacing:.4px;">${esc(co.name)}</div>
+          <div style="font-family:var(--display);text-transform:uppercase;font-size:14px;color:var(--text);letter-spacing:.4px;">${esc(co.name)}${co.archived?' <span style="font-size:10px;color:var(--mutedFaint);text-transform:none;letter-spacing:0;">(empresa archivada)</span>':''}</div>
           <div style="font-size:11.5px;color:var(--mutedFaint);">${list.length} conductor${list.length!==1?'es':''}${list.length && !archivedView ? ` · Neto ${currentYear}: <strong style="color:var(--primary);">${eur2(companyNeto)}</strong>` : ''}</div>
         </div>
         ${list.length === 0 ? `
@@ -2401,7 +2407,35 @@ function driversListBodyHtml(){
           }).join('')}
         </div>`}
       </div>`;
-    }).join('') || `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${archivedView ? 'No hay conductores archivados.' : companies.length ? 'Ningún conductor coincide con la búsqueda.' : 'Sin empresas todavía. Empieza dando de alta una.'}</div>`}`;
+    }).join('') || `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${archivedView ? 'No hay conductores archivados.' : companiesToShow.length ? 'Ningún conductor coincide con la búsqueda.' : 'Sin empresas activas todavía. Empieza dando de alta una.'}</div>`}`;
+}
+
+function tplCompaniesList(){
+  const view = window.__companiesView || 'activos';
+  const archivedView = view === 'archivados';
+  const list = companies.filter(co => !!co.archived === archivedView);
+  const archivedCount = companies.filter(co=>co.archived).length;
+  return `
+    <button class="btn btn-ghost" onclick="backToDriversList()" style="margin-bottom:16px;">← Volver a conductores</button>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+      <div style="font-family:var(--display);font-size:19px;">Empresas</div>
+      ${archivedView ? '' : `<button class="btn btn-primary" onclick="openCompanyModal()">+ Nueva empresa</button>`}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;">
+      <button class="btn ${!archivedView?'btn-primary':'btn-ghost'}" onclick="window.__companiesView='activos'; renderTab();">Activas</button>
+      <button class="btn ${archivedView?'btn-primary':'btn-ghost'}" onclick="window.__companiesView='archivados'; renderTab();">🗄 Archivadas (${archivedCount})</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;">
+      ${list.map(co => {
+        const totalDriverCount = drivers.filter(d=>d.companyId===co.id).length;
+        const activeDriverCount = drivers.filter(d=>d.companyId===co.id && !d.archived).length;
+        return `
+        <div class="card" style="cursor:pointer;${archivedView?'opacity:0.7;':''}" onclick="openCompanyModal('${co.id}')">
+          <div style="font-family:var(--display);font-size:15.5px;margin-bottom:6px;">${esc(co.name)}${archivedView?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;">· archivada</span>':''}</div>
+          <div style="font-size:12px;color:var(--muted);">${totalDriverCount} conductor${totalDriverCount!==1?'es':''}${activeDriverCount ? ` · ${activeDriverCount} activo${activeDriverCount!==1?'s':''}` : ''}</div>
+        </div>`;
+      }).join('') || `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;grid-column:1/-1;">${archivedView?'No hay empresas archivadas.':'Sin empresas activas todavía.'}</div>`}
+    </div>`;
 }
 
 // Semanas que cruzan de mes: si hay fichajes diarios de respaldo, se
@@ -3026,27 +3060,60 @@ async function deleteCommissionRate(id){
 }
 
 /* ============================= AUTÓNOMOS: MODALES ============================= */
-function openCompanyModal(){
+function openCompanyModal(editId){
+  const editing = editId ? companies.find(c=>c.id===editId) : null;
+  const activeDriverCount = editing ? drivers.filter(d=>d.companyId===editing.id && !d.archived).length : 0;
+  const blockArchive = editing && !editing.archived && activeDriverCount > 0;
   document.getElementById('modal-slot').innerHTML = `
     <div class="modal-overlay">
       <div class="modal-box" style="max-width:380px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
-          <h3 class="modal-title">Nueva empresa</h3><button class="close-x" onclick="closeModal()">✕</button>
+          <h3 class="modal-title">${editing?'Editar empresa':'Nueva empresa'}</h3><button class="close-x" onclick="closeModal()">✕</button>
         </div>
-        <div class="field"><label>Nombre de la empresa</label><input id="co-name" placeholder="Ej. EMPEA LOGISTIC" /></div>
+        <div class="field"><label>Nombre de la empresa</label><input id="co-name" placeholder="Ej. EMPEA LOGISTIC" value="${esc(editing?editing.name:'')}" /></div>
+        ${blockArchive ? `<div style="font-size:11.5px;color:var(--mutedFaint);margin-bottom:14px;">No se puede archivar: tiene ${activeDriverCount} conductor${activeDriverCount!==1?'es':''} activo${activeDriverCount!==1?'s':''}. Archívalos o muévelos de empresa antes.</div>` : ''}
+        <div id="co-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
         <div style="display:flex;gap:10px;">
+          ${editing ? `<button class="btn btn-ghost" style="color:${editing.archived?'var(--success)':'var(--danger)'};" ${blockArchive?'disabled title="Tiene conductores activos"':''} onclick="${editing.archived?`unarchiveCompany('${editing.id}')`:`archiveCompany('${editing.id}')`}">${editing.archived?'↩ Restaurar':'🗄 Archivar'}</button>` : ''}
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitCompany()">Añadir</button>
+          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitCompany('${editId||''}')">${editing?'Guardar cambios':'Añadir'}</button>
         </div>
       </div>
     </div>`;
 }
-async function submitCompany(){
+async function submitCompany(editId){
+  const errEl = document.getElementById('co-error');
+  errEl.textContent = '';
   const name = document.getElementById('co-name').value.trim();
-  if (!name) return;
-  const { data, error } = await supabaseClient.from('companies').insert({ name }).select().single();
-  if (error || !data) return;
-  companies.push({ id: data.id, name });
+  if (!name) { errEl.textContent = 'Indica el nombre.'; return; }
+  if (editId) {
+    const { error } = await supabaseClient.from('companies').update({ name }).eq('id', editId);
+    if (error) { errEl.textContent = 'No se pudo guardar.'; return; }
+    const co = companies.find(c=>c.id===editId);
+    if (co) co.name = name;
+  } else {
+    const { data, error } = await supabaseClient.from('companies').insert({ name, archived: false }).select().single();
+    if (error || !data) { errEl.textContent = 'No se pudo guardar.'; return; }
+    companies.push({ id: data.id, name, archived: false });
+  }
+  closeModal(); renderTab();
+}
+async function archiveCompany(id){
+  const activeCount = drivers.filter(d=>d.companyId===id && !d.archived).length;
+  if (activeCount) {
+    const errEl = document.getElementById('co-error');
+    if (errEl) errEl.textContent = `No se puede archivar: tiene ${activeCount} conductor${activeCount!==1?'es':''} activo${activeCount!==1?'s':''}.`;
+    return;
+  }
+  await supabaseClient.from('companies').update({ archived: true }).eq('id', id);
+  const co = companies.find(c=>c.id===id);
+  if (co) co.archived = true;
+  closeModal(); renderTab();
+}
+async function unarchiveCompany(id){
+  await supabaseClient.from('companies').update({ archived: false }).eq('id', id);
+  const co = companies.find(c=>c.id===id);
+  if (co) co.archived = false;
   closeModal(); renderTab();
 }
 
