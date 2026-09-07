@@ -431,7 +431,7 @@ async function setTab(id){
   closeMobileSidebar();
   // Pulsar la pestaña del panel siempre lleva a su pantalla principal
   // (lista), aunque ya estuvieras dentro viendo el detalle de algo.
-  if (id === 'autonomos') { window.__autonomosView = 'lista'; window.__autonomosDriverId = null; }
+  if (id === 'autonomos') { window.__autonomosView = 'home'; window.__autonomosDriverId = null; }
   if (id === 'fichajes') { window.__fichajesView = 'lista'; window.__fichajesDriverId = null; }
   if (id === 'admin') await loadAllProfiles();
   renderSidebar(); renderHeader(); renderTab();
@@ -2165,8 +2165,10 @@ async function deleteRate(id){
 function tplAutonomos(){
   if (window.__autonomosView === 'detalle' && window.__autonomosDriverId) return tplDriverDetail();
   if (window.__autonomosView === 'empresas') return tplCompaniesList();
-  return tplDriversList();
+  if (window.__autonomosView === 'lista') return tplDriversManage();
+  return tplAutonomosHome();
 }
+function backToAutonomosHome(){ window.__autonomosView='home'; renderSidebar(); renderHeader(); renderTab(); }
 function openCompaniesList(){
   window.__autonomosView = 'empresas';
   renderSidebar(); renderHeader(); renderTab();
@@ -2285,22 +2287,30 @@ function tplTrafico(){
     </div>`;
 }
 
-function tplDriversList(){
+function tplAutonomosHome(){
   const currentYear = new Date().getFullYear();
   const activeDrivers = drivers.filter(d=>!d.archived);
-  const archivedCount = drivers.filter(d=>d.archived).length;
   const openTodayCount = activeDrivers.filter(d=>openTodayEntry(d.id)).length;
   const totalBrutoYear = activeDrivers.reduce((s,d)=> s + brutoForDriverYear(d.id, currentYear), 0);
+
+  return `
+    <div style="display:flex;gap:12px;flex-wrap:wrap;">
+      ${kpi('Empresas', companies.filter(c=>!c.archived).length, 'ver / archivar', false, 'openCompaniesList()')}
+      ${kpi('Conductores activos', activeDrivers.length, 'ver / gestionar', false, 'openDriversList()')}
+      ${kpi('Jornadas abiertas hoy', openTodayCount, openTodayCount ? 'pendientes de cerrar' : 'todo cerrado')}
+      ${kpi('Facturación ' + currentYear, eur2(totalBrutoYear))}
+    </div>`;
+}
+function openDriversList(){
+  window.__autonomosView = 'lista';
+  renderSidebar(); renderHeader(); renderTab();
+}
+function tplDriversManage(){
+  const archivedCount = drivers.filter(d=>d.archived).length;
   const view = window.__driversView || 'activos';
 
   return `
-    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;">
-      ${kpi('Empresas', companies.filter(c=>!c.archived).length, 'ver / archivar', false, 'openCompaniesList()')}
-      ${kpi('Conductores activos', activeDrivers.length)}
-      ${kpi('Jornadas abiertas hoy', openTodayCount, openTodayCount ? 'pendientes de cerrar' : 'todo cerrado')}
-      ${kpi('Facturación ' + currentYear, eur2(totalBrutoYear))}
-    </div>
-
+    <button class="btn btn-ghost" onclick="backToAutonomosHome()" style="margin-bottom:16px;">← Volver</button>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
       <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
         <input id="drivers-search-input" placeholder="Buscar conductor…" value="${esc(window.__driversSearch||'')}" oninput="window.__driversSearch=this.value; refreshDriversListBody();" style="padding-left:34px;" />
@@ -2508,7 +2518,7 @@ function backToDriversList(){ window.__autonomosView='lista'; window.__autonomos
 
 function tplDriverDetail(){
   const d = drivers.find(x=>x.id===window.__autonomosDriverId);
-  if (!d) { window.__autonomosView='lista'; return tplDriversList(); }
+  if (!d) { window.__autonomosView='lista'; return tplDriversManage(); }
   if (d.modality === 'piso_movil') return tplPisoMovilDetail(d);
   const co = companies.find(c=>c.id===d.companyId);
   const driverIndexed = getRatesForDate(d.id, today()).hasIndexation !== false;
