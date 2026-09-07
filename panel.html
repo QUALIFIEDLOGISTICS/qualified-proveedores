@@ -431,7 +431,7 @@ async function setTab(id){
   closeMobileSidebar();
   // Pulsar la pestaña del panel siempre lleva a su pantalla principal
   // (lista), aunque ya estuvieras dentro viendo el detalle de algo.
-  if (id === 'autonomos') { window.__autonomosView = 'home'; window.__autonomosDriverId = null; }
+  if (id === 'autonomos') { window.__autonomosView = 'home'; window.__autonomosDriverId = null; window.__driversCompanyFilter = null; }
   if (id === 'fichajes') { window.__fichajesView = 'lista'; window.__fichajesDriverId = null; }
   if (id === 'admin') await loadAllProfiles();
   renderSidebar(); renderHeader(); renderTab();
@@ -2303,23 +2303,34 @@ function tplAutonomosHome(){
 }
 function openDriversList(){
   window.__autonomosView = 'lista';
+  window.__driversCompanyFilter = null;
   renderSidebar(); renderHeader(); renderTab();
+}
+function openCompanyDrivers(companyId){
+  window.__autonomosView = 'lista';
+  window.__driversView = 'activos';
+  window.__driversCompanyFilter = companyId;
+  window.__driversSearch = '';
+  renderSidebar(); renderHeader(); renderTab();
+}
+function clearDriversCompanyFilter(){
+  window.__driversCompanyFilter = null;
+  renderTab();
 }
 function tplDriversManage(){
   const archivedCount = drivers.filter(d=>d.archived).length;
   const view = window.__driversView || 'activos';
+  const companyFilter = window.__driversCompanyFilter ? companies.find(c=>c.id===window.__driversCompanyFilter) : null;
 
   return `
-    <button class="btn btn-ghost" onclick="backToAutonomosHome()" style="margin-bottom:16px;">← Volver</button>
+    <button class="btn btn-ghost" onclick="${companyFilter?'openCompaniesList()':'backToAutonomosHome()'}" style="margin-bottom:16px;">← Volver${companyFilter?' a empresas':''}</button>
+    ${companyFilter ? `<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12.5px;color:var(--muted);">Mostrando conductores de <strong>${esc(companyFilter.name)}</strong><button onclick="clearDriversCompanyFilter()" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:11px;padding:2px 8px;">✕ Quitar filtro</button></div>` : ''}
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
       <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
         <input id="drivers-search-input" placeholder="Buscar conductor…" value="${esc(window.__driversSearch||'')}" oninput="window.__driversSearch=this.value; refreshDriversListBody();" style="padding-left:34px;" />
         <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
       </div>
-      <div style="display:flex;gap:10px;">
-        <button class="btn btn-ghost" onclick="openCompanyModal()">+ Nueva empresa</button>
-        ${view==='archivados' ? '' : `<button class="btn btn-primary" onclick="openDriverModal()">+ Nuevo conductor</button>`}
-      </div>
+      ${view==='archivados' ? '' : `<button class="btn btn-primary" onclick="openDriverModal()">+ Nuevo conductor</button>`}
     </div>
 
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;">
@@ -2370,7 +2381,9 @@ function driversListBodyHtml(){
   const view = window.__driversView || 'activos';
   const archivedView = view === 'archivados';
 
-  const companiesToShow = archivedView ? companies : companies.filter(co=>!co.archived);
+  const companyFilter = window.__driversCompanyFilter;
+  let companiesToShow = archivedView ? companies : companies.filter(co=>!co.archived);
+  if (companyFilter) companiesToShow = companiesToShow.filter(co=>co.id===companyFilter);
   return `${companiesToShow.map(co => {
       const list = drivers.filter(d => d.companyId === co.id && !!d.archived === archivedView && d.name.toLowerCase().includes(search));
       if ((search || archivedView) && list.length === 0) return '';
@@ -2454,9 +2467,12 @@ function companiesListBodyHtml(){
         const totalDriverCount = drivers.filter(d=>d.companyId===co.id).length;
         const activeDriverCount = drivers.filter(d=>d.companyId===co.id && !d.archived).length;
         return `
-        <div class="card" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;${archivedView?'opacity:0.7;':''}" onclick="openCompanyModal('${co.id}')">
+        <div class="card" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;${archivedView?'opacity:0.7;':''}" onclick="openCompanyDrivers('${co.id}')">
           <div style="font-family:var(--display);font-size:15px;">${esc(co.name)}${archivedView?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;">· archivada</span>':''}</div>
-          <div style="font-size:12px;color:var(--muted);white-space:nowrap;">${totalDriverCount} conductor${totalDriverCount!==1?'es':''}${activeDriverCount ? ` · ${activeDriverCount} activo${activeDriverCount!==1?'s':''}` : ''}</div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="font-size:12px;color:var(--muted);white-space:nowrap;">${totalDriverCount} conductor${totalDriverCount!==1?'es':''}${activeDriverCount ? ` · ${activeDriverCount} activo${activeDriverCount!==1?'s':''}` : ''}</span>
+            <button onclick="event.stopPropagation(); openCompanyModal('${co.id}');" title="Editar empresa" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:10.5px;padding:3px 7px;white-space:nowrap;">✏️ Editar</button>
+          </div>
         </div>`;
       }).join('') || `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${archivedView ? 'No hay empresas archivadas.' : search ? 'Ninguna empresa coincide con la búsqueda.' : 'Sin empresas activas todavía.'}</div>`}
     </div>`;
