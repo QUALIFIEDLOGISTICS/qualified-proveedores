@@ -2707,6 +2707,41 @@ function tplDriverDetail(){
   });
   const rows = entries.map(e => ({ e, c: computeWeek(getRatesForDate(d.id, e._rateDate || weekDateRange(e.year,e.week).monday), e) }));
 
+  // Con "Todos los meses" seleccionado, la tabla inferior agrupa las
+  // semanas por mes en vez de mostrar una fila por semana — más legible
+  // para ver el año entero de un vistazo.
+  let monthRows = null;
+  if (month === 'todos') {
+    const byMonth = new Map();
+    rows.forEach(r => {
+      const m = r.e._splitMonth !== undefined ? r.e._splitMonth : weekMonth(r.e.year, r.e.week);
+      if (!byMonth.has(m)) byMonth.set(m, []);
+      byMonth.get(m).push(r);
+    });
+    const sumGroup = (group, fn) => group.reduce((s,r)=>s+fn(r),0);
+    monthRows = [...byMonth.keys()].sort((a,b)=>a-b).map(m => {
+      const group = byMonth.get(m);
+      const daysCount = sumGroup(group, r=>r.e.daysCount);
+      const km = sumGroup(group, r=>r.e.km);
+      const hours = sumGroup(group, r=>r.e.hours);
+      const kmExtra = sumGroup(group, r=>r.c.kmExtra);
+      const hoursExtra = sumGroup(group, r=>r.c.hoursExtra);
+      const dayAmount = sumGroup(group, r=>r.c.dayAmount);
+      const extraCharge = sumGroup(group, r=>r.c.extraCharge);
+      const supplements = sumGroup(group, r=>r.e.supplements);
+      const manualAmount = sumGroup(group, r=>r.e.manualAmount);
+      const totalIngreso = sumGroup(group, r=>r.c.totalIngreso);
+      const gasoil = sumGroup(group, r=>r.e.gasoil);
+      const peajes = sumGroup(group, r=>r.e.peajes);
+      const otros = sumGroup(group, r=>r.e.otros);
+      const gastosTotal = sumGroup(group, r=>r.c.gastosTotal);
+      const idxPct = driverIndexed ? getIndexPercent(d.id, year, m) : 0;
+      const idxAmount = driverIndexed ? dayAmount * (idxPct/100) : 0;
+      const neto = totalIngreso - gastosTotal + idxAmount;
+      return { month: m, daysCount, km, hours, kmExtra, hoursExtra, dayAmount, extraCharge, supplements, manualAmount, totalIngreso, gasoil, peajes, otros, gastosTotal, idxPct, idxAmount, neto };
+    });
+  }
+
   const sum = (key) => rows.reduce((s,r)=> s + (typeof r.e[key]==='number'?r.e[key]:0), 0);
   const sumC = (key) => rows.reduce((s,r)=> s + r.c[key], 0);
   const totalDias = sum('daysCount'), totalKm = sum('km'), totalHoras = sum('hours');
@@ -2911,28 +2946,49 @@ function tplDriverDetail(){
             <th colspan="2" class="fin-neto">Neto</th>
           </tr>
           <tr class="fin-col-row">
-            <th class="fin-first fin-center" title="Número de semana del año (calendario ISO).">Semana</th>
-            <th class="fin-num fin-center fin-g-jornada fin-g-start" title="Jornadas trabajadas esa semana — incluye los días con importe manual aunque estén excluidos del €/día. El €/día se calcula solo sobre los días no excluidos.">Días</th>
-            <th class="fin-num fin-g-jornada" title="Kilómetros totales recorridos esa semana.">Km</th>
-            <th class="fin-num fin-g-jornada" title="Horas totales trabajadas esa semana.">Horas</th>
+            <th class="fin-first fin-center" title="${monthRows ? 'Mes del año.' : 'Número de semana del año (calendario ISO).'}">${monthRows ? 'Mes' : 'Semana'}</th>
+            <th class="fin-num fin-center fin-g-jornada fin-g-start" title="Jornadas trabajadas ${monthRows?'ese mes':'esa semana'} — incluye los días con importe manual aunque estén excluidos del €/día. El €/día se calcula solo sobre los días no excluidos.">Días</th>
+            <th class="fin-num fin-g-jornada" title="Kilómetros totales recorridos ${monthRows?'ese mes':'esa semana'}.">Km</th>
+            <th class="fin-num fin-g-jornada" title="Horas totales trabajadas ${monthRows?'ese mes':'esa semana'}.">Horas</th>
             <th class="fin-num fin-g-jornada" title="Km − (máx. km/día × días trabajados). Positivo si se ha superado el máximo permitido.">Km extra</th>
             <th class="fin-num fin-g-jornada" title="Horas − (máx. horas/día × días trabajados). Positivo si se ha superado el máximo permitido.">H. extra</th>
-            <th class="fin-num fin-g-ingresos fin-g-start" title="Días trabajados × precio/día de la tarifa vigente esa semana.">€/día</th>
-            <th class="fin-num fin-g-ingresos" title="Se coge el valor más alto entre el importe de km extra y el de horas extra de la semana. Nunca se suman los dos, solo se cobra el mayor.">Extra</th>
-            <th class="fin-num fin-g-ingresos" title="Suma de los suplementos registrados esa semana (fecha, importe y motivo). Haz clic para ver el detalle.">Suplem.</th>
+            <th class="fin-num fin-g-ingresos fin-g-start" title="Días trabajados × precio/día de la tarifa vigente ${monthRows?'ese mes':'esa semana'}.">€/día</th>
+            <th class="fin-num fin-g-ingresos" title="Se coge el valor más alto entre el importe de km extra y el de horas extra de cada semana. Nunca se suman los dos, solo se cobra el mayor.">Extra</th>
+            <th class="fin-num fin-g-ingresos" title="Suma de los suplementos registrados ${monthRows?'ese mes':'esa semana'} (fecha, importe y motivo).${monthRows?'':' Haz clic para ver el detalle.'}">Suplem.</th>
             <th class="fin-num fin-g-ingresos" title="Importe manual de los días marcados como excluidos del cálculo normal (ver Fichajes diarios). Se paga tal cual, en vez de €/día y km/h extra para esos días.">Manual</th>
             <th class="fin-num fin-g-ingresos" title="€/día + Extra + Suplementos + Manual.">Ingreso</th>
-            <th class="fin-num fin-g-gastos fin-g-start" title="Suma de los repostajes registrados esa semana (litros × precio/litro). Haz clic para ver el detalle.">Gasoil</th>
-            <th class="fin-num fin-g-gastos" title="Suma de los peajes registrados esa semana (fecha, importe y motivo). Haz clic para ver el detalle. Se descuenta del ingreso.">Peajes</th>
-            <th class="fin-num fin-g-gastos" title="Suma de otros gastos registrados esa semana (fecha, importe y motivo). Haz clic para ver el detalle. Se descuenta del ingreso.">Otros</th>
+            <th class="fin-num fin-g-gastos fin-g-start" title="Suma de los repostajes registrados ${monthRows?'ese mes':'esa semana'} (litros × precio/litro).${monthRows?'':' Haz clic para ver el detalle.'}">Gasoil</th>
+            <th class="fin-num fin-g-gastos" title="Suma de los peajes registrados ${monthRows?'ese mes':'esa semana'} (fecha, importe y motivo).${monthRows?'':' Haz clic para ver el detalle.'} Se descuenta del ingreso.">Peajes</th>
+            <th class="fin-num fin-g-gastos" title="Suma de otros gastos registrados ${monthRows?'ese mes':'esa semana'} (fecha, importe y motivo).${monthRows?'':' Haz clic para ver el detalle.'} Se descuenta del ingreso.">Otros</th>
             <th class="fin-num fin-g-gastos" title="Gasoil + Peajes + Otros. Se descuenta del ingreso.">Total</th>
-            ${driverIndexed ? `<th class="fin-num fin-g-ajustes fin-g-start" title="Importe por días × % de indexación del mes al que pertenece esa semana. Puede subir o bajar el neto.">Indexación</th>` : ''}
-            <th class="fin-num fin-neto" title="Ingreso − Gastos + Indexación. Lo que queda finalmente esa semana.">Neto</th>
-            <th class="fin-num fin-eurkm" title="(Ingreso + Indexación) ÷ Km recorridos esa semana. Lo que se saca por cada kilómetro.">€/Km</th>
+            ${driverIndexed ? `<th class="fin-num fin-g-ajustes fin-g-start" title="Importe por días × % de indexación del mes al que pertenece cada semana. Puede subir o bajar el neto.">Indexación</th>` : ''}
+            <th class="fin-num fin-neto" title="Ingreso − Gastos + Indexación. Lo que queda finalmente ${monthRows?'ese mes':'esa semana'}.">Neto</th>
+            <th class="fin-num fin-eurkm" title="(Ingreso + Indexación) ÷ Km recorridos ${monthRows?'ese mes':'esa semana'}. Lo que se saca por cada kilómetro.">€/Km</th>
           </tr>
         </thead>
         <tbody>
-          ${rows.map(({e,c}) => {
+          ${monthRows ? monthRows.map(r => `
+            <tr class="fin-row">
+              <td class="fin-first fin-center" style="font-weight:600;text-transform:capitalize;">${MONTH_NAMES[r.month]}</td>
+              <td class="fin-num fin-center fin-g-jornada fin-g-start" style="color:var(--muted);">${r.daysCount}</td>
+              <td class="fin-num fin-g-jornada" style="color:var(--muted);">${r.km}</td>
+              <td class="fin-num fin-g-jornada" style="color:var(--muted);">${fmtHoursMin(r.hours)}</td>
+              <td class="fin-num fin-g-jornada" style="color:var(--muted);">${r.kmExtra>0?'+':''}${r.kmExtra.toFixed(1)}</td>
+              <td class="fin-num fin-g-jornada" style="color:var(--muted);">${r.hoursExtra>0?'+':''}${fmtHoursMin(r.hoursExtra)}</td>
+              <td class="fin-num fin-g-ingresos fin-g-start" style="color:var(--muted);">${eur2(r.dayAmount)}</td>
+              <td class="fin-num fin-g-ingresos">${r.extraCharge>0 ? `<span class="fin-pill" style="background:rgba(63,143,95,0.12);color:var(--success);">+${eur2(r.extraCharge)}</span>` : `<span style="color:var(--mutedFaint);">—</span>`}</td>
+              <td class="fin-num fin-g-ingresos" style="color:${r.supplements?'var(--muted)':'var(--mutedFaint)'};">${r.supplements ? eur2(r.supplements) : '—'}</td>
+              <td class="fin-num fin-g-ingresos" style="color:${r.manualAmount?'var(--primary)':'var(--mutedFaint)'};font-weight:600;">${r.manualAmount ? eur2(r.manualAmount) : '—'}</td>
+              <td class="fin-num fin-g-ingresos" style="font-weight:700;">${eur2(r.totalIngreso)}</td>
+              <td class="fin-num fin-g-gastos fin-g-start" style="color:${r.gasoil?'var(--danger)':'var(--mutedFaint)'};">${r.gasoil ? eur2(r.gasoil) : '—'}</td>
+              <td class="fin-num fin-g-gastos" style="color:${r.peajes?'var(--danger)':'var(--mutedFaint)'};">${r.peajes ? eur2(r.peajes) : '—'}</td>
+              <td class="fin-num fin-g-gastos" style="color:${r.otros?'var(--danger)':'var(--mutedFaint)'};">${r.otros ? eur2(r.otros) : '—'}</td>
+              <td class="fin-num fin-g-gastos" style="color:${r.gastosTotal?'var(--danger)':'var(--mutedFaint)'};font-weight:600;">${r.gastosTotal ? '−'+eur2(r.gastosTotal) : '—'}</td>
+              ${driverIndexed ? `<td class="fin-num fin-g-ajustes fin-g-start" style="color:${r.idxAmount<0?'var(--danger)':r.idxAmount>0?'var(--success)':'var(--mutedFaint)'};font-weight:600;" title="${r.idxPct}% sobre ${eur2(r.dayAmount)}">${r.idxAmount ? eurSigned(r.idxAmount) : '—'}</td>` : ''}
+              <td class="fin-num fin-neto" style="font-weight:800;color:var(--primary);font-size:13.5px;">${eur2(r.neto)}</td>
+              <td class="fin-num fin-eurkm" style="color:var(--muted);font-weight:600;">${r.km ? eur2((r.totalIngreso+r.idxAmount)/r.km) : '—'}</td>
+            </tr>`).join('') || `<tr><td colspan="${driverIndexed?18:17}" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin datos registrados en ${year}</td></tr>`
+          : rows.map(({e,c}) => {
             const idxPct = driverIndexed ? getIndexPercent(d.id, e.year, e._splitMonth !== undefined ? e._splitMonth : weekMonth(e.year, e.week)) : 0;
             const idxAmount = driverIndexed ? c.dayAmount * (idxPct/100) : 0;
             const rowNeto = c.neto + idxAmount;
@@ -2959,7 +3015,7 @@ function tplDriverDetail(){
             </tr>`;
           }).join('') || `<tr><td colspan="${driverIndexed?18:17}" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin semanas registradas en ${year}</td></tr>`}
         </tbody>
-        ${rows.length ? `
+        ${(monthRows ? monthRows.length : rows.length) ? `
         <tfoot>
           <tr class="fin-total-row">
             <td class="fin-first fin-center" style="text-transform:uppercase;letter-spacing:.3px;">Total</td>
