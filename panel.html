@@ -2398,34 +2398,45 @@ function openDriversList(){
 }
 function openCompanyDrivers(companyId){
   window.__autonomosView = 'lista';
-  window.__driversView = 'activos';
+  window.__driversStatusFilter = 'activos';
   window.__driversCompanyFilter = companyId;
   window.__driversSearch = '';
   renderSidebar(); renderHeader(); renderTab();
 }
-function clearDriversCompanyFilter(){
-  window.__driversCompanyFilter = null;
-  renderTab();
-}
 function tplDriversManage(){
-  const archivedCount = drivers.filter(d=>d.archived).length;
-  const view = window.__driversView || 'activos';
   const companyFilter = window.__driversCompanyFilter ? companies.find(c=>c.id===window.__driversCompanyFilter) : null;
+  const statusFilter = window.__driversStatusFilter || 'activos';
+  const companyOptions = companies.filter(co=>!co.archived || co.id===window.__driversCompanyFilter).sort((a,b)=>a.name.localeCompare(b.name,'es'));
 
   return `
     <button class="btn btn-ghost" onclick="${companyFilter?'openCompaniesList()':'backToAutonomosHome()'}" style="margin-bottom:16px;">← Volver${companyFilter?' a empresas':''}</button>
-    ${companyFilter ? `<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12.5px;color:var(--muted);">Mostrando conductores de <strong>${esc(companyFilter.name)}</strong><button onclick="clearDriversCompanyFilter()" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:11px;padding:2px 8px;">✕ Quitar filtro</button></div>` : ''}
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
-      <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
-        <input id="drivers-search-input" placeholder="Buscar conductor…" value="${esc(window.__driversSearch||'')}" oninput="window.__driversSearch=this.value; refreshDriversListBody();" style="padding-left:34px;" />
-        <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div style="width:48px;height:48px;border-radius:12px;background:rgba(27,58,107,0.08);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          ${homeIcon(HOME_ICON_PATHS.user, 24, 'var(--primary)')}
+        </div>
+        <div>
+          <div style="font-family:var(--display);font-size:22px;">Autónomos</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">Conductores autónomos, sus datos y su modalidad de contrato.</div>
+        </div>
       </div>
-      ${view==='archivados' ? '' : `<button class="btn btn-primary" onclick="openDriverModal()">+ Nuevo conductor</button>`}
+      <button class="btn btn-primary" onclick="openDriverModal()">+ Nuevo conductor</button>
     </div>
 
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;">
-      <button class="btn ${view==='activos'?'btn-primary':'btn-ghost'}" onclick="window.__driversView='activos'; renderTab();">Activos</button>
-      <button class="btn ${view==='archivados'?'btn-primary':'btn-ghost'}" onclick="window.__driversView='archivados'; renderTab();">🗄 Archivados (${archivedCount})</button>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;">
+      <div style="position:relative;flex:1;min-width:240px;max-width:340px;">
+        <input id="drivers-search-input" placeholder="Buscar por nombre, DNI, matrícula…" value="${esc(window.__driversSearch||'')}" oninput="window.__driversSearch=this.value; refreshDriversListBody();" style="padding-left:34px;" />
+        <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+      </div>
+      <select style="width:auto;min-width:170px;" onchange="window.__driversCompanyFilter=this.value||null; refreshDriversListBody();">
+        <option value="">Empresa: Todas</option>
+        ${companyOptions.map(co=>`<option value="${co.id}" ${window.__driversCompanyFilter===co.id?'selected':''}>${esc(co.name)}</option>`).join('')}
+      </select>
+      <select style="width:auto;min-width:150px;" onchange="window.__driversStatusFilter=this.value; refreshDriversListBody();">
+        <option value="activos" ${statusFilter==='activos'?'selected':''}>Estado: Activos</option>
+        <option value="archivados" ${statusFilter==='archivados'?'selected':''}>Estado: Archivados</option>
+        <option value="todos" ${statusFilter==='todos'?'selected':''}>Estado: Todos</option>
+      </select>
     </div>
 
     <div id="drivers-list-body">${driversListBodyHtml()}</div>`;
@@ -2467,58 +2478,64 @@ function brutoForDriverYear(driverId, year){
 }
 function driversListBodyHtml(){
   const search = (window.__driversSearch || '').toLowerCase();
-  const view = window.__driversView || 'activos';
-  const archivedView = view === 'archivados';
-
+  const statusFilter = window.__driversStatusFilter || 'activos';
   const companyFilter = window.__driversCompanyFilter;
   const companiesById = new Map(companies.map(co=>[co.id, co]));
-  let list = drivers.filter(d => !!d.archived === archivedView && d.name.toLowerCase().includes(search));
+  let list = drivers.filter(d =>
+    (statusFilter==='todos' || !!d.archived === (statusFilter==='archivados')) &&
+    (d.name.toLowerCase().includes(search) || (d.dni||'').toLowerCase().includes(search) || (d.truckPlate||'').toLowerCase().includes(search))
+  );
   if (companyFilter) list = list.filter(d => d.companyId === companyFilter);
   list = list.slice().sort((a,b) => a.name.localeCompare(b.name, 'es'));
 
   if (!list.length) {
-    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${archivedView ? 'No hay conductores archivados.' : search ? 'Ningún conductor coincide con la búsqueda.' : 'Todavía no hay conductores. Empieza dando de alta uno.'}</div>`;
+    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search ? 'Ningún conductor coincide con la búsqueda.' : statusFilter==='archivados' ? 'No hay conductores archivados.' : 'Todavía no hay conductores. Empieza dando de alta uno.'}</div>`;
   }
 
-  const rows = list.map(d => {
+  const rows = list.map((d,i) => {
     const isPisoMovil = d.modality === 'piso_movil';
     const co = companiesById.get(d.companyId);
-    const openNow = !isPisoMovil && !archivedView && openTodayEntry(d.id);
-    const initial = (d.name||'?').trim().charAt(0).toUpperCase();
+    const openNow = !isPisoMovil && !d.archived && openTodayEntry(d.id);
     const modalityBadge = isPisoMovil
       ? `<span style="font-size:11px;font-weight:600;color:#8A4A35;background:rgba(138,74,53,0.08);border-radius:999px;padding:2px 9px;white-space:nowrap;">Piso Móvil</span>`
       : `<span style="font-size:11px;font-weight:600;color:var(--primary);background:rgba(27,58,107,0.08);border-radius:999px;padding:2px 9px;white-space:nowrap;">Plaza</span>`;
-    return { d, co, openNow, initial, modalityBadge };
+    const statusDot = d.archived
+      ? `<span style="display:inline-flex;align-items:center;gap:6px;color:var(--mutedFaint);font-size:12.5px;"><span style="width:7px;height:7px;border-radius:50%;background:var(--mutedFaint);display:inline-block;"></span>Archivado</span>`
+      : `<span style="display:inline-flex;align-items:center;gap:6px;color:var(--success);font-size:12.5px;font-weight:600;"><span style="width:7px;height:7px;border-radius:50%;background:var(--success);display:inline-block;"></span>Activo</span>`;
+    return { d, co, i, openNow, modalityBadge, statusDot };
   });
 
   return `
     <div class="card" style="padding:0;overflow-x:auto;">
       <table>
         <thead><tr>
+          <th>Nº</th>
           <th>Conductor</th>
           <th>Empresa</th>
-          <th>Modalidad de autónomo</th>
+          <th>Modalidad</th>
           <th>Nº Flota</th>
           <th>Matrícula vehículo</th>
-          <th></th>
+          <th>Estado</th>
+          <th>Acciones</th>
         </tr></thead>
         <tbody>
-          ${rows.map(({d, co, openNow, initial, modalityBadge}) => `
-            <tr class="dr-row" style="cursor:pointer;${archivedView?'opacity:0.65;':''}" onclick="openDriverDetail('${d.id}')">
+          ${rows.map(({d, co, i, openNow, modalityBadge, statusDot}) => `
+            <tr class="dr-row" style="cursor:pointer;${d.archived?'opacity:0.65;':''}" onclick="openDriverDetail('${d.id}')">
+              <td style="color:var(--mutedFaint);">${i+1}</td>
               <td>
-                <div style="display:flex;align-items:center;gap:10px;">
-                  <div style="width:34px;height:34px;border-radius:50%;background:var(--primary);color:var(--primary-text);display:flex;align-items:center;justify-content:center;font-family:var(--display);font-size:13px;flex-shrink:0;">${esc(initial)}</div>
-                  <div style="min-width:0;">
-                    <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(d.name)}${archivedView?' <span style="font-size:10px;color:var(--mutedFaint);text-transform:uppercase;font-weight:400;">· archivado</span>':''}${openNow?' <span class="badge" style="background:#D9A72C;">Jornada abierta</span>':''}</div>
-                    <div style="font-size:11px;color:var(--mutedFaint);font-family:var(--mono);">${esc(d.dni||'—')}</div>
-                  </div>
-                </div>
+                <div style="font-weight:600;">${esc(d.name)}${openNow?' <span class="badge" style="background:#D9A72C;">Jornada abierta</span>':''}</div>
+                <div style="font-size:11px;color:var(--mutedFaint);font-family:var(--mono);">${esc(d.dni||'—')}</div>
               </td>
               <td style="color:var(--muted);">${esc(co?co.name:'—')}</td>
               <td>${modalityBadge}</td>
               <td style="color:var(--muted);">${d.fleetNumber?esc(d.fleetNumber):'—'}</td>
               <td style="color:var(--muted);font-family:var(--mono);font-size:12.5px;">${d.truckPlate?esc(d.truckPlate):'—'}</td>
-              <td style="text-align:right;white-space:nowrap;">${archivedView ? `<button onclick="event.stopPropagation(); unarchiveDriver('${d.id}');" title="Restaurar conductor" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--primary);font-size:10.5px;padding:3px 7px;">↩ Restaurar</button>` : `<span style="color:var(--mutedFaint);">→</span>`}</td>
+              <td>${statusDot}</td>
+              <td style="white-space:nowrap;">
+                <button onclick="event.stopPropagation(); openDriverModal('${d.id}');" title="Editar" style="background:none;border:none;color:var(--muted);font-size:14px;padding:2px 4px;">✏️</button>
+                <button onclick="event.stopPropagation(); openDriverDetail('${d.id}');" title="Ver ficha" style="background:none;border:none;color:var(--muted);font-size:14px;padding:2px 4px;">👁</button>
+                ${d.archived ? `<button onclick="event.stopPropagation(); unarchiveDriver('${d.id}');" title="Restaurar" style="background:none;border:none;color:var(--primary);font-size:14px;padding:2px 4px;">↩</button>` : ''}
+              </td>
             </tr>`).join('')}
         </tbody>
       </table>
