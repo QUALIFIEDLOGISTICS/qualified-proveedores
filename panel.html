@@ -2609,6 +2609,7 @@ function tplDriverDetail(){
   if (!d) { window.__autonomosView='lista'; return tplDriversManage(); }
   if (d.modality === 'piso_movil') return tplPisoMovilDetail(d);
   const co = companies.find(c=>c.id===d.companyId);
+  const readOnly = d.archived;
   const driverIndexed = getRatesForDate(d.id, today()).hasIndexation !== false;
   const year = window.__autonomosYear;
   const month = window.__autonomosMonth === undefined ? 'todos' : window.__autonomosMonth;
@@ -2699,6 +2700,7 @@ function tplDriverDetail(){
               ${d.truckPlate ? `<span style="font-size:11px;font-weight:600;color:var(--muted);background:var(--panel2);border:1px solid var(--border);border-radius:999px;padding:2px 9px;font-family:var(--mono);">${esc(d.truckPlate)}</span>` : ''}
               <span style="font-size:11px;font-weight:600;color:var(--muted);background:var(--panel2);border:1px solid var(--border);border-radius:999px;padding:2px 9px;">${esc(co?co.name:'')}</span>
               <span style="font-size:11px;font-weight:600;color:var(--primary);background:rgba(27,58,107,0.08);border-radius:999px;padding:2px 9px;">Plaza</span>
+              ${readOnly ? `<span style="font-size:11px;font-weight:600;color:var(--danger);background:rgba(193,68,61,0.08);border-radius:999px;padding:2px 9px;">🔒 Inactivo — solo lectura</span>` : ''}
             </div>
           </div>
         </div>
@@ -2734,13 +2736,13 @@ function tplDriverDetail(){
     <div class="card" style="margin-bottom:22px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
         <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Histórico de tarifas</div>
-        <button class="btn btn-ghost" onclick="openRateModal('${d.id}')">+ Nueva tarifa desde una fecha</button>
+        ${readOnly ? '' : `<button class="btn btn-ghost" onclick="openRateModal('${d.id}')">+ Nueva tarifa desde una fecha</button>`}
       </div>
       <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:10px;">Cada tarifa se aplica desde su fecha en adelante, hasta que empiece la siguiente. Así, si cambias un precio, las semanas ya pasadas no se recalculan con el precio nuevo.</div>
       <div class="card" style="padding:0;overflow:hidden;">
         <table><thead><tr><th>Vigente desde</th><th>€/día</th><th>€/km extra</th><th>€/h extra</th><th>Máx km/día</th><th>Máx h/día</th><th>Indexación</th><th></th></tr></thead><tbody>
           ${rateHistory.filter(r=>r.driverId===d.id).sort((a,b)=>b.validFrom.localeCompare(a.validFrom)).map(r => `
-            <tr onclick="openRateModal('${d.id}','${r.id}')" style="cursor:pointer;">
+            <tr ${readOnly?'':`onclick="openRateModal('${d.id}','${r.id}')" style="cursor:pointer;"`}>
               <td>${fmtDateY(r.validFrom)}${r.note ? ` <span title="${esc(r.note)}" style="cursor:help;">📝</span>` : ''}</td>
               <td>${eur2(r.priceDay)}</td>
               <td>${eur2(r.priceKmExtra)}</td>
@@ -2748,7 +2750,7 @@ function tplDriverDetail(){
               <td>${r.maxKmDay}</td>
               <td>${r.maxHoursDay}</td>
               <td>${r.hasIndexation!==false ? '<span class="badge" style="background:#3F8F5F;">Sí</span>' : '<span class="badge" style="background:var(--mutedFaint);">No</span>'}</td>
-              <td><button onclick="event.stopPropagation(); deleteRate('${r.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button></td>
+              <td>${readOnly ? '' : `<button onclick="event.stopPropagation(); deleteRate('${r.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>`}</td>
             </tr>`).join('') || `<tr><td colspan="8" style="color:var(--mutedFaint);text-align:center;padding:16px;">Sin tarifas registradas</td></tr>`}
         </tbody></table>
       </div>
@@ -2779,13 +2781,17 @@ function tplDriverDetail(){
     <div class="card" style="margin-bottom:22px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
         <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Indexación mensual — ${month==='todos' ? year : MONTH_NAMES[month].charAt(0).toUpperCase()+MONTH_NAMES[month].slice(1)+' '+year}</div>
-        ${month==='todos' ? `<button class="btn btn-primary" onclick="saveAllIndexPercents('${d.id}', ${year})">💾 Guardar</button>` : ''}
+        ${month==='todos' && !readOnly ? `<button class="btn btn-primary" onclick="saveAllIndexPercents('${d.id}', ${year})">💾 Guardar</button>` : ''}
       </div>
       ${month==='todos' ? `
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;">
         ${MONTH_NAMES.map((mn,i) => {
           const existing = indexationEntries.find(x=>x.driverId===d.id && x.year===year && x.month===i);
-          return `
+          return readOnly ? `
+          <label style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;">
+            <span style="font-size:12px;color:var(--muted);text-transform:capitalize;">${mn}</span>
+            <span style="font-size:12.5px;color:var(--mutedFaint);">${existing?existing.percent+'%':'—'}</span>
+          </label>` : `
           <label style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;">
             <span style="font-size:12px;color:var(--muted);text-transform:capitalize;">${mn}</span>
             <input type="number" step="0.01" id="idx-input-${i}" value="${existing?existing.percent:''}" placeholder="0"
@@ -2793,7 +2799,12 @@ function tplDriverDetail(){
           </label>`;
         }).join('')}
       </div>
-      <div style="font-size:11px;color:var(--mutedFaint);margin-top:8px;">Los 12 meses ya están aquí — escribe el % que corresponda a cada uno y pulsa Guardar (déjalo en blanco si ese mes no lleva indexación). O elige un mes arriba en el filtro para editar solo ese.</div>
+      ${readOnly ? '' : `<div style="font-size:11px;color:var(--mutedFaint);margin-top:8px;">Los 12 meses ya están aquí — escribe el % que corresponda a cada uno y pulsa Guardar (déjalo en blanco si ese mes no lleva indexación). O elige un mes arriba en el filtro para editar solo ese.</div>`}
+      ` : readOnly ? `
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:13px;color:var(--muted);">Indexación de ${MONTH_NAMES[month]} ${year}:</span>
+        <span style="font-family:var(--display);font-size:15px;">${(()=>{ const ex=indexationEntries.find(x=>x.driverId===d.id&&x.year===year&&x.month===Number(month)); return ex?ex.percent+'%':'—'; })()}</span>
+      </div>
       ` : `
       <div style="display:flex;align-items:center;gap:10px;">
         <span style="font-size:13px;color:var(--muted);">Indexación de ${MONTH_NAMES[month]} ${year}:</span>
@@ -2809,8 +2820,10 @@ function tplDriverDetail(){
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;margin-top:22px;flex-wrap:wrap;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Fichajes diarios de ${MONTH_NAMES[month].charAt(0).toUpperCase()+MONTH_NAMES[month].slice(1)+' '+year}</div>
       <div style="flex:1;"></div>
+      ${readOnly ? '' : `
       <button class="btn btn-ghost" onclick="confirmRecalcWeeks('${d.id}', ${year})">🔄 Recalcular semanas</button>
       <button class="btn btn-ghost" onclick="openAddFichajeModal('${d.id}')">+ Añadir fichaje diario manual</button>
+      `}
     </div>
     <div class="card" style="padding:0;overflow-x:auto;margin-bottom:14px;">
       <table><thead><tr><th>Fecha</th><th>Estado</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km inicial</th><th>Km final</th><th>Km recorridos</th><th>Incidencias</th><th title="Excluir días/km/horas de este día del cálculo normal (a la carta) y/o pagar un importe manual.">Cálculo</th><th>Foto inicio</th><th>Foto cierre</th><th></th></tr></thead><tbody>
@@ -2828,21 +2841,26 @@ function tplDriverDetail(){
             <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmEnd ?? '—'}</td>
             <td style="font-weight:600;${f.excludeKm?'color:var(--mutedFaint);text-decoration:line-through;':''}">${f.km!=null ? f.km+' km' : '—'}</td>
             <td>
-              <button onclick="openIncidentsModal('${d.id}', '${f.date}')" title="Ver o añadir incidencias de este día" style="background:none;border:1px solid var(--border);border-radius:5px;color:${inc.length?'var(--danger)':'var(--muted)'};font-size:10.5px;padding:3px 7px;white-space:nowrap;">${inc.length ? '⚠ '+inc.length : '+ Incidencia'}</button>
+              ${readOnly
+                ? (inc.length ? `<span style="color:var(--danger);font-size:10.5px;">⚠ ${inc.length}</span>` : `<span style="color:var(--mutedFaint);font-size:10.5px;">—</span>`)
+                : `<button onclick="openIncidentsModal('${d.id}', '${f.date}')" title="Ver o añadir incidencias de este día" style="background:none;border:1px solid var(--border);border-radius:5px;color:${inc.length?'var(--danger)':'var(--muted)'};font-size:10.5px;padding:3px 7px;white-space:nowrap;">${inc.length ? '⚠ '+inc.length : '+ Incidencia'}</button>`}
             </td>
             <td>
               ${(() => {
                 const tags = [f.excludeDays?'Días':null, f.excludeKm?'Km':null, f.excludeHours?'Horas':null].filter(Boolean);
                 const active = tags.length || f.manualAmount;
                 const label = tags.length ? '🚫 '+tags.join('+')+(f.manualAmount?' · '+eur2(f.manualAmount):'') : (f.manualAmount ? '💶 '+eur2(f.manualAmount) : '+ Ajustar');
+                if (readOnly) return active ? `<span style="color:var(--primary);font-size:10.5px;">${label}</span>` : `<span style="color:var(--mutedFaint);font-size:10.5px;">—</span>`;
                 return `<button onclick="openExclusionModal('${f.id}')" title="Excluir días/km/horas de este día del cálculo normal y/o pagar un importe manual" style="background:none;border:1px solid var(--border);border-radius:5px;color:${active?'var(--primary)':'var(--muted)'};font-size:10.5px;padding:3px 7px;white-space:nowrap;">${label}</button>`;
               })()}
             </td>
             <td>${photoThumb(f.photoIn)}</td>
             <td>${photoThumb(f.photoOut)}</td>
             <td style="white-space:nowrap;">
+              ${readOnly ? '' : `
               <button onclick="openEditFichajeModal('${f.id}')" title="Corregir" style="background:none;border:none;color:var(--primary);">✏️</button>
               <button onclick="deleteFichaje('${f.id}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>
+              `}
             </td>
           </tr>`; }).join('') || `<tr><td colspan="13" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin fichajes registrados en ${MONTH_NAMES[month]} de ${year}</td></tr>`}
       </tbody></table>
@@ -2932,12 +2950,12 @@ function tplDriverDetail(){
               <td class="fin-num fin-g-jornada" style="color:${c.extraCharge>0 && c.hoursExtraAmount===c.extraCharge?'var(--success)':'var(--muted)'};font-weight:${c.extraCharge>0 && c.hoursExtraAmount===c.extraCharge?'700':'400'};" onclick="event.stopPropagation();" title="${c.extraCharge>0 && c.hoursExtraAmount===c.extraCharge?'Esto es lo que se está pagando en Total Extra.':''}">${c.hoursExtra>0?'+':''}${fmtHoursMin(c.hoursExtra)}</td>
               <td class="fin-num fin-g-ingresos fin-g-start" style="color:var(--muted);" onclick="event.stopPropagation();">${eur2(c.dayAmount)}</td>
               <td class="fin-num fin-g-ingresos" onclick="event.stopPropagation();">${c.extraCharge>0 ? `<span class="fin-pill" style="background:rgba(63,143,95,0.12);color:var(--success);">+${eur2(c.extraCharge)}</span>` : `<span style="color:var(--mutedFaint);">—</span>`}</td>
-              <td class="fin-num fin-g-ingresos" style="color:var(--primary);text-decoration:underline;cursor:pointer;" onclick="event.stopPropagation(); openSupplementModal('${d.id}', ${e.year}, ${e.week});">${e.supplements ? eur2(e.supplements) : '—'}</td>
+              <td class="fin-num fin-g-ingresos" ${readOnly?'':`style="color:var(--primary);text-decoration:underline;cursor:pointer;" onclick="event.stopPropagation(); openSupplementModal('${d.id}', ${e.year}, ${e.week});"`}>${e.supplements ? eur2(e.supplements) : '—'}</td>
               <td class="fin-num fin-g-ingresos" style="color:${e.manualAmount?'var(--primary)':'var(--mutedFaint)'};font-weight:600;" onclick="event.stopPropagation();">${e.manualAmount ? eur2(e.manualAmount) : '—'}</td>
               <td class="fin-num fin-g-ingresos" style="font-weight:700;" onclick="event.stopPropagation();">${eur2(c.totalIngreso)}</td>
-              <td class="fin-num fin-g-gastos fin-g-start" style="color:${e.gasoil?'var(--danger)':'var(--mutedFaint)'};text-decoration:underline;cursor:pointer;" onclick="event.stopPropagation(); openFuelModal('${d.id}', ${e.year}, ${e.week});">${e.gasoil ? eur2(e.gasoil) : '—'}</td>
-              <td class="fin-num fin-g-gastos" style="color:${e.peajes?'var(--danger)':'var(--mutedFaint)'};text-decoration:underline;cursor:pointer;" onclick="event.stopPropagation(); openExpenseModal('${d.id}', ${e.year}, ${e.week}, 'peaje');">${e.peajes ? eur2(e.peajes) : '—'}</td>
-              <td class="fin-num fin-g-gastos" style="color:${e.otros?'var(--danger)':'var(--mutedFaint)'};text-decoration:underline;cursor:pointer;" onclick="event.stopPropagation(); openExpenseModal('${d.id}', ${e.year}, ${e.week}, 'otro');">${e.otros ? eur2(e.otros) : '—'}</td>
+              <td class="fin-num fin-g-gastos fin-g-start" style="color:${e.gasoil?'var(--danger)':'var(--mutedFaint)'};${readOnly?'':'text-decoration:underline;cursor:pointer;'}" ${readOnly?'':`onclick="event.stopPropagation(); openFuelModal('${d.id}', ${e.year}, ${e.week});"`}>${e.gasoil ? eur2(e.gasoil) : '—'}</td>
+              <td class="fin-num fin-g-gastos" style="color:${e.peajes?'var(--danger)':'var(--mutedFaint)'};${readOnly?'':'text-decoration:underline;cursor:pointer;'}" ${readOnly?'':`onclick="event.stopPropagation(); openExpenseModal('${d.id}', ${e.year}, ${e.week}, 'peaje');"`}>${e.peajes ? eur2(e.peajes) : '—'}</td>
+              <td class="fin-num fin-g-gastos" style="color:${e.otros?'var(--danger)':'var(--mutedFaint)'};${readOnly?'':'text-decoration:underline;cursor:pointer;'}" ${readOnly?'':`onclick="event.stopPropagation(); openExpenseModal('${d.id}', ${e.year}, ${e.week}, 'otro');"`}>${e.otros ? eur2(e.otros) : '—'}</td>
               <td class="fin-num fin-g-gastos" style="color:${c.gastosTotal?'var(--danger)':'var(--mutedFaint)'};font-weight:600;" onclick="event.stopPropagation();">${c.gastosTotal ? '−'+eur2(c.gastosTotal) : '—'}</td>
               ${driverIndexed ? `<td class="fin-num fin-g-ajustes fin-g-start" style="color:${idxAmount<0?'var(--danger)':idxAmount>0?'var(--success)':'var(--mutedFaint)'};font-weight:600;" title="${idxPct}% sobre ${eur2(c.dayAmount)}" onclick="event.stopPropagation();">${idxAmount ? eurSigned(idxAmount) : '—'}</td>` : ''}
               <td class="fin-num fin-neto" style="font-weight:800;color:var(--primary);font-size:13.5px;" onclick="event.stopPropagation();">${eur2(rowNeto)}</td>
@@ -2970,14 +2988,15 @@ function tplDriverDetail(){
     ${tplAnotacionesSection(d.id, driverNotes.filter(n=>n.driverId===d.id && n.date.startsWith(String(year))
         && (month==='todos' || Number(n.date.slice(5,7))-1===Number(month))
         && (weekFilter==='todas' || getISOWeek(n.date).week===Number(weekFilter))
-      ))}`;
+      ), readOnly)}`;
 }
-function tplAnotacionesSection(driverId, filteredNotes){
+function tplAnotacionesSection(driverId, filteredNotes, readOnly){
   return `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;margin-top:22px;flex-wrap:wrap;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Anotaciones</div>
       <div style="font-size:11.5px;color:var(--mutedFaint);">— para dejar constancia de lo que sea, en el día que quieras. No afecta a ningún cálculo.</div>
     </div>
+    ${readOnly ? '' : `
     <div class="card" style="margin-bottom:14px;">
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
         <div class="field" style="flex:0 0 160px;margin-bottom:0;"><label>Fecha</label><input id="note-date" type="date" value="${today()}" /></div>
@@ -2986,8 +3005,9 @@ function tplAnotacionesSection(driverId, filteredNotes){
       </div>
       <div id="note-error" style="color:var(--danger);font-size:12.5px;margin-top:8px;"></div>
     </div>
+    `}
     <div style="display:flex;flex-direction:column;gap:8px;">
-      ${filteredNotes.map(n => window.__editingNoteId===n.id ? `
+      ${filteredNotes.map(n => (!readOnly && window.__editingNoteId===n.id) ? `
         <div class="card" style="padding:10px 14px;">
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
             <div class="field" style="flex:0 0 160px;margin-bottom:0;"><label>Fecha</label><input id="note-edit-date-${n.id}" type="date" value="${n.date}" /></div>
@@ -3002,10 +3022,12 @@ function tplAnotacionesSection(driverId, filteredNotes){
             <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:2px;">${fmtDate(n.date)}</div>
             <div style="font-size:13.5px;">${esc(n.note)}</div>
           </div>
+          ${readOnly ? '' : `
           <div style="display:flex;gap:4px;flex-shrink:0;">
             <button onclick="window.__editingNoteId='${n.id}'; renderTab();" title="Editar" style="background:none;border:none;color:var(--primary);">✏️</button>
             <button onclick="deleteDriverNote('${n.id}', '${driverId}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>
           </div>
+          `}
         </div>`).join('') || `<div style="color:var(--mutedFaint);font-size:12.5px;">Sin anotaciones en este periodo.</div>`}
     </div>`;
 }
@@ -3017,6 +3039,7 @@ function tplAnotacionesSection(driverId, filteredNotes){
    km/horas extra ni indexación. */
 function tplPisoMovilDetail(d){
   const co = companies.find(c=>c.id===d.companyId);
+  const readOnly = d.archived;
   const year = window.__autonomosYear;
   const month = window.__autonomosMonth === undefined ? 'todos' : window.__autonomosMonth;
   const systemYear = new Date().getFullYear();
@@ -3056,6 +3079,7 @@ function tplPisoMovilDetail(d){
               ${d.truckPlate ? `<span style="font-size:11px;font-weight:600;color:var(--muted);background:var(--panel2);border:1px solid var(--border);border-radius:999px;padding:2px 9px;font-family:var(--mono);">${esc(d.truckPlate)}</span>` : ''}
               <span style="font-size:11px;font-weight:600;color:var(--muted);background:var(--panel2);border:1px solid var(--border);border-radius:999px;padding:2px 9px;">${esc(co?co.name:'')}</span>
               <span style="font-size:11px;font-weight:600;color:#8A4A35;background:rgba(138,74,53,0.08);border-radius:999px;padding:2px 9px;">Piso Móvil</span>
+              ${readOnly ? `<span style="font-size:11px;font-weight:600;color:var(--danger);background:rgba(193,68,61,0.08);border-radius:999px;padding:2px 9px;">🔒 Inactivo — solo lectura</span>` : ''}
             </div>
           </div>
         </div>
@@ -3079,16 +3103,16 @@ function tplPisoMovilDetail(d){
     <div class="card" style="margin-bottom:22px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
         <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Histórico de comisión</div>
-        <button class="btn btn-ghost" onclick="openCommissionModal('${d.id}')">+ Nueva comisión desde una fecha</button>
+        ${readOnly ? '' : `<button class="btn btn-ghost" onclick="openCommissionModal('${d.id}')">+ Nueva comisión desde una fecha</button>`}
       </div>
       <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:10px;">Cada comisión se aplica desde su fecha en adelante, hasta que empiece la siguiente. Así, si cambias el %, los meses ya pasados no se recalculan con el nuevo.</div>
       <div class="card" style="padding:0;overflow:hidden;">
         <table><thead><tr><th>Vigente desde</th><th>% Comisión</th><th></th></tr></thead><tbody>
           ${mobileCommissionRates.filter(r=>r.driverId===d.id).sort((a,b)=>b.validFrom.localeCompare(a.validFrom)).map(r => `
-            <tr onclick="openCommissionModal('${d.id}','${r.id}')" style="cursor:pointer;">
+            <tr ${readOnly?'':`onclick="openCommissionModal('${d.id}','${r.id}')" style="cursor:pointer;"`}>
               <td>${fmtDateY(r.validFrom)}</td>
               <td>${r.commissionPercent}%</td>
-              <td><button onclick="event.stopPropagation(); deleteCommissionRate('${r.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button></td>
+              <td>${readOnly ? '' : `<button onclick="event.stopPropagation(); deleteCommissionRate('${r.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>`}</td>
             </tr>`).join('') || `<tr><td colspan="3" style="color:var(--mutedFaint);text-align:center;padding:16px;">Sin comisión registrada — se usará 0%.</td></tr>`}
         </tbody></table>
       </div>
@@ -3107,7 +3131,7 @@ function tplPisoMovilDetail(d){
           ${MONTH_NAMES.map((mn,i)=>`<option value="${i}" ${month===i?'selected':''}>${mn.charAt(0).toUpperCase()+mn.slice(1)}</option>`).join('')}
         </select>
         <div style="flex:1;"></div>
-        <button class="btn btn-primary" onclick="openBillingModal('${d.id}')">+ Añadir facturación mensual</button>
+        ${readOnly ? '' : `<button class="btn btn-primary" onclick="openBillingModal('${d.id}')">+ Añadir facturación mensual</button>`}
       </div>
     </div>
 
@@ -3123,7 +3147,7 @@ function tplPisoMovilDetail(d){
     <div class="card" style="padding:0;overflow-x:auto;margin-bottom:22px;">
       <table><thead><tr><th>Mes</th><th>Facturación</th><th>Km</th><th title="Facturación ÷ Km.">€/Km Fact.</th><th>% Comisión</th><th>Comisión</th><th>Total a cobrar</th><th title="(Facturación − Comisión) ÷ Km.">€/Km Neto</th><th></th></tr></thead><tbody>
         ${rows.map(({e,commissionPercent,commission,total,eurPerKm,eurPerKmNeto}) => `
-          <tr onclick="openBillingModal('${d.id}','${e.id}')" style="cursor:pointer;">
+          <tr ${readOnly?'':`onclick="openBillingModal('${d.id}','${e.id}')" style="cursor:pointer;"`}>
             <td style="text-transform:capitalize;">${MONTH_NAMES[e.month]} ${e.year}</td>
             <td>${eur2(e.billingAmount)}</td>
             <td>${e.km ? e.km.toLocaleString('es-ES')+' km' : '—'}</td>
@@ -3132,14 +3156,14 @@ function tplPisoMovilDetail(d){
             <td style="color:var(--danger);">−${eur2(commission)}</td>
             <td style="font-weight:700;">${eur2(total)}</td>
             <td>${eurPerKmNeto!=null ? eur2(eurPerKmNeto) : '—'}</td>
-            <td><button onclick="event.stopPropagation(); deleteBilling('${e.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button></td>
+            <td>${readOnly ? '' : `<button onclick="event.stopPropagation(); deleteBilling('${e.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>`}</td>
           </tr>`).join('') || `<tr><td colspan="9" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin facturación registrada en este periodo.</td></tr>`}
       </tbody></table>
     </div>
 
     ${tplAnotacionesSection(d.id, driverNotes.filter(n=>n.driverId===d.id && n.date.startsWith(String(year))
         && (month==='todos' || Number(n.date.slice(5,7))-1===Number(month))
-      ))}`;
+      ), readOnly)}`;
 }
 function openBillingModal(driverId, editId){
   const editing = editId ? monthlyBillingEntries.find(e=>e.id===editId) : null;
