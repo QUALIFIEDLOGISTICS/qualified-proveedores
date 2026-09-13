@@ -2288,8 +2288,399 @@ function tplAutonomosDashboardPage(){
     </div>
     ${tplAutonomosDashboardBody()}`;
 }
-function tplAutonomosDashboardBody(){
+const DASH_PERIODS = {
+  hoy: 'Hoy', semana: 'Esta semana', semana_anterior: 'Semana anterior',
+  mes: 'Este mes', mes_anterior: 'Mes anterior', trimestre: 'Últimos 3 meses', personalizado: 'Personalizado',
+};
+function dashboardPeriodInfo(){
+  const period = window.__dashPeriod || 'semana';
+  const t = today();
+  if (period === 'hoy' || period === 'semana') return { kind:'weeks', weeks:[getISOWeek(t)] };
+  if (period === 'semana_anterior') {
+    const d = new Date(t+'T00:00:00'); d.setDate(d.getDate()-7);
+    return { kind:'weeks', weeks:[getISOWeek(toDateStr(d))] };
+  }
+  const now = new Date(t+'T00:00:00');
+  if (period === 'mes') return { kind:'months', months:[{year:now.getFullYear(), month:now.getMonth()}] };
+  if (period === 'mes_anterior') {
+    let m = now.getMonth()-1, y = now.getFullYear();
+    if (m<0){ m=11; y-=1; }
+    return { kind:'months', months:[{year:y, month:m}] };
+  }
+  if (period === 'trimestre') {
+    const months = [];
+    for (let i=2;i>=0;i--){ let m=now.getMonth()-i, y=now.getFullYear(); while(m<0){m+=12;y-=1;} months.push({year:y,month:m}); }
+    return { kind:'months', months };
+  }
+  // personalizado
+  const from = window.__dashCustomFrom || t;
+  const to = window.__dashCustomTo || t;
+  const fromD = new Date(Math.min(new Date(from+'T00:00:00').getTime(), new Date(to+'T00:00:00').getTime()));
+  const toD = new Date(Math.max(new Date(from+'T00:00:00').getTime(), new Date(to+'T00:00:00').getTime()));
+  const weeks = []; const seen = new Set();
+  for (let cursor=new Date(fromD); cursor<=toD; cursor.setDate(cursor.getDate()+1)) {
+    const w = getISOWeek(toDateStr(cursor));
+    const key = w.year+'-'+w.week;
+    if (!seen.has(key)) { seen.add(key); weeks.push(w); }
+  }
+  return { kind:'weeks', weeks, from, to };
+}
+function dashboardWeeksInMonth(year, month){
+  const result = [];
+  for (let week=1; week<=53; week++){
+    const thu = isoWeekThursday(year, week);
+    if (thu.getFullYear()===year && thu.getMonth()===month) result.push({ year, week });
+  }
+  return result;
+}
+function dashboardWeekBuckets(info){
+  if (info.kind === 'weeks') return info.weeks.map(w=>({ year:w.year, week:w.week }));
+  const buckets = [];
+  info.months.forEach(({year,month}) => {
+    dashboardWeeksInMonth(year, month).forEach(w => buckets.push({ year:w.year, week:w.week, _month:month, _monthYear:year }));
+  });
+  return buckets;
+}
+let __dashMonthRowsCache = new Map();
+function dashboardDriverWeekRow(driverId, bucket){
+  if (bucket._month !== undefined) {
+    const key = driverId+'|'+bucket._monthYear+'|'+bucket._month;
+    let rows = __dashMonthRowsCache.get(key);
+    if (!rows) { rows = buildMonthRows(driverId, bucket._monthYear, bucket._month); __dashMonthRowsCache.set(key, rows); }
+    return rows.find(e=>e.week===bucket.week);
+  }
+  return weeklyEntries.find(e=>e.driverId===driverId && e.year===bucket.year && e.week===bucket.week);
+}
+// Recalcula, para una semana concreta de un conductor Plaza, los mismos
+// importes que usa la ficha del conductor (mismas funciones, mismo
+// criterio de indexación y de "solo se cobra el mayor extra") — así el
+// dashboard nunca puede desviarse de lo que realmente se le paga.
+function dashboardWeekFinancials(driverId, e){
+  if (!e) return null;
+  const m = e._splitMonth;
+  const gasoil = computeGasoilForWeek(driverId, e.year, e.week, m);
+  const peajes = computeExpenseForWeek(driverId, e.year, e.week, 'peaje', m);
+  const otros = computeExpenseForWeek(driverId, e.year, e.week, 'otro', m);
+  const supplements = computeSupplementsForWeek(driverId, e.year, e.week, m);
+  const daysCount = computeDaysCountForWeek(driverId, e.year, e.week, m);
+  const rates = getRatesForDate(driverId, e._rateDate || weekDateRange(e.year,e.week).monday);
+  const c = computeWeek(rates, { ...e, gasoil, peajes, otros, supplements });
+  const mm = e._splitMonth !== undefined ? e._splitMonth : weekMonth(e.year, e.week);
+  const idxPct = rates.hasIndexation !== false ? getIndexPercent(driverId, e.year, mm) : 0;
+  const idxAmount = c.dayAmount * (idxPct/100);
+  const costeTotal = c.totalIngreso - c.gastosTotal + idxAmount;
+  return {
+    daysCount, km: e.km||0, hours: e.hours||0,
+    kmExtra: Math.max(0, c.kmExtra), hoursExtra: Math.max(0, c.hoursExtra),
+    kmExtraAmount: Math.max(0, c.kmExtraAmount), hoursExtraAmount: Math.max(0, c.hoursExtraAmount),
+    costeBase: c.dayAmount, costeExtras: c.extraCharge, costeTotal,
+  };
+}
+function dashboardDriverStats(d, info){
+  if (d.modality === 'piso_movil') {
+    if (info.kind !== 'months') return null;
+    const entries = monthlyBillingEntries.filter(e => e.driverId===d.id && info.months.some(mo=>mo.year===e.year && mo.month===e.month));
+    if (!entries.length) return null;
+    let billing=0, km=0, commission=0;
+    entries.forEach(e => {
+      billing += e.billingAmount; km += e.km;
+      const pct = getCommissionForDate(d.id, `${e.year}-${String(e.month+1).padStart(2,'0')}-01`);
+      commission += e.billingAmount * (pct/100);
+    });
+    const costeTotal = billing - commission;
+    return { driver:d, days:null, km, hours:null, kmExtra:0, hoursExtra:0, costeKmExtraPot:0, costeHorasExtraPot:0, costeBase:costeTotal, costeExtras:0, costeTotal, eurKm: km?costeTotal/km:null, eurHora:null };
+  }
+  const buckets = dashboardWeekBuckets(info);
+  let found = false;
+  let days=0, km=0, hours=0, kmExtra=0, hoursExtra=0, costeKmExtraPot=0, costeHorasExtraPot=0, costeBase=0, costeExtras=0, costeTotal=0;
+  buckets.forEach(b => {
+    const f = dashboardWeekFinancials(d.id, dashboardDriverWeekRow(d.id, b));
+    if (!f) return;
+    found = true;
+    days += f.daysCount; km += f.km; hours += f.hours;
+    kmExtra += f.kmExtra; hoursExtra += f.hoursExtra;
+    costeKmExtraPot += f.kmExtraAmount; costeHorasExtraPot += f.hoursExtraAmount;
+    costeBase += f.costeBase; costeExtras += f.costeExtras; costeTotal += f.costeTotal;
+  });
+  if (!found) return null;
+  return { driver:d, days, km, hours, kmExtra, hoursExtra, costeKmExtraPot, costeHorasExtraPot, costeBase, costeExtras, costeTotal, eurKm: km?costeTotal/km:null, eurHora: hours?costeTotal/hours:null };
+}
+function dashboardSeries(driverList, info){
+  const buckets = dashboardWeekBuckets(info);
+  const plazaDrivers = driverList.filter(d=>d.modality!=='piso_movil');
+  const labels = buckets.map(b => 'S'+b.week);
+  const coste = buckets.map(b => plazaDrivers.reduce((s,d) => s + (dashboardWeekFinancials(d.id, dashboardDriverWeekRow(d.id, b))?.costeTotal || 0), 0));
+  const km = buckets.map(b => plazaDrivers.reduce((s,d) => s + (dashboardWeekFinancials(d.id, dashboardDriverWeekRow(d.id, b))?.km || 0), 0));
+  return { labels, coste, km };
+}
+function dashLineChart(labels, values, color, fmtY){
+  const w = 640, h = 190, padL=48, padR=14, padT=14, padB=26;
+  const innerW = w-padL-padR, innerH = h-padT-padB;
+  const n = values.length;
+  const maxV = Math.max(1, ...values);
+  const x = i => n<=1 ? padL+innerW/2 : padL + innerW*i/(n-1);
+  const y = v => padT + innerH - (maxV ? (v/maxV)*innerH : 0);
+  const gridY = [0,0.5,1].map(f=>{
+    const val = maxV*f, yy=y(val);
+    return `<line x1="${padL}" y1="${yy}" x2="${w-padR}" y2="${yy}" stroke="var(--border)" stroke-width="1"/><text x="${padL-8}" y="${yy+3}" font-size="9.5" fill="var(--mutedFaint)" text-anchor="end">${fmtY?esc(fmtY(val)):Math.round(val)}</text>`;
+  }).join('');
+  const pts = values.map((v,i)=>`${x(i)},${y(v)}`).join(' ');
+  const dots = values.map((v,i)=>`<circle cx="${x(i)}" cy="${y(v)}" r="3.2" fill="${color}"/>`).join('');
+  const step = n>9 ? Math.ceil(n/9) : 1;
+  const xLabels = labels.map((l,i)=> (i%step===0 || i===n-1) ? `<text x="${x(i)}" y="${h-6}" font-size="9.5" fill="var(--mutedFaint)" text-anchor="middle">${esc(l)}</text>` : '').join('');
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block;">${gridY}${n>1?`<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2.5"/>`:''}${dots}${xLabels}</svg>`;
+}
+function dashboardExtrasBlock(stats, totalCoste){
+  const totalKmExtra = stats.reduce((s,x)=>s+x.kmExtra,0);
+  const totalHorasExtra = stats.reduce((s,x)=>s+x.hoursExtra,0);
+  const costeKmExtraPot = stats.reduce((s,x)=>s+(x.costeKmExtraPot||0),0);
+  const costeHorasExtraPot = stats.reduce((s,x)=>s+(x.costeHorasExtraPot||0),0);
+  const totalExtras = stats.reduce((s,x)=>s+x.costeExtras,0);
+  const pct = totalCoste ? (totalExtras/totalCoste*100) : 0;
+  return `
+    <div class="card">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:14px;">Extras generados</div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div style="display:flex;justify-content:space-between;"><span style="color:var(--muted);font-size:13px;">Km extra</span><span style="font-family:var(--display);">${totalKmExtra.toLocaleString('es-ES',{maximumFractionDigits:0})} km</span></div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:var(--muted);font-size:13px;">Coste km extra <span style="color:var(--mutedFaint);font-size:11px;">(potencial)</span></span><span style="font-family:var(--display);">${eur2(costeKmExtraPot)}</span></div>
+        <div style="height:1px;background:var(--border);"></div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:var(--muted);font-size:13px;">Horas extra</span><span style="font-family:var(--display);">${fmtHoursMin(totalHorasExtra)}</span></div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:var(--muted);font-size:13px;">Coste horas extra <span style="color:var(--mutedFaint);font-size:11px;">(potencial)</span></span><span style="font-family:var(--display);">${eur2(costeHorasExtraPot)}</span></div>
+        <div style="height:1px;background:var(--border);"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-weight:700;">TOTAL EXTRAS</span>
+          <span style="font-family:var(--display);font-size:18px;color:var(--danger);">${eur2(totalExtras)}</span>
+        </div>
+        <div style="font-size:11px;color:var(--mutedFaint);">${pct.toFixed(1)}% del coste total. Cada semana solo se cobra el mayor entre el extra de km y el de horas, nunca los dos a la vez — por eso "Coste km extra" y "Coste horas extra" son importes potenciales y no siempre suman TOTAL EXTRAS.</div>
+      </div>
+    </div>`;
+}
+const DASH_RANK_LABELS = { costeTotal:'Coste', km:'Km', hours:'Horas', kmExtra:'Km extra', hoursExtra:'Horas extra', eurKm:'€/km', eurHora:'€/hora' };
+function dashboardRankFmt(sortKey, s){
+  if (sortKey==='costeTotal') return eur2(s.costeTotal);
+  if (sortKey==='km') return s.km.toLocaleString('es-ES',{maximumFractionDigits:0})+' km';
+  if (sortKey==='hours') return s.hours!=null ? fmtHoursMin(s.hours) : '—';
+  if (sortKey==='kmExtra') return s.kmExtra.toLocaleString('es-ES',{maximumFractionDigits:0})+' km';
+  if (sortKey==='hoursExtra') return fmtHoursMin(s.hoursExtra);
+  if (sortKey==='eurKm') return s.eurKm!=null ? eur2(s.eurKm) : '—';
+  if (sortKey==='eurHora') return s.eurHora!=null ? eur2(s.eurHora) : '—';
   return '';
+}
+function dashboardRankingBlock(stats){
+  const sortKey = DASH_RANK_LABELS[window.__dashRankSort] ? window.__dashRankSort : 'costeTotal';
+  const sorted = stats.slice().sort((a,b)=> (b[sortKey]||0) - (a[sortKey]||0)).slice(0,6);
+  const maxVal = Math.max(1, ...sorted.map(s=>s[sortKey]||0));
+  return `
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+        <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Ranking de autónomos</div>
+        <select style="width:auto;min-width:140px;" onchange="window.__dashRankSort=this.value; renderTab();">
+          ${Object.entries(DASH_RANK_LABELS).map(([k,l])=>`<option value="${k}" ${sortKey===k?'selected':''}>Por ${l}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        ${sorted.map((s,i) => {
+          const val = s[sortKey]||0;
+          const pct = maxVal ? Math.max(4, val/maxVal*100) : 0;
+          return `
+          <div style="display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="openDriverDetail('${s.driver.id}')">
+            <div style="width:18px;color:var(--mutedFaint);font-size:12px;text-align:right;">${i+1}</div>
+            <div style="flex:1;min-width:0;">
+              <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px;"><span style="font-weight:600;">${esc(s.driver.name)}</span><span style="color:var(--muted);">${dashboardRankFmt(sortKey,s)}</span></div>
+              <div style="height:6px;background:var(--panel2);border-radius:99px;overflow:hidden;"><div style="height:100%;width:${pct}%;background:var(--primary);border-radius:99px;"></div></div>
+            </div>
+          </div>`;
+        }).join('') || `<div style="color:var(--mutedFaint);font-size:12.5px;text-align:center;padding:16px;">Sin datos en este periodo.</div>`}
+      </div>
+    </div>`;
+}
+function setDashSort(key){
+  if (window.__dashSort === key) window.__dashSortDir = window.__dashSortDir === 'desc' ? 'asc' : 'desc';
+  else { window.__dashSort = key; window.__dashSortDir = 'desc'; }
+  renderTab();
+}
+function dashboardTable(stats){
+  const sortKey = window.__dashSort || 'costeTotal';
+  const sortDir = window.__dashSortDir || 'desc';
+  const sorted = stats.slice().sort((a,b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    const an = (av==null?-Infinity:av), bn = (bv==null?-Infinity:bv);
+    if (typeof an === 'string' || typeof bn === 'string') return String(an).localeCompare(String(bn),'es') * (sortDir==='asc'?1:-1);
+    return (an-bn) * (sortDir==='asc'?1:-1);
+  });
+  const arrow = (key) => sortKey===key ? (sortDir==='desc'?' ↓':' ↑') : '';
+  const th = (key,label) => `<th style="cursor:pointer;white-space:nowrap;" onclick="setDashSort('${key}')">${label}${arrow(key)}</th>`;
+  return `
+    <div class="card" style="padding:0;overflow-x:auto;">
+      <table>
+        <thead><tr>
+          ${th('driverName','Conductor')}
+          <th>Empresa</th>
+          <th>Modalidad</th>
+          ${th('days','Días')}
+          ${th('km','Km')}
+          ${th('hours','Horas')}
+          ${th('kmExtra','Km extra')}
+          ${th('hoursExtra','Horas extra')}
+          ${th('costeBase','Coste base')}
+          ${th('costeExtras','Coste extras')}
+          ${th('costeTotal','Coste total')}
+          ${th('eurKm','€/km')}
+          ${th('eurHora','€/hora')}
+          <th>Estado</th>
+        </tr></thead>
+        <tbody>
+          ${sorted.map(s => {
+            const d = s.driver;
+            const co = companies.find(c=>c.id===d.companyId);
+            const modalityLabel = d.modality==='piso_movil' ? 'Piso Móvil' : 'Plaza';
+            return `
+            <tr class="dr-row" style="cursor:pointer;${d.archived?'opacity:0.65;':''}" onclick="openDriverDetail('${d.id}')">
+              <td style="font-weight:600;">${esc(d.name)}</td>
+              <td style="color:var(--muted);">${esc(co?co.name:'—')}</td>
+              <td style="color:var(--muted);">${modalityLabel}</td>
+              <td style="color:var(--muted);">${s.days!=null?s.days:'—'}</td>
+              <td style="color:var(--muted);">${s.km.toLocaleString('es-ES',{maximumFractionDigits:0})}</td>
+              <td style="color:var(--muted);">${s.hours!=null?fmtHoursMin(s.hours):'—'}</td>
+              <td style="color:var(--muted);">${s.kmExtra?s.kmExtra.toLocaleString('es-ES',{maximumFractionDigits:0}):'—'}</td>
+              <td style="color:var(--muted);">${s.hoursExtra?fmtHoursMin(s.hoursExtra):'—'}</td>
+              <td style="color:var(--muted);">${eur2(s.costeBase)}</td>
+              <td style="color:${s.costeExtras?'var(--danger)':'var(--mutedFaint)'};">${s.costeExtras?eur2(s.costeExtras):'—'}</td>
+              <td style="font-weight:700;">${eur2(s.costeTotal)}</td>
+              <td style="color:var(--muted);">${s.eurKm!=null?eur2(s.eurKm):'—'}</td>
+              <td style="color:var(--muted);">${s.eurHora!=null?eur2(s.eurHora):'—'}</td>
+              <td>${d.archived?`<span style="color:var(--danger);font-size:12px;font-weight:600;">Inactivo</span>`:`<span style="color:var(--success);font-size:12px;font-weight:600;">Activo</span>`}</td>
+            </tr>`;
+          }).join('') || `<tr><td colspan="14" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin datos en este periodo con los filtros aplicados.</td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+}
+function tplAutonomosDashboardBody(){
+  __dashMonthRowsCache = new Map();
+  const period = window.__dashPeriod || 'semana';
+  const info = dashboardPeriodInfo();
+  const filterCompany = window.__dashFilterCompany || '';
+  const filterModality = window.__dashFilterModality || '';
+  const filterStatus = window.__dashFilterStatus || 'activos';
+  const filterDriver = window.__dashFilterDriver || '';
+  const filterExtras = window.__dashFilterExtras || '';
+  const search = (window.__dashSearch||'').toLowerCase();
+
+  let candidateDrivers = drivers.filter(d => filterStatus==='todos' || !!d.archived === (filterStatus==='archivados'));
+  if (filterCompany) candidateDrivers = candidateDrivers.filter(d=>d.companyId===filterCompany);
+  if (filterModality) candidateDrivers = candidateDrivers.filter(d=>d.modality===filterModality);
+  if (filterDriver) candidateDrivers = candidateDrivers.filter(d=>d.id===filterDriver);
+  if (search) candidateDrivers = candidateDrivers.filter(d=>d.name.toLowerCase().includes(search));
+
+  let stats = candidateDrivers.map(d => {
+    const s = dashboardDriverStats(d, info);
+    return s ? { ...s, driverName: d.name } : null;
+  }).filter(Boolean);
+
+  if (filterExtras==='con') stats = stats.filter(s=>s.kmExtra>0||s.hoursExtra>0);
+  if (filterExtras==='sin') stats = stats.filter(s=>s.kmExtra<=0&&s.hoursExtra<=0);
+  if (filterExtras==='km') stats = stats.filter(s=>s.kmExtra>0);
+  if (filterExtras==='horas') stats = stats.filter(s=>s.hoursExtra>0);
+
+  const totalActivos = drivers.filter(d=>!d.archived).length;
+  const totalCoste = stats.reduce((s,x)=>s+x.costeTotal,0);
+  const totalKm = stats.reduce((s,x)=>s+x.km,0);
+  const totalHoras = stats.reduce((s,x)=>s+(x.hours||0),0);
+  const totalKmExtra = stats.reduce((s,x)=>s+x.kmExtra,0);
+  const totalHorasExtra = stats.reduce((s,x)=>s+x.hoursExtra,0);
+  const totalCosteBase = stats.reduce((s,x)=>s+x.costeBase,0);
+  const totalCosteExtras = stats.reduce((s,x)=>s+x.costeExtras,0);
+  const costeKm = totalKm ? totalCoste/totalKm : null;
+  const costeHora = totalHoras ? totalCoste/totalHoras : null;
+
+  const series = dashboardSeries(candidateDrivers, info);
+
+  const companyOptions = companies.filter(co=>!co.archived).sort((a,b)=>a.name.localeCompare(b.name,'es'));
+  const driverOptions = drivers.filter(d=>!filterCompany || d.companyId===filterCompany).sort((a,b)=>a.name.localeCompare(b.name,'es'));
+
+  return `
+    <div class="card" style="margin-bottom:18px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <label style="font-size:12.5px;color:var(--muted);font-weight:600;">📅 Periodo:</label>
+        <select style="width:auto;min-width:170px;" onchange="window.__dashPeriod=this.value; renderTab();">
+          ${Object.entries(DASH_PERIODS).map(([k,l])=>`<option value="${k}" ${period===k?'selected':''}>${l}</option>`).join('')}
+        </select>
+        ${period==='personalizado' ? `
+        <label style="font-size:12.5px;color:var(--muted);">Desde</label>
+        <input type="date" value="${window.__dashCustomFrom||today()}" onchange="window.__dashCustomFrom=this.value; renderTab();" style="width:150px;" />
+        <label style="font-size:12.5px;color:var(--muted);">Hasta</label>
+        <input type="date" value="${window.__dashCustomTo||today()}" onchange="window.__dashCustomTo=this.value; renderTab();" style="width:150px;" />
+        ` : ''}
+        <div style="flex:1;"></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+        <div style="position:relative;flex:1;min-width:180px;max-width:260px;">
+          <input placeholder="Buscar conductor…" value="${esc(window.__dashSearch||'')}" oninput="window.__dashSearch=this.value; renderTab();" style="padding-left:34px;" />
+          <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+        </div>
+        <select style="width:auto;min-width:150px;" onchange="window.__dashFilterCompany=this.value||''; renderTab();">
+          <option value="">Empresa: Todas</option>
+          ${companyOptions.map(co=>`<option value="${co.id}" ${filterCompany===co.id?'selected':''}>${esc(co.name)}</option>`).join('')}
+        </select>
+        <select style="width:auto;min-width:140px;" onchange="window.__dashFilterModality=this.value||''; renderTab();">
+          <option value="">Modalidad: Todas</option>
+          <option value="plaza" ${filterModality==='plaza'?'selected':''}>Plaza</option>
+          <option value="piso_movil" ${filterModality==='piso_movil'?'selected':''}>Piso Móvil</option>
+        </select>
+        <select style="width:auto;min-width:140px;" onchange="window.__dashFilterStatus=this.value; renderTab();">
+          <option value="activos" ${filterStatus==='activos'?'selected':''}>Estado: Activos</option>
+          <option value="archivados" ${filterStatus==='archivados'?'selected':''}>Estado: Inactivos</option>
+          <option value="todos" ${filterStatus==='todos'?'selected':''}>Estado: Todos</option>
+        </select>
+        <select style="width:auto;min-width:150px;" onchange="window.__dashFilterDriver=this.value||''; renderTab();">
+          <option value="">Autónomo: Todos</option>
+          ${driverOptions.map(d=>`<option value="${d.id}" ${filterDriver===d.id?'selected':''}>${esc(d.name)}</option>`).join('')}
+        </select>
+        <select style="width:auto;min-width:150px;" onchange="window.__dashFilterExtras=this.value; renderTab();">
+          <option value="" ${filterExtras===''?'selected':''}>Extras: Todos</option>
+          <option value="con" ${filterExtras==='con'?'selected':''}>Con extras</option>
+          <option value="sin" ${filterExtras==='sin'?'selected':''}>Sin extras</option>
+          <option value="km" ${filterExtras==='km'?'selected':''}>Con km extra</option>
+          <option value="horas" ${filterExtras==='horas'?'selected':''}>Con horas extra</option>
+        </select>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+      ${kpi('Autónomos activos', totalActivos, null, true)}
+      ${kpi('Coste total', eur2(totalCoste), null, true)}
+      ${kpi('Km realizados', totalKm.toLocaleString('es-ES',{maximumFractionDigits:0}), null, true)}
+      ${kpi('Horas realizadas', fmtHoursMin(totalHoras), null, true)}
+      ${kpi('Km extra', totalKmExtra.toLocaleString('es-ES',{maximumFractionDigits:0}), null, true)}
+      ${kpi('Horas extra', fmtHoursMin(totalHorasExtra), null, true)}
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:22px;">
+      ${kpi('Coste medio €/km', costeKm!=null?eur2(costeKm):'—', null, true)}
+      ${kpi('Coste medio €/hora', costeHora!=null?eur2(costeHora):'—', null, true)}
+      ${kpi('Coste base', eur2(totalCosteBase), null, true)}
+      ${kpi('Coste extras', eur2(totalCosteExtras), null, true)}
+    </div>
+
+    <div class="card" style="margin-bottom:18px;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:10px;">Evolución del coste</div>
+      ${series.labels.length ? dashLineChart(series.labels, series.coste, '#1B3A6B', v=>eur2(v)) : `<div style="color:var(--mutedFaint);font-size:12.5px;text-align:center;padding:24px;">Sin semanas en este periodo.</div>`}
+      <div style="font-size:11px;color:var(--mutedFaint);margin-top:6px;">Solo incluye conductores en modalidad Plaza (Piso Móvil no tiene datos semanales).</div>
+    </div>
+    <div class="card" style="margin-bottom:18px;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:10px;">Evolución de kilómetros</div>
+      ${series.labels.length ? dashLineChart(series.labels, series.km, '#2E6F95', v=>Math.round(v).toLocaleString('es-ES')) : `<div style="color:var(--mutedFaint);font-size:12.5px;text-align:center;padding:24px;">Sin semanas en este periodo.</div>`}
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:22px;">
+      ${dashboardExtrasBlock(stats, totalCoste)}
+      ${dashboardRankingBlock(stats)}
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Detalle de autónomos</div>
+    </div>
+    ${dashboardTable(stats)}`;
 }
 /* ============================= DASHBOARD TRÁFICO ============================= */
 function tplTrafico(){
