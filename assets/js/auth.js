@@ -23,6 +23,7 @@ async function getCurrentSession(){
 }
 
 async function handleLogout(){
+  try { localStorage.removeItem('qp_last_tab'); } catch(e) {}
   await supabaseClient.auth.signOut();
   window.location.href = 'index.html';
 }

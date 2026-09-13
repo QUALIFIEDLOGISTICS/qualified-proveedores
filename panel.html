@@ -400,6 +400,18 @@ window.__calOpen = false;
 let currentWarehouseId = 'balsareny';
 let currentTab = 'citas';
 
+// Recuerda en qué pestaña (y almacén) se quedó el usuario para que, si
+// recarga la página sin cerrar sesión, siga viendo lo mismo en vez de
+// volver siempre a Inicio. Al cerrar sesión se borra (ver handleLogout en
+// auth.js), así que un login nuevo sí empieza en Inicio como hasta ahora.
+const LAST_TAB_KEY = 'qp_last_tab';
+function saveLastTab(){
+  try { localStorage.setItem(LAST_TAB_KEY, JSON.stringify({ tab: currentTab, warehouseId: currentWarehouseId })); } catch(e) {}
+}
+function readLastTab(){
+  try { return JSON.parse(localStorage.getItem(LAST_TAB_KEY)); } catch(e) { return null; }
+}
+
 const TABS = [
   {id:'clientes', label:'Clientes', group:'Almacén'},
   {id:'citas', label:'Franjas horarias', group:'Almacén'},
@@ -437,11 +449,13 @@ function closeMobileSidebar(){
 function switchWarehouse(id){
   currentWarehouseId = id; window.__invSearch='';
   closeMobileSidebar();
+  saveLastTab();
   renderSidebar(); renderHeader(); renderTab();
 }
 function goHome(){
   currentTab = 'inicio';
   closeMobileSidebar();
+  saveLastTab();
   renderSidebar(); renderHeader(); renderTab();
 }
 async function setTab(id){
@@ -455,6 +469,7 @@ async function setTab(id){
   if (id === 'autonomos') { window.__autonomosView = 'home'; window.__autonomosDriverId = null; window.__driversCompanyFilter = null; }
   if (id === 'fichajes') { window.__fichajesView = 'lista'; window.__fichajesDriverId = null; }
   if (id === 'admin') await loadAllProfiles();
+  saveLastTab();
   renderSidebar(); renderHeader(); renderTab();
 }
 
@@ -4583,10 +4598,18 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   }
 
   await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData()]);
-  // Al iniciar sesión siempre se entra en la pantalla de inicio (selector
-  // de módulos), nunca directamente en el primer apartado disponible.
+  // Si el usuario recarga la página sin haber cerrado sesión, se queda en
+  // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
+  // Tras un login nuevo (después de cerrar sesión) no hay nada guardado
+  // — ahí sí se entra siempre en la pantalla de inicio, como hasta ahora.
   const allowed = visibleTabs().map(t=>t.id);
-  currentTab = allowed.length ? 'inicio' : null;
+  const last = readLastTab();
+  if (last && last.tab && (last.tab === 'inicio' || allowed.includes(last.tab))) {
+    currentTab = last.tab;
+    if (last.warehouseId && WAREHOUSES.some(w=>w.id===last.warehouseId)) currentWarehouseId = last.warehouseId;
+  } else {
+    currentTab = allowed.length ? 'inicio' : null;
+  }
   document.getElementById('app-root').style.display = '';
   if (currentTab) { renderSidebar(); renderHeader(); renderTab(); }
   else { document.getElementById('tab-content').innerHTML = '<div class="card" style="text-align:center;color:var(--mutedFaint);padding:32px;">Tu cuenta todavía no tiene ninguna pestaña activada. Contacta con el administrador.</div>'; renderSidebar(); }
