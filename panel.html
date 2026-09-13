@@ -703,10 +703,25 @@ function tplClientes(){
     </div>`;
 }
 
-function activeApptsAt(dayAppts, startMin){
-  return dayAppts
-    .filter(a => { const s=timeToMin(a.start), e=s+a.duration; return startMin>=s && startMin<e; })
-    .sort((a,b)=> timeToMin(a.start)-timeToMin(b.start) || a.id.localeCompare(b.id));
+// Cada reserva del día se coloca en una columna (0 o 1) fija para todo su
+// horario, en vez de recalcularse franja a franja — si no, una reserva de
+// varias franjas podía aparecer a la izquierda en una franja y saltar a la
+// derecha en la siguiente en cuanto la reserva que tenía al lado terminaba
+// antes, dando la sensación de que todo el timeline "se movía".
+function assignApptColumns(dayAppts){
+  const sorted = dayAppts.slice().sort((a,b)=> timeToMin(a.start)-timeToMin(b.start) || a.id.localeCompare(b.id));
+  const colEndMin = [-Infinity, -Infinity];
+  const colOf = {};
+  sorted.forEach(a => {
+    const s = timeToMin(a.start), e = s + a.duration;
+    let col = colEndMin[0] <= s ? 0 : colEndMin[1] <= s ? 1 : (colEndMin[0] <= colEndMin[1] ? 0 : 1);
+    colOf[a.id] = col;
+    colEndMin[col] = Math.max(colEndMin[col], e);
+  });
+  return colOf;
+}
+function activeApptForColumn(dayAppts, startMin, colOf, col){
+  return dayAppts.find(a => colOf[a.id]===col && (() => { const s=timeToMin(a.start), e=s+a.duration; return startMin>=s && startMin<e; })());
 }
 
 function apptCellHtml(appt, wh, rowStart){
@@ -749,24 +764,22 @@ function emptyCell(startMin, compact){
 }
 
 function renderTimeline(dayAppts, wh, slots){
+  const colOf = assignApptColumns(dayAppts);
   return slots.map((startMin, idx) => {
     const prev = slots[idx-1];
     const gapBefore = idx > 0 && startMin - prev > 30
       ? `<div style="text-align:center;font-size:11px;color:var(--mutedFaint);letter-spacing:.4px;margin:6px 0;">— pausa (${minToTime(prev+30)}–${minToTime(startMin)}) —</div>`
       : '';
-    const active = activeApptsAt(dayAppts, startMin);
+    const a0 = activeApptForColumn(dayAppts, startMin, colOf, 0);
+    const a1 = activeApptForColumn(dayAppts, startMin, colOf, 1);
     let cellsHtml;
     let rowContinues = false;
-    if (active.length === 0) {
+    if (!a0 && !a1) {
       cellsHtml = emptyCell(startMin, false);
-    } else if (active.length === 1) {
-      const a0 = active[0];
-      cellsHtml = apptCellHtml(a0, wh, startMin) + emptyCell(startMin, true);
-      rowContinues = (timeToMin(a0.start) + a0.duration) > startMin + 30;
     } else {
-      const [a0, a1] = active;
-      cellsHtml = apptCellHtml(a0, wh, startMin) + apptCellHtml(a1, wh, startMin);
-      rowContinues = active.some(a => (timeToMin(a.start) + a.duration) > startMin + 30);
+      cellsHtml = (a0 ? apptCellHtml(a0, wh, startMin) : emptyCell(startMin, true))
+                + (a1 ? apptCellHtml(a1, wh, startMin) : emptyCell(startMin, true));
+      rowContinues = [a0,a1].some(a => a && (timeToMin(a.start) + a.duration) > startMin + 30);
     }
     return gapBefore + `
       <div style="display:flex;gap:10px;align-items:stretch;min-height:74px;margin-bottom:${rowContinues?'0':'6px'};">
