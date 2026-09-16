@@ -1086,6 +1086,19 @@ function fichajeHours(f){
   if (mins < 0) mins += 24*60; // turno que cruza medianoche
   return Math.round((mins/60) * 100) / 100;
 }
+// Si se cerró sola a 0h/0km es casi seguro porque el conductor no tenía
+// ninguna tarifa registrada para esa fecha (getRatesForDate no encontró
+// nada y usó el valor por defecto) — se avisa de eso en concreto, porque
+// si no, "0h/0km" parece un día sin problema en vez de un dato a corregir.
+function autoClosedBadgeHtml(f){
+  if (!f.autoClosed) return '';
+  const noRate = !f.km && !fichajeHours(f);
+  const msg = noRate
+    ? 'Se cerró sola a 0h/0km porque este conductor no tenía ninguna tarifa registrada para esa fecha — ponle una tarifa y corrige este fichaje con la hora/km reales.'
+    : 'Se cerró sola porque el conductor no la cerró — comprueba la hora de salida y los km antes de pagarla.';
+  const label = noRate ? '⚠ Auto (sin tarifa)' : '⚠ Auto';
+  return ` <span title="${esc(msg)}" style="cursor:help;color:var(--danger);font-size:10.5px;font-weight:700;">${label}</span>`;
+}
 function fmtHoursMin(decimalHours){
   if (decimalHours == null || isNaN(decimalHours)) return '—';
   const sign = decimalHours < 0 ? '-' : '';
@@ -3295,7 +3308,7 @@ function tplDriverDetail(){
           ).sort((a,b)=>a.date.localeCompare(b.date)).map(f => { const inc = incidentsForDay(d.id, f.date); const hasNote = driverNotes.some(n=>n.driverId===d.id && n.date===f.date); const rowBg = f.autoClosed ? 'rgba(193,68,61,0.12)' : hasNote ? 'rgba(217,167,44,0.18)' : null; return `
           <tr ${rowBg?`style="background:${rowBg};"`:''}>
             <td>${fmtDate(f.date)}${hasNote?' <span title="Este día tiene una anotación — mira más abajo." style="cursor:help;">📌</span>':''}</td>
-            <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}${f.autoClosed ? ` <span title="Se cerró sola porque el conductor no la cerró — comprueba la hora de salida y los km antes de pagarla." style="cursor:help;color:var(--danger);font-size:10.5px;font-weight:700;">⚠ Auto</span>` : ''}</td>
+            <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}${autoClosedBadgeHtml(f)}</td>
             <td style="color:var(--muted);">${f.timeIn}</td>
             <td style="color:var(--muted);">${f.timeOut||'—'}</td>
             <td style="${f.excludeHours?'color:var(--mutedFaint);text-decoration:line-through;':''}">${f.timeOut ? fmtHoursMin(fichajeHours(f)) : '—'}</td>
@@ -4116,7 +4129,7 @@ function tplFichajesDriverDetail(){
         ${entries.map(f => `
           <tr ${f.autoClosed?'style="background:rgba(193,68,61,0.12);"':''}>
             <td>${fmtDate(f.date)}</td>
-            <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}${f.autoClosed ? ` <span title="Se cerró sola porque el conductor no la cerró — comprueba la hora de salida y los km antes de pagarla." style="cursor:help;color:var(--danger);font-size:10.5px;font-weight:700;">⚠ Auto</span>` : ''}</td>
+            <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}${autoClosedBadgeHtml(f)}</td>
             <td style="color:var(--muted);">${f.timeIn}</td>
             <td style="color:var(--muted);">${f.timeOut||'—'}</td>
             <td>${f.timeOut ? fmtHoursMin(fichajeHours(f)) : '—'}</td>
@@ -4208,7 +4221,7 @@ function openEditFichajeModal(id){
           <div class="field" style="flex:1;"><label>Km inicial</label><input id="ef-kmstart" type="number" step="0.1" value="${f.kmStart??''}" /></div>
           <div class="field" style="flex:1;"><label>Km final</label><input id="ef-kmend" type="number" step="0.1" value="${f.kmEnd??''}" /></div>
         </div>
-        ${f.autoClosed ? `<div style="font-size:11.5px;color:var(--danger);margin-bottom:10px;">⚠ Esta jornada se cerró sola porque el conductor no la cerró a tiempo (se usó el máximo de horas/km de su tarifa). Corrige la hora de salida y los km reales antes de que se pague.</div>` : ''}
+        ${f.autoClosed ? `<div style="font-size:11.5px;color:var(--danger);margin-bottom:10px;">⚠ Esta jornada se cerró sola porque el conductor no la cerró a tiempo. ${(!f.km && !fichajeHours(f)) ? 'Este conductor no tenía tarifa registrada esa fecha, así que se cerró a 0h/0km — ponle una tarifa y corrige' : 'Se usó el máximo de horas/km de su tarifa — corrige'} la hora de salida y los km reales antes de que se pague.</div>` : ''}
         <div style="font-size:11.5px;color:var(--mutedFaint);margin-bottom:10px;">Deja la hora/km de salida en blanco si esa jornada debe quedar como abierta.</div>
         <div id="ef-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
         <div style="display:flex;gap:10px;">
