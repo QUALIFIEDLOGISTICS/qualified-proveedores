@@ -1036,9 +1036,29 @@ async function loadDailyEntries(){
     dailyEntries.push({
       id: f.id, driverId: f.driver_id, date: f.date, status: f.status, timeIn: f.time_in, timeOut: f.time_out,
       kmStart: f.km_start!=null?Number(f.km_start):null, kmEnd: f.km_end!=null?Number(f.km_end):null, km: f.km!=null?Number(f.km):null,
-      photoIn, photoOut,
+      photoIn, photoOut, autoClosed: !!f.auto_closed,
       excludeDays: !!f.exclude_days, excludeKm: !!f.exclude_km, excludeHours: !!f.exclude_hours, manualAmount: Number(f.manual_amount||0),
     });
+  }
+}
+// Si un conductor se dejó una jornada de un día anterior sin cerrar, se
+// cierra sola al máximo de horas/km de su tarifa de ese día — así nunca se
+// le paga de más por un olvido — y se marca con auto_closed para que quien
+// lleve las tarifas la revise (sale resaltada en rojo en Fichajes diarios).
+async function autoCloseStaleFichajes(){
+  const t = today();
+  const stale = dailyEntries.filter(f => f.status==='abierta' && f.date < t);
+  for (const f of stale) {
+    const rates = getRatesForDate(f.driverId, f.date);
+    const [h,m] = f.timeIn.split(':').map(Number);
+    const endMin = (h*60 + m + Math.round((rates.maxHoursDay||0)*60)) % (24*60);
+    const timeOut = `${String(Math.floor(endMin/60)).padStart(2,'0')}:${String(endMin%60).padStart(2,'0')}`;
+    const km = Math.round((rates.maxKmDay||0)*10)/10;
+    const kmEnd = (f.kmStart||0) + km;
+    await supabaseClient.from('daily_entries').update({
+      status: 'cerrada', time_out: timeOut, km_end: kmEnd, km, auto_closed: true,
+    }).eq('id', f.id);
+    f.status = 'cerrada'; f.timeOut = timeOut; f.kmEnd = kmEnd; f.km = km; f.autoClosed = true;
   }
 }
 function getISOWeek(dateStr){
@@ -3272,10 +3292,10 @@ function tplDriverDetail(){
         ${dailyEntries.filter(f=>f.driverId===d.id && f.date.startsWith(String(year))
             && Number(f.date.slice(5,7))-1===Number(month)
             && (weekFilter==='todas' || getISOWeek(f.date).week===Number(weekFilter))
-          ).sort((a,b)=>a.date.localeCompare(b.date)).map(f => { const inc = incidentsForDay(d.id, f.date); const hasNote = driverNotes.some(n=>n.driverId===d.id && n.date===f.date); return `
-          <tr ${hasNote?'style="background:rgba(217,167,44,0.18);"':''}>
+          ).sort((a,b)=>a.date.localeCompare(b.date)).map(f => { const inc = incidentsForDay(d.id, f.date); const hasNote = driverNotes.some(n=>n.driverId===d.id && n.date===f.date); const rowBg = f.autoClosed ? 'rgba(193,68,61,0.12)' : hasNote ? 'rgba(217,167,44,0.18)' : null; return `
+          <tr ${rowBg?`style="background:${rowBg};"`:''}>
             <td>${fmtDate(f.date)}${hasNote?' <span title="Este día tiene una anotación — mira más abajo." style="cursor:help;">📌</span>':''}</td>
-            <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}</td>
+            <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}${f.autoClosed ? ` <span title="Se cerró sola porque el conductor no la cerró — comprueba la hora de salida y los km antes de pagarla." style="cursor:help;color:var(--danger);font-size:10.5px;font-weight:700;">⚠ Auto</span>` : ''}</td>
             <td style="color:var(--muted);">${f.timeIn}</td>
             <td style="color:var(--muted);">${f.timeOut||'—'}</td>
             <td style="${f.excludeHours?'color:var(--mutedFaint);text-decoration:line-through;':''}">${f.timeOut ? fmtHoursMin(fichajeHours(f)) : '—'}</td>
@@ -4088,9 +4108,9 @@ function tplFichajesDriverDetail(){
     <div class="card" style="padding:0;overflow-x:auto;">
       <table><thead><tr><th>Fecha</th><th>Estado</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km inicial</th><th>Km final</th><th>Km recorridos</th><th>Foto inicio</th><th>Foto cierre</th></tr></thead><tbody>
         ${entries.map(f => `
-          <tr>
+          <tr ${f.autoClosed?'style="background:rgba(193,68,61,0.12);"':''}>
             <td>${fmtDate(f.date)}</td>
-            <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}</td>
+            <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}${f.autoClosed ? ` <span title="Se cerró sola porque el conductor no la cerró — comprueba la hora de salida y los km antes de pagarla." style="cursor:help;color:var(--danger);font-size:10.5px;font-weight:700;">⚠ Auto</span>` : ''}</td>
             <td style="color:var(--muted);">${f.timeIn}</td>
             <td style="color:var(--muted);">${f.timeOut||'—'}</td>
             <td>${f.timeOut ? fmtHoursMin(fichajeHours(f)) : '—'}</td>
@@ -4182,6 +4202,7 @@ function openEditFichajeModal(id){
           <div class="field" style="flex:1;"><label>Km inicial</label><input id="ef-kmstart" type="number" step="0.1" value="${f.kmStart??''}" /></div>
           <div class="field" style="flex:1;"><label>Km final</label><input id="ef-kmend" type="number" step="0.1" value="${f.kmEnd??''}" /></div>
         </div>
+        ${f.autoClosed ? `<div style="font-size:11.5px;color:var(--danger);margin-bottom:10px;">⚠ Esta jornada se cerró sola porque el conductor no la cerró a tiempo (se usó el máximo de horas/km de su tarifa). Corrige la hora de salida y los km reales antes de que se pague.</div>` : ''}
         <div style="font-size:11.5px;color:var(--mutedFaint);margin-bottom:10px;">Deja la hora/km de salida en blanco si esa jornada debe quedar como abierta.</div>
         <div id="ef-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
         <div style="display:flex;gap:10px;">
@@ -4211,10 +4232,10 @@ async function submitEditFichaje(id){
   btn.disabled = true;
   try {
     const { error } = await supabaseClient.from('daily_entries').update({
-      time_in: timeIn, time_out: timeOut, km_start: kmStart, km_end: kmEnd, km, status,
+      time_in: timeIn, time_out: timeOut, km_start: kmStart, km_end: kmEnd, km, status, auto_closed: false,
     }).eq('id', id);
     if (error) throw error;
-    Object.assign(f, { timeIn, timeOut, kmStart, kmEnd, km, status });
+    Object.assign(f, { timeIn, timeOut, kmStart, kmEnd, km, status, autoClosed: false });
     const { year, week } = getISOWeek(f.date);
     closeModal();
     await recalcWeeksFromFichajes(f.driverId, year, { year, week });
@@ -4587,7 +4608,8 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
 
   if (isDriverOnlyAccount()) {
     document.getElementById('sidebar-aside').style.display = 'none';
-    await Promise.all([loadDrivers(), loadDailyEntries()]);
+    await Promise.all([loadDrivers(), loadDriverRates(), loadDailyEntries()]);
+    await autoCloseStaleFichajes();
     document.getElementById('app-root').style.display = '';
     document.getElementById('wh-title-row').innerHTML = '';
     document.getElementById('wh-sub').textContent = '';
@@ -4597,6 +4619,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   }
 
   await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData()]);
+  await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
   // Tras un login nuevo (después de cerrar sesión) no hay nada guardado
