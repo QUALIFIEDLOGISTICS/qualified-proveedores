@@ -1055,9 +1055,19 @@ async function autoCloseStaleFichajes(){
     const timeOut = `${String(Math.floor(endMin/60)).padStart(2,'0')}:${String(endMin%60).padStart(2,'0')}`;
     const km = Math.round((rates.maxKmDay||0)*10)/10;
     const kmEnd = (f.kmStart||0) + km;
-    await supabaseClient.from('daily_entries').update({
+    // .select() al final del update no es decorativo: es la única forma de
+    // saber si Supabase realmente guardó el cambio. Si RLS bloquea la
+    // escritura (p. ej. esta cuenta no tiene permiso sobre "fichajes"),
+    // update() no da error — simplemente actualiza 0 filas en silencio —
+    // así que sin este chequeo el fichaje se habría dado por cerrado en
+    // memoria mientras en la base de datos seguía abierto.
+    const { data, error } = await supabaseClient.from('daily_entries').update({
       status: 'cerrada', time_out: timeOut, km_end: kmEnd, km, auto_closed: true,
-    }).eq('id', f.id);
+    }).eq('id', f.id).select();
+    if (error || !data || !data.length) {
+      console.error('No se pudo autocerrar el fichaje (revisa permisos de esta cuenta sobre daily_entries):', f.id, error);
+      continue;
+    }
     f.status = 'cerrada'; f.timeOut = timeOut; f.kmEnd = kmEnd; f.km = km; f.autoClosed = true;
   }
 }
