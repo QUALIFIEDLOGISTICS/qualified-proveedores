@@ -11,6 +11,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://unpkg.com/qrcode-generator@1.4.4/qrcode.js"></script>
 <style>
   :root{
     --bg:#F4F6F8; --panel:#FFFFFF; --panel2:#F0F2F5; --border:#E1E5EA;
@@ -2795,7 +2797,7 @@ function tplTrafico(){
   if (window.__traficoView === 'deca') return tplDecaPage();
   return `
     <div style="max-width:1080px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;">
-      ${autonomosHomeCard('file', '#C1443D', 'DECA - Control Transporte por Carretera', 'Todavía por definir', 'openDecaModule()')}
+      ${autonomosHomeCard('file', '#C1443D', 'DECA - Control Transporte por Carretera', 'Documento electrónico de Control Administrativo', 'openDecaModule()')}
     </div>`;
 }
 function openDecaModule(){
@@ -2807,6 +2809,9 @@ function backToTraficoHome(){
   renderSidebar(); renderHeader(); renderTab();
 }
 function tplDecaPage(){
+  const search = (window.__decaSearch || '').toLowerCase();
+  let list = decaDocuments.filter(d => !search || [d.cargadorNombre, d.transportistaNombre, d.origen, d.destino, d.matricula].some(v => (v||'').toLowerCase().includes(search)));
+  list = list.slice().sort((a,b) => (b.fechaTransporte||'').localeCompare(a.fechaTransporte||''));
   return `
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
       <div style="display:flex;align-items:center;gap:14px;">
@@ -2815,14 +2820,353 @@ function tplDecaPage(){
         </div>
         <div>
           <div style="font-family:var(--display);font-size:22px;">DECA - Control Transporte por Carretera</div>
-          <div style="font-size:12.5px;color:var(--mutedFaint);">Todavía por definir.</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">Documento electrónico de Control Administrativo — obligatorio en transporte de mercancías por carretera.</div>
         </div>
       </div>
       <button class="btn btn-ghost" onclick="backToTraficoHome()">← Volver</button>
     </div>
-    <div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">
-      Este módulo está creado pero vacío — falta definir qué es el DECA en concreto y qué hay que controlar/crear para construirlo de verdad.
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
+      <div style="position:relative;flex:1;min-width:220px;max-width:340px;">
+        <input placeholder="Buscar por cargador, transportista, origen, destino o matrícula…" value="${esc(window.__decaSearch||'')}" oninput="window.__decaSearch=this.value; refreshDecaListBody();" style="padding-left:34px;" />
+        <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+      </div>
+      <div style="flex:1;"></div>
+      <button class="btn btn-primary" onclick="openDecaFormModal()">+ Nuevo DeCA</button>
+    </div>
+    <div id="deca-list-body">${decaListBodyHtml()}</div>`;
+}
+function refreshDecaListBody(){
+  const el = document.getElementById('deca-list-body');
+  if (el) el.innerHTML = decaListBodyHtml();
+}
+function decaListBodyHtml(){
+  const search = (window.__decaSearch || '').toLowerCase();
+  let list = decaDocuments.filter(d => !search || [d.cargadorNombre, d.transportistaNombre, d.origen, d.destino, d.matricula].some(v => (v||'').toLowerCase().includes(search)));
+  list = list.slice().sort((a,b) => (b.fechaTransporte||'').localeCompare(a.fechaTransporte||''));
+  if (!list.length) {
+    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search ? 'Ningún DeCA coincide con la búsqueda.' : 'Todavía no hay ningún DeCA creado.'}</div>`;
+  }
+  return `
+    <div class="card" style="padding:0;overflow-x:auto;">
+      <table>
+        <thead><tr>
+          <th>Fecha</th><th>Cargador contractual</th><th>Transportista efectivo</th><th>Origen → Destino</th><th>Matrícula</th><th>Mercancía</th><th>Acciones</th>
+        </tr></thead>
+        <tbody>
+          ${list.map(d => `
+            <tr class="dr-row" style="cursor:pointer;" onclick="openDecaViewModal('${d.id}')">
+              <td style="color:var(--muted);">${fmtDate(d.fechaTransporte)}</td>
+              <td style="font-weight:600;">${esc(d.cargadorNombre)}</td>
+              <td style="color:var(--muted);">${esc(d.transportistaNombre)}</td>
+              <td style="color:var(--muted);">${esc(d.origen)} → ${esc(d.destino)}</td>
+              <td style="color:var(--muted);font-family:var(--mono);font-size:12.5px;">${esc(d.matricula)}</td>
+              <td style="color:var(--muted);">${esc(d.mercanciaNaturaleza)}</td>
+              <td style="white-space:nowrap;">
+                <button onclick="event.stopPropagation(); openDecaViewModal('${d.id}');" title="Ver" style="background:none;border:none;color:var(--muted);font-size:14px;padding:2px 4px;">👁</button>
+                <button onclick="event.stopPropagation(); openDecaFormModal('${d.id}');" title="Editar" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+                <button onclick="event.stopPropagation(); confirmDeleteDeca('${d.id}');" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);font-size:14px;padding:2px 4px;">🗑</button>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
     </div>`;
+}
+
+/* ---- DeCA: datos ---- */
+let decaDocuments = [];
+async function loadDecaDocuments(){
+  const { data } = await supabaseClient.from('deca_documents').select('*').order('created_at', { ascending: false });
+  decaDocuments = (data||[]).map(d => ({
+    id: d.id, createdAt: d.created_at,
+    cargadorNombre: d.cargador_nombre, cargadorNif: d.cargador_nif, cargadorDomicilio: d.cargador_domicilio || '',
+    transportistaNombre: d.transportista_nombre, transportistaNif: d.transportista_nif,
+    origen: d.origen, destino: d.destino,
+    mercanciaNaturaleza: d.mercancia_naturaleza, mercanciaPeso: d.mercancia_peso,
+    autorizacionEspecial: d.autorizacion_especial || '', fechaTransporte: d.fecha_transporte,
+    matricula: d.matricula, observaciones: d.observaciones || '',
+    pdfStoragePath: d.pdf_storage_path || null, pdfUrl: d.pdf_url || null,
+  }));
+}
+
+/* ---- DeCA: generación del PDF nativo + QR ---- */
+function dataUrlToUint8Array(dataUrl){
+  const base64 = dataUrl.split(',')[1];
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i=0; i<binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+// qrcode-generator's propio createDataURL() exporta GIF (evita depender de
+// <canvas>), pero pdf-lib solo puede embeber PNG/JPG — así que se dibuja a
+// mano en un <canvas> a partir de isDark()/getModuleCount() y se exporta
+// como PNG real, tanto para el PDF como para la vista previa en pantalla.
+function qrDataUrl(text, cellSize, margin){
+  const qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  const cs = cellSize || 6, m = margin != null ? margin : 4;
+  const count = qr.getModuleCount();
+  const size = (count + m*2) * cs;
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = '#000000';
+  for (let row = 0; row < count; row++) {
+    for (let col = 0; col < count; col++) {
+      if (qr.isDark(row, col)) ctx.fillRect((col+m)*cs, (row+m)*cs, cs, cs);
+    }
+  }
+  return canvas.toDataURL('image/png');
+}
+function wrapPdfText(text, font, size, maxWidth){
+  const words = String(text||'').split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = '';
+  words.forEach(w => {
+    const test = line ? line + ' ' + w : w;
+    if (line && font.widthOfTextAtSize(test, size) > maxWidth) { lines.push(line); line = w; }
+    else line = test;
+  });
+  if (line) lines.push(line);
+  return lines.length ? lines : ['—'];
+}
+// Genera el PDF nativo del DeCA (campos del art. 6 Orden FOM 2861/2012)
+// con el QR que apunta a su URL de descarga, lo sube al bucket y
+// devuelve la URL firmada guardada. La ruta de storage se reutiliza tal
+// cual al editar, así el DeCA conserva la misma URL/QR durante el
+// servicio (una de las dos vías que permite la resolución del 5 de junio
+// para modificar datos durante el transporte).
+async function buildAndUploadDecaPdf(fields, storagePath){
+  const { data: signedData, error: signError } = await supabaseClient.storage.from(DOCS_BUCKET).createSignedUrl(storagePath, 90*24*3600);
+  if (signError || !signedData) throw new Error('No se pudo generar la URL de descarga.');
+  const url = signedData.signedUrl;
+  const qrPngDataUrl = qrDataUrl(url, 6);
+
+  const { PDFDocument, StandardFonts, rgb } = PDFLib;
+  const pdfDoc = await PDFDocument.create();
+  const page = pdfDoc.addPage([595.28, 841.89]);
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const marginX = 50, contentWidth = 495.28;
+  let y = 790;
+
+  const drawTitle = (text, size) => { page.drawText(text, { x: marginX, y, size, font: bold, color: rgb(0.1,0.1,0.1) }); y -= size + 8; };
+  const drawSection = (text) => { y -= 6; page.drawText(text, { x: marginX, y, size: 11, font: bold, color: rgb(0.75,0.27,0.24) }); y -= 16; };
+  const drawField = (label, value) => {
+    page.drawText(label + ':', { x: marginX, y, size: 10, font: bold, color: rgb(0.3,0.3,0.3) });
+    const lines = wrapPdfText(value || '—', font, 10, contentWidth - 160);
+    lines.forEach((line, i) => {
+      page.drawText(line, { x: marginX + 160, y: y - i*13, size: 10, font, color: rgb(0.1,0.1,0.1) });
+    });
+    y -= Math.max(13, lines.length*13) + 6;
+  };
+
+  drawTitle('Documento electrónico de Control Administrativo (DeCA)', 15);
+  page.drawText('Art. 147 LOTT / art. 222 ROTT — Orden FOM 2861/2012', { x: marginX, y, size: 9, font, color: rgb(0.5,0.5,0.5) });
+  y -= 26;
+
+  drawSection('CARGADOR CONTRACTUAL');
+  drawField('Nombre / razón social', fields.cargadorNombre);
+  drawField('NIF', fields.cargadorNif);
+  drawField('Domicilio', fields.cargadorDomicilio);
+
+  drawSection('TRANSPORTISTA EFECTIVO');
+  drawField('Nombre / razón social', fields.transportistaNombre);
+  drawField('NIF', fields.transportistaNif);
+
+  drawSection('ENVÍO');
+  drawField('Origen', fields.origen);
+  drawField('Destino', fields.destino);
+  drawField('Naturaleza de la mercancía', fields.mercanciaNaturaleza);
+  drawField('Peso de la mercancía', fields.mercanciaPeso);
+  drawField('Autorización especial de circulación', fields.autorizacionEspecial || 'No aplica');
+  drawField('Fecha del transporte', fields.fechaTransporte ? fmtDateY(fields.fechaTransporte) : '—');
+  drawField('Matrícula del vehículo', fields.matricula);
+  drawField('Observaciones', fields.observaciones || '—');
+
+  y -= 10;
+  page.drawText(`Generado el ${new Date().toLocaleString('es-ES')} · Qualified Logistics`, { x: marginX, y, size: 8, font, color: rgb(0.6,0.6,0.6) });
+
+  const qrImage = await pdfDoc.embedPng(dataUrlToUint8Array(qrPngDataUrl));
+  const qrSize = 110;
+  page.drawImage(qrImage, { x: 595.28 - marginX - qrSize, y: 60, width: qrSize, height: qrSize });
+  page.drawText('Escanea para descargar el documento:', { x: 595.28 - marginX - qrSize, y: 60 + qrSize + 6, size: 8, font, color: rgb(0.4,0.4,0.4) });
+  const urlLines = wrapPdfText(url, font, 7, qrSize);
+  urlLines.forEach((line,i) => page.drawText(line, { x: 595.28 - marginX - qrSize, y: 50 - i*9, size: 7, font, color: rgb(0.4,0.4,0.4) }));
+
+  const pdfBytes = await pdfDoc.save();
+  const { error: uploadError } = await supabaseClient.storage.from(DOCS_BUCKET).upload(storagePath, new Blob([pdfBytes], { type: 'application/pdf' }), { upsert: true, contentType: 'application/pdf' });
+  if (uploadError) throw new Error('No se pudo subir el PDF.');
+  return { url };
+}
+
+/* ---- DeCA: formulario crear/editar ---- */
+function tplDecaFormFields(e){
+  return `
+    <div style="font-family:var(--display);text-transform:uppercase;font-size:11px;color:var(--muted);letter-spacing:.4px;margin:10px 0 6px;">Cargador contractual</div>
+    <div class="field"><label>Nombre o razón social</label><input id="dc-cargador-nombre" value="${esc(e.cargadorNombre||'')}" /></div>
+    <div style="display:flex;gap:10px;">
+      <div class="field" style="flex:1;"><label>NIF</label><input id="dc-cargador-nif" value="${esc(e.cargadorNif||'')}" /></div>
+      <div class="field" style="flex:2;"><label>Domicilio</label><input id="dc-cargador-domicilio" value="${esc(e.cargadorDomicilio||'')}" /></div>
+    </div>
+    <div style="font-family:var(--display);text-transform:uppercase;font-size:11px;color:var(--muted);letter-spacing:.4px;margin:14px 0 6px;">Transportista efectivo</div>
+    <div style="display:flex;gap:10px;">
+      <div class="field" style="flex:2;"><label>Nombre o razón social</label><input id="dc-transportista-nombre" value="${esc(e.transportistaNombre||'')}" /></div>
+      <div class="field" style="flex:1;"><label>NIF</label><input id="dc-transportista-nif" value="${esc(e.transportistaNif||'')}" /></div>
+    </div>
+    <div style="font-family:var(--display);text-transform:uppercase;font-size:11px;color:var(--muted);letter-spacing:.4px;margin:14px 0 6px;">Envío</div>
+    <div style="display:flex;gap:10px;">
+      <div class="field" style="flex:1;"><label>Origen</label><input id="dc-origen" value="${esc(e.origen||'')}" /></div>
+      <div class="field" style="flex:1;"><label>Destino</label><input id="dc-destino" value="${esc(e.destino||'')}" /></div>
+    </div>
+    <div style="display:flex;gap:10px;">
+      <div class="field" style="flex:2;"><label>Naturaleza de la mercancía</label><input id="dc-mercancia-naturaleza" value="${esc(e.mercanciaNaturaleza||'')}" /></div>
+      <div class="field" style="flex:1;"><label>Peso</label><input id="dc-mercancia-peso" placeholder="Ej. 12.500 kg" value="${esc(e.mercanciaPeso||'')}" /></div>
+    </div>
+    <div class="field"><label>Autorización especial de circulación (si aplica)</label><input id="dc-autorizacion" value="${esc(e.autorizacionEspecial||'')}" /></div>
+    <div style="display:flex;gap:10px;">
+      <div class="field" style="flex:1;"><label>Fecha del transporte</label><input id="dc-fecha" type="date" value="${e.fechaTransporte||today()}" /></div>
+      <div class="field" style="flex:1;"><label>Matrícula del vehículo</label><input id="dc-matricula" value="${esc(e.matricula||'')}" /></div>
+    </div>
+    <div class="field"><label>Observaciones</label><textarea id="dc-observaciones">${esc(e.observaciones||'')}</textarea></div>`;
+}
+function openDecaFormModal(editId){
+  const editing = editId ? decaDocuments.find(d=>d.id===editId) : null;
+  const e = editing || {};
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:520px;max-height:85vh;overflow-y:auto;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <h3 class="modal-title">${editing?'Editar DeCA':'Nuevo DeCA'}</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:6px;">Al guardar se genera (o regenera) el PDF con su código QR de descarga.</div>
+        ${tplDecaFormFields(e)}
+        <div id="dc-error" style="color:var(--danger);font-size:12.5px;margin:8px 0;"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" id="dc-submit-btn" style="flex:1;justify-content:center;" onclick="submitDecaForm('${editId||''}')">${editing?'Guardar y regenerar PDF':'Generar DeCA'}</button>
+        </div>
+      </div>
+    </div>`;
+}
+async function submitDecaForm(editId){
+  const errEl = document.getElementById('dc-error');
+  const btn = document.getElementById('dc-submit-btn');
+  errEl.textContent = '';
+  const fields = {
+    cargadorNombre: document.getElementById('dc-cargador-nombre').value.trim(),
+    cargadorNif: document.getElementById('dc-cargador-nif').value.trim(),
+    cargadorDomicilio: document.getElementById('dc-cargador-domicilio').value.trim(),
+    transportistaNombre: document.getElementById('dc-transportista-nombre').value.trim(),
+    transportistaNif: document.getElementById('dc-transportista-nif').value.trim(),
+    origen: document.getElementById('dc-origen').value.trim(),
+    destino: document.getElementById('dc-destino').value.trim(),
+    mercanciaNaturaleza: document.getElementById('dc-mercancia-naturaleza').value.trim(),
+    mercanciaPeso: document.getElementById('dc-mercancia-peso').value.trim(),
+    autorizacionEspecial: document.getElementById('dc-autorizacion').value.trim(),
+    fechaTransporte: document.getElementById('dc-fecha').value,
+    matricula: document.getElementById('dc-matricula').value.trim(),
+    observaciones: document.getElementById('dc-observaciones').value.trim(),
+  };
+  const required = ['cargadorNombre','cargadorNif','transportistaNombre','transportistaNif','origen','destino','mercanciaNaturaleza','mercanciaPeso','fechaTransporte','matricula'];
+  if (required.some(k => !fields[k])) { errEl.textContent = 'Rellena todos los campos obligatorios.'; return; }
+  btn.disabled = true; btn.textContent = 'Generando PDF…';
+  try {
+    const editing = editId ? decaDocuments.find(d=>d.id===editId) : null;
+    const storagePath = editing && editing.pdfStoragePath ? editing.pdfStoragePath : `deca/${nextId()}.pdf`;
+    const { url } = await buildAndUploadDecaPdf(fields, storagePath);
+    const dbPayload = {
+      cargador_nombre: fields.cargadorNombre, cargador_nif: fields.cargadorNif, cargador_domicilio: fields.cargadorDomicilio || null,
+      transportista_nombre: fields.transportistaNombre, transportista_nif: fields.transportistaNif,
+      origen: fields.origen, destino: fields.destino,
+      mercancia_naturaleza: fields.mercanciaNaturaleza, mercancia_peso: fields.mercanciaPeso,
+      autorizacion_especial: fields.autorizacionEspecial || null, fecha_transporte: fields.fechaTransporte,
+      matricula: fields.matricula, observaciones: fields.observaciones || null,
+      pdf_storage_path: storagePath, pdf_url: url, updated_at: new Date().toISOString(),
+    };
+    let newId = editId;
+    if (editing) {
+      const { error } = await supabaseClient.from('deca_documents').update(dbPayload).eq('id', editId);
+      if (error) throw error;
+      Object.assign(editing, { ...fields, pdfStoragePath: storagePath, pdfUrl: url });
+    } else {
+      const { data, error } = await supabaseClient.from('deca_documents').insert(dbPayload).select().single();
+      if (error || !data) throw (error || new Error('sin datos'));
+      newId = data.id;
+      decaDocuments.unshift({ id: data.id, ...fields, pdfStoragePath: storagePath, pdfUrl: url });
+    }
+    closeModal();
+    openDecaViewModal(newId);
+  } catch (err) {
+    errEl.textContent = 'No se pudo generar/guardar el DeCA: ' + (err && err.message ? err.message : 'error desconocido.');
+    btn.disabled = false; btn.textContent = editId ? 'Guardar y regenerar PDF' : 'Generar DeCA';
+  }
+}
+
+/* ---- DeCA: ver / eliminar ---- */
+function openDecaViewModal(id){
+  const d = decaDocuments.find(x=>x.id===id);
+  if (!d) return;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:460px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <h3 class="modal-title">DeCA — ${esc(d.matricula)}</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;font-size:13px;margin-bottom:16px;">
+          <div><b>Cargador contractual:</b> ${esc(d.cargadorNombre)} (${esc(d.cargadorNif)})</div>
+          <div><b>Transportista efectivo:</b> ${esc(d.transportistaNombre)} (${esc(d.transportistaNif)})</div>
+          <div><b>Origen → Destino:</b> ${esc(d.origen)} → ${esc(d.destino)}</div>
+          <div><b>Mercancía:</b> ${esc(d.mercanciaNaturaleza)} · ${esc(d.mercanciaPeso)}</div>
+          <div><b>Fecha:</b> ${fmtDateY(d.fechaTransporte)}</div>
+          ${d.observaciones ? `<div><b>Observaciones:</b> ${esc(d.observaciones)}</div>` : ''}
+        </div>
+        ${d.pdfUrl ? `
+        <div style="text-align:center;margin-bottom:14px;">
+          <img src="${esc(d.pdfUrl)}" style="display:none;" onerror="this.style.display='none';" />
+          <div id="deca-qr-holder" style="display:flex;justify-content:center;margin-bottom:10px;"></div>
+          <div style="font-size:11px;color:var(--mutedFaint);word-break:break-all;">${esc(d.pdfUrl)}</div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="copyDecaLink('${esc(d.pdfUrl)}')">📋 Copiar enlace</button>
+          <a class="btn btn-primary" style="flex:1;justify-content:center;text-decoration:none;" href="${esc(d.pdfUrl)}" target="_blank" rel="noopener">Abrir PDF</a>
+        </div>` : `<div style="color:var(--mutedFaint);font-size:12.5px;">Sin PDF generado.</div>`}
+      </div>
+    </div>`;
+  if (d.pdfUrl) {
+    const dataUrl = qrDataUrl(d.pdfUrl, 5);
+    const holder = document.getElementById('deca-qr-holder');
+    if (holder) holder.innerHTML = `<img src="${dataUrl}" width="180" height="180" style="border:1px solid var(--border);border-radius:8px;" />`;
+  }
+}
+function copyDecaLink(url){
+  navigator.clipboard.writeText(url).catch(()=>{});
+}
+function confirmDeleteDeca(id){
+  const d = decaDocuments.find(x=>x.id===id);
+  if (!d) return;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:360px;">
+        <h3 class="modal-title" style="margin-bottom:10px;">Eliminar DeCA</h3>
+        <div style="font-size:13.5px;color:var(--muted);margin-bottom:20px;">¿Seguro que quieres eliminar el DeCA de ${esc(d.matricula)} (${fmtDateY(d.fechaTransporte)})? Esta acción no se puede deshacer.</div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" style="flex:1;justify-content:center;background:var(--danger);" onclick="deleteDeca('${id}')">Sí, eliminar</button>
+        </div>
+      </div>
+    </div>`;
+}
+async function deleteDeca(id){
+  const d = decaDocuments.find(x=>x.id===id);
+  if (!d) return;
+  if (d.pdfStoragePath) await supabaseClient.storage.from(DOCS_BUCKET).remove([d.pdfStoragePath]);
+  await supabaseClient.from('deca_documents').delete().eq('id', id);
+  decaDocuments = decaDocuments.filter(x=>x.id!==id);
+  closeModal();
+  renderTab();
 }
 
 function autonomosHomeCard(icon, color, title, description, onclick){
@@ -4677,7 +5021,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
     return;
   }
 
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData()]);
+  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
