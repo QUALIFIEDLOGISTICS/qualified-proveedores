@@ -2794,6 +2794,7 @@ function tplAutonomosDashboardBody(){
 }
 /* ============================= DASHBOARD TRÁFICO ============================= */
 function tplTrafico(){
+  if (window.__traficoView === 'cargadores') return tplCargadoresPage();
   if (window.__traficoView === 'deca') return tplDecaPage();
   return `
     <div style="max-width:1080px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;">
@@ -2831,6 +2832,7 @@ function tplDecaPage(){
         <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
       </div>
       <div style="flex:1;"></div>
+      <button class="btn btn-ghost" onclick="openCargadoresModule()">📋 Cargadores contractuales</button>
       <button class="btn btn-primary" onclick="openDecaFormModal()">+ Nuevo DeCA</button>
     </div>
     <div id="deca-list-body">${decaListBodyHtml()}</div>`;
@@ -2886,6 +2888,119 @@ async function loadDecaDocuments(){
     matricula: d.matricula, observaciones: d.observaciones || '',
     pdfStoragePath: d.pdf_storage_path || null, pdfUrl: d.pdf_url || null,
   }));
+}
+
+/* ---- Cargadores contractuales: lista reutilizable para rellenar el DeCA rápido ---- */
+let cargadoresContractuales = [];
+async function loadCargadoresContractuales(){
+  const { data } = await supabaseClient.from('cargadores_contractuales').select('*').order('nombre', { ascending: true });
+  cargadoresContractuales = (data||[]).map(c => ({ id: c.id, nombre: c.nombre, nif: c.nif, domicilio: c.domicilio || '' }));
+}
+function openCargadoresModule(){
+  window.__traficoView = 'cargadores';
+  renderSidebar(); renderHeader(); renderTab();
+}
+function backToDecaFromCargadores(){
+  window.__traficoView = 'deca';
+  renderSidebar(); renderHeader(); renderTab();
+}
+function tplCargadoresPage(){
+  return `
+    <button class="btn btn-ghost" onclick="backToDecaFromCargadores()" style="margin-bottom:16px;">← Volver al DeCA</button>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+      <div style="font-family:var(--display);font-size:19px;">Cargadores contractuales</div>
+      <button class="btn btn-primary" onclick="openCargadorModal()">+ Nuevo cargador</button>
+    </div>
+    <div style="position:relative;flex:1;min-width:220px;max-width:320px;margin-bottom:16px;">
+      <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__cargadoresSearch||'')}" oninput="window.__cargadoresSearch=this.value; refreshCargadoresListBody();" style="padding-left:34px;" />
+      <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+    </div>
+    <div id="cargadores-list-body">${cargadoresListBodyHtml()}</div>`;
+}
+function refreshCargadoresListBody(){
+  const el = document.getElementById('cargadores-list-body');
+  if (el) el.innerHTML = cargadoresListBodyHtml();
+}
+function cargadoresListBodyHtml(){
+  const search = (window.__cargadoresSearch || '').toLowerCase();
+  const list = cargadoresContractuales.filter(c => !search || c.nombre.toLowerCase().includes(search) || c.nif.toLowerCase().includes(search));
+  if (!list.length) {
+    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search ? 'Ningún cargador coincide con la búsqueda.' : 'Todavía no hay ningún cargador contractual creado.'}</div>`;
+  }
+  return `
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      ${list.map(c => `
+        <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+          <div>
+            <div style="font-family:var(--display);font-size:15px;">${esc(c.nombre)}</div>
+            <div style="font-size:12px;color:var(--muted);">${esc(c.nif)}${c.domicilio ? ' · ' + esc(c.domicilio) : ''}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button onclick="openCargadorModal('${c.id}');" title="Editar" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:10.5px;padding:3px 7px;white-space:nowrap;">✏️ Editar</button>
+            <button onclick="confirmDeleteCargador('${c.id}');" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);font-size:14px;padding:2px 4px;">🗑</button>
+          </div>
+        </div>`).join('')}
+    </div>`;
+}
+function openCargadorModal(editId){
+  const editing = editId ? cargadoresContractuales.find(c=>c.id===editId) : null;
+  const c = editing || {};
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:400px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+          <h3 class="modal-title">${editing?'Editar cargador':'Nuevo cargador'}</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div class="field"><label>Nombre o razón social</label><input id="cg-nombre" value="${esc(c.nombre||'')}" /></div>
+        <div class="field"><label>NIF</label><input id="cg-nif" value="${esc(c.nif||'')}" /></div>
+        <div class="field"><label>Domicilio</label><input id="cg-domicilio" value="${esc(c.domicilio||'')}" /></div>
+        <div id="cg-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitCargadorForm('${editId||''}')">${editing?'Guardar cambios':'Añadir'}</button>
+        </div>
+      </div>
+    </div>`;
+}
+async function submitCargadorForm(editId){
+  const errEl = document.getElementById('cg-error');
+  errEl.textContent = '';
+  const nombre = document.getElementById('cg-nombre').value.trim();
+  const nif = document.getElementById('cg-nif').value.trim();
+  const domicilio = document.getElementById('cg-domicilio').value.trim();
+  if (!nombre || !nif) { errEl.textContent = 'Indica al menos el nombre y el NIF.'; return; }
+  if (editId) {
+    const { data, error } = await supabaseClient.from('cargadores_contractuales').update({ nombre, nif, domicilio: domicilio || null }).eq('id', editId).select();
+    if (error || !data || !data.length) { errEl.textContent = 'No se pudo guardar.'; return; }
+    const c = cargadoresContractuales.find(x=>x.id===editId);
+    if (c) Object.assign(c, { nombre, nif, domicilio });
+  } else {
+    const { data, error } = await supabaseClient.from('cargadores_contractuales').insert({ nombre, nif, domicilio: domicilio || null }).select().single();
+    if (error || !data) { errEl.textContent = 'No se pudo guardar.'; return; }
+    cargadoresContractuales.push({ id: data.id, nombre, nif, domicilio });
+    cargadoresContractuales.sort((a,b) => a.nombre.localeCompare(b.nombre));
+  }
+  closeModal(); renderTab();
+}
+function confirmDeleteCargador(id){
+  const c = cargadoresContractuales.find(x=>x.id===id);
+  if (!c) return;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:360px;">
+        <h3 class="modal-title" style="margin-bottom:10px;">Eliminar cargador</h3>
+        <div style="font-size:13.5px;color:var(--muted);margin-bottom:20px;">¿Seguro que quieres eliminar a ${esc(c.nombre)}? Esto no afecta a los DeCA ya creados con sus datos, solo a la lista rápida.</div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" style="flex:1;justify-content:center;background:var(--danger);" onclick="deleteCargador('${id}')">Sí, eliminar</button>
+        </div>
+      </div>
+    </div>`;
+}
+async function deleteCargador(id){
+  await supabaseClient.from('cargadores_contractuales').delete().eq('id', id);
+  cargadoresContractuales = cargadoresContractuales.filter(x=>x.id!==id);
+  closeModal(); renderTab();
 }
 
 /* ---- DeCA: generación del PDF nativo + QR ---- */
@@ -3006,7 +3121,13 @@ async function buildAndUploadDecaPdf(fields, storagePath){
 function tplDecaFormFields(e){
   return `
     <div style="font-family:var(--display);text-transform:uppercase;font-size:11px;color:var(--muted);letter-spacing:.4px;margin:10px 0 6px;">Cargador contractual</div>
-    <div class="field"><label>Nombre o razón social</label><input id="dc-cargador-nombre" value="${esc(e.cargadorNombre||'')}" /></div>
+    <div class="field">
+      <label>Nombre o razón social</label>
+      <input id="dc-cargador-nombre" list="dc-cargadores-datalist" oninput="onDecaCargadorInput()" placeholder="Escribe para buscar uno guardado o escribe uno nuevo" value="${esc(e.cargadorNombre||'')}" />
+      <datalist id="dc-cargadores-datalist">
+        ${cargadoresContractuales.map(c=>`<option value="${esc(c.nombre)}">`).join('')}
+      </datalist>
+    </div>
     <div style="display:flex;gap:10px;">
       <div class="field" style="flex:1;"><label>NIF</label><input id="dc-cargador-nif" value="${esc(e.cargadorNif||'')}" /></div>
       <div class="field" style="flex:2;"><label>Domicilio</label><input id="dc-cargador-domicilio" value="${esc(e.cargadorDomicilio||'')}" /></div>
@@ -3031,6 +3152,14 @@ function tplDecaFormFields(e){
       <div class="field" style="flex:1;"><label>Matrícula del vehículo</label><input id="dc-matricula" value="${esc(e.matricula||'')}" /></div>
     </div>
     <div class="field"><label>Observaciones</label><textarea id="dc-observaciones">${esc(e.observaciones||'')}</textarea></div>`;
+}
+function onDecaCargadorInput(){
+  const val = document.getElementById('dc-cargador-nombre').value;
+  const match = cargadoresContractuales.find(c => c.nombre === val);
+  if (match) {
+    document.getElementById('dc-cargador-nif').value = match.nif;
+    document.getElementById('dc-cargador-domicilio').value = match.domicilio || '';
+  }
 }
 function openDecaFormModal(editId){
   const editing = editId ? decaDocuments.find(d=>d.id===editId) : null;
@@ -5021,7 +5150,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
     return;
   }
 
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments()]);
+  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadCargadoresContractuales()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
