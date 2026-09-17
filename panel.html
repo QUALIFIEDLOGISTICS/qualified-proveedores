@@ -741,6 +741,7 @@ function contactosListBodyHtml(){
   else if (roleFilter === 'transportista') list = list.filter(c=>c.esTransportista);
   else if (roleFilter === 'autonomos') list = list.filter(c=>c.esAutonomos);
   list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || c.nif.toLowerCase().includes(search));
+  window.__contactoNavContext = { label: 'Contactos', ids: list.map(c=>c.id) };
   if (!list.length) {
     return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search||roleFilter!=='todos' ? 'Ningún contacto coincide con el filtro.' : archivedView ? 'No hay contactos archivados.' : 'Todavía no hay ningún contacto creado.'}</div>`;
   }
@@ -820,6 +821,7 @@ function openContactoModal(editId, presetRoles){
   window.__showingContactoDetail = true;
   window.__contactoDetailId = editId || null;
   window.__contactoDetailPreset = presetRoles || null;
+  window.__contactoDetailNavContext = window.__contactoNavContext || null;
   window.__contactoHistorial = editId ? (contactoHistorialCache[editId] || null) : [];
   renderTab();
   if (editId) {
@@ -832,10 +834,22 @@ function openContactoModal(editId, presetRoles){
     });
   }
 }
+// Va al contacto anterior/siguiente dentro de la misma lista filtrada
+// (Contactos, Clientes o Empresas) desde la que se abrió esta ficha —
+// para poder revisar varios contactos seguidos sin volver a la lista.
+function contactoNavGoto(offset){
+  const nav = window.__contactoDetailNavContext;
+  if (!nav || !nav.ids.length) return;
+  const idx = nav.ids.indexOf(window.__contactoDetailId);
+  if (idx === -1) return;
+  let newIdx = (idx + offset + nav.ids.length) % nav.ids.length;
+  openContactoModal(nav.ids[newIdx]);
+}
 function closeContactoDetail(){
   window.__showingContactoDetail = false;
   window.__contactoDetailId = null;
   window.__contactoDetailPreset = null;
+  window.__contactoDetailNavContext = null;
   window.__contactoHistorial = null;
   renderTab();
 }
@@ -845,6 +859,8 @@ function tplContactoDetailPage(){
   const c = editing || window.__contactoDetailPreset || {};
   const warehouseIds = c.warehouseIds || [];
   const historial = window.__contactoHistorial;
+  const nav = window.__contactoDetailNavContext;
+  const navIdx = (nav && editId) ? nav.ids.indexOf(editId) : -1;
   return `
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
       <div style="display:flex;align-items:center;gap:14px;">
@@ -853,10 +869,20 @@ function tplContactoDetailPage(){
         </div>
         <div>
           <div style="font-family:var(--display);font-size:22px;">${editing?'Editar contacto':'Nuevo contacto'}</div>
-          <div style="font-size:12.5px;color:var(--mutedFaint);">${editing?esc(editing.nombre):'Razón social, roles y dirección.'}</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">
+            ${nav ? `<span style="cursor:pointer;color:var(--primary);text-decoration:underline;" onclick="closeContactoDetail()">${esc(nav.label)}</span> / ` : ''}${editing?esc(editing.nombre):'Nuevo contacto'}
+          </div>
         </div>
       </div>
-      <button class="btn btn-ghost" onclick="closeContactoDetail()">← Volver</button>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        ${navIdx>-1 && nav.ids.length>1 ? `
+          <div style="display:flex;align-items:center;gap:4px;">
+            <button onclick="contactoNavGoto(-1)" title="Contacto anterior" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13px;">←</button>
+            <span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${navIdx+1}/${nav.ids.length}</span>
+            <button onclick="contactoNavGoto(1)" title="Contacto siguiente" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13px;">→</button>
+          </div>` : ''}
+        <button class="btn btn-ghost" onclick="closeContactoDetail()">← Volver</button>
+      </div>
     </div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
     <div class="card" style="flex:2;min-width:360px;">
@@ -1107,6 +1133,7 @@ function tplClientes(){
   if (view === 'archivados') list = clients.filter(c => c.warehouseIds.includes(currentWarehouseId) && c.archived);
   else if (view === 'sinasignar') list = clients.filter(c => c.warehouseIds.length === 0 && !c.archived);
   else list = clients.filter(c => c.warehouseIds.includes(currentWarehouseId) && !c.archived);
+  window.__contactoNavContext = { label: 'Clientes', ids: list.map(c=>c.id) };
 
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
@@ -3868,6 +3895,7 @@ function companiesListBodyHtml(){
   const archivedView = view === 'archivados';
   const search = (window.__companiesSearch || '').toLowerCase();
   const list = companies.filter(co => !!co.archived === archivedView && co.name.toLowerCase().includes(search));
+  window.__contactoNavContext = { label: 'Empresas', ids: list.map(co=>co.id) };
   return `
     <div style="display:flex;flex-direction:column;gap:8px;">
       ${list.map(co => {
