@@ -265,8 +265,8 @@ async function syncAttachments(parentType, parentId){
 
 let clients = [];
 async function loadClients(){
-  const { data } = await supabaseClient.from('clients').select('id,name,archived,client_warehouses(warehouse_id)').order('name');
-  clients = (data||[]).map(r => ({ id: r.id, name: r.name, archived: r.archived, warehouseIds: (r.client_warehouses||[]).map(cw=>cw.warehouse_id) }));
+  const { data } = await supabaseClient.from('contactos').select('id,nombre,archived,contacto_warehouses(warehouse_id)').eq('es_cliente_almacen', true).order('nombre');
+  clients = (data||[]).map(r => ({ id: r.id, name: r.nombre, archived: r.archived, warehouseIds: (r.contacto_warehouses||[]).map(cw=>cw.warehouse_id) }));
 }
 
 let pallets = {};
@@ -680,23 +680,39 @@ function backToAdministracionHome(){
 /* ---- Contactos: datos ---- */
 let contactos = [];
 async function loadContactos(){
-  const { data } = await supabaseClient.from('contactos').select('*').order('nombre', { ascending: true });
+  const { data } = await supabaseClient.from('contactos').select('*,contacto_warehouses(warehouse_id)').order('nombre', { ascending: true });
   contactos = (data||[]).map(c => ({
-    id: c.id, nombre: c.nombre, nif: c.nif || '',
+    id: c.id, nombre: c.nombre, nif: c.nif || '', archived: !!c.archived,
+    esClienteAlmacen: !!c.es_cliente_almacen, esTransportista: !!c.es_transportista, esAutonomos: !!c.es_autonomos,
+    warehouseIds: (c.contacto_warehouses||[]).map(cw=>cw.warehouse_id),
     calle1: c.calle1 || '', calle2: c.calle2 || '', codigoPostal: c.codigo_postal || '',
     ciudad: c.ciudad || '', provincia: c.provincia || '', pais: c.pais || '',
   }));
 }
+const CONTACTO_ROLE_LABELS = { cliente: 'Cliente de almacén', transportista: 'Transportista', autonomos: 'Autónomos' };
 function tplContactosPage(){
+  const view = window.__contactosView || 'activos';
+  const archivedCount = contactos.filter(c=>c.archived).length;
   return `
     <button class="btn btn-ghost" onclick="backToAdministracionHome()" style="margin-bottom:16px;">← Volver</button>
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
       <div style="font-family:var(--display);font-size:19px;">Contactos</div>
-      <button class="btn btn-primary" onclick="openContactoModal()">+ Nuevo contacto</button>
+      ${view==='archivados' ? '' : `<button class="btn btn-primary" onclick="openContactoModal()">+ Nuevo contacto</button>`}
     </div>
-    <div style="position:relative;flex:1;min-width:220px;max-width:320px;margin-bottom:16px;">
-      <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__contactosSearch||'')}" oninput="window.__contactosSearch=this.value; refreshContactosListBody();" style="padding-left:34px;" />
-      <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+      <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
+        <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__contactosSearch||'')}" oninput="window.__contactosSearch=this.value; refreshContactosListBody();" style="padding-left:34px;" />
+        <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn ${view!=='archivados'?'btn-primary':'btn-ghost'}" onclick="window.__contactosView='activos'; renderTab();">Activos</button>
+        <button class="btn ${view==='archivados'?'btn-primary':'btn-ghost'}" onclick="window.__contactosView='archivados'; renderTab();">🗄 Archivados (${archivedCount})</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+      ${['todos', ...Object.keys(CONTACTO_ROLE_LABELS)].map(r => `
+        <button class="btn ${(window.__contactosRoleFilter||'todos')===r?'btn-primary':'btn-ghost'}" style="font-size:12px;padding:6px 12px;" onclick="window.__contactosRoleFilter='${r}'; refreshContactosListBody();">${r==='todos'?'Todos':esc(CONTACTO_ROLE_LABELS[r])}</button>
+      `).join('')}
     </div>
     <div id="contactos-list-body">${contactosListBodyHtml()}</div>`;
 }
@@ -705,29 +721,41 @@ function refreshContactosListBody(){
   if (el) el.innerHTML = contactosListBodyHtml();
 }
 function contactosListBodyHtml(){
+  const view = window.__contactosView || 'activos';
+  const archivedView = view === 'archivados';
+  const roleFilter = window.__contactosRoleFilter || 'todos';
   const search = (window.__contactosSearch || '').toLowerCase();
-  const list = contactos.filter(c => !search || c.nombre.toLowerCase().includes(search) || c.nif.toLowerCase().includes(search));
+  let list = contactos.filter(c => !!c.archived === archivedView);
+  if (roleFilter === 'cliente') list = list.filter(c=>c.esClienteAlmacen);
+  else if (roleFilter === 'transportista') list = list.filter(c=>c.esTransportista);
+  else if (roleFilter === 'autonomos') list = list.filter(c=>c.esAutonomos);
+  list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || c.nif.toLowerCase().includes(search));
   if (!list.length) {
-    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search ? 'Ningún contacto coincide con la búsqueda.' : 'Todavía no hay ningún contacto creado.'}</div>`;
+    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search||roleFilter!=='todos' ? 'Ningún contacto coincide con el filtro.' : archivedView ? 'No hay contactos archivados.' : 'Todavía no hay ningún contacto creado.'}</div>`;
   }
   return `
     <div style="display:flex;flex-direction:column;gap:8px;">
-      ${list.map(c => `
-        <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      ${list.map(c => {
+        const roleTags = [c.esClienteAlmacen&&'cliente', c.esTransportista&&'transportista', c.esAutonomos&&'autonomos'].filter(Boolean);
+        return `
+        <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;${archivedView?'opacity:0.7;':''}">
           <div>
-            <div style="font-family:var(--display);font-size:15px;">${esc(c.nombre)}</div>
+            <div style="font-family:var(--display);font-size:15px;">${esc(c.nombre)}${archivedView?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;">· archivado</span>':''}</div>
             <div style="font-size:12px;color:var(--muted);">${[c.nif, cargadorDireccionCompleta(c)].filter(Boolean).join(' · ')}</div>
+            ${roleTags.length ? `<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;">${roleTags.map(r=>`<span style="font-size:10px;text-transform:uppercase;letter-spacing:.3px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:2px 8px;color:var(--muted);">${esc(CONTACTO_ROLE_LABELS[r])}</span>`).join('')}</div>` : ''}
           </div>
-          <div style="display:flex;align-items:center;gap:8px;">
-            <button onclick="openContactoModal('${c.id}');" title="Editar" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:10.5px;padding:3px 7px;white-space:nowrap;">✏️ Editar</button>
-            <button onclick="confirmDeleteContacto('${c.id}');" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);font-size:14px;padding:2px 4px;">🗑</button>
-          </div>
-        </div>`).join('')}
+          <button onclick="openContactoModal('${c.id}');" title="Editar" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:10.5px;padding:3px 7px;white-space:nowrap;">✏️ Editar</button>
+        </div>`;
+      }).join('')}
     </div>`;
 }
-function openContactoModal(editId){
+function toggleCtWarehousesBlock(){
+  document.getElementById('ct-warehouses-block').style.display = document.getElementById('ct-rol-cliente').checked ? 'block' : 'none';
+}
+function openContactoModal(editId, presetRoles){
   const editing = editId ? contactos.find(c=>c.id===editId) : null;
-  const c = editing || {};
+  const c = editing || presetRoles || {};
+  const warehouseIds = c.warehouseIds || [];
   document.getElementById('modal-slot').innerHTML = `
     <div class="modal-overlay">
       <div class="modal-box" style="max-width:440px;max-height:85vh;overflow-y:auto;">
@@ -736,6 +764,26 @@ function openContactoModal(editId){
         </div>
         <div class="field"><label>Razón social</label><input id="ct-nombre" maxlength="150" value="${esc(c.nombre||'')}" /></div>
         <div class="field"><label>NIF</label><input id="ct-nif" maxlength="20" value="${esc(c.nif||'')}" /></div>
+        <div class="field">
+          <label>Roles</label>
+          <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px;">
+            <input type="checkbox" id="ct-rol-cliente" ${c.esClienteAlmacen?'checked':''} onchange="toggleCtWarehousesBlock()" style="width:auto;" /> Cliente de almacén
+          </label>
+          <div id="ct-warehouses-block" style="display:${c.esClienteAlmacen?'block':'none'};margin:0 0 6px 24px;">
+            ${WAREHOUSES.map(w => `
+              <label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;color:var(--muted);">
+                <input type="checkbox" class="ct-warehouse" value="${w.id}" ${warehouseIds.includes(w.id)?'checked':''} style="width:auto;" />
+                <span style="width:8px;height:8px;border-radius:99px;background:${w.color};display:inline-block;"></span>
+                ${esc(w.name)}
+              </label>`).join('')}
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px;">
+            <input type="checkbox" id="ct-rol-transportista" ${c.esTransportista?'checked':''} style="width:auto;" /> Transportista
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px;">
+            <input type="checkbox" id="ct-rol-autonomos" ${c.esAutonomos?'checked':''} style="width:auto;" /> Autónomos
+          </label>
+        </div>
         <div class="field"><label>Calle 1</label><input id="ct-calle1" maxlength="150" value="${esc(c.calle1||'')}" /></div>
         <div class="field"><label>Calle 2</label><input id="ct-calle2" maxlength="150" value="${esc(c.calle2||'')}" /></div>
         <div style="display:flex;gap:10px;">
@@ -748,9 +796,11 @@ function openContactoModal(editId){
         </div>
         <div id="ct-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
         <div style="display:flex;gap:10px;">
+          ${editing ? `<button class="btn btn-ghost" style="color:${editing.archived?'var(--success)':'var(--danger)'};" onclick="${editing.archived?`unarchiveContacto('${editing.id}')`:`archiveContacto('${editing.id}')`}">${editing.archived?'↩ Restaurar':'🗄 Archivar'}</button>` : ''}
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
           <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitContactoForm('${editId||''}')">${editing?'Guardar cambios':'Añadir'}</button>
         </div>
+        ${editing && editing.archived ? `<button type="button" onclick="confirmDeleteContacto('${editing.id}')" style="width:100%;text-align:center;background:none;border:1px dashed var(--border);border-radius:6px;padding:8px;color:var(--danger);font-size:12.5px;margin-top:10px;cursor:pointer;">🗑 Eliminar definitivamente</button>` : ''}
       </div>
     </div>`;
 }
@@ -759,6 +809,10 @@ async function submitContactoForm(editId){
   errEl.textContent = '';
   const nombre = document.getElementById('ct-nombre').value.trim();
   const nif = document.getElementById('ct-nif').value.trim();
+  const esClienteAlmacen = document.getElementById('ct-rol-cliente').checked;
+  const esTransportista = document.getElementById('ct-rol-transportista').checked;
+  const esAutonomos = document.getElementById('ct-rol-autonomos').checked;
+  const warehouseIds = esClienteAlmacen ? [...document.querySelectorAll('.ct-warehouse:checked')].map(el=>el.value) : [];
   const calle1 = document.getElementById('ct-calle1').value.trim();
   const calle2 = document.getElementById('ct-calle2').value.trim();
   const codigoPostal = document.getElementById('ct-cp').value.trim();
@@ -766,31 +820,91 @@ async function submitContactoForm(editId){
   const provincia = document.getElementById('ct-provincia').value.trim();
   const pais = document.getElementById('ct-pais').value.trim();
   if (!nombre) { errEl.textContent = 'Indica al menos el nombre.'; return; }
-  const fields = { nombre, nif, calle1, calle2, codigoPostal, ciudad, provincia, pais };
+  const fields = { nombre, nif, esClienteAlmacen, esTransportista, esAutonomos, warehouseIds, calle1, calle2, codigoPostal, ciudad, provincia, pais };
   const dbPayload = {
     nombre, nif: nif || null, calle1: calle1 || null, calle2: calle2 || null,
     codigo_postal: codigoPostal || null, ciudad: ciudad || null, provincia: provincia || null, pais: pais || null,
+    es_cliente_almacen: esClienteAlmacen, es_transportista: esTransportista, es_autonomos: esAutonomos,
   };
-  if (editId) {
-    const { data, error } = await supabaseClient.from('contactos').update(dbPayload).eq('id', editId).select();
-    if (error || !data || !data.length) { errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'sin permiso o error desconocido.'); return; }
-    const c = contactos.find(x=>x.id===editId);
-    if (c) Object.assign(c, fields);
-  } else {
-    const { data, error } = await supabaseClient.from('contactos').insert(dbPayload).select().single();
-    if (error || !data) { errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'sin permiso o error desconocido.'); return; }
-    contactos.push({ id: data.id, ...fields });
-    contactos.sort((a,b) => a.nombre.localeCompare(b.nombre));
+  try {
+    let contactoId = editId;
+    if (editId) {
+      const { data, error } = await supabaseClient.from('contactos').update(dbPayload).eq('id', editId).select();
+      if (error || !data || !data.length) throw (error || new Error('sin permiso o error desconocido.'));
+      const c = contactos.find(x=>x.id===editId);
+      if (c) Object.assign(c, fields);
+    } else {
+      const { data, error } = await supabaseClient.from('contactos').insert(dbPayload).select().single();
+      if (error || !data) throw (error || new Error('sin permiso o error desconocido.'));
+      contactoId = data.id;
+      contactos.push({ id: data.id, archived: false, ...fields });
+      contactos.sort((a,b) => a.nombre.localeCompare(b.nombre));
+    }
+    await supabaseClient.from('contacto_warehouses').delete().eq('contacto_id', contactoId);
+    if (warehouseIds.length) {
+      await supabaseClient.from('contacto_warehouses').insert(warehouseIds.map(wid=>({ contacto_id: contactoId, warehouse_id: wid })));
+    }
+    await Promise.all([loadClients(), loadCompanies()]);
+    closeModal(); renderTab();
+  } catch (error) {
+    errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'error desconocido.');
   }
+}
+// Un contacto puede ser a la vez cliente de almacén y/o autónomos — estos
+// guards comprueban TODAS las tablas dependientes sin importar qué rol
+// tenga marcado ahora mismo, porque la clave foránea sigue existiendo
+// aunque el usuario desmarque la casilla después de acumular histórico.
+function contactoHasWarehouseHistory(id){
+  return Object.keys(pallets).some(wid => pallets[wid].some(p=>p.clientId===id))
+    || Object.keys(movements).some(wid => movements[wid].some(m=>m.clientId===id))
+    || Object.keys(appointments).some(wid => appointments[wid].some(a=>a.clientId===id))
+    || Object.keys(unscheduled).some(wid => unscheduled[wid].some(u=>u.clientId===id));
+}
+function contactoHasAnyDrivers(id){
+  return drivers.some(d=>d.companyId===id);
+}
+async function archiveContacto(id){
+  const c = contactos.find(x=>x.id===id);
+  const activeCount = drivers.filter(d=>d.companyId===id && !d.archived).length;
+  if (activeCount) {
+    const errEl = document.getElementById('ct-error');
+    if (errEl) errEl.textContent = `No se puede archivar: tiene ${activeCount} conductor${activeCount!==1?'es':''} activo${activeCount!==1?'s':''}. ${activeCount!==1?'Archívalos o muévelos':'Archívalo o muévelo'} de empresa antes.`;
+    return;
+  }
+  const { data, error } = await supabaseClient.from('contactos').update({ archived: true }).eq('id', id).select();
+  if (error || !data || !data.length) { const errEl=document.getElementById('ct-error'); if(errEl) errEl.textContent='No se pudo archivar: '+(error&&error.message?error.message:'sin permiso.'); return; }
+  if (c) c.archived = true;
+  await Promise.all([loadClients(), loadCompanies()]);
+  closeModal(); renderTab();
+}
+async function unarchiveContacto(id){
+  const { data, error } = await supabaseClient.from('contactos').update({ archived: false }).eq('id', id).select();
+  if (error || !data || !data.length) { const errEl=document.getElementById('ct-error'); if(errEl) errEl.textContent='No se pudo restaurar: '+(error&&error.message?error.message:'sin permiso.'); return; }
+  const c = contactos.find(x=>x.id===id);
+  if (c) c.archived = false;
+  await Promise.all([loadClients(), loadCompanies()]);
   closeModal(); renderTab();
 }
 function confirmDeleteContacto(id){
+  if (contactoHasWarehouseHistory(id) || contactoHasAnyDrivers(id)) {
+    document.getElementById('modal-slot').innerHTML = `
+      <div class="modal-overlay">
+        <div class="modal-box" style="max-width:360px;">
+          <h3 class="modal-title" style="margin-bottom:10px;">No se puede eliminar</h3>
+          <div style="font-size:13.5px;color:var(--muted);margin-bottom:20px;">
+            Este contacto tiene mercancía, citas, movimientos o conductores asociados en el histórico. Para conservar la trazabilidad no se puede eliminar de forma permanente — puedes dejarlo archivado.
+          </div>
+          <button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="closeModal()">Entendido</button>
+        </div>
+      </div>`;
+    return;
+  }
   const c = contactos.find(x=>x.id===id);
   if (!c) return;
   document.getElementById('modal-slot').innerHTML = `
     <div class="modal-overlay">
       <div class="modal-box" style="max-width:360px;">
-        <h3 class="modal-title" style="margin-bottom:10px;">Eliminar contacto</h3>
+        <h3 class="modal-title" style="margin-bottom:10px;">Eliminar definitivamente</h3>
         <div style="font-size:13.5px;color:var(--muted);margin-bottom:20px;">¿Seguro que quieres eliminar a ${esc(c.nombre)}? Esta acción no se puede deshacer.</div>
         <div style="display:flex;gap:10px;">
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
@@ -802,6 +916,7 @@ function confirmDeleteContacto(id){
 async function deleteContacto(id){
   await supabaseClient.from('contactos').delete().eq('id', id);
   contactos = contactos.filter(x=>x.id!==id);
+  await Promise.all([loadClients(), loadCompanies()]);
   closeModal(); renderTab();
 }
 
@@ -882,14 +997,14 @@ function tplClientes(){
         <button class="btn ${view==='sinasignar'?'btn-primary':'btn-ghost'}" onclick="window.__clientsView='sinasignar'; renderTab();">⚠ Sin asignar (${unassignedCount})</button>
         <button class="btn ${view==='archivados'?'btn-primary':'btn-ghost'}" onclick="window.__clientsView='archivados'; renderTab();">🗄 Archivados</button>
       </div>
-      ${view==='archivados' ? '' : `<button class="btn btn-primary" onclick="openClientModal()">+ Nuevo cliente</button>`}
+      ${view==='archivados' ? '' : `<button class="btn btn-primary" onclick='openContactoModal(null, {esClienteAlmacen:true, warehouseIds:["${currentWarehouseId}"]})'>+ Nuevo cliente</button>`}
     </div>
     ${view==='sinasignar' ? `<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Estos clientes todavía no están asignados a ningún almacén. Ábrelos para marcarles uno o varios.</div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;">
       ${list.map(c=>{
         const activos = view==='sinasignar' ? 0 : pallets[currentWarehouseId].filter(p=>p.clientId===c.id && p.status==='en almacén').length;
         return `<div class="card" style="position:relative;${view==='archivados'?'opacity:0.7;':''}">
-          <div onclick="openClientModal('${c.id}')" style="cursor:pointer;">
+          <div onclick="openContactoModal('${c.id}')" style="cursor:pointer;">
             <div style="font-family:var(--display);font-size:15.5px;margin-bottom:4px;">${esc(c.name)}${view==='archivados'?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;">· archivado</span>':''}</div>
           </div>
           ${view==='sinasignar'
@@ -1088,8 +1203,8 @@ function tplUnscheduled(){
 ========================================================= */
 let companies = [];
 async function loadCompanies(){
-  const { data } = await supabaseClient.from('companies').select('*').order('name');
-  companies = (data||[]).map(c => ({ id: c.id, name: c.name, archived: !!c.archived }));
+  const { data } = await supabaseClient.from('contactos').select('id,nombre,archived').eq('es_autonomos', true).order('nombre');
+  companies = (data||[]).map(c => ({ id: c.id, name: c.nombre, archived: !!c.archived }));
 }
 let drivers = [];
 async function loadDrivers(){
@@ -1979,120 +2094,8 @@ function kpi(label, value, sub, compact, onclick){
 }
 
 /* ============================= ACCIONES ============================= */
-async function archiveClient(id){
-  await supabaseClient.from('clients').update({ archived: true }).eq('id', id);
-  const c = clients.find(x=>x.id===id);
-  if (c) c.archived = true;
-  renderTab();
-}
-async function unarchiveClient(id){
-  await supabaseClient.from('clients').update({ archived: false }).eq('id', id);
-  const c = clients.find(x=>x.id===id);
-  if (c) c.archived = false;
-  renderTab();
-}
-
 /* ============================= MODALES ============================= */
 function closeModal(){ document.getElementById('modal-slot').innerHTML = ''; }
-
-function openClientModal(editId){
-  const editing = editId ? clients.find(c=>c.id===editId) : null;
-  const currentIds = editing ? editing.warehouseIds : [currentWarehouseId];
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
-          <h3 class="modal-title">${editing?'Editar cliente':'Nuevo cliente'}</h3><button class="close-x" onclick="closeModal()">✕</button>
-        </div>
-        <div class="field"><label>Empresa / cliente</label><input id="cf-name" value="${esc(editing?editing.name:'')}" /></div>
-        <div class="field">
-          <label>Almacenes a los que pertenece</label>
-          ${WAREHOUSES.map(w => `
-            <label style="display:flex;align-items:center;gap:8px;padding:7px 0;font-size:13.5px;">
-              <input type="checkbox" class="cf-warehouse" value="${w.id}" ${currentIds.includes(w.id)?'checked':''} style="width:auto;" />
-              <span style="width:8px;height:8px;border-radius:99px;background:${w.color};display:inline-block;"></span>
-              ${esc(w.name)}
-            </label>`).join('')}
-        </div>
-        <div id="cf-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
-        <div style="display:flex;gap:10px;">
-          ${editing ? `<button class="btn btn-ghost" style="color:${editing.archived?'var(--success)':'var(--danger)'};" onclick="${editing.archived?`unarchiveClient('${editing.id}')`:`archiveClient('${editing.id}')`}; closeModal();">${editing.archived?'↩ Restaurar':'🗄 Archivar'}</button>` : ''}
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button class="btn btn-primary" id="cf-submit-btn" style="flex:1;justify-content:center;" onclick="submitClient('${editId||''}')">${editing?'Guardar cambios':'Añadir'}</button>
-        </div>
-        ${editing && editing.archived ? `<button type="button" onclick="deleteClientForever('${editing.id}')" style="width:100%;text-align:center;background:none;border:1px dashed var(--border);border-radius:6px;padding:8px;color:var(--danger);font-size:12.5px;margin-top:10px;cursor:pointer;">🗑 Eliminar definitivamente</button>` : ''}
-      </div>
-    </div>`;
-}
-function deleteClientForever(id){
-  const hasHistory = Object.keys(pallets).some(wid => pallets[wid].some(p=>p.clientId===id))
-    || Object.keys(movements).some(wid => movements[wid].some(m=>m.clientId===id))
-    || Object.keys(appointments).some(wid => appointments[wid].some(a=>a.clientId===id))
-    || Object.keys(unscheduled).some(wid => unscheduled[wid].some(u=>u.clientId===id));
-  if (hasHistory) {
-    document.getElementById('modal-slot').innerHTML = `
-      <div class="modal-overlay">
-        <div class="modal-box" style="max-width:360px;">
-          <h3 class="modal-title" style="margin-bottom:10px;">No se puede eliminar</h3>
-          <div style="font-size:13.5px;color:var(--muted);margin-bottom:20px;">
-            Este cliente tiene mercancía o movimientos registrados en el histórico. Para conservar la trazabilidad no se puede eliminar de forma permanente — puedes dejarlo archivado.
-          </div>
-          <button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="closeModal()">Entendido</button>
-        </div>
-      </div>`;
-    return;
-  }
-  const c = clients.find(x=>x.id===id);
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box" style="max-width:360px;">
-        <h3 class="modal-title" style="margin-bottom:10px;">Eliminar definitivamente</h3>
-        <div style="font-size:13.5px;color:var(--muted);margin-bottom:20px;">¿Seguro que quieres eliminar a ${esc(c?c.name:'este cliente')}? Esta acción no se puede deshacer.</div>
-        <div style="display:flex;gap:10px;">
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button class="btn btn-primary" style="flex:1;justify-content:center;background:var(--danger);" onclick="confirmDeleteClientForever('${id}')">Sí, eliminar</button>
-        </div>
-      </div>
-    </div>`;
-}
-async function confirmDeleteClientForever(id){
-  await supabaseClient.from('clients').delete().eq('id', id);
-  clients = clients.filter(x=>x.id!==id);
-  closeModal(); renderTab();
-}
-async function submitClient(editId){
-  const errEl = document.getElementById('cf-error');
-  const btn = document.getElementById('cf-submit-btn');
-  errEl.textContent = '';
-  const name = document.getElementById('cf-name').value.trim();
-  if(!name){ errEl.textContent = 'Escribe el nombre del cliente.'; return; }
-  const warehouseIds = [...document.querySelectorAll('.cf-warehouse:checked')].map(el=>el.value);
-  btn.disabled = true;
-  try {
-    if (editId) {
-      let { error } = await supabaseClient.from('clients').update({ name }).eq('id', editId);
-      if (error) throw error;
-      ({ error } = await supabaseClient.from('client_warehouses').delete().eq('client_id', editId));
-      if (error) throw error;
-      if (warehouseIds.length) {
-        ({ error } = await supabaseClient.from('client_warehouses').insert(warehouseIds.map(wid=>({client_id:editId, warehouse_id:wid}))));
-        if (error) throw error;
-      }
-    } else {
-      const { data, error } = await supabaseClient.from('clients').insert({ name }).select().single();
-      if (error) throw error;
-      if (warehouseIds.length) {
-        const { error: whError } = await supabaseClient.from('client_warehouses').insert(warehouseIds.map(wid=>({client_id:data.id, warehouse_id:wid})));
-        if (whError) throw whError;
-      }
-    }
-    await loadClients();
-    closeModal(); renderTab();
-  } catch (error) {
-    errEl.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido.');
-    btn.disabled = false;
-  }
-}
 
 function openPalletModal(){
   const wh = currentWh();
@@ -3724,7 +3727,7 @@ function tplCompaniesList(){
     <button class="btn btn-ghost" onclick="backToAutonomosHome()" style="margin-bottom:16px;">← Volver</button>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
       <div style="font-family:var(--display);font-size:19px;">Empresas</div>
-      ${archivedView ? '' : `<button class="btn btn-primary" onclick="openCompanyModal()">+ Nueva empresa</button>`}
+      ${archivedView ? '' : `<button class="btn btn-primary" onclick="openContactoModal(null, {esAutonomos:true})">+ Nueva empresa</button>`}
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
       <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
@@ -3757,7 +3760,7 @@ function companiesListBodyHtml(){
           <div style="font-family:var(--display);font-size:15px;">${esc(co.name)}${archivedView?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;">· archivada</span>':''}</div>
           <div style="display:flex;align-items:center;gap:10px;">
             <span style="font-size:12px;color:var(--muted);white-space:nowrap;">${totalDriverCount} conductor${totalDriverCount!==1?'es':''}${activeDriverCount ? ` · ${activeDriverCount} activo${activeDriverCount!==1?'s':''}` : ''}</span>
-            <button onclick="event.stopPropagation(); openCompanyModal('${co.id}');" title="Editar empresa" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:10.5px;padding:3px 7px;white-space:nowrap;">✏️ Editar</button>
+            <button onclick="event.stopPropagation(); openContactoModal('${co.id}');" title="Editar empresa" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:10.5px;padding:3px 7px;white-space:nowrap;">✏️ Editar</button>
           </div>
         </div>`;
       }).join('') || `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${archivedView ? 'No hay empresas archivadas.' : search ? 'Ninguna empresa coincide con la búsqueda.' : 'Sin empresas activas todavía.'}</div>`}
@@ -4501,59 +4504,8 @@ async function deleteCommissionRate(id){
 }
 
 /* ============================= AUTÓNOMOS: MODALES ============================= */
-function openCompanyModal(editId){
-  const editing = editId ? companies.find(c=>c.id===editId) : null;
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box" style="max-width:380px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
-          <h3 class="modal-title">${editing?'Editar empresa':'Nueva empresa'}</h3><button class="close-x" onclick="closeModal()">✕</button>
-        </div>
-        <div class="field"><label>Nombre de la empresa</label><input id="co-name" placeholder="Ej. EMPEA LOGISTIC" value="${esc(editing?editing.name:'')}" /></div>
-        <div id="co-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
-        <div style="display:flex;gap:10px;">
-          ${editing ? `<button class="btn btn-ghost" style="color:${editing.archived?'var(--success)':'var(--danger)'};" onclick="${editing.archived?`unarchiveCompany('${editing.id}')`:`archiveCompany('${editing.id}')`}">${editing.archived?'↩ Restaurar':'🗄 Archivar'}</button>` : ''}
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitCompany('${editId||''}')">${editing?'Guardar cambios':'Añadir'}</button>
-        </div>
-      </div>
-    </div>`;
-}
-async function submitCompany(editId){
-  const errEl = document.getElementById('co-error');
-  errEl.textContent = '';
-  const name = document.getElementById('co-name').value.trim();
-  if (!name) { errEl.textContent = 'Indica el nombre.'; return; }
-  if (editId) {
-    const { error } = await supabaseClient.from('companies').update({ name }).eq('id', editId);
-    if (error) { errEl.textContent = 'No se pudo guardar.'; return; }
-    const co = companies.find(c=>c.id===editId);
-    if (co) co.name = name;
-  } else {
-    const { data, error } = await supabaseClient.from('companies').insert({ name, archived: false }).select().single();
-    if (error || !data) { errEl.textContent = 'No se pudo guardar.'; return; }
-    companies.push({ id: data.id, name, archived: false });
-  }
-  closeModal(); renderTab();
-}
-async function archiveCompany(id){
-  const activeCount = drivers.filter(d=>d.companyId===id && !d.archived).length;
-  if (activeCount) {
-    const errEl = document.getElementById('co-error');
-    if (errEl) errEl.textContent = `No se puede archivar: tiene ${activeCount} conductor${activeCount!==1?'es':''} activo${activeCount!==1?'s':''}. ${activeCount!==1?'Archívalos o muévelos':'Archívalo o muévelo'} de empresa antes.`;
-    return;
-  }
-  await supabaseClient.from('companies').update({ archived: true }).eq('id', id);
-  const co = companies.find(c=>c.id===id);
-  if (co) co.archived = true;
-  closeModal(); renderTab();
-}
-async function unarchiveCompany(id){
-  await supabaseClient.from('companies').update({ archived: false }).eq('id', id);
-  const co = companies.find(c=>c.id===id);
-  if (co) co.archived = false;
-  closeModal(); renderTab();
-}
+// Alta/edición/archivo de empresas se gestiona desde Contactos
+// (openContactoModal/archiveContacto/unarchiveContacto) — ver Administración.
 
 function openDriverModal(editId){
   const editing = editId ? drivers.find(d=>d.id===editId) : null;
