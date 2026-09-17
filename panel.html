@@ -2893,7 +2893,17 @@ async function loadDecaDocuments(){
 let cargadoresContractuales = [];
 async function loadCargadoresContractuales(){
   const { data } = await supabaseClient.from('cargadores_contractuales').select('*').order('nombre', { ascending: true });
-  cargadoresContractuales = (data||[]).map(c => ({ id: c.id, nombre: c.nombre, nif: c.nif, domicilio: c.domicilio || '' }));
+  cargadoresContractuales = (data||[]).map(c => ({
+    id: c.id, nombre: c.nombre, nif: c.nif,
+    calle1: c.calle1 || '', calle2: c.calle2 || '', codigoPostal: c.codigo_postal || '',
+    ciudad: c.ciudad || '', provincia: c.provincia || '', pais: c.pais || '',
+  }));
+}
+function cargadorDireccionCompleta(c){
+  const linea1 = [c.calle1, c.calle2].filter(Boolean).join(', ');
+  const linea2 = [c.codigoPostal, c.ciudad].filter(Boolean).join(' ');
+  const linea3 = [c.provincia, c.pais].filter(Boolean).join(', ');
+  return [linea1, linea2, linea3].filter(Boolean).join(', ');
 }
 function openCargadoresModule(){
   window.__traficoView = 'cargadores';
@@ -2932,7 +2942,7 @@ function cargadoresListBodyHtml(){
         <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
           <div>
             <div style="font-family:var(--display);font-size:15px;">${esc(c.nombre)}</div>
-            <div style="font-size:12px;color:var(--muted);">${esc(c.nif)}${c.domicilio ? ' · ' + esc(c.domicilio) : ''}</div>
+            <div style="font-size:12px;color:var(--muted);">${esc(c.nif)}${cargadorDireccionCompleta(c) ? ' · ' + esc(cargadorDireccionCompleta(c)) : ''}</div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;">
             <button onclick="openCargadorModal('${c.id}');" title="Editar" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:10.5px;padding:3px 7px;white-space:nowrap;">✏️ Editar</button>
@@ -2946,13 +2956,22 @@ function openCargadorModal(editId){
   const c = editing || {};
   document.getElementById('modal-slot').innerHTML = `
     <div class="modal-overlay">
-      <div class="modal-box" style="max-width:400px;">
+      <div class="modal-box" style="max-width:440px;max-height:85vh;overflow-y:auto;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
           <h3 class="modal-title">${editing?'Editar cargador':'Nuevo cargador'}</h3><button class="close-x" onclick="closeModal()">✕</button>
         </div>
-        <div class="field"><label>Nombre o razón social</label><input id="cg-nombre" value="${esc(c.nombre||'')}" /></div>
+        <div class="field"><label>Razón social</label><input id="cg-nombre" value="${esc(c.nombre||'')}" /></div>
         <div class="field"><label>NIF</label><input id="cg-nif" value="${esc(c.nif||'')}" /></div>
-        <div class="field"><label>Domicilio</label><input id="cg-domicilio" value="${esc(c.domicilio||'')}" /></div>
+        <div class="field"><label>Calle 1</label><input id="cg-calle1" value="${esc(c.calle1||'')}" /></div>
+        <div class="field"><label>Calle 2</label><input id="cg-calle2" value="${esc(c.calle2||'')}" /></div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Código postal</label><input id="cg-cp" value="${esc(c.codigoPostal||'')}" /></div>
+          <div class="field" style="flex:2;"><label>Ciudad</label><input id="cg-ciudad" value="${esc(c.ciudad||'')}" /></div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Provincia</label><input id="cg-provincia" value="${esc(c.provincia||'')}" /></div>
+          <div class="field" style="flex:1;"><label>País</label><input id="cg-pais" value="${esc(c.pais||'')}" /></div>
+        </div>
         <div id="cg-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
         <div style="display:flex;gap:10px;">
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
@@ -2966,17 +2985,27 @@ async function submitCargadorForm(editId){
   errEl.textContent = '';
   const nombre = document.getElementById('cg-nombre').value.trim();
   const nif = document.getElementById('cg-nif').value.trim();
-  const domicilio = document.getElementById('cg-domicilio').value.trim();
+  const calle1 = document.getElementById('cg-calle1').value.trim();
+  const calle2 = document.getElementById('cg-calle2').value.trim();
+  const codigoPostal = document.getElementById('cg-cp').value.trim();
+  const ciudad = document.getElementById('cg-ciudad').value.trim();
+  const provincia = document.getElementById('cg-provincia').value.trim();
+  const pais = document.getElementById('cg-pais').value.trim();
   if (!nombre || !nif) { errEl.textContent = 'Indica al menos el nombre y el NIF.'; return; }
+  const fields = { nombre, nif, calle1, calle2, codigoPostal, ciudad, provincia, pais };
+  const dbPayload = {
+    nombre, nif, calle1: calle1 || null, calle2: calle2 || null,
+    codigo_postal: codigoPostal || null, ciudad: ciudad || null, provincia: provincia || null, pais: pais || null,
+  };
   if (editId) {
-    const { data, error } = await supabaseClient.from('cargadores_contractuales').update({ nombre, nif, domicilio: domicilio || null }).eq('id', editId).select();
+    const { data, error } = await supabaseClient.from('cargadores_contractuales').update(dbPayload).eq('id', editId).select();
     if (error || !data || !data.length) { errEl.textContent = 'No se pudo guardar.'; return; }
     const c = cargadoresContractuales.find(x=>x.id===editId);
-    if (c) Object.assign(c, { nombre, nif, domicilio });
+    if (c) Object.assign(c, fields);
   } else {
-    const { data, error } = await supabaseClient.from('cargadores_contractuales').insert({ nombre, nif, domicilio: domicilio || null }).select().single();
+    const { data, error } = await supabaseClient.from('cargadores_contractuales').insert(dbPayload).select().single();
     if (error || !data) { errEl.textContent = 'No se pudo guardar.'; return; }
-    cargadoresContractuales.push({ id: data.id, nombre, nif, domicilio });
+    cargadoresContractuales.push({ id: data.id, ...fields });
     cargadoresContractuales.sort((a,b) => a.nombre.localeCompare(b.nombre));
   }
   closeModal(); renderTab();
@@ -3174,7 +3203,7 @@ function onDecaCargadorInput(){
   const match = cargadoresContractuales.find(c => c.nombre === val);
   if (match) {
     document.getElementById('dc-cargador-nif').value = match.nif;
-    document.getElementById('dc-cargador-domicilio').value = match.domicilio || '';
+    document.getElementById('dc-cargador-domicilio').value = cargadorDireccionCompleta(match);
   }
 }
 function openDecaFormModal(editId){
