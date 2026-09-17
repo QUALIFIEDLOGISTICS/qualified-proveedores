@@ -221,21 +221,23 @@ const CP_PROVINCIA = {
 // (tabla fija) y pide la ciudad a un servicio externo gratuito y sin
 // clave (zippopotam.us) — si no hay conexión o el CP no existe, no pasa
 // nada y el usuario rellena la ciudad a mano.
-async function onCargadorCpInput(){
-  const paisEl = document.getElementById('cg-pais');
+async function autofillCiudadProvinciaFromCp(prefix){
+  const paisEl = document.getElementById(`${prefix}-pais`);
   if (paisEl && paisEl.value !== 'España') return;
-  const cp = document.getElementById('cg-cp').value.trim();
+  const cp = document.getElementById(`${prefix}-cp`).value.trim();
   if (!/^\d{5}$/.test(cp)) return;
   const provincia = CP_PROVINCIA[cp.slice(0,2)];
-  if (provincia) document.getElementById('cg-provincia').value = provincia;
+  if (provincia) document.getElementById(`${prefix}-provincia`).value = provincia;
   try {
     const res = await fetch(`https://api.zippopotam.us/es/${cp}`);
     if (!res.ok) return;
     const data = await res.json();
     const place = data.places && data.places[0];
-    if (place && place['place name']) document.getElementById('cg-ciudad').value = place['place name'];
+    if (place && place['place name']) document.getElementById(`${prefix}-ciudad`).value = place['place name'];
   } catch (e) { /* sin conexión o CP no encontrado: se deja para rellenar a mano */ }
 }
+function onCargadorCpInput(){ return autofillCiudadProvinciaFromCp('cg'); }
+function onContactoCpInput(){ return autofillCiudadProvinciaFromCp('ct'); }
 
 const DOCS_BUCKET = 'qualified-docs';
 async function signedUrl(path){
@@ -596,7 +598,7 @@ const HOME_MODULES = {
   autonomos: { color: '#D9A72C', icon: 'user', description: 'Empresas, conductores, tarifas y liquidación.' },
   fichajes: { color: '#2C9A93', icon: 'clock', description: 'Jornadas fichadas por cada conductor.' },
   admin: { color: '#1B3A6B', icon: 'shield', description: 'Usuarios y permisos de acceso al panel.' },
-  administracion: { color: '#5C6670', icon: 'settings', description: 'Todavía por definir.' },
+  administracion: { color: '#5C6670', icon: 'settings', description: 'Contactos y configuración general.' },
 };
 const HOME_GROUPS = {
   'Almacén': { icon: 'home' },
@@ -660,19 +662,147 @@ function renderTab(){
   if (currentTab === 'administracion') el.innerHTML = tplAdministracion();
 }
 function tplAdministracion(){
+  if (window.__administracionView === 'contactos') return tplContactosPage();
   return `
-    <div style="display:flex;align-items:center;gap:14px;margin-bottom:22px;">
-      <div style="width:48px;height:48px;border-radius:12px;background:rgba(92,102,112,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-        ${homeIcon(HOME_ICON_PATHS.settings, 24, '#5C6670')}
-      </div>
-      <div>
-        <div style="font-family:var(--display);font-size:22px;">Administración</div>
-        <div style="font-size:12.5px;color:var(--mutedFaint);">Todavía por definir.</div>
-      </div>
-    </div>
-    <div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">
-      Este módulo está creado pero vacío — falta definir qué hay que gestionar aquí.
+    <div style="max-width:1080px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;">
+      ${autonomosHomeCard('users', '#5C6670', 'Contactos', 'Agenda de contactos: razón social, NIF y dirección.', 'openContactosModule()')}
     </div>`;
+}
+function openContactosModule(){
+  window.__administracionView = 'contactos';
+  renderSidebar(); renderHeader(); renderTab();
+}
+function backToAdministracionHome(){
+  window.__administracionView = 'home';
+  renderSidebar(); renderHeader(); renderTab();
+}
+
+/* ---- Contactos: datos ---- */
+let contactos = [];
+async function loadContactos(){
+  const { data } = await supabaseClient.from('contactos').select('*').order('nombre', { ascending: true });
+  contactos = (data||[]).map(c => ({
+    id: c.id, nombre: c.nombre, nif: c.nif || '',
+    calle1: c.calle1 || '', calle2: c.calle2 || '', codigoPostal: c.codigo_postal || '',
+    ciudad: c.ciudad || '', provincia: c.provincia || '', pais: c.pais || '',
+  }));
+}
+function tplContactosPage(){
+  return `
+    <button class="btn btn-ghost" onclick="backToAdministracionHome()" style="margin-bottom:16px;">← Volver</button>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+      <div style="font-family:var(--display);font-size:19px;">Contactos</div>
+      <button class="btn btn-primary" onclick="openContactoModal()">+ Nuevo contacto</button>
+    </div>
+    <div style="position:relative;flex:1;min-width:220px;max-width:320px;margin-bottom:16px;">
+      <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__contactosSearch||'')}" oninput="window.__contactosSearch=this.value; refreshContactosListBody();" style="padding-left:34px;" />
+      <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+    </div>
+    <div id="contactos-list-body">${contactosListBodyHtml()}</div>`;
+}
+function refreshContactosListBody(){
+  const el = document.getElementById('contactos-list-body');
+  if (el) el.innerHTML = contactosListBodyHtml();
+}
+function contactosListBodyHtml(){
+  const search = (window.__contactosSearch || '').toLowerCase();
+  const list = contactos.filter(c => !search || c.nombre.toLowerCase().includes(search) || c.nif.toLowerCase().includes(search));
+  if (!list.length) {
+    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search ? 'Ningún contacto coincide con la búsqueda.' : 'Todavía no hay ningún contacto creado.'}</div>`;
+  }
+  return `
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      ${list.map(c => `
+        <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+          <div>
+            <div style="font-family:var(--display);font-size:15px;">${esc(c.nombre)}</div>
+            <div style="font-size:12px;color:var(--muted);">${[c.nif, cargadorDireccionCompleta(c)].filter(Boolean).join(' · ')}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button onclick="openContactoModal('${c.id}');" title="Editar" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:10.5px;padding:3px 7px;white-space:nowrap;">✏️ Editar</button>
+            <button onclick="confirmDeleteContacto('${c.id}');" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);font-size:14px;padding:2px 4px;">🗑</button>
+          </div>
+        </div>`).join('')}
+    </div>`;
+}
+function openContactoModal(editId){
+  const editing = editId ? contactos.find(c=>c.id===editId) : null;
+  const c = editing || {};
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:440px;max-height:85vh;overflow-y:auto;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+          <h3 class="modal-title">${editing?'Editar contacto':'Nuevo contacto'}</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div class="field"><label>Razón social</label><input id="ct-nombre" maxlength="150" value="${esc(c.nombre||'')}" /></div>
+        <div class="field"><label>NIF</label><input id="ct-nif" maxlength="20" value="${esc(c.nif||'')}" /></div>
+        <div class="field"><label>Calle 1</label><input id="ct-calle1" maxlength="150" value="${esc(c.calle1||'')}" /></div>
+        <div class="field"><label>Calle 2</label><input id="ct-calle2" maxlength="150" value="${esc(c.calle2||'')}" /></div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Código postal</label><input id="ct-cp" maxlength="10" oninput="onContactoCpInput()" value="${esc(c.codigoPostal||'')}" /></div>
+          <div class="field" style="flex:2;"><label>Ciudad</label><input id="ct-ciudad" maxlength="100" value="${esc(c.ciudad||'')}" /></div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Provincia</label><input id="ct-provincia" maxlength="100" value="${esc(c.provincia||'')}" /></div>
+          <div class="field" style="flex:1;"><label>País</label><select id="ct-pais">${paisOptionsHtml(c.pais)}</select></div>
+        </div>
+        <div id="ct-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitContactoForm('${editId||''}')">${editing?'Guardar cambios':'Añadir'}</button>
+        </div>
+      </div>
+    </div>`;
+}
+async function submitContactoForm(editId){
+  const errEl = document.getElementById('ct-error');
+  errEl.textContent = '';
+  const nombre = document.getElementById('ct-nombre').value.trim();
+  const nif = document.getElementById('ct-nif').value.trim();
+  const calle1 = document.getElementById('ct-calle1').value.trim();
+  const calle2 = document.getElementById('ct-calle2').value.trim();
+  const codigoPostal = document.getElementById('ct-cp').value.trim();
+  const ciudad = document.getElementById('ct-ciudad').value.trim();
+  const provincia = document.getElementById('ct-provincia').value.trim();
+  const pais = document.getElementById('ct-pais').value.trim();
+  if (!nombre) { errEl.textContent = 'Indica al menos el nombre.'; return; }
+  const fields = { nombre, nif, calle1, calle2, codigoPostal, ciudad, provincia, pais };
+  const dbPayload = {
+    nombre, nif: nif || null, calle1: calle1 || null, calle2: calle2 || null,
+    codigo_postal: codigoPostal || null, ciudad: ciudad || null, provincia: provincia || null, pais: pais || null,
+  };
+  if (editId) {
+    const { data, error } = await supabaseClient.from('contactos').update(dbPayload).eq('id', editId).select();
+    if (error || !data || !data.length) { errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'sin permiso o error desconocido.'); return; }
+    const c = contactos.find(x=>x.id===editId);
+    if (c) Object.assign(c, fields);
+  } else {
+    const { data, error } = await supabaseClient.from('contactos').insert(dbPayload).select().single();
+    if (error || !data) { errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'sin permiso o error desconocido.'); return; }
+    contactos.push({ id: data.id, ...fields });
+    contactos.sort((a,b) => a.nombre.localeCompare(b.nombre));
+  }
+  closeModal(); renderTab();
+}
+function confirmDeleteContacto(id){
+  const c = contactos.find(x=>x.id===id);
+  if (!c) return;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:360px;">
+        <h3 class="modal-title" style="margin-bottom:10px;">Eliminar contacto</h3>
+        <div style="font-size:13.5px;color:var(--muted);margin-bottom:20px;">¿Seguro que quieres eliminar a ${esc(c.nombre)}? Esta acción no se puede deshacer.</div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" style="flex:1;justify-content:center;background:var(--danger);" onclick="deleteContacto('${id}')">Sí, eliminar</button>
+        </div>
+      </div>
+    </div>`;
+}
+async function deleteContacto(id){
+  await supabaseClient.from('contactos').delete().eq('id', id);
+  contactos = contactos.filter(x=>x.id!==id);
+  closeModal(); renderTab();
 }
 
 function tplResumen(){
@@ -5262,7 +5392,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
     return;
   }
 
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadCargadoresContractuales()]);
+  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadCargadoresContractuales(), loadContactos()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
