@@ -773,16 +773,70 @@ function toggleCtTransportistaImplied(){
   if (auton) { transp.checked = true; transp.disabled = true; }
   else { transp.disabled = false; }
 }
+let contactoHistorialCache = {};
+async function loadContactoHistorial(contactoId){
+  const { data } = await supabaseClient.from('contacto_historial').select('*').eq('contacto_id', contactoId).order('created_at', { ascending: false });
+  return (data||[]).map(h => ({ id: h.id, createdAt: h.created_at, usuario: h.usuario || '', resumen: h.resumen }));
+}
+function currentUserEmail(){
+  const el = document.getElementById('current-user-email');
+  return el ? el.textContent.trim() : '';
+}
+async function logContactoHistorial(contactoId, resumen){
+  if (!resumen) return;
+  const usuario = currentUserEmail();
+  const { data } = await supabaseClient.from('contacto_historial').insert({ contacto_id: contactoId, usuario, resumen }).select().single();
+  if (!data) return;
+  const entry = { id: data.id, createdAt: data.created_at, usuario, resumen };
+  contactoHistorialCache[contactoId] = [entry, ...(contactoHistorialCache[contactoId]||[])];
+  if (window.__contactoDetailId === contactoId) window.__contactoHistorial = contactoHistorialCache[contactoId];
+}
+const CONTACTO_FIELD_LABELS = {
+  nombre: 'Razón social', nif: 'NIF', calle1: 'Calle 1', calle2: 'Calle 2',
+  codigoPostal: 'Código postal', ciudad: 'Ciudad', provincia: 'Provincia', pais: 'País',
+};
+function buildContactoChangeSummary(before, after){
+  const lines = [];
+  Object.keys(CONTACTO_FIELD_LABELS).forEach(key => {
+    const oldVal = (before[key]||'').toString();
+    const newVal = (after[key]||'').toString();
+    if (oldVal !== newVal) lines.push(`${CONTACTO_FIELD_LABELS[key]}: "${oldVal||'—'}" → "${newVal||'—'}"`);
+  });
+  [['esClienteAlmacen','Cliente de almacén'], ['esTransportista','Transportista'], ['esAutonomos','Autónomos']].forEach(([key,label]) => {
+    if (!!before[key] !== !!after[key]) lines.push(after[key] ? `Marcado como ${label}` : `Desmarcado como ${label}`);
+  });
+  const beforeWh = (before.warehouseIds||[]).slice().sort().join(',');
+  const afterWh = (after.warehouseIds||[]).slice().sort().join(',');
+  if (beforeWh !== afterWh) {
+    const names = (after.warehouseIds||[]).map(id => (WAREHOUSES.find(w=>w.id===id)||{}).name).filter(Boolean).join(', ') || 'ninguno';
+    lines.push(`Almacenes asignados: ${names}`);
+  }
+  return lines;
+}
+function fmtDateHora(iso){
+  return new Date(iso).toLocaleString('es-ES', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+}
 function openContactoModal(editId, presetRoles){
   window.__showingContactoDetail = true;
   window.__contactoDetailId = editId || null;
   window.__contactoDetailPreset = presetRoles || null;
+  window.__contactoHistorial = editId ? (contactoHistorialCache[editId] || null) : [];
   renderTab();
+  if (editId) {
+    loadContactoHistorial(editId).then(list => {
+      contactoHistorialCache[editId] = list;
+      if (window.__showingContactoDetail && window.__contactoDetailId === editId) {
+        window.__contactoHistorial = list;
+        renderTab();
+      }
+    });
+  }
 }
 function closeContactoDetail(){
   window.__showingContactoDetail = false;
   window.__contactoDetailId = null;
   window.__contactoDetailPreset = null;
+  window.__contactoHistorial = null;
   renderTab();
 }
 function tplContactoDetailPage(){
@@ -790,6 +844,7 @@ function tplContactoDetailPage(){
   const editing = editId ? contactos.find(c=>c.id===editId) : null;
   const c = editing || window.__contactoDetailPreset || {};
   const warehouseIds = c.warehouseIds || [];
+  const historial = window.__contactoHistorial;
   return `
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
       <div style="display:flex;align-items:center;gap:14px;">
@@ -803,7 +858,8 @@ function tplContactoDetailPage(){
       </div>
       <button class="btn btn-ghost" onclick="closeContactoDetail()">← Volver</button>
     </div>
-    <div class="card" style="max-width:640px;">
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+    <div class="card" style="flex:2;min-width:360px;">
       <div class="field"><label>Razón social</label><input id="ct-nombre" maxlength="150" value="${esc(c.nombre||'')}" /></div>
       <div class="field"><label>NIF</label><input id="ct-nif" maxlength="20" value="${esc(c.nif||'')}" /></div>
       <div class="field">
@@ -845,6 +901,18 @@ function tplContactoDetailPage(){
         <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitContactoForm('${editId||''}')">${editing?'Guardar cambios':'Añadir'}</button>
       </div>
       ${editing && editing.archived ? `<button type="button" onclick="confirmDeleteContacto('${editing.id}')" style="width:100%;text-align:center;background:none;border:1px dashed var(--border);border-radius:6px;padding:8px;color:var(--danger);font-size:12.5px;margin-top:10px;cursor:pointer;">🗑 Eliminar definitivamente</button>` : ''}
+    </div>
+    <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Historial de cambios</div>
+      ${!editing ? `<div style="color:var(--mutedFaint);font-size:12.5px;">Se empezará a registrar en cuanto guardes el contacto.</div>` :
+        historial === null ? `<div style="color:var(--mutedFaint);font-size:12.5px;">Cargando…</div>` :
+        !historial.length ? `<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay cambios registrados.</div>` :
+        historial.map(h => `
+          <div style="padding:10px 0;border-bottom:1px solid var(--border);">
+            <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:3px;">${fmtDateHora(h.createdAt)}${h.usuario?' · '+esc(h.usuario):''}</div>
+            <div style="font-size:12.5px;color:var(--text);white-space:pre-line;">${esc(h.resumen)}</div>
+          </div>`).join('')}
+    </div>
     </div>`;
 }
 async function submitContactoForm(editId){
@@ -871,17 +939,19 @@ async function submitContactoForm(editId){
   };
   try {
     let contactoId = editId;
+    let changeLines = [];
     if (editId) {
       const { data, error } = await supabaseClient.from('contactos').update(dbPayload).eq('id', editId).select();
       if (error || !data || !data.length) throw (error || new Error('sin permiso o error desconocido.'));
       const c = contactos.find(x=>x.id===editId);
-      if (c) Object.assign(c, fields);
+      if (c) { changeLines = buildContactoChangeSummary(c, fields); Object.assign(c, fields); }
     } else {
       const { data, error } = await supabaseClient.from('contactos').insert(dbPayload).select().single();
       if (error || !data) throw (error || new Error('sin permiso o error desconocido.'));
       contactoId = data.id;
       contactos.push({ id: data.id, archived: false, ...fields });
       contactos.sort((a,b) => a.nombre.localeCompare(b.nombre));
+      changeLines = ['Contacto creado.'];
     }
     let { error: whDeleteError } = await supabaseClient.from('contacto_warehouses').delete().eq('contacto_id', contactoId);
     if (whDeleteError) throw whDeleteError;
@@ -889,6 +959,7 @@ async function submitContactoForm(editId){
       const { error: whInsertError } = await supabaseClient.from('contacto_warehouses').insert(warehouseIds.map(wid=>({ contacto_id: contactoId, warehouse_id: wid })));
       if (whInsertError) throw whInsertError;
     }
+    if (changeLines.length) await logContactoHistorial(contactoId, changeLines.join('\n'));
     await Promise.all([loadClients(), loadCompanies()]);
     closeContactoDetail();
   } catch (error) {
@@ -919,6 +990,7 @@ async function archiveContacto(id){
   const { data, error } = await supabaseClient.from('contactos').update({ archived: true }).eq('id', id).select();
   if (error || !data || !data.length) { const errEl=document.getElementById('ct-error'); if(errEl) errEl.textContent='No se pudo archivar: '+(error&&error.message?error.message:'sin permiso.'); return; }
   if (c) c.archived = true;
+  await logContactoHistorial(id, 'Archivado.');
   await Promise.all([loadClients(), loadCompanies()]);
   closeContactoDetail();
 }
@@ -927,6 +999,7 @@ async function unarchiveContacto(id){
   if (error || !data || !data.length) { const errEl=document.getElementById('ct-error'); if(errEl) errEl.textContent='No se pudo restaurar: '+(error&&error.message?error.message:'sin permiso.'); return; }
   const c = contactos.find(x=>x.id===id);
   if (c) c.archived = false;
+  await logContactoHistorial(id, 'Restaurado.');
   await Promise.all([loadClients(), loadCompanies()]);
   closeContactoDetail();
 }
