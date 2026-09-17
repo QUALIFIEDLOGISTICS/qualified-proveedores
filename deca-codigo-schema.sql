@@ -1,8 +1,8 @@
 -- ============================================================
 -- QUALIFIED PROVEEDORES — código único correlativo por año para
--- cada DeCA (ej. 2026-0001, 2026-0002...). Se asigna solo una vez,
--- automáticamente al crear el documento, y no cambia aunque se
--- edite después.
+-- cada DeCA (ej. 2026-1000, 2026-1001..., empieza en 1000). Se
+-- asigna solo una vez, automáticamente al crear el documento, y no
+-- cambia aunque se edite después.
 -- Instrucciones: Supabase → SQL Editor → pega este archivo
 -- ENTERO → Run. Se ejecuta una sola vez, después de los anteriores
 -- (incluido deca-schema.sql).
@@ -12,7 +12,7 @@ alter table public.deca_documents add column if not exists codigo text unique;
 
 create table if not exists public.deca_codigo_counters (
   year int primary key,
-  next_seq int not null default 1
+  next_seq int not null default 1000
 );
 alter table public.deca_codigo_counters enable row level security;
 
@@ -25,7 +25,7 @@ declare
   yr int := extract(year from now())::int;
   seq int;
 begin
-  insert into public.deca_codigo_counters(year, next_seq) values (yr, 2)
+  insert into public.deca_codigo_counters(year, next_seq) values (yr, 1001)
   on conflict (year) do update set next_seq = public.deca_codigo_counters.next_seq + 1
   returning next_seq - 1 into seq;
   new.codigo := yr::text || '-' || lpad(seq::text, 4, '0');
@@ -54,7 +54,7 @@ begin
     where codigo is null
     order by created_at
   ) loop
-    insert into public.deca_codigo_counters(year, next_seq) values (r.yr, 2)
+    insert into public.deca_codigo_counters(year, next_seq) values (r.yr, 1001)
     on conflict (year) do update set next_seq = public.deca_codigo_counters.next_seq + 1
     returning next_seq - 1 into seq;
     update public.deca_documents set codigo = r.yr::text || '-' || lpad(seq::text, 4, '0') where id = r.id;
