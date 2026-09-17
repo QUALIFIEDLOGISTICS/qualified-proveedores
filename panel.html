@@ -3053,10 +3053,25 @@ function wrapPdfText(text, font, size, maxWidth){
 // cual al editar, así el DeCA conserva la misma URL/QR durante el
 // servicio (una de las dos vías que permite la resolución del 5 de junio
 // para modificar datos durante el transporte).
-async function buildAndUploadDecaPdf(fields, storagePath){
-  const { data: signedData, error: signError } = await supabaseClient.storage.from(DOCS_BUCKET).createSignedUrl(storagePath, 90*24*3600);
-  if (signError || !signedData) throw new Error('No se pudo generar la URL de descarga.');
-  const url = signedData.signedUrl;
+async function buildAndUploadDecaPdf(fields, storagePath, existingUrl){
+  // Supabase Storage exige que el objeto ya exista para poder firmar su URL
+  // (createSignedUrl falla con "not found" sobre una ruta vacía), pero el
+  // PDF necesita conocer esa URL de antemano para poder imprimir su QR.
+  // Al crear un DeCA nuevo se sube primero un PDF marcador de posición para
+  // reservar la ruta, se firma la URL sobre ese objeto ya existente, y
+  // luego se sube el PDF definitivo (con el QR ya embebido) encima. Al
+  // editar, se reutiliza la URL ya guardada — así el QR no cambia cada vez.
+  let url = existingUrl;
+  if (!url) {
+    const placeholderDoc = await PDFLib.PDFDocument.create();
+    placeholderDoc.addPage([100, 100]);
+    const placeholderBytes = await placeholderDoc.save();
+    const { error: placeholderError } = await supabaseClient.storage.from(DOCS_BUCKET).upload(storagePath, new Blob([placeholderBytes], { type: 'application/pdf' }), { upsert: true, contentType: 'application/pdf' });
+    if (placeholderError) throw new Error('No se pudo reservar el archivo.');
+    const { data: signedData, error: signError } = await supabaseClient.storage.from(DOCS_BUCKET).createSignedUrl(storagePath, 90*24*3600);
+    if (signError || !signedData) throw new Error('No se pudo generar la URL de descarga.');
+    url = signedData.signedUrl;
+  }
   const qrPngDataUrl = qrDataUrl(url, 6);
 
   const { PDFDocument, StandardFonts, rgb } = PDFLib;
@@ -3205,7 +3220,7 @@ async function submitDecaForm(editId){
   try {
     const editing = editId ? decaDocuments.find(d=>d.id===editId) : null;
     const storagePath = editing && editing.pdfStoragePath ? editing.pdfStoragePath : `deca/${nextId()}.pdf`;
-    const { url } = await buildAndUploadDecaPdf(fields, storagePath);
+    const { url } = await buildAndUploadDecaPdf(fields, storagePath, editing ? editing.pdfUrl : null);
     const dbPayload = {
       cargador_nombre: fields.cargadorNombre, cargador_nif: fields.cargadorNif, cargador_domicilio: fields.cargadorDomicilio || null,
       transportista_nombre: fields.transportistaNombre, transportista_nif: fields.transportistaNif,
