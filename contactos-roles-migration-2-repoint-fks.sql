@@ -75,6 +75,11 @@ create policy contactos_delete on public.contactos for delete using (
   or (es_autonomos and exists (select 1 from public.profiles p where p.id = auth.uid() and p.allowed_tabs ?| array['trafico','autonomos']))
 );
 
+drop policy if exists contacto_warehouses_select on public.contacto_warehouses;
+drop policy if exists contacto_warehouses_insert on public.contacto_warehouses;
+drop policy if exists contacto_warehouses_update on public.contacto_warehouses;
+drop policy if exists contacto_warehouses_delete on public.contacto_warehouses;
+
 create policy contacto_warehouses_select on public.contacto_warehouses for select using (
   exists (select 1 from public.profiles p where p.id = auth.uid()
     and (p.is_admin or p.allowed_tabs ?| array['administracion','clientes','citas','documentos']))
