@@ -3,9 +3,12 @@
 -- cada DeCA (ej. 2026-1000, 2026-1001..., empieza en 1000). Se
 -- asigna solo una vez, automáticamente al crear el documento, y no
 -- cambia aunque se edite después.
+-- Este script es seguro de ejecutar aunque ya hayas ejecutado antes
+-- una versión anterior (usa IF NOT EXISTS / OR REPLACE en todo, y
+-- al final renumera lo que ya exista para que también empiece en
+-- 1000, en vez de dar error o duplicar nada).
 -- Instrucciones: Supabase → SQL Editor → pega este archivo
--- ENTERO → Run. Se ejecuta una sola vez, después de los anteriores
--- (incluido deca-schema.sql).
+-- ENTERO → Run.
 -- ============================================================
 
 alter table public.deca_documents add column if not exists codigo text unique;
@@ -40,23 +43,36 @@ for each row
 when (new.codigo is null)
 execute function public.assign_deca_codigo();
 
--- Asigna código a los DeCA creados antes de este cambio (si los hay) y
--- deja el contador de cada año listo para que el siguiente código nuevo
--- continúe justo después del último asignado aquí.
+-- Renumera TODOS los DeCA de cada año (tengan ya código o no) para que
+-- cada año empiece limpio en 1000, por orden de creación, y deja el
+-- contador de cada año listo para que el siguiente DeCA continúe justo
+-- después del último renumerado aquí.
 do $$
 declare
   r record;
   seq int;
+  cur_year int;
 begin
+  cur_year := null;
+  seq := 999;
   for r in (
     select id, extract(year from created_at)::int as yr
     from public.deca_documents
-    where codigo is null
-    order by created_at
+    order by extract(year from created_at), created_at
   ) loop
-    insert into public.deca_codigo_counters(year, next_seq) values (r.yr, 1001)
-    on conflict (year) do update set next_seq = public.deca_codigo_counters.next_seq + 1
-    returning next_seq - 1 into seq;
-    update public.deca_documents set codigo = r.yr::text || '-' || lpad(seq::text, 4, '0') where id = r.id;
+    if cur_year is distinct from r.yr then
+      if cur_year is not null then
+        insert into public.deca_codigo_counters(year, next_seq) values (cur_year, seq + 1)
+        on conflict (year) do update set next_seq = seq + 1;
+      end if;
+      cur_year := r.yr;
+      seq := 999;
+    end if;
+    seq := seq + 1;
+    update public.deca_documents set codigo = cur_year::text || '-' || lpad(seq::text, 4, '0') where id = r.id;
   end loop;
+  if cur_year is not null then
+    insert into public.deca_codigo_counters(year, next_seq) values (cur_year, seq + 1)
+    on conflict (year) do update set next_seq = seq + 1;
+  end if;
 end $$;
