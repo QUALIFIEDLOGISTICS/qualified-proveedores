@@ -217,11 +217,25 @@ const CP_PROVINCIA = {
   '43':'Tarragona','44':'Teruel','45':'Toledo','46':'Valencia','47':'Valladolid','48':'Bizkaia','49':'Zamora',
   '50':'Zaragoza','51':'Ceuta','52':'Melilla',
 };
-// Al completar un CP español (5 dígitos) o portugués (formato NNNN-NNN),
-// rellena Provincia al momento cuando hay tabla fija (España) y pide la
-// ciudad —y en Portugal también el distrito— a un servicio externo
-// gratuito y sin clave (zippopotam.us); si no hay conexión o el CP no
-// existe, no pasa nada y el usuario rellena el resto a mano.
+// Rellena Ciudad y Provincia a partir de la respuesta de zippopotam.us
+// para países que no tienen tabla fija de provincia (Portugal, Francia):
+// usa "state" (distrito/región) tal cual lo devuelve la API.
+async function fillCiudadProvinciaFromApi(prefix, countryCode, cp){
+  try {
+    const res = await fetch(`https://api.zippopotam.us/${countryCode}/${cp}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const place = data.places && data.places[0];
+    if (!place) return;
+    if (place['place name']) document.getElementById(`${prefix}-ciudad`).value = place['place name'];
+    if (place['state']) document.getElementById(`${prefix}-provincia`).value = place['state'];
+  } catch (e) { /* sin conexión o CP no existe: se deja para rellenar a mano */ }
+}
+// Al completar un CP español (5 dígitos), portugués (NNNN-NNN) o francés
+// (5 dígitos), rellena Provincia al momento cuando hay tabla fija
+// (España) y pide el resto a un servicio externo gratuito y sin clave
+// (zippopotam.us); si no hay conexión o el CP no existe, no pasa nada y
+// el usuario rellena el resto a mano.
 async function autofillCiudadProvinciaFromCp(prefix){
   const paisEl = document.getElementById(`${prefix}-pais`);
   const pais = paisEl ? paisEl.value : 'España';
@@ -241,15 +255,12 @@ async function autofillCiudadProvinciaFromCp(prefix){
   }
   if (pais === 'Portugal') {
     if (!/^\d{4}-\d{3}$/.test(cpRaw)) return;
-    try {
-      const res = await fetch(`https://api.zippopotam.us/pt/${cpRaw}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      const place = data.places && data.places[0];
-      if (!place) return;
-      if (place['place name']) document.getElementById(`${prefix}-ciudad`).value = place['place name'];
-      if (place['state']) document.getElementById(`${prefix}-provincia`).value = place['state'];
-    } catch (e) { /* sin conexión o CP no existe: se deja para rellenar a mano */ }
+    await fillCiudadProvinciaFromApi(prefix, 'pt', cpRaw);
+    return;
+  }
+  if (pais === 'Francia') {
+    if (!/^\d{5}$/.test(cpRaw)) return;
+    await fillCiudadProvinciaFromApi(prefix, 'fr', cpRaw);
   }
 }
 function onCargadorCpInput(){ return autofillCiudadProvinciaFromCp('cg'); }
