@@ -785,7 +785,9 @@ async function refreshContactoLogoThumbnails(){
   const pending = contactos.filter(c => c.logoStoragePath && !(c.id in contactoLogoUrlCache));
   if (!pending.length) return;
   await Promise.all(pending.map(async c => { contactoLogoUrlCache[c.id] = await signedUrl(c.logoStoragePath); }));
-  if (window.__administracionView === 'contactos' && !window.__showingContactoDetail) refreshContactosListBody();
+  if (window.__showingContactoDetail) return;
+  if (currentTab === 'administracion' && window.__administracionView === 'contactos') refreshContactosListBody();
+  if (currentTab === 'autonomos' && window.__autonomosView === 'empresas') refreshCompaniesListBody();
 }
 function contactoLogoThumbHtml(c){
   const url = contactoLogoUrlCache[c.id];
@@ -873,22 +875,24 @@ function refreshContactosListBody(){
   const pagEl = document.getElementById('contactos-pagination');
   if (pagEl) pagEl.innerHTML = tplContactosPaginationHtml();
 }
-function contactoCardHtml(c, archivedView){
+function contactoCardHtml(c, archivedView, opts){
+  const o = opts || {};
   const lugar = [c.ciudad, c.pais].filter(Boolean).join(', ');
   const hasNombreComercial = c.nombreComercial && c.nombreComercial.trim().toLowerCase() !== (c.nombre||'').trim().toLowerCase();
   return `
-    <div class="card" style="cursor:pointer;display:flex;gap:14px;align-items:flex-start;padding:18px;${archivedView?'opacity:0.7;':''}" onclick="openContactoModal('${c.id}')">
+    <div class="card" style="cursor:pointer;display:flex;gap:14px;align-items:flex-start;padding:18px;${archivedView?'opacity:0.7;':''}" onclick="${o.onclick || `openContactoModal('${c.id}')`}">
       <div style="width:68px;height:68px;border-radius:10px;overflow:hidden;flex-shrink:0;border:1px solid var(--border);">${contactoLogoThumbHtml(c)}</div>
       <div style="min-width:0;flex:1;">
         <div style="font-family:var(--display);font-size:15px;font-weight:700;line-height:1.35;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;">${esc(c.nombre)}${archivedView?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;font-weight:400;">· archivado</span>':''}</div>
         ${hasNombreComercial ? `<div style="font-size:12px;color:var(--muted);margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;">${esc(c.nombreComercial)}</div>` : ''}
         <div style="font-size:12.5px;color:var(--muted);">${lugar ? esc(lugar) : '—'}</div>
         ${c.nif ? `<div style="font-size:12px;color:var(--mutedFaint);">${esc(c.nif)}</div>` : ''}
+        ${o.footerHtml || ''}
       </div>
     </div>`;
 }
-function contactosGridHtml(list, archivedView){
-  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">${list.map(c=>contactoCardHtml(c, archivedView)).join('')}</div>`;
+function contactosGridHtml(list, archivedView, opts){
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">${list.map(c=>contactoCardHtml(c, archivedView, typeof opts === 'function' ? opts(c) : opts)).join('')}</div>`;
 }
 const CONTACTOS_PAGE_SIZE = 80;
 function contactosFilteredList(){
@@ -4188,23 +4192,23 @@ function companiesListBodyHtml(){
   const view = window.__companiesView || 'activos';
   const archivedView = view === 'archivados';
   const search = (window.__companiesSearch || '').toLowerCase();
-  const list = companies.filter(co => !!co.archived === archivedView && co.name.toLowerCase().includes(search));
-  window.__contactoNavContext = { label: 'Empresas', ids: list.map(co=>co.id) };
-  return `
-    <div style="display:flex;flex-direction:column;gap:8px;">
-      ${list.map(co => {
-        const totalDriverCount = drivers.filter(d=>d.companyId===co.id).length;
-        const activeDriverCount = drivers.filter(d=>d.companyId===co.id && !d.archived).length;
-        return `
-        <div class="card" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;${archivedView?'opacity:0.7;':''}" onclick="openCompanyDrivers('${co.id}')">
-          <div style="font-family:var(--display);font-size:15px;">${esc(co.name)}${archivedView?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;">· archivada</span>':''}</div>
-          <div style="display:flex;align-items:center;gap:10px;">
-            <span style="font-size:12px;color:var(--muted);white-space:nowrap;">${totalDriverCount} conductor${totalDriverCount!==1?'es':''}${activeDriverCount ? ` · ${activeDriverCount} activo${activeDriverCount!==1?'s':''}` : ''}</span>
-            <button onclick="event.stopPropagation(); openContactoModal('${co.id}');" title="Editar empresa" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:10.5px;padding:3px 7px;white-space:nowrap;">Editar</button>
-          </div>
-        </div>`;
-      }).join('') || `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${archivedView ? 'No hay empresas archivadas.' : search ? 'Ninguna empresa coincide con la búsqueda.' : 'Sin empresas activas todavía.'}</div>`}
-    </div>`;
+  const list = companies
+    .filter(co => !!co.archived === archivedView)
+    .map(co => contactos.find(c=>c.id===co.id) || { id: co.id, nombre: co.name, nombreComercial: '', nif: '', ciudad: '', pais: '' })
+    .filter(c => !search || c.nombre.toLowerCase().includes(search) || (c.nombreComercial||'').toLowerCase().includes(search) || (c.nif||'').toLowerCase().includes(search));
+  window.__contactoNavContext = { label: 'Empresas', ids: list.map(c=>c.id) };
+  if (!list.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${archivedView ? 'No hay empresas archivadas.' : search ? 'Ninguna empresa coincide con la búsqueda.' : 'Sin empresas activas todavía.'}</div>`;
+  return contactosGridHtml(list, archivedView, c => {
+    const totalDriverCount = drivers.filter(d=>d.companyId===c.id).length;
+    const activeDriverCount = drivers.filter(d=>d.companyId===c.id && !d.archived).length;
+    return {
+      onclick: `openCompanyDrivers('${c.id}')`,
+      footerHtml: `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;">
+        <span style="font-size:12px;color:var(--muted);">${totalDriverCount} conductor${totalDriverCount!==1?'es':''}${activeDriverCount ? ` · ${activeDriverCount} activo${activeDriverCount!==1?'s':''}` : ''}</span>
+        <button onclick="event.stopPropagation(); openContactoModal('${c.id}');" title="Abrir ficha del contacto" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:10.5px;padding:3px 7px;white-space:nowrap;cursor:pointer;">Ficha</button>
+      </div>`,
+    };
+  });
 }
 
 // Semanas que cruzan de mes: si hay fichajes diarios de respaldo, se
