@@ -822,6 +822,7 @@ function openContactoModal(editId, presetRoles){
   window.__showingContactoDetail = true;
   window.__contactoDetailId = editId || null;
   window.__contactoDetailPreset = presetRoles || null;
+  window.__contactoDetailEditMode = !editId;
   window.__contactoDetailNavContext = window.__contactoNavContext || null;
   window.__contactoHistorial = editId ? (contactoHistorialCache[editId] || null) : [];
   const editing = editId ? contactos.find(c=>c.id===editId) : null;
@@ -886,43 +887,63 @@ function closeContactoDetail(){
   window.__showingContactoDetail = false;
   window.__contactoDetailId = null;
   window.__contactoDetailPreset = null;
+  window.__contactoDetailEditMode = false;
   window.__contactoDetailNavContext = null;
   window.__contactoHistorial = null;
   renderTab();
 }
-function tplContactoDetailPage(){
-  const editId = window.__contactoDetailId;
-  const editing = editId ? contactos.find(c=>c.id===editId) : null;
-  const c = editing || window.__contactoDetailPreset || {};
-  const warehouseIds = c.warehouseIds || [];
-  const historial = window.__contactoHistorial;
+function enterContactoEditMode(){
+  window.__contactoDetailEditMode = true;
+  renderTab();
+}
+// Cancelar una edición vuelve a modo vista del mismo contacto; si era uno
+// nuevo sin guardar todavía, no hay nada que ver, así que cierra la ficha.
+function exitContactoEditMode(){
+  if (!window.__contactoDetailId) { closeContactoDetail(); return; }
+  window.__contactoDetailEditMode = false;
+  renderTab();
+}
+function contactoPresetForNavLabel(label){
+  if (label === 'Clientes') return { esClienteAlmacen: true, warehouseIds: [currentWarehouseId] };
+  if (label === 'Empresas') return { esAutonomos: true };
+  return null;
+}
+function newContactoFromContext(){
   const nav = window.__contactoDetailNavContext;
-  const navIdx = (nav && editId) ? nav.ids.indexOf(editId) : -1;
+  openContactoModal(null, contactoPresetForNavLabel(nav ? nav.label : null));
+}
+function tplContactoArchiveActions(editing){
   return `
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
-      <div style="display:flex;align-items:center;gap:14px;">
-        <div style="width:48px;height:48px;border-radius:12px;background:rgba(92,102,112,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-          ${homeIcon(HOME_ICON_PATHS.users, 24, '#5C6670')}
-        </div>
-        <div>
-          <div style="font-family:var(--display);font-size:22px;">${editing?'Editar contacto':'Nuevo contacto'}</div>
-          <div style="font-size:12.5px;color:var(--mutedFaint);">
-            ${nav ? `<span style="cursor:pointer;color:var(--primary);text-decoration:underline;" onclick="closeContactoDetail()">${esc(nav.label)}</span> / ` : ''}${editing?esc(editing.nombre):'Nuevo contacto'}
-          </div>
-        </div>
+    <div id="ct-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
+    <div style="display:flex;gap:10px;">
+      <button class="btn btn-ghost" style="color:${editing.archived?'var(--success)':'var(--danger)'};" onclick="${editing.archived?`unarchiveContacto('${editing.id}')`:`archiveContacto('${editing.id}')`}">${editing.archived?'↩ Restaurar':'🗄 Archivar'}</button>
+    </div>
+    ${editing.archived ? `<button type="button" onclick="confirmDeleteContacto('${editing.id}')" style="width:100%;text-align:center;background:none;border:1px dashed var(--border);border-radius:6px;padding:8px;color:var(--danger);font-size:12.5px;margin-top:10px;cursor:pointer;">🗑 Eliminar definitivamente</button>` : ''}`;
+}
+function tplContactoViewCard(editing){
+  const roleTags = [editing.esClienteAlmacen&&'cliente', editing.esTransportista&&'transportista', editing.esAutonomos&&'autonomos'].filter(Boolean);
+  const direccion = cargadorDireccionCompleta(editing);
+  const warehouseNames = (editing.warehouseIds||[]).map(id=>(WAREHOUSES.find(w=>w.id===id)||{}).name).filter(Boolean);
+  return `
+    <div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:16px;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-family:var(--display);font-size:19px;margin-bottom:4px;">${esc(editing.nombre)}${editing.archived?' <span style="font-size:11px;color:var(--danger);text-transform:uppercase;">· archivado</span>':''}</div>
+        <div style="font-size:13px;color:var(--muted);">${editing.nif ? 'NIF: '+esc(editing.nif) : 'Sin NIF registrado'}</div>
       </div>
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        ${navIdx>-1 && nav.ids.length>1 ? `
-          <div style="display:flex;align-items:center;gap:4px;">
-            <button onclick="contactoNavGoto(-1)" title="Contacto anterior" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13px;">←</button>
-            <span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${navIdx+1}/${nav.ids.length}</span>
-            <button onclick="contactoNavGoto(1)" title="Contacto siguiente" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13px;">→</button>
-          </div>` : ''}
-        <button class="btn btn-ghost" onclick="closeContactoDetail()">← Volver</button>
+      <div style="width:76px;height:76px;border-radius:10px;border:1px solid var(--border);overflow:hidden;display:flex;align-items:center;justify-content:center;background:#fff;flex-shrink:0;">
+        ${window.__contactoDetailLogoUrl ? `<img src="${esc(window.__contactoDetailLogoUrl)}" style="width:100%;height:100%;object-fit:contain;" />` : `<span style="color:var(--mutedFaint);font-size:10.5px;">Sin logo</span>`}
       </div>
     </div>
-    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
-    <div class="card" style="flex:2;min-width:360px;">
+    ${roleTags.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;">${roleTags.map(r=>`<span style="font-size:11px;text-transform:uppercase;letter-spacing:.3px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:3px 10px;color:var(--muted);">${esc(CONTACTO_ROLE_LABELS[r])}</span>`).join('')}</div>` : ''}
+    <div style="display:flex;flex-direction:column;gap:10px;font-size:13.5px;margin-bottom:20px;">
+      <div><span style="color:var(--mutedFaint);">Dirección: </span>${direccion ? esc(direccion) : '—'}</div>
+      ${editing.esClienteAlmacen ? `<div><span style="color:var(--mutedFaint);">Almacenes: </span>${warehouseNames.length ? esc(warehouseNames.join(', ')) : '—'}</div>` : ''}
+    </div>
+    ${tplContactoArchiveActions(editing)}`;
+}
+function tplContactoEditForm(c, editing, editId){
+  const warehouseIds = c.warehouseIds || [];
+  return `
       <div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:6px;">
         <div style="flex:1;min-width:0;">
           <div class="field"><label>Razón social</label><input id="ct-nombre" maxlength="150" value="${esc(c.nombre||'')}" /></div>
@@ -973,10 +994,47 @@ function tplContactoDetailPage(){
       <div id="ct-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
       <div style="display:flex;gap:10px;">
         ${editing ? `<button class="btn btn-ghost" style="color:${editing.archived?'var(--success)':'var(--danger)'};" onclick="${editing.archived?`unarchiveContacto('${editing.id}')`:`archiveContacto('${editing.id}')`}">${editing.archived?'↩ Restaurar':'🗄 Archivar'}</button>` : ''}
-        <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeContactoDetail()">Cancelar</button>
+        <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="exitContactoEditMode()">Cancelar</button>
         <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitContactoForm('${editId||''}')">${editing?'Guardar cambios':'Añadir'}</button>
       </div>
-      ${editing && editing.archived ? `<button type="button" onclick="confirmDeleteContacto('${editing.id}')" style="width:100%;text-align:center;background:none;border:1px dashed var(--border);border-radius:6px;padding:8px;color:var(--danger);font-size:12.5px;margin-top:10px;cursor:pointer;">🗑 Eliminar definitivamente</button>` : ''}
+      ${editing && editing.archived ? `<button type="button" onclick="confirmDeleteContacto('${editing.id}')" style="width:100%;text-align:center;background:none;border:1px dashed var(--border);border-radius:6px;padding:8px;color:var(--danger);font-size:12.5px;margin-top:10px;cursor:pointer;">🗑 Eliminar definitivamente</button>` : ''}`;
+}
+function tplContactoDetailPage(){
+  const editId = window.__contactoDetailId;
+  const editing = editId ? contactos.find(c=>c.id===editId) : null;
+  const editMode = window.__contactoDetailEditMode || !editing;
+  const c = editing || window.__contactoDetailPreset || {};
+  const historial = window.__contactoHistorial;
+  const nav = window.__contactoDetailNavContext;
+  const navIdx = (nav && editId) ? nav.ids.indexOf(editId) : -1;
+  return `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div style="width:48px;height:48px;border-radius:12px;background:rgba(92,102,112,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          ${homeIcon(HOME_ICON_PATHS.users, 24, '#5C6670')}
+        </div>
+        <div>
+          <div style="font-family:var(--display);font-size:22px;">${editing?(editMode?'Editar contacto':'Contacto'):'Nuevo contacto'}</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">
+            ${nav ? `<span style="cursor:pointer;color:var(--primary);text-decoration:underline;" onclick="closeContactoDetail()">${esc(nav.label)}</span> / ` : ''}${editing?esc(editing.nombre):'Nuevo contacto'}
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        ${navIdx>-1 && nav.ids.length>1 ? `
+          <div style="display:flex;align-items:center;gap:4px;">
+            <button onclick="contactoNavGoto(-1)" title="Contacto anterior" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13px;">←</button>
+            <span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${navIdx+1}/${nav.ids.length}</span>
+            <button onclick="contactoNavGoto(1)" title="Contacto siguiente" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13px;">→</button>
+          </div>` : ''}
+        ${!editMode ? `<button class="btn btn-ghost" onclick="enterContactoEditMode()">✏️ Editar</button>` : ''}
+        <button class="btn btn-ghost" onclick="newContactoFromContext()">+ Nuevo</button>
+        <button class="btn btn-ghost" onclick="closeContactoDetail()">← Volver</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+    <div class="card" style="flex:2;min-width:360px;">
+      ${editMode ? tplContactoEditForm(c, editing, editId) : tplContactoViewCard(editing)}
     </div>
     <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Historial de cambios</div>
@@ -1037,7 +1095,7 @@ async function submitContactoForm(editId){
     }
     if (changeLines.length) await logContactoHistorial(contactoId, changeLines.join('\n'));
     await Promise.all([loadClients(), loadCompanies()]);
-    closeContactoDetail();
+    openContactoModal(contactoId);
   } catch (error) {
     errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'error desconocido.');
   }
@@ -1068,7 +1126,7 @@ async function archiveContacto(id){
   if (c) c.archived = true;
   await logContactoHistorial(id, 'Archivado.');
   await Promise.all([loadClients(), loadCompanies()]);
-  closeContactoDetail();
+  openContactoModal(id);
 }
 async function unarchiveContacto(id){
   const { data, error } = await supabaseClient.from('contactos').update({ archived: false }).eq('id', id).select();
@@ -1077,7 +1135,7 @@ async function unarchiveContacto(id){
   if (c) c.archived = false;
   await logContactoHistorial(id, 'Restaurado.');
   await Promise.all([loadClients(), loadCompanies()]);
-  closeContactoDetail();
+  openContactoModal(id);
 }
 function confirmDeleteContacto(id){
   if (contactoHasWarehouseHistory(id) || contactoHasAnyDrivers(id)) {
