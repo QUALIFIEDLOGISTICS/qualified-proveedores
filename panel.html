@@ -508,6 +508,8 @@ async function setTab(id){
   const allowed = visibleTabs().map(t=>t.id);
   if (id !== 'admin' && !allowed.includes(id)) return;
   if (id === 'admin' && !PROFILE.isAdmin) return;
+  if (window.__showingContactoDetail && !contactoConfirmLeaveEdit()) return;
+  window.__contactoFormDirty = false;
   currentTab = id;
   closeMobileSidebar();
   // Pulsar la pestaña del panel siempre lleva a su pantalla principal
@@ -916,6 +918,7 @@ function openContactoModal(editId, presetRoles){
   const editing = editId ? contactos.find(c=>c.id===editId) : null;
   window.__contactoDetailLogoUrl = null;
   window.__contactoActionMenuOpen = false;
+  window.__contactoFormDirty = false;
   renderTab();
   if (editId) {
     loadContactoHistorial(editId).then(list => {
@@ -967,6 +970,8 @@ async function removeContactoLogo(){
 // (Contactos, Clientes o Empresas) desde la que se abrió esta ficha —
 // para poder revisar varios contactos seguidos sin volver a la lista.
 function contactoNavGoto(offset){
+  if (!contactoConfirmLeaveEdit()) return;
+  window.__contactoFormDirty = false;
   const nav = window.__contactoDetailNavContext;
   if (!nav || !nav.ids.length) return;
   const idx = nav.ids.indexOf(window.__contactoDetailId);
@@ -974,23 +979,37 @@ function contactoNavGoto(offset){
   let newIdx = (idx + offset + nav.ids.length) % nav.ids.length;
   openContactoModal(nav.ids[newIdx]);
 }
+// Evita perder cambios sin querer: si hay una edición en curso con algo
+// escrito, cualquier acción que saque de la ficha (volver, navegar a otro
+// contacto, cancelar, +Nuevo) pide confirmación antes de descartarlos.
+function contactoConfirmLeaveEdit(){
+  if (window.__contactoDetailEditMode && window.__contactoFormDirty) {
+    return confirm('Tienes cambios sin guardar. ¿Seguro que quieres salir sin guardar?');
+  }
+  return true;
+}
 function closeContactoDetail(){
+  if (!contactoConfirmLeaveEdit()) return;
   window.__showingContactoDetail = false;
   window.__contactoDetailId = null;
   window.__contactoDetailPreset = null;
   window.__contactoDetailEditMode = false;
   window.__contactoDetailNavContext = null;
   window.__contactoHistorial = null;
+  window.__contactoFormDirty = false;
   renderTab();
 }
 function enterContactoEditMode(){
   window.__contactoDetailEditMode = true;
+  window.__contactoFormDirty = false;
   renderTab();
 }
 // Cancelar una edición vuelve a modo vista del mismo contacto; si era uno
 // nuevo sin guardar todavía, no hay nada que ver, así que cierra la ficha.
 function exitContactoEditMode(){
-  if (!window.__contactoDetailId) { closeContactoDetail(); return; }
+  if (!contactoConfirmLeaveEdit()) return;
+  window.__contactoFormDirty = false;
+  if (!window.__contactoDetailId) { window.__contactoDetailEditMode = false; closeContactoDetail(); return; }
   window.__contactoDetailEditMode = false;
   renderTab();
 }
@@ -1000,6 +1019,7 @@ function contactoPresetForNavLabel(label){
   return null;
 }
 function newContactoFromContext(){
+  if (!contactoConfirmLeaveEdit()) return;
   const nav = window.__contactoDetailNavContext;
   openContactoModal(null, contactoPresetForNavLabel(nav ? nav.label : null));
 }
@@ -1129,7 +1149,7 @@ function tplContactoDetailPage(){
       </div>
     </div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
-    <div class="card" style="flex:2;min-width:360px;">
+    <div class="card" style="flex:2;min-width:360px;" ${editMode ? 'oninput="window.__contactoFormDirty=true;" onchange="window.__contactoFormDirty=true;"' : ''}>
       ${editMode ? tplContactoEditForm(c, editing, editId) : tplContactoViewCard(editing)}
     </div>
     <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
