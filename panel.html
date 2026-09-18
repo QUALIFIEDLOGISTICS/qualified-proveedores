@@ -552,6 +552,7 @@ async function setTab(id){
     window.__contactosFilterOpen = false;
     window.__contactosPage = 0;
   }
+  if (id === 'trafico') { window.__traficoView = 'home'; }
   if (id === 'admin') await loadAllProfiles();
   saveLastTab();
   renderSidebar(); renderHeader(); renderTab();
@@ -684,22 +685,100 @@ function tplInicio(){
       }).join('') || `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Tu cuenta todavía no tiene ninguna pestaña activada. Contacta con el administrador.</div>`}
     </div>`;
 }
+// Camino de navegación actual como lista de tramos {label, onclick}
+// (onclick null = pantalla actual, no clicable). Se calcula siempre a
+// partir del estado de cada módulo — no hay pila/histórico aparte que
+// pueda desincronizarse — y reutiliza las funciones "volver" que ya
+// existían en cada módulo como destino de cada tramo.
+function contactoBreadcrumbGo(fnName){
+  closeContactoDetail();
+  if (window.__showingContactoDetail) return;
+  window[fnName]();
+}
+function computeBreadcrumbSegments(){
+  if (window.__showingContactoDetail) {
+    const nav = window.__contactoDetailNavContext;
+    const label = nav ? nav.label : 'Contactos';
+    const ancestors = {
+      'Contactos': [{label:'Administración', onclick:"contactoBreadcrumbGo('backToAdministracionHome')"}],
+      'Clientes': [],
+      'Empresas': [{label:'Autónomos', onclick:"contactoBreadcrumbGo('backToAutonomosHome')"}],
+    }[label] || [];
+    const editId = window.__contactoDetailId;
+    const editing = editId ? contactos.find(c=>c.id===editId) : null;
+    return [...ancestors, {label, onclick:'closeContactoDetail()'}, {label: editing ? editing.nombre : 'Nuevo contacto', onclick:null}];
+  }
+  if (currentTab === 'trafico') {
+    if (window.__traficoView === 'cargadores') return [
+      {label:'Tráfico', onclick:'backToTraficoHome()'},
+      {label:'DECA', onclick:'backToDecaFromCargadores()'},
+      {label:'Cargadores contractuales', onclick:null},
+    ];
+    if (window.__traficoView === 'deca') return [{label:'Tráfico', onclick:'backToTraficoHome()'}, {label:'DECA', onclick:null}];
+    return [{label:'Tráfico', onclick:null}];
+  }
+  if (currentTab === 'autonomos') {
+    const companyFilter = window.__driversCompanyFilter;
+    if (window.__autonomosView === 'detalle') {
+      const d = drivers.find(x=>x.id===window.__autonomosDriverId);
+      const base = [{label:'Autónomos', onclick:'backToAutonomosHome()'}];
+      if (companyFilter) base.push({label:'Empresas', onclick:'openCompaniesList()'});
+      return [...base, {label:'Conductores', onclick:'backToDriversList()'}, {label: d ? d.name : '…', onclick:null}];
+    }
+    if (window.__autonomosView === 'lista') {
+      if (companyFilter) {
+        const co = companies.find(c=>c.id===companyFilter);
+        return [{label:'Autónomos', onclick:'backToAutonomosHome()'}, {label:'Empresas', onclick:'openCompaniesList()'}, {label: co ? co.name : 'Conductores', onclick:null}];
+      }
+      return [{label:'Autónomos', onclick:'backToAutonomosHome()'}, {label:'Conductores', onclick:null}];
+    }
+    if (window.__autonomosView === 'empresas') return [{label:'Autónomos', onclick:'backToAutonomosHome()'}, {label:'Empresas', onclick:null}];
+    if (window.__autonomosView === 'dashboard') return [{label:'Autónomos', onclick:'backToAutonomosHome()'}, {label:'Dashboard', onclick:null}];
+    return [{label:'Autónomos', onclick:null}];
+  }
+  if (currentTab === 'fichajes') {
+    if (window.__fichajesView === 'detalle') {
+      const d = drivers.find(x=>x.id===window.__fichajesDriverId);
+      return [{label:'Fichajes', onclick:'backToFichajesDriversList()'}, {label: d ? d.name : '…', onclick:null}];
+    }
+    return [{label:'Fichajes', onclick:null}];
+  }
+  if (currentTab === 'administracion') {
+    if (window.__administracionView === 'contactos') return [{label:'Administración', onclick:'backToAdministracionHome()'}, {label:'Contactos', onclick:null}];
+    return [{label:'Administración', onclick:null}];
+  }
+  const tab = TABS.concat([ADMIN_TAB]).find(t=>t.id===currentTab);
+  return tab ? [{label:tab.label, onclick:null}] : [];
+}
+function renderBreadcrumbHtml(){
+  const segments = computeBreadcrumbSegments();
+  if (!segments.length) return '';
+  const last = segments.length - 1;
+  return `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:12.5px;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border);">
+    ${segments.map((s,i) => `${i>0 ? '<span style="color:var(--mutedFaint);">/</span>' : ''}${s.onclick
+      ? `<span style="cursor:pointer;color:var(--primary);" onclick="${s.onclick}">${esc(s.label)}</span>`
+      : `<span style="color:${i===last?'var(--text)':'var(--mutedFaint)'};font-weight:${i===last?'600':'400'};">${esc(s.label)}</span>`}`).join('')}
+  </div>`;
+}
 function renderTab(){
   const el = document.getElementById('tab-content');
   if (window.__kioskMode) { el.innerHTML = tplKiosk(); return; }
-  if (window.__showingContactoDetail) { el.innerHTML = tplContactoDetailPage(); return; }
-  if (currentTab === 'inicio') el.innerHTML = tplInicio();
-  if (currentTab === 'resumen') el.innerHTML = tplResumen();
-  if (currentTab === 'mercancia') el.innerHTML = tplMercancia();
-  if (currentTab === 'clientes') el.innerHTML = tplClientes();
-  if (currentTab === 'movimientos') el.innerHTML = tplMovimientos();
-  if (currentTab === 'citas') el.innerHTML = tplCitas();
-  if (currentTab === 'documentos') el.innerHTML = tplDocumentos();
-  if (currentTab === 'autonomos') el.innerHTML = tplAutonomos();
-  if (currentTab === 'trafico') el.innerHTML = tplTrafico();
-  if (currentTab === 'admin') el.innerHTML = tplAdmin();
-  if (currentTab === 'fichajes') el.innerHTML = tplFichajes();
-  if (currentTab === 'administracion') el.innerHTML = tplAdministracion();
+  let bodyHtml = '';
+  if (window.__showingContactoDetail) bodyHtml = tplContactoDetailPage();
+  else if (currentTab === 'inicio') bodyHtml = tplInicio();
+  else if (currentTab === 'resumen') bodyHtml = tplResumen();
+  else if (currentTab === 'mercancia') bodyHtml = tplMercancia();
+  else if (currentTab === 'clientes') bodyHtml = tplClientes();
+  else if (currentTab === 'movimientos') bodyHtml = tplMovimientos();
+  else if (currentTab === 'citas') bodyHtml = tplCitas();
+  else if (currentTab === 'documentos') bodyHtml = tplDocumentos();
+  else if (currentTab === 'autonomos') bodyHtml = tplAutonomos();
+  else if (currentTab === 'trafico') bodyHtml = tplTrafico();
+  else if (currentTab === 'admin') bodyHtml = tplAdmin();
+  else if (currentTab === 'fichajes') bodyHtml = tplFichajes();
+  else if (currentTab === 'administracion') bodyHtml = tplAdministracion();
+  const breadcrumb = (currentTab === 'inicio' && !window.__showingContactoDetail) ? '' : renderBreadcrumbHtml();
+  el.innerHTML = breadcrumb + bodyHtml;
 }
 function tplAdministracion(){
   if (window.__administracionView === 'contactos') return tplContactosPage();
@@ -784,7 +863,6 @@ function tplContactosPage(){
           <div style="font-size:12.5px;color:var(--mutedFaint);">Agenda de contactos: razón social, NIF y dirección.</div>
         </div>
       </div>
-      <button class="btn btn-ghost" onclick="backToAdministracionHome()">← Volver</button>
     </div>
     <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-self:start;">
@@ -1158,7 +1236,7 @@ function tplContactoDetailPage(){
         </div>
         <div>
           <div style="font-family:var(--display);font-size:22px;">
-            ${nav ? `<span style="cursor:pointer;color:var(--primary);" onclick="closeContactoDetail()">${esc(nav.label)}</span> / ` : ''}${editing ? ((editing.nombreComercial && editing.nombreComercial.trim().toLowerCase()!==(editing.nombre||'').trim().toLowerCase()) ? `(${esc(editing.nombreComercial)}) ` : '') + esc(editing.nombre) : 'Nuevo contacto'}
+            ${editing ? ((editing.nombreComercial && editing.nombreComercial.trim().toLowerCase()!==(editing.nombre||'').trim().toLowerCase()) ? `(${esc(editing.nombreComercial)}) ` : '') + esc(editing.nombre) : 'Nuevo contacto'}
           </div>
         </div>
       </div>
@@ -2992,7 +3070,6 @@ function tplAutonomosDashboardPage(){
           <div style="font-size:12.5px;color:var(--mutedFaint);">Estadísticas y submódulos.</div>
         </div>
       </div>
-      <button class="btn btn-ghost" onclick="backToAutonomosHome()">← Volver</button>
     </div>
     ${tplAutonomosDashboardBody()}`;
 }
@@ -3423,7 +3500,6 @@ function tplDecaPage(){
           <div style="font-size:12.5px;color:var(--mutedFaint);">Documento electrónico de Control Administrativo — obligatorio en transporte de mercancías por carretera.</div>
         </div>
       </div>
-      <button class="btn btn-ghost" onclick="backToTraficoHome()">← Volver</button>
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
       <div style="position:relative;flex:1;min-width:220px;max-width:340px;">
@@ -3517,7 +3593,6 @@ function backToDecaFromCargadores(){
 }
 function tplCargadoresPage(){
   return `
-    <button class="btn btn-ghost" onclick="backToDecaFromCargadores()" style="margin-bottom:16px;">← Volver al DeCA</button>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
       <div style="font-family:var(--display);font-size:19px;">Cargadores contractuales</div>
       <button class="btn btn-primary" onclick="openCargadorModal()">+ Nuevo cargador</button>
@@ -4000,7 +4075,6 @@ function tplDriversManage(){
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:10px;">
-        <button class="btn btn-ghost" onclick="${companyFilter?'openCompaniesList()':'backToAutonomosHome()'}">← Volver${companyFilter?' a empresas':''}</button>
         <button class="btn btn-primary" onclick="openDriverModal()">+ Nuevo conductor</button>
       </div>
     </div>
@@ -4128,7 +4202,6 @@ function tplCompaniesList(){
   const archivedView = view === 'archivados';
   const archivedCount = companies.filter(co=>co.archived).length;
   return `
-    <button class="btn btn-ghost" onclick="backToAutonomosHome()" style="margin-bottom:16px;">← Volver</button>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
       <div style="font-family:var(--display);font-size:19px;">Empresas</div>
       ${archivedView ? '' : `<button class="btn btn-primary" onclick="openContactoModal(null, {esAutonomos:true})">+ Nueva empresa</button>`}
@@ -4325,7 +4398,6 @@ function tplDriverDetail(){
   const totalNeto = totalIngreso - totalGastos + indexAmount;
 
   return `
-    <button class="btn btn-ghost" onclick="backToDriversList()" style="margin-bottom:16px;">← Volver a conductores</button>
     <div class="card" style="margin-bottom:18px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:14px;">
         <div style="display:flex;align-items:center;gap:14px;">
@@ -4704,7 +4776,6 @@ function tplPisoMovilDetail(d){
   const avgEurPerKmNeto = totalKm ? totalToPay / totalKm : null;
 
   return `
-    <button class="btn btn-ghost" onclick="backToDriversList()" style="margin-bottom:16px;">← Volver a conductores</button>
     <div class="card" style="margin-bottom:18px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:14px;">
         <div style="display:flex;align-items:center;gap:14px;">
@@ -5219,7 +5290,6 @@ function tplFichajesDriverDetail(){
   const years = [...new Set(dailyEntries.filter(f=>f.driverId===d.id).map(f=>Number(f.date.slice(0,4))).concat([year, new Date().getFullYear()]))].sort();
   const entries = dailyEntries.filter(f=>f.driverId===d.id && f.date.startsWith(String(year))).sort((a,b)=>a.date.localeCompare(b.date));
   return `
-    <button class="btn btn-ghost" onclick="backToFichajesDriversList()" style="margin-bottom:16px;">← Volver a conductores</button>
     <div class="card" style="margin-bottom:18px;">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
         <div style="display:flex;align-items:center;gap:12px;">
