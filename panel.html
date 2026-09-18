@@ -1613,7 +1613,10 @@ function tplUnscheduled(){
     <div class="card" style="margin-top:14px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
         <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);">Camiones sin hora fija (llegan durante el día)</div>
-        <button class="btn btn-ghost" onclick="openUnscheduledModal()">+ Apuntar camión</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-ghost" onclick="openQuickUnscheduledModal()" title="Apuntar varios camiones sin hora de golpe">Creación rápida</button>
+          <button class="btn btn-ghost" onclick="openUnscheduledModal()">+ Apuntar camión</button>
+        </div>
       </div>
       ${list.length === 0 ? `<div style="color:var(--mutedFaint);font-size:12.5px;">Ninguno apuntado para este día.</div>` : list.map(u => {
         const c = clients.find(x=>x.id===u.clientId);
@@ -2189,6 +2192,118 @@ async function submitUnscheduled(editId){
     id = row.id;
   }
   await syncAttachments('unscheduled', id);
+  await loadUnscheduled();
+  closeModal(); renderTab();
+}
+// Creación rápida: N camiones sin hora al día durante varios días, con solo
+// lo indispensable (cliente, cuántos, qué días). Los días en que el almacén
+// está cerrado según su horario se omiten solos.
+const QUICK_UNSCHED_MAX_ROWS = 300;
+function openQuickUnscheduledModal(){
+  const list = clients.filter(c=>c.warehouseIds.includes(currentWarehouseId) && !c.archived);
+  const base = new Date((window.__citasDate || today()) + 'T00:00:00');
+  const end = new Date(base);
+  end.setDate(end.getDate() + ((7 - (base.getDay() || 7)) % 7));
+  const dayNames = [['1','L'],['2','M'],['3','X'],['4','J'],['5','V'],['6','S'],['0','D']];
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+          <h3 class="modal-title">Creación rápida</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Apunta varios camiones sin hora fija de golpe en ${esc((WAREHOUSES.find(w=>w.id===currentWarehouseId)||{}).name||'')}. Después puedes editar cada uno por separado.</div>
+        ${list.length ? '' : `<div style="color:var(--danger);font-size:12.5px;margin-bottom:12px;">Antes de apuntar, da de alta al cliente en Contactos (marcado como cliente de almacén).</div>`}
+        <div class="field"><label>Cliente</label><select id="qu-client" onchange="refreshQuickUnschedPreview()">${list.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Camiones por día</label><input id="qu-count" type="number" min="1" max="20" value="2" oninput="refreshQuickUnschedPreview()" /></div>
+          <div class="field" style="flex:1;"><label>Tipo</label>
+            <select id="qu-type"><option value="descarga">Descarga</option><option value="carga">Carga</option></select>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Desde</label><input id="qu-from" type="date" value="${toDateStr(base)}" oninput="refreshQuickUnschedPreview()" /></div>
+          <div class="field" style="flex:1;"><label>Hasta</label><input id="qu-to" type="date" value="${toDateStr(end)}" oninput="refreshQuickUnschedPreview()" /></div>
+        </div>
+        <div class="field">
+          <label>Días de la semana</label>
+          <div style="display:flex;gap:6px;">
+            ${dayNames.map(([v,l]) => `
+              <label style="flex:1;text-align:center;font-size:13px;border:1px solid var(--border);border-radius:6px;padding:8px 0;cursor:pointer;background:var(--panel2);">
+                <input type="checkbox" class="qu-day" value="${v}" ${['6','0'].includes(v)?'':'checked'} onchange="refreshQuickUnschedPreview()" style="display:none;" />
+                <span>${l}</span>
+              </label>`).join('')}
+          </div>
+        </div>
+        <div class="field"><label>Observaciones (opcional)</label><input id="qu-notes" placeholder="Ej. Llamará al llegar" /></div>
+        <div id="qu-preview" style="font-size:12.5px;color:var(--muted);margin-bottom:12px;"></div>
+        <div id="qu-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button id="qu-submit" class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitQuickUnscheduled()" ${list.length?'':'disabled'}>Crear</button>
+        </div>
+      </div>
+    </div>`;
+  refreshQuickUnschedPreview();
+}
+function quickUnschedPlan(){
+  const from = document.getElementById('qu-from').value;
+  const to = document.getElementById('qu-to').value;
+  const count = Math.max(0, Math.min(20, parseInt(document.getElementById('qu-count').value, 10) || 0));
+  const weekdays = [...document.querySelectorAll('.qu-day:checked')].map(el=>Number(el.value));
+  const dates = []; let closedSkipped = 0; let tooLong = false;
+  if (from && to && from <= to) {
+    const d = new Date(from + 'T00:00:00');
+    const last = new Date(to + 'T00:00:00');
+    for (let i = 0; d <= last; i++, d.setDate(d.getDate()+1)) {
+      if (i >= 92) { tooLong = true; break; }
+      if (!weekdays.includes(d.getDay())) continue;
+      const ds = toDateStr(d);
+      if (!daySchedule(currentWarehouseId, ds).open) { closedSkipped++; continue; }
+      dates.push(ds);
+    }
+  }
+  return { dates, count, closedSkipped, tooLong, valid: !!(from && to && from <= to) };
+}
+function refreshQuickUnschedPreview(){
+  document.querySelectorAll('.qu-day').forEach(el => {
+    const lbl = el.parentElement;
+    lbl.style.background = el.checked ? 'var(--primary)' : 'var(--panel2)';
+    lbl.style.color = el.checked ? 'var(--primary-text)' : 'var(--text)';
+    lbl.style.borderColor = el.checked ? 'var(--primary)' : 'var(--border)';
+  });
+  const plan = quickUnschedPlan();
+  const total = plan.dates.length * plan.count;
+  const btn = document.getElementById('qu-submit');
+  let msg;
+  if (!plan.valid) msg = 'Elige un rango de fechas válido.';
+  else if (!plan.dates.length) msg = 'Ningún día del rango coincide con los días marcados y con el almacén abierto.';
+  else msg = `Se crearán <b>${total}</b> ${total!==1?'camiones':'camión'}: ${plan.count} al día durante ${plan.dates.length} día${plan.dates.length!==1?'s':''}.` + (plan.closedSkipped ? ` (${plan.closedSkipped} día${plan.closedSkipped!==1?'s':''} con el almacén cerrado omitido${plan.closedSkipped!==1?'s':''}.)` : '') + (plan.tooLong ? ' Solo se cubren los primeros 92 días.' : '');
+  document.getElementById('qu-preview').innerHTML = msg;
+  if (btn) {
+    btn.disabled = !document.getElementById('qu-client').value || !total || total > QUICK_UNSCHED_MAX_ROWS;
+    btn.textContent = total ? `Crear ${total}` : 'Crear';
+  }
+  if (total > QUICK_UNSCHED_MAX_ROWS) document.getElementById('qu-preview').innerHTML += ` <span style="color:var(--danger);">Máximo ${QUICK_UNSCHED_MAX_ROWS} de una vez.</span>`;
+}
+async function submitQuickUnscheduled(){
+  const errEl = document.getElementById('qu-error');
+  errEl.textContent = '';
+  const clientId = document.getElementById('qu-client').value;
+  const plan = quickUnschedPlan();
+  if (!clientId || !plan.dates.length || !plan.count) return;
+  const type = document.getElementById('qu-type').value;
+  const notes = document.getElementById('qu-notes').value.trim();
+  const rows = [];
+  plan.dates.forEach(date => {
+    for (let i = 0; i < plan.count; i++) {
+      rows.push({ warehouse_id: currentWarehouseId, client_id: clientId, date, status: 'planificado', carrier: '', plate: '', trailer_plate: '', cargo_ref: '', type, notes });
+    }
+  });
+  if (rows.length > QUICK_UNSCHED_MAX_ROWS) return;
+  const btn = document.getElementById('qu-submit');
+  btn.disabled = true;
+  const { error } = await supabaseClient.from('unscheduled_trucks').insert(rows);
+  if (error) { errEl.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido.'); btn.disabled = false; return; }
   await loadUnscheduled();
   closeModal(); renderTab();
 }
