@@ -711,7 +711,8 @@ function contactoLogoThumbHtml(c){
 const CONTACTO_ROLE_LABELS = { cliente: 'Cliente de almacén', transportista: 'Transportista', autonomos: 'Autónomos' };
 function tplContactosPage(){
   const view = window.__contactosView || 'activos';
-  const groupBy = window.__contactosGroupBy || 'ninguno';
+  const roleFilters = window.__contactosRoleFilters || [];
+  const filterCount = (view==='archivados'?1:0) + roleFilters.length;
   return `
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
       <div style="display:flex;align-items:center;gap:14px;">
@@ -733,38 +734,36 @@ function tplContactosPage(){
         <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__contactosSearch||'')}" oninput="window.__contactosSearch=this.value; refreshContactosListBody();" style="padding-left:34px;" />
         <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <div style="position:relative;">
-          <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__contactosGroupOpen=false; window.__contactosFilterOpen=!window.__contactosFilterOpen; renderTab();">Filtros${view==='archivados'?' (1)':''} ▾</button>
-          ${window.__contactosFilterOpen ? tplContactosFilterDropdown() : ''}
-        </div>
-        <div style="position:relative;">
-          <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__contactosFilterOpen=false; window.__contactosGroupOpen=!window.__contactosGroupOpen; renderTab();">Agrupar por${groupBy!=='ninguno'?' (1)':''} ▾</button>
-          ${window.__contactosGroupOpen ? tplContactosGroupDropdown() : ''}
-        </div>
+      <div style="position:relative;">
+        <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__contactosFilterOpen=!window.__contactosFilterOpen; renderTab();">Filtros${filterCount?` (${filterCount})`:''} ▾</button>
+        ${window.__contactosFilterOpen ? tplContactosFilterDropdown() : ''}
       </div>
     </div>
     <div id="contactos-list-body">${contactosListBodyHtml()}</div>`;
 }
 function tplContactosFilterDropdown(){
   const view = window.__contactosView || 'activos';
+  const roleFilters = window.__contactosRoleFilters || [];
+  const roleOptions = [['cliente',CONTACTO_ROLE_LABELS.cliente], ['transportista',CONTACTO_ROLE_LABELS.transportista], ['autonomos',CONTACTO_ROLE_LABELS.autonomos]];
   return `
-    <div onclick="event.stopPropagation();" style="position:absolute;top:100%;right:0;margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:180px;">
+    <div onclick="event.stopPropagation();" style="position:absolute;top:100%;right:0;margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:190px;">
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 4px;cursor:pointer;white-space:nowrap;">
-        <input type="checkbox" ${view==='archivados'?'checked':''} onchange="window.__contactosView=this.checked?'archivados':'activos'; window.__contactosFilterOpen=false; renderTab();" style="width:auto;" />
+        <input type="checkbox" ${view==='archivados'?'checked':''} onchange="window.__contactosView=this.checked?'archivados':'activos'; renderTab();" style="width:auto;" />
         Archivados
       </label>
-    </div>`;
-}
-function tplContactosGroupDropdown(){
-  const groupBy = window.__contactosGroupBy || 'ninguno';
-  const options = [['ninguno','Sin agrupar'], ['cliente',CONTACTO_ROLE_LABELS.cliente], ['transportista',CONTACTO_ROLE_LABELS.transportista], ['autonomos',CONTACTO_ROLE_LABELS.autonomos]];
-  return `
-    <div onclick="event.stopPropagation();" style="position:absolute;top:100%;right:0;margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:200px;">
-      ${options.map(([val,label]) => `
-        <div onclick="window.__contactosGroupBy='${val}'; window.__contactosGroupOpen=false; renderTab();" style="cursor:pointer;padding:8px 10px;border-radius:6px;font-size:13px;white-space:nowrap;${groupBy===val?'background:var(--panel2);font-weight:600;':''}">${esc(label)}</div>
+      <div style="height:1px;background:var(--border);margin:6px 0;"></div>
+      ${roleOptions.map(([val,label]) => `
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 4px;cursor:pointer;white-space:nowrap;">
+          <input type="checkbox" ${roleFilters.includes(val)?'checked':''} onchange="toggleContactoRoleFilter('${val}', this.checked)" style="width:auto;" />
+          ${esc(label)}
+        </label>
       `).join('')}
     </div>`;
+}
+function toggleContactoRoleFilter(role, checked){
+  const cur = window.__contactosRoleFilters || [];
+  window.__contactosRoleFilters = checked ? [...cur, role] : cur.filter(r=>r!==role);
+  renderTab();
 }
 function refreshContactosListBody(){
   const el = document.getElementById('contactos-list-body');
@@ -790,26 +789,18 @@ function contactosGridHtml(list, archivedView){
 function contactosListBodyHtml(){
   const view = window.__contactosView || 'activos';
   const archivedView = view === 'archivados';
-  const groupBy = window.__contactosGroupBy || 'ninguno';
+  const roleFilters = window.__contactosRoleFilters || [];
   const search = (window.__contactosSearch || '').toLowerCase();
   let list = contactos.filter(c => !!c.archived === archivedView);
+  if (roleFilters.length) {
+    list = list.filter(c => roleFilters.some(r => r==='cliente' ? c.esClienteAlmacen : r==='transportista' ? c.esTransportista : c.esAutonomos));
+  }
   list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || c.nif.toLowerCase().includes(search));
   window.__contactoNavContext = { label: 'Contactos', ids: list.map(c=>c.id) };
   if (!list.length) {
-    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search ? 'Ningún contacto coincide con la búsqueda.' : archivedView ? 'No hay contactos archivados.' : 'Todavía no hay ningún contacto creado.'}</div>`;
+    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search||roleFilters.length ? 'Ningún contacto coincide con el filtro.' : archivedView ? 'No hay contactos archivados.' : 'Todavía no hay ningún contacto creado.'}</div>`;
   }
-  if (groupBy === 'ninguno') return contactosGridHtml(list, archivedView);
-  const roleKey = groupBy === 'cliente' ? 'esClienteAlmacen' : groupBy === 'transportista' ? 'esTransportista' : 'esAutonomos';
-  const withRole = list.filter(c=>c[roleKey]);
-  const withoutRole = list.filter(c=>!c[roleKey]);
-  return `
-    ${withRole.length ? `
-      <div style="font-family:var(--display);text-transform:uppercase;font-size:11.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:10px;">${esc(CONTACTO_ROLE_LABELS[groupBy])} (${withRole.length})</div>
-      ${contactosGridHtml(withRole, archivedView)}` : ''}
-    ${withoutRole.length ? `
-      <div style="font-family:var(--display);text-transform:uppercase;font-size:11.5px;color:var(--muted);letter-spacing:.4px;margin:${withRole.length?'22px':'0'} 0 10px;">Sin ese rol (${withoutRole.length})</div>
-      ${contactosGridHtml(withoutRole, archivedView)}` : ''}
-  `;
+  return contactosGridHtml(list, archivedView);
 }
 function toggleCtWarehousesBlock(){
   document.getElementById('ct-warehouses-block').style.display = document.getElementById('ct-rol-cliente').checked ? 'block' : 'none';
