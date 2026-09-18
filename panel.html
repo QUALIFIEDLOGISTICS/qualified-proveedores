@@ -589,6 +589,7 @@ const HOME_ICON_PATHS = {
   settings: '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>',
   arrow: '<line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline>',
   edit: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>',
+  building: '<rect x="4" y="3" width="16" height="18" rx="1"></rect><rect x="8" y="7" width="2" height="2"></rect><rect x="14" y="7" width="2" height="2"></rect><rect x="8" y="12" width="2" height="2"></rect><rect x="14" y="12" width="2" height="2"></rect><rect x="10" y="17" width="4" height="4"></rect>',
 };
 const HOME_MODULES = {
   clientes: { color: '#2E6F95', icon: 'users', description: 'Clientes y almacenes asignados.' },
@@ -690,6 +691,22 @@ async function loadContactos(){
     ciudad: c.ciudad || '', provincia: c.provincia || '', pais: c.pais || '',
     logoStoragePath: c.logo_storage_path || null,
   }));
+  refreshContactoLogoThumbnails();
+}
+// Miniaturas de logo para la vista en tarjetas de Contactos: se piden en
+// segundo plano (sin bloquear la carga inicial) y se cachean por id, así
+// no hace falta volver a firmar la URL cada vez que se repinta la lista.
+let contactoLogoUrlCache = {};
+async function refreshContactoLogoThumbnails(){
+  const pending = contactos.filter(c => c.logoStoragePath && !(c.id in contactoLogoUrlCache));
+  if (!pending.length) return;
+  await Promise.all(pending.map(async c => { contactoLogoUrlCache[c.id] = await signedUrl(c.logoStoragePath); }));
+  if (window.__administracionView === 'contactos' && !window.__showingContactoDetail) refreshContactosListBody();
+}
+function contactoLogoThumbHtml(c){
+  const url = contactoLogoUrlCache[c.id];
+  if (url) return `<img src="${esc(url)}" style="width:100%;height:100%;object-fit:contain;background:#fff;" />`;
+  return `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:var(--panel2);">${homeIcon(HOME_ICON_PATHS.building, 26, 'var(--mutedFaint)', 1.5)}</div>`;
 }
 const CONTACTO_ROLE_LABELS = { cliente: 'Cliente de almacén', transportista: 'Transportista', autonomos: 'Autónomos' };
 function tplContactosPage(){
@@ -747,17 +764,19 @@ function contactosListBodyHtml(){
     return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search||roleFilter!=='todos' ? 'Ningún contacto coincide con el filtro.' : archivedView ? 'No hay contactos archivados.' : 'Todavía no hay ningún contacto creado.'}</div>`;
   }
   return `
-    <div style="display:flex;flex-direction:column;gap:8px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;">
       ${list.map(c => {
         const roleTags = [c.esClienteAlmacen&&'cliente', c.esTransportista&&'transportista', c.esAutonomos&&'autonomos'].filter(Boolean);
+        const lugar = [c.ciudad, c.pais].filter(Boolean).join(', ');
         return `
-        <div class="card" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;${archivedView?'opacity:0.7;':''}" onclick="openContactoModal('${c.id}')">
-          <div>
-            <div style="font-family:var(--display);font-size:15px;">${esc(c.nombre)}${archivedView?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;">· archivado</span>':''}</div>
-            <div style="font-size:12px;color:var(--muted);">${[c.nif, cargadorDireccionCompleta(c)].filter(Boolean).join(' · ')}</div>
-            ${roleTags.length ? `<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;">${roleTags.map(r=>`<span style="font-size:10px;text-transform:uppercase;letter-spacing:.3px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:2px 8px;color:var(--muted);">${esc(CONTACTO_ROLE_LABELS[r])}</span>`).join('')}</div>` : ''}
+        <div class="card" style="cursor:pointer;display:flex;gap:12px;align-items:flex-start;padding:14px;${archivedView?'opacity:0.7;':''}" onclick="openContactoModal('${c.id}')">
+          <div style="width:56px;height:56px;border-radius:8px;overflow:hidden;flex-shrink:0;border:1px solid var(--border);">${contactoLogoThumbHtml(c)}</div>
+          <div style="min-width:0;flex:1;">
+            <div style="font-family:var(--display);font-size:13.5px;font-weight:700;line-height:1.35;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;">${esc(c.nombre)}${archivedView?' <span style="font-size:10px;color:var(--mutedFaint);text-transform:uppercase;font-weight:400;">· archivado</span>':''}</div>
+            <div style="font-size:11.5px;color:var(--muted);">${lugar ? esc(lugar) : '—'}</div>
+            ${c.nif ? `<div style="font-size:11px;color:var(--mutedFaint);">${esc(c.nif)}</div>` : ''}
+            ${roleTags.length ? `<div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap;">${roleTags.map(r=>`<span style="font-size:9.5px;text-transform:uppercase;letter-spacing:.3px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:2px 7px;color:var(--muted);">${esc(CONTACTO_ROLE_LABELS[r])}</span>`).join('')}</div>` : ''}
           </div>
-          <button onclick="event.stopPropagation(); openContactoModal('${c.id}');" title="Editar" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:10.5px;padding:3px 7px;white-space:nowrap;">Editar</button>
         </div>`;
       }).join('')}
     </div>`;
@@ -858,6 +877,7 @@ async function addContactoLogo(file){
   const c = contactos.find(x=>x.id===editId);
   if (c) c.logoStoragePath = path;
   window.__contactoDetailLogoUrl = await signedUrl(path);
+  contactoLogoUrlCache[editId] = window.__contactoDetailLogoUrl;
   await logContactoHistorial(editId, 'Logo actualizado.');
   renderTab();
 }
@@ -869,6 +889,7 @@ async function removeContactoLogo(){
   await supabaseClient.from('contactos').update({ logo_storage_path: null }).eq('id', editId);
   c.logoStoragePath = null;
   window.__contactoDetailLogoUrl = null;
+  delete contactoLogoUrlCache[editId];
   await logContactoHistorial(editId, 'Logo eliminado.');
   renderTab();
 }
