@@ -711,7 +711,7 @@ function contactoLogoThumbHtml(c){
 const CONTACTO_ROLE_LABELS = { cliente: 'Cliente de almacén', transportista: 'Transportista', autonomos: 'Autónomos' };
 function tplContactosPage(){
   const view = window.__contactosView || 'activos';
-  const archivedCount = contactos.filter(c=>c.archived).length;
+  const groupBy = window.__contactosGroupBy || 'ninguno';
   return `
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
       <div style="display:flex;align-items:center;gap:14px;">
@@ -728,58 +728,88 @@ function tplContactosPage(){
         ${view==='archivados' ? '' : `<button class="btn btn-primary" onclick="openContactoModal()">+ Nuevo contacto</button>`}
       </div>
     </div>
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
       <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
         <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__contactosSearch||'')}" oninput="window.__contactosSearch=this.value; refreshContactosListBody();" style="padding-left:34px;" />
         <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn ${view!=='archivados'?'btn-primary':'btn-ghost'}" onclick="window.__contactosView='activos'; renderTab();">Activos</button>
-        <button class="btn ${view==='archivados'?'btn-primary':'btn-ghost'}" onclick="window.__contactosView='archivados'; renderTab();">🗄 Archivados (${archivedCount})</button>
+        <div style="position:relative;">
+          <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__contactosGroupOpen=false; window.__contactosFilterOpen=!window.__contactosFilterOpen; renderTab();">Filtros${view==='archivados'?' (1)':''} ▾</button>
+          ${window.__contactosFilterOpen ? tplContactosFilterDropdown() : ''}
+        </div>
+        <div style="position:relative;">
+          <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__contactosFilterOpen=false; window.__contactosGroupOpen=!window.__contactosGroupOpen; renderTab();">Agrupar por${groupBy!=='ninguno'?' (1)':''} ▾</button>
+          ${window.__contactosGroupOpen ? tplContactosGroupDropdown() : ''}
+        </div>
       </div>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
-      ${['todos', ...Object.keys(CONTACTO_ROLE_LABELS)].map(r => `
-        <button class="btn ${(window.__contactosRoleFilter||'todos')===r?'btn-primary':'btn-ghost'}" style="font-size:12px;padding:6px 12px;" onclick="window.__contactosRoleFilter='${r}'; renderTab();">${r==='todos'?'Todos':esc(CONTACTO_ROLE_LABELS[r])}</button>
-      `).join('')}
-    </div>
     <div id="contactos-list-body">${contactosListBodyHtml()}</div>`;
+}
+function tplContactosFilterDropdown(){
+  const view = window.__contactosView || 'activos';
+  return `
+    <div onclick="event.stopPropagation();" style="position:absolute;top:100%;right:0;margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:180px;">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 4px;cursor:pointer;white-space:nowrap;">
+        <input type="checkbox" ${view==='archivados'?'checked':''} onchange="window.__contactosView=this.checked?'archivados':'activos'; window.__contactosFilterOpen=false; renderTab();" style="width:auto;" />
+        Archivados
+      </label>
+    </div>`;
+}
+function tplContactosGroupDropdown(){
+  const groupBy = window.__contactosGroupBy || 'ninguno';
+  const options = [['ninguno','Sin agrupar'], ['cliente',CONTACTO_ROLE_LABELS.cliente], ['transportista',CONTACTO_ROLE_LABELS.transportista], ['autonomos',CONTACTO_ROLE_LABELS.autonomos]];
+  return `
+    <div onclick="event.stopPropagation();" style="position:absolute;top:100%;right:0;margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:200px;">
+      ${options.map(([val,label]) => `
+        <div onclick="window.__contactosGroupBy='${val}'; window.__contactosGroupOpen=false; renderTab();" style="cursor:pointer;padding:8px 10px;border-radius:6px;font-size:13px;white-space:nowrap;${groupBy===val?'background:var(--panel2);font-weight:600;':''}">${esc(label)}</div>
+      `).join('')}
+    </div>`;
 }
 function refreshContactosListBody(){
   const el = document.getElementById('contactos-list-body');
   if (el) el.innerHTML = contactosListBodyHtml();
 }
+function contactoCardHtml(c, archivedView){
+  const roleTags = [c.esClienteAlmacen&&'cliente', c.esTransportista&&'transportista', c.esAutonomos&&'autonomos'].filter(Boolean);
+  const lugar = [c.ciudad, c.pais].filter(Boolean).join(', ');
+  return `
+    <div class="card" style="cursor:pointer;display:flex;gap:12px;align-items:flex-start;padding:14px;${archivedView?'opacity:0.7;':''}" onclick="openContactoModal('${c.id}')">
+      <div style="width:56px;height:56px;border-radius:8px;overflow:hidden;flex-shrink:0;border:1px solid var(--border);">${contactoLogoThumbHtml(c)}</div>
+      <div style="min-width:0;flex:1;">
+        <div style="font-family:var(--display);font-size:13.5px;font-weight:700;line-height:1.35;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;">${esc(c.nombre)}${archivedView?' <span style="font-size:10px;color:var(--mutedFaint);text-transform:uppercase;font-weight:400;">· archivado</span>':''}</div>
+        <div style="font-size:11.5px;color:var(--muted);">${lugar ? esc(lugar) : '—'}</div>
+        ${c.nif ? `<div style="font-size:11px;color:var(--mutedFaint);">${esc(c.nif)}</div>` : ''}
+        ${roleTags.length ? `<div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap;">${roleTags.map(r=>`<span style="font-size:9.5px;text-transform:uppercase;letter-spacing:.3px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:2px 7px;color:var(--muted);">${esc(CONTACTO_ROLE_LABELS[r])}</span>`).join('')}</div>` : ''}
+      </div>
+    </div>`;
+}
+function contactosGridHtml(list, archivedView){
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;">${list.map(c=>contactoCardHtml(c, archivedView)).join('')}</div>`;
+}
 function contactosListBodyHtml(){
   const view = window.__contactosView || 'activos';
   const archivedView = view === 'archivados';
-  const roleFilter = window.__contactosRoleFilter || 'todos';
+  const groupBy = window.__contactosGroupBy || 'ninguno';
   const search = (window.__contactosSearch || '').toLowerCase();
   let list = contactos.filter(c => !!c.archived === archivedView);
-  if (roleFilter === 'cliente') list = list.filter(c=>c.esClienteAlmacen);
-  else if (roleFilter === 'transportista') list = list.filter(c=>c.esTransportista);
-  else if (roleFilter === 'autonomos') list = list.filter(c=>c.esAutonomos);
   list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || c.nif.toLowerCase().includes(search));
   window.__contactoNavContext = { label: 'Contactos', ids: list.map(c=>c.id) };
   if (!list.length) {
-    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search||roleFilter!=='todos' ? 'Ningún contacto coincide con el filtro.' : archivedView ? 'No hay contactos archivados.' : 'Todavía no hay ningún contacto creado.'}</div>`;
+    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search ? 'Ningún contacto coincide con la búsqueda.' : archivedView ? 'No hay contactos archivados.' : 'Todavía no hay ningún contacto creado.'}</div>`;
   }
+  if (groupBy === 'ninguno') return contactosGridHtml(list, archivedView);
+  const roleKey = groupBy === 'cliente' ? 'esClienteAlmacen' : groupBy === 'transportista' ? 'esTransportista' : 'esAutonomos';
+  const withRole = list.filter(c=>c[roleKey]);
+  const withoutRole = list.filter(c=>!c[roleKey]);
   return `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;">
-      ${list.map(c => {
-        const roleTags = [c.esClienteAlmacen&&'cliente', c.esTransportista&&'transportista', c.esAutonomos&&'autonomos'].filter(Boolean);
-        const lugar = [c.ciudad, c.pais].filter(Boolean).join(', ');
-        return `
-        <div class="card" style="cursor:pointer;display:flex;gap:12px;align-items:flex-start;padding:14px;${archivedView?'opacity:0.7;':''}" onclick="openContactoModal('${c.id}')">
-          <div style="width:56px;height:56px;border-radius:8px;overflow:hidden;flex-shrink:0;border:1px solid var(--border);">${contactoLogoThumbHtml(c)}</div>
-          <div style="min-width:0;flex:1;">
-            <div style="font-family:var(--display);font-size:13.5px;font-weight:700;line-height:1.35;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;">${esc(c.nombre)}${archivedView?' <span style="font-size:10px;color:var(--mutedFaint);text-transform:uppercase;font-weight:400;">· archivado</span>':''}</div>
-            <div style="font-size:11.5px;color:var(--muted);">${lugar ? esc(lugar) : '—'}</div>
-            ${c.nif ? `<div style="font-size:11px;color:var(--mutedFaint);">${esc(c.nif)}</div>` : ''}
-            ${roleTags.length ? `<div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap;">${roleTags.map(r=>`<span style="font-size:9.5px;text-transform:uppercase;letter-spacing:.3px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:2px 7px;color:var(--muted);">${esc(CONTACTO_ROLE_LABELS[r])}</span>`).join('')}</div>` : ''}
-          </div>
-        </div>`;
-      }).join('')}
-    </div>`;
+    ${withRole.length ? `
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:11.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:10px;">${esc(CONTACTO_ROLE_LABELS[groupBy])} (${withRole.length})</div>
+      ${contactosGridHtml(withRole, archivedView)}` : ''}
+    ${withoutRole.length ? `
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:11.5px;color:var(--muted);letter-spacing:.4px;margin:${withRole.length?'22px':'0'} 0 10px;">Sin ese rol (${withoutRole.length})</div>
+      ${contactosGridHtml(withoutRole, archivedView)}` : ''}
+  `;
 }
 function toggleCtWarehousesBlock(){
   document.getElementById('ct-warehouses-block').style.display = document.getElementById('ct-rol-cliente').checked ? 'block' : 'none';
