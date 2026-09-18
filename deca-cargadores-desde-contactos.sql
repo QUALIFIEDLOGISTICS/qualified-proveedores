@@ -14,7 +14,7 @@ create policy contactos_select on public.contactos for select using (
   exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin)
   or exists (select 1 from public.profiles p where p.id = auth.uid() and p.allowed_tabs ?| array['administracion','trafico'])
   or (es_cliente_almacen and exists (select 1 from public.profiles p where p.id = auth.uid() and p.allowed_tabs ?| array['clientes','citas','documentos']))
-  or (es_autonomos and exists (select 1 from public.profiles p where p.id = auth.uid() and p.allowed_tabs ?| array['autonomos']))
+  or (es_autonomos and exists (select 1 from public.profiles p where p.id = auth.uid() and p.allowed_tabs ?| array['trafico','autonomos']))
 );
 
 insert into public.contactos (nombre, nif, calle1, calle2, codigo_postal, ciudad, provincia, pais)
