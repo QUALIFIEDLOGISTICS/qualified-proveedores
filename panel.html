@@ -500,6 +500,8 @@ function switchWarehouse(id){
 }
 function goHome(){
   if (window.__showingContactoDetail && !contactoConfirmLeaveEdit()) return;
+  if (!decaConfirmLeaveForm()) return;
+  window.__decaFormDirty = false;
   window.__contactoFormDirty = false;
   window.__showingContactoDetail = false;
   window.__contactoDetailId = null;
@@ -513,6 +515,8 @@ async function setTab(id){
   if (id !== 'admin' && !allowed.includes(id)) return;
   if (id === 'admin' && !PROFILE.isAdmin) return;
   if (window.__showingContactoDetail && !contactoConfirmLeaveEdit()) return;
+  if (!decaConfirmLeaveForm()) return;
+  window.__decaFormDirty = false;
   window.__contactoFormDirty = false;
   currentTab = id;
   // Pulsar la pestaña del panel siempre lleva a su pantalla principal
@@ -670,6 +674,10 @@ function computeBreadcrumbSegments(){
     return [...ancestors, {label, onclick:'closeContactoDetail()'}, {label: editing ? editing.nombre : 'Nuevo contacto', onclick:null}];
   }
   if (currentTab === 'trafico') {
+    if (window.__traficoView === 'decaForm') {
+      const ed = window.__decaFormId ? decaDocuments.find(d=>d.id===window.__decaFormId) : null;
+      return [{label:'Tráfico', onclick:'backToTraficoHome()'}, {label:'DECA', onclick:'backToDecaList()'}, {label: ed ? 'Editar DeCA' + (ed.codigo ? ' ' + ed.codigo : '') : 'Nuevo DeCA', onclick:null}];
+    }
     if (window.__traficoView === 'deca') return [{label:'Tráfico', onclick:'backToTraficoHome()'}, {label:'DECA', onclick:null}];
     return [{label:'Tráfico', onclick:null}];
   }
@@ -3530,6 +3538,7 @@ function tplAutonomosDashboardBody(){
 }
 /* ============================= DASHBOARD TRÁFICO ============================= */
 function tplTrafico(){
+  if (window.__traficoView === 'decaForm') return tplDecaFormPage();
   if (window.__traficoView === 'deca') return tplDecaPage();
   return `
     <div style="max-width:1080px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;">
@@ -3541,6 +3550,8 @@ function openDecaModule(){
   renderHeader(); renderTab();
 }
 function backToTraficoHome(){
+  if (!decaConfirmLeaveForm()) return;
+  window.__decaFormDirty = false;
   window.__traficoView = 'home';
   renderHeader(); renderTab();
 }
@@ -3563,7 +3574,7 @@ function tplDecaPage(){
         <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
       </div>
       <div style="flex:1;"></div>
-      <button class="btn btn-primary" onclick="openDecaFormModal()">+ Nuevo DeCA</button>
+      <button class="btn btn-primary" onclick="openDecaForm()">+ Nuevo DeCA</button>
     </div>
     <div id="deca-list-body">${decaListBodyHtml()}</div>`;
 }
@@ -3597,7 +3608,7 @@ function decaListBodyHtml(){
               <td style="color:var(--muted);">${esc(d.mercanciaNaturaleza)}</td>
               <td style="white-space:nowrap;">
                 <button onclick="event.stopPropagation(); openDecaViewModal('${d.id}');" title="Ver" style="background:none;border:none;color:var(--muted);font-size:14px;padding:2px 4px;">👁</button>
-                <button onclick="event.stopPropagation(); openDecaFormModal('${d.id}');" title="Editar" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+                <button onclick="event.stopPropagation(); openDecaForm('${d.id}');" title="Editar" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
                 <button onclick="event.stopPropagation(); confirmDeleteDeca('${d.id}');" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);font-size:14px;padding:2px 4px;">🗑</button>
               </td>
             </tr>`).join('')}
@@ -3760,43 +3771,86 @@ async function buildAndUploadDecaPdf(fields, storagePath, existingUrl){
 }
 
 /* ---- DeCA: formulario crear/editar ---- */
+function decaSectionTitle(txt){
+  return `<div style="font-family:var(--display);text-transform:uppercase;font-size:12px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">${txt}</div>`;
+}
 function tplDecaFormFields(e){
   return `
-    <div style="font-family:var(--display);text-transform:uppercase;font-size:11px;color:var(--muted);letter-spacing:.4px;margin:10px 0 6px;">Cargador contractual</div>
-    <div class="field">
-      <label>Nombre o razón social</label>
-      <input id="dc-cargador-nombre" maxlength="150" list="dc-cargadores-datalist" oninput="onDecaCargadorInput()" placeholder="Escribe para buscar entre tus contactos" value="${esc(e.cargadorNombre||'')}" />
-      <datalist id="dc-cargadores-datalist">
-        ${contactos.filter(c=>!c.archived).map(c=>`<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('')}
-      </datalist>
-    </div>
-    <div style="display:flex;gap:10px;">
-      <div class="field" style="flex:1;"><label>NIF</label><input id="dc-cargador-nif" maxlength="20" value="${esc(e.cargadorNif||'')}" /></div>
-      <div class="field" style="flex:2;"><label>Domicilio</label><input id="dc-cargador-domicilio" maxlength="250" value="${esc(e.cargadorDomicilio||'')}" /></div>
-    </div>
-    <div style="font-family:var(--display);text-transform:uppercase;font-size:11px;color:var(--muted);letter-spacing:.4px;margin:14px 0 6px;">Transportista efectivo</div>
-    <div style="display:flex;gap:10px;">
-      <div class="field" style="flex:2;"><label>Nombre o razón social</label><input id="dc-transportista-nombre" maxlength="150" value="${esc(e.transportistaNombre||'')}" /></div>
-      <div class="field" style="flex:1;"><label>NIF</label><input id="dc-transportista-nif" maxlength="20" value="${esc(e.transportistaNif||'')}" /></div>
-    </div>
-    <div style="font-family:var(--display);text-transform:uppercase;font-size:11px;color:var(--muted);letter-spacing:.4px;margin:14px 0 6px;">Envío</div>
-    <div style="display:flex;gap:10px;">
-      <div class="field" style="flex:1;"><label>Origen</label><input id="dc-origen" maxlength="150" value="${esc(e.origen||'')}" /></div>
-      <div class="field" style="flex:1;"><label>Destino</label><input id="dc-destino" maxlength="150" value="${esc(e.destino||'')}" /></div>
-    </div>
-    <div style="display:flex;gap:10px;">
-      <div class="field" style="flex:2;"><label>Naturaleza de la mercancía</label><input id="dc-mercancia-naturaleza" maxlength="200" value="${esc(e.mercanciaNaturaleza||'')}" /></div>
-      <div class="field" style="flex:1;"><label>Peso</label><input id="dc-mercancia-peso" maxlength="30" placeholder="Ej. 12.500 kg" value="${esc(e.mercanciaPeso||'')}" /></div>
-    </div>
-    <div class="field"><label>Autorización especial de circulación (si aplica)</label><input id="dc-autorizacion" maxlength="200" value="${esc(e.autorizacionEspecial||'')}" /></div>
-    <div class="field"><label>Fecha del transporte</label><input id="dc-fecha" type="date" value="${e.fechaTransporte||today()}" /></div>
-    <div style="display:flex;gap:10px;">
-      <div class="field" style="flex:1;"><label>Matrícula tractora</label><input id="dc-matricula-tractora" maxlength="15" value="${esc(e.matriculaTractora||'')}" /></div>
-      <div class="field" style="flex:1;"><label>Matrícula remolque (si aplica)</label><input id="dc-matricula-remolque" maxlength="15" value="${esc(e.matriculaRemolque||'')}" /></div>
-    </div>
-    <div class="field"><label>Observaciones</label><textarea id="dc-observaciones" maxlength="500">${esc(e.observaciones||'')}</textarea></div>`;
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px;margin-bottom:18px;align-items:start;">
+      <div class="card">
+        ${decaSectionTitle('Cargador contractual')}
+        <div class="field">
+          <label>Nombre o razÃ³n social</label>
+          <input id="dc-cargador-nombre" maxlength="150" list="dc-cargadores-datalist" oninput="onDecaCargadorInput()" placeholder="Escribe para buscar entre tus contactos" value="${esc(e.cargadorNombre||'')}" />
+          <datalist id="dc-cargadores-datalist">
+            ${contactos.filter(c=>!c.archived).map(c=>`<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' Â· '))}">`).join('')}
+          </datalist>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>NIF</label><input id="dc-cargador-nif" maxlength="20" value="${esc(e.cargadorNif||'')}" /></div>
+          <div class="field" style="flex:2;"><label>Domicilio</label><input id="dc-cargador-domicilio" maxlength="250" value="${esc(e.cargadorDomicilio||'')}" /></div>
+        </div>
+      </div>
+      <div class="card">
+        ${decaSectionTitle('Transportista efectivo')}
+        <div class="field"><label>Nombre o razÃ³n social</label><input id="dc-transportista-nombre" maxlength="150" value="${esc(e.transportistaNombre||'')}" /></div>
+        <div class="field"><label>NIF</label><input id="dc-transportista-nif" maxlength="20" value="${esc(e.transportistaNif||'')}" /></div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>MatrÃ­cula tractora</label><input id="dc-matricula-tractora" maxlength="15" value="${esc(e.matriculaTractora||'')}" /></div>
+          <div class="field" style="flex:1;"><label>MatrÃ­cula remolque (si aplica)</label><input id="dc-matricula-remolque" maxlength="15" value="${esc(e.matriculaRemolque||'')}" /></div>
+        </div>
+      </div>
+      <div class="card">
+        ${decaSectionTitle('EnvÃ­o')}
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Origen</label><input id="dc-origen" maxlength="150" value="${esc(e.origen||'')}" /></div>
+          <div class="field" style="flex:1;"><label>Destino</label><input id="dc-destino" maxlength="150" value="${esc(e.destino||'')}" /></div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:2;"><label>Naturaleza de la mercancÃ­a</label><input id="dc-mercancia-naturaleza" maxlength="200" value="${esc(e.mercanciaNaturaleza||'')}" /></div>
+          <div class="field" style="flex:1;"><label>Peso</label><input id="dc-mercancia-peso" maxlength="30" placeholder="Ej. 12.500 kg" value="${esc(e.mercanciaPeso||'')}" /></div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Fecha del transporte</label><input id="dc-fecha" type="date" value="${e.fechaTransporte||today()}" /></div>
+          <div class="field" style="flex:2;"><label>AutorizaciÃ³n especial de circulaciÃ³n (si aplica)</label><input id="dc-autorizacion" maxlength="200" value="${esc(e.autorizacionEspecial||'')}" /></div>
+        </div>
+      </div>
+      <div class="card" style="grid-column:1 / -1;">
+        ${decaSectionTitle('Observaciones')}
+        <div class="field" style="margin-bottom:0;"><textarea id="dc-observaciones" maxlength="500" style="min-height:120px;">${esc(e.observaciones||'')}</textarea></div>
+      </div>
+    </div>`;
 }
-function onDecaCargadorInput(){
+function tplDecaFormPage(){
+  const editId = window.__decaFormId;
+  const editing = editId ? decaDocuments.find(d=>d.id===editId) : null;
+  const e = editing || {};
+  const submitLabel = editing ? 'Guardar y regenerar PDF' : 'Generar DeCA';
+  return `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div style="width:48px;height:48px;border-radius:12px;background:rgba(193,68,61,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          ${homeIcon(HOME_ICON_PATHS.file, 24, '#C1443D')}
+        </div>
+        <div>
+          <div style="font-family:var(--display);font-size:22px;">${editing ? 'Editar DeCA' + (editing.codigo ? ' ' + esc(editing.codigo) : '') : 'Nuevo DeCA'}</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">Al guardar se genera (o regenera) el PDF con su cÃ³digo QR de descarga.</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-ghost" onclick="backToDecaList()">Cancelar</button>
+        <button class="btn btn-primary dc-submit-btn" onclick="submitDecaForm('${editId||''}')">${submitLabel}</button>
+      </div>
+    </div>
+    <div oninput="window.__decaFormDirty=true;" onchange="window.__decaFormDirty=true;">
+      ${tplDecaFormFields(e)}
+    </div>
+    <div id="dc-error" style="color:var(--danger);font-size:12.5px;margin-bottom:10px;"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button class="btn btn-ghost" onclick="backToDecaList()">Cancelar</button>
+      <button class="btn btn-primary dc-submit-btn" onclick="submitDecaForm('${editId||''}')">${submitLabel}</button>
+    </div>`;
+}function onDecaCargadorInput(){
   const val = document.getElementById('dc-cargador-nombre').value;
   const match = contactos.find(c => !c.archived && c.nombre === val);
   if (match) {
@@ -3804,28 +3858,28 @@ function onDecaCargadorInput(){
     document.getElementById('dc-cargador-domicilio').value = cargadorDireccionCompleta(match);
   }
 }
-function openDecaFormModal(editId){
-  const editing = editId ? decaDocuments.find(d=>d.id===editId) : null;
-  const e = editing || {};
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box" style="max-width:520px;max-height:85vh;overflow-y:auto;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-          <h3 class="modal-title">${editing?'Editar DeCA':'Nuevo DeCA'}</h3><button class="close-x" onclick="closeModal()">✕</button>
-        </div>
-        <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:6px;">Al guardar se genera (o regenera) el PDF con su código QR de descarga.</div>
-        ${tplDecaFormFields(e)}
-        <div id="dc-error" style="color:var(--danger);font-size:12.5px;margin:8px 0;"></div>
-        <div style="display:flex;gap:10px;">
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button class="btn btn-primary" id="dc-submit-btn" style="flex:1;justify-content:center;" onclick="submitDecaForm('${editId||''}')">${editing?'Guardar y regenerar PDF':'Generar DeCA'}</button>
-        </div>
-      </div>
-    </div>`;
+function openDecaForm(editId){
+  window.__traficoView = 'decaForm';
+  window.__decaFormId = editId || null;
+  window.__decaFormDirty = false;
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
 }
-async function submitDecaForm(editId){
+// Avisa antes de descartar un DeCA a medio rellenar.
+function decaConfirmLeaveForm(){
+  if (window.__traficoView === 'decaForm' && window.__decaFormDirty) {
+    return confirm('Tienes cambios sin guardar. Â¿Seguro que quieres salir sin guardar?');
+  }
+  return true;
+}
+function backToDecaList(){
+  if (!decaConfirmLeaveForm()) return;
+  window.__decaFormDirty = false;
+  window.__traficoView = 'deca';
+  renderHeader(); renderTab();
+}async function submitDecaForm(editId){
   const errEl = document.getElementById('dc-error');
-  const btn = document.getElementById('dc-submit-btn');
+  const btns = [...document.querySelectorAll('.dc-submit-btn')];
   errEl.textContent = '';
   const fields = {
     cargadorNombre: document.getElementById('dc-cargador-nombre').value.trim(),
@@ -3845,7 +3899,7 @@ async function submitDecaForm(editId){
   };
   const required = ['cargadorNombre','cargadorNif','transportistaNombre','transportistaNif','origen','destino','mercanciaNaturaleza','mercanciaPeso','fechaTransporte','matriculaTractora'];
   if (required.some(k => !fields[k])) { errEl.textContent = 'Rellena todos los campos obligatorios.'; return; }
-  btn.disabled = true; btn.textContent = 'Generando PDF…';
+  btns.forEach(b => { b.disabled = true; b.textContent = 'Generando PDF…'; });
   try {
     const editing = editId ? decaDocuments.find(d=>d.id===editId) : null;
     const storagePath = editing && editing.pdfStoragePath ? editing.pdfStoragePath : `deca/${nextId()}.pdf`;
@@ -3870,11 +3924,13 @@ async function submitDecaForm(editId){
       newId = data.id;
       decaDocuments.unshift({ id: data.id, codigo: data.codigo || '', ...fields, pdfStoragePath: storagePath, pdfUrl: url });
     }
-    closeModal();
+    window.__decaFormDirty = false;
+    window.__traficoView = 'deca';
+    renderHeader(); renderTab();
     openDecaViewModal(newId);
   } catch (err) {
     errEl.textContent = 'No se pudo generar/guardar el DeCA: ' + (err && err.message ? err.message : 'error desconocido.');
-    btn.disabled = false; btn.textContent = editId ? 'Guardar y regenerar PDF' : 'Generar DeCA';
+    btns.forEach(b => { b.disabled = false; b.textContent = editId ? 'Guardar y regenerar PDF' : 'Generar DeCA'; });
   }
 }
 
