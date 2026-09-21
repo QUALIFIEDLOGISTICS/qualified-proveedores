@@ -4968,49 +4968,95 @@ async function buildAndUploadDecaPdf(fields, storagePath, existingUrl){
   // Página con toda la información del DeCA (sin QR): es lo que se ve al
   // escanear el código y también la segunda página del PDF del conductor.
   const drawInfoPage = async (pdfDoc) => {
-  const page = pdfDoc.addPage([595.28, 841.89]);
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const marginX = 50, contentWidth = 495.28;
-  let y = 790;
+    const page = pdfDoc.addPage([595.28, 841.89]);
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const ink = rgb(0.08, 0.1, 0.14), gray = rgb(0.42, 0.45, 0.5), lineCol = rgb(0.2, 0.22, 0.27), accent = rgb(0.106, 0.227, 0.42);
+    const mx = 36, W = 523.28, top = 806;
+    let logo = null;
+    try { const r = await fetch('logo-mark.png'); if (r.ok) logo = await pdfDoc.embedPng(await r.arrayBuffer()); } catch (e) { /* sin logo */ }
 
-  const drawTitle = (text, size) => { page.drawText(text, { x: marginX, y, size, font: bold, color: rgb(0.1,0.1,0.1) }); y -= size + 8; };
-  const drawSection = (text) => { y -= 6; page.drawText(text, { x: marginX, y, size: 11, font: bold, color: rgb(0.75,0.27,0.24) }); y -= 16; };
-  const drawField = (label, value) => {
-    page.drawText(label + ':', { x: marginX, y, size: 10, font: bold, color: rgb(0.3,0.3,0.3) });
-    const lines = wrapPdfText(value || '—', font, 10, contentWidth - 160);
-    lines.forEach((line, i) => {
-      page.drawText(line, { x: marginX + 160, y: y - i*13, size: 10, font, color: rgb(0.1,0.1,0.1) });
-    });
-    y -= Math.max(13, lines.length*13) + 6;
-  };
+    // Casilla numerada al estilo de la carta de porte CMR: recuadro con el
+    // número y el título arriba a la izquierda y el dato debajo.
+    const box = (x, yTop, w, h, num, label, items) => {
+      page.drawRectangle({ x, y: yTop - h, width: w, height: h, borderColor: lineCol, borderWidth: 0.8 });
+      let lx = x + 6;
+      if (num) {
+        page.drawRectangle({ x: x + 4, y: yTop - 16, width: 14, height: 12, color: accent });
+        const nw = bold.widthOfTextAtSize(String(num), 8);
+        page.drawText(String(num), { x: x + 4 + (14 - nw) / 2, y: yTop - 13.2, size: 8, font: bold, color: rgb(1, 1, 1) });
+        lx = x + 23;
+      }
+      page.drawText(String(label).toUpperCase(), { x: lx, y: yTop - 13, size: 6.8, font: bold, color: gray });
+      let y = yTop - 32;
+      const bottom = yTop - h + 8;
+      for (const it of items) {
+        const size = it.size || 10.5, f = it.bold ? bold : font, lh = size + 3.5;
+        const lines = wrapPdfText(it.text, f, size, w - 14);
+        for (const ln of lines) {
+          if (y < bottom) return;
+          page.drawText(ln, { x: x + 7, y, size, font: f, color: it.color || ink });
+          y -= lh;
+        }
+        y -= it.gap || 0;
+      }
+    };
+    const dash = v => (v && String(v).trim()) ? String(v).trim() : '—';
+    const fecha = fields.fechaTransporte
+      ? new Date(fields.fechaTransporte + 'T00:00:00').toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' })
+      : '—';
 
-  drawTitle('Documento electrónico de Control Administrativo (DeCA)', 15);
-  page.drawText('Art. 147 LOTT / art. 222 ROTT — Orden FOM 2861/2012', { x: marginX, y, size: 9, font, color: rgb(0.5,0.5,0.5) });
-  y -= 26;
+    // Cabecera: logo, título y número del DeCA
+    const hH = 70, wLogo = 96, wCode = 112;
+    const wTitle = W - wLogo - wCode;
+    page.drawRectangle({ x: mx, y: top - hH, width: W, height: hH, borderColor: lineCol, borderWidth: 1.4 });
+    page.drawLine({ start: { x: mx + wLogo, y: top }, end: { x: mx + wLogo, y: top - hH }, thickness: 0.8, color: lineCol });
+    page.drawLine({ start: { x: mx + wLogo + wTitle, y: top }, end: { x: mx + wLogo + wTitle, y: top - hH }, thickness: 0.8, color: lineCol });
+    if (logo) page.drawImage(logo, { x: mx + (wLogo - 34) / 2, y: top - 44, width: 34, height: 34 });
+    const brand = 'QUALIFIED';
+    page.drawText(brand, { x: mx + (wLogo - bold.widthOfTextAtSize(brand, 8.5)) / 2, y: top - 56, size: 8.5, font: bold, color: accent });
+    const brand2 = 'LOGISTICS & TRANSPORT';
+    page.drawText(brand2, { x: mx + (wLogo - font.widthOfTextAtSize(brand2, 5.2)) / 2, y: top - 63, size: 5.2, font, color: gray });
+    const t1 = 'DOCUMENTO ELECTRÓNICO DE', t2 = 'CONTROL ADMINISTRATIVO';
+    page.drawText(t1, { x: mx + wLogo + (wTitle - bold.widthOfTextAtSize(t1, 13)) / 2, y: top - 27, size: 13, font: bold, color: accent });
+    page.drawText(t2, { x: mx + wLogo + (wTitle - bold.widthOfTextAtSize(t2, 13)) / 2, y: top - 43, size: 13, font: bold, color: accent });
+    const t3 = 'DeCA · Transporte de mercancías por carretera';
+    page.drawText(t3, { x: mx + wLogo + (wTitle - font.widthOfTextAtSize(t3, 7.5)) / 2, y: top - 58, size: 7.5, font, color: gray });
+    page.drawText('DeCA Nº', { x: mx + wLogo + wTitle + 7, y: top - 13, size: 6.8, font: bold, color: gray });
+    const code = dash(fields.codigo);
+    page.drawText(code, { x: mx + wLogo + wTitle + (wCode - bold.widthOfTextAtSize(code, 15)) / 2, y: top - 46, size: 15, font: bold, color: ink });
 
-  drawSection('CARGADOR CONTRACTUAL');
-  drawField('Nombre / razón social', fields.cargadorNombre);
-  drawField('NIF', fields.cargadorNif);
-  drawField('Domicilio', fields.cargadorDomicilio);
+    // Rejilla de casillas
+    const half = W / 2;
+    let y = top - hH;
+    const r1 = 122, r2 = 92, r3 = 74, r4 = 66, r5 = 170;
+    box(mx, y, half, r1, 1, 'Cargador contractual', [
+      { text: dash(fields.cargadorNombre), bold: true, size: 11.5, gap: 4 },
+      { text: 'NIF: ' + dash(fields.cargadorNif), size: 10 },
+      { text: dash(fields.cargadorDomicilio), size: 9.5, color: gray },
+    ]);
+    box(mx + half, y, half, r1, 2, 'Transportista efectivo', [
+      { text: dash(fields.transportistaNombre), bold: true, size: 11.5, gap: 4 },
+      { text: 'NIF: ' + dash(fields.transportistaNif), size: 10 },
+    ]);
+    y -= r1;
+    box(mx, y, half, r2, 3, 'Lugar de origen (carga)', [{ text: dash(fields.origen), bold: true, size: 11 }]);
+    box(mx + half, y, half, r2, 4, 'Lugar de destino (descarga)', [{ text: dash(fields.destino), bold: true, size: 11 }]);
+    y -= r2;
+    const w5 = half, w6 = (W - half) / 2;
+    box(mx, y, w5, r3, 5, 'Naturaleza de la mercancía', [{ text: dash(fields.mercanciaNaturaleza), bold: true, size: 11 }]);
+    box(mx + w5, y, w6, r3, 6, 'Peso bruto', [{ text: dash(fields.mercanciaPeso), bold: true, size: 12.5 }]);
+    box(mx + w5 + w6, y, w6, r3, 7, 'Fecha del transporte', [{ text: fecha, bold: true, size: 11 }]);
+    y -= r3;
+    box(mx, y, half, r4, 8, 'Matrícula tractora', [{ text: dash(fields.matriculaTractora), bold: true, size: 15 }]);
+    box(mx + half, y, half, r4, 9, 'Matrícula remolque', [{ text: fields.matriculaRemolque && fields.matriculaRemolque.trim() ? fields.matriculaRemolque.trim() : 'No aplica', bold: true, size: 15 }]);
+    y -= r4;
+    box(mx, y, W, r5, 10, 'Observaciones', [{ text: dash(fields.observaciones), size: 10.5 }]);
+    y -= r5;
 
-  drawSection('TRANSPORTISTA EFECTIVO');
-  drawField('Nombre / razón social', fields.transportistaNombre);
-  drawField('NIF', fields.transportistaNif);
-
-  drawSection('ENVÍO');
-  drawField('Origen', fields.origen);
-  drawField('Destino', fields.destino);
-  drawField('Naturaleza de la mercancía', fields.mercanciaNaturaleza);
-  drawField('Peso de la mercancía', fields.mercanciaPeso);
-  drawField('Fecha del transporte', fields.fechaTransporte ? fmtDateY(fields.fechaTransporte) : '—');
-  drawField('Matrícula tractora', fields.matriculaTractora);
-  drawField('Matrícula remolque', fields.matriculaRemolque || 'No aplica');
-  drawField('Observaciones', fields.observaciones || '—');
-
-  y -= 10;
-  page.drawText(`Generado el ${new Date().toLocaleString('es-ES')} · Qualified Logistics`, { x: marginX, y, size: 8, font, color: rgb(0.6,0.6,0.6) });
-
+    // Pie
+    page.drawText('Art. 147 LOTT / art. 222 ROTT — Orden FOM 2861/2012', { x: mx, y: y - 18, size: 7.5, font, color: gray });
+    page.drawText(`Documento generado electrónicamente el ${new Date().toLocaleString('es-ES')} · Qualified Logistics`, { x: mx, y: y - 29, size: 7.5, font, color: gray });
   };
 
   // 1) Lo que abre el QR: solo la información (misma ruta y URL de siempre).
@@ -5195,7 +5241,7 @@ function backToDecaList(){
   try {
     const editing = editId ? decaDocuments.find(d=>d.id===editId) : null;
     const storagePath = editing && editing.pdfStoragePath ? editing.pdfStoragePath : `deca/${nextId()}.pdf`;
-    const { url } = await buildAndUploadDecaPdf(fields, storagePath, editing ? editing.pdfUrl : null);
+    const { url } = await buildAndUploadDecaPdf({ ...fields, codigo: editing ? editing.codigo : '' }, storagePath, editing ? editing.pdfUrl : null);
     const dbPayload = {
       cargador_nombre: fields.cargadorNombre, cargador_nif: fields.cargadorNif, cargador_domicilio: fields.cargadorDomicilio || null,
       transportista_nombre: fields.transportistaNombre, transportista_nif: fields.transportistaNif,
@@ -5214,6 +5260,9 @@ function backToDecaList(){
       const { data, error } = await supabaseClient.from('deca_documents').insert(dbPayload).select().single();
       if (error || !data) throw (error || new Error('sin datos'));
       newId = data.id;
+      // El número lo asigna la base de datos al crear el DeCA: se vuelve a
+      // generar el PDF (misma ruta y misma URL) para que lo lleve impreso.
+      if (data.codigo) await buildAndUploadDecaPdf({ ...fields, codigo: data.codigo }, storagePath, url);
       decaDocuments.unshift({ id: data.id, codigo: data.codigo || '', ...fields, pdfStoragePath: storagePath, pdfUrl: url });
     }
     window.__decaFormDirty = false;
