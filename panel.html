@@ -5380,6 +5380,7 @@ function openKiosk(driverId){
   window.__kioskMode = true;
   window.__kioskDriverId = driverId;
   window.__kioskStep = 'home';
+  window.__kioskHistoryMonth = null;
   window.__kioskPhotoDraft = null;
   renderTab();
 }
@@ -5389,6 +5390,24 @@ function closeKiosk(){
 }
 function openTodayEntry(driverId){
   return dailyEntries.find(f => f.driverId===driverId && f.date===today() && f.status==='abierta');
+}
+// Historial del conductor: por defecto el mes en curso; se puede retroceder
+// hasta el primer mes con jornadas cerradas y volver hasta el mes actual.
+function kioskHistoryBounds(driverId){
+  const current = today().slice(0,7);
+  const months = dailyEntries.filter(f=>f.driverId===driverId && f.status==='cerrada').map(f=>f.date.slice(0,7));
+  const earliest = months.length ? months.reduce((m,x)=>x<m?x:m, months[0]) : current;
+  const month = window.__kioskHistoryMonth || current;
+  return { month, earliest: earliest < current ? earliest : current, current };
+}
+function kioskShiftHistoryMonth(delta){
+  const { month, earliest, current } = kioskHistoryBounds(window.__kioskDriverId);
+  const [y, m] = month.split('-').map(Number);
+  const d = new Date(y, m-1+delta, 1);
+  const next = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  if (next < earliest || next > current) return;
+  window.__kioskHistoryMonth = next;
+  renderTab();
 }
 function tplKiosk(){
   const d = drivers.find(x=>x.id===window.__kioskDriverId);
@@ -5410,9 +5429,23 @@ function tplKiosk(){
   if (step === 'start') return shell(tplKioskForm('start', d));
   if (step === 'close') return shell(tplKioskForm('close', openEntry ? d : d));
   if (step === 'history') {
-    const closedEntries = dailyEntries.filter(f=>f.driverId===d.id && f.status==='cerrada').sort((a,b)=>b.date.localeCompare(a.date));
+    const { month, earliest, current } = kioskHistoryBounds(d.id);
+    const closedEntries = dailyEntries.filter(f=>f.driverId===d.id && f.status==='cerrada' && f.date.startsWith(month)).sort((a,b)=>b.date.localeCompare(a.date));
+    const totalHours = closedEntries.reduce((s,f)=>s+fichajeHours(f), 0);
+    const totalKm = closedEntries.reduce((s,f)=>s+(Number(f.km)||0), 0);
+    const [my, mm] = month.split('-').map(Number);
+    const monthLabel = (s => s.charAt(0).toUpperCase()+s.slice(1))(new Date(my, mm-1, 1).toLocaleDateString('es-ES',{month:'long', year:'numeric'}));
+    const arrowStyle = (disabled) => `background:none;border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:15px;color:${disabled?'var(--mutedFaint)':'var(--text)'};cursor:${disabled?'default':'pointer'};opacity:${disabled?.4:1};`;
     return shell(`
       <button onclick="window.__kioskStep='home'; renderTab();" style="background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;padding:0;margin-bottom:14px;">← Volver</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;">
+        <button ${month<=earliest?'disabled':''} onclick="kioskShiftHistoryMonth(-1)" title="Mes anterior" style="${arrowStyle(month<=earliest)}">←</button>
+        <div style="text-align:center;">
+          <div style="font-family:var(--display);font-size:17px;text-transform:uppercase;letter-spacing:.3px;">${esc(monthLabel)}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px;">${closedEntries.length} jornada${closedEntries.length!==1?'s':''} · ${fmtHoursMin(totalHours)} · ${totalKm.toLocaleString('es-ES')} km</div>
+        </div>
+        <button ${month>=current?'disabled':''} onclick="kioskShiftHistoryMonth(1)" title="Mes siguiente" style="${arrowStyle(month>=current)}">→</button>
+      </div>
       <div class="card" style="padding:0;overflow-x:auto;">
         <table><thead><tr><th>Fecha</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km</th></tr></thead><tbody>
           ${closedEntries.map(f => `
@@ -5422,12 +5455,12 @@ function tplKiosk(){
               <td style="color:var(--muted);">${f.timeOut}</td>
               <td>${fmtHoursMin(fichajeHours(f))}</td>
               <td style="font-weight:600;">${f.km} km</td>
-            </tr>`).join('') || `<tr><td colspan="5" style="color:var(--mutedFaint);text-align:center;padding:20px;">Todavía no tienes jornadas cerradas.</td></tr>`}
+            </tr>`).join('') || `<tr><td colspan="5" style="color:var(--mutedFaint);text-align:center;padding:20px;">${month===current ? 'Todavía no tienes jornadas cerradas este mes.' : 'No hay jornadas cerradas este mes.'}</td></tr>`}
         </tbody></table>
       </div>`);
   }
 
-  const historyLink = `<div style="text-align:center;margin-top:16px;"><button onclick="window.__kioskStep='history'; renderTab();" style="background:none;border:none;color:var(--primary);font-size:12.5px;cursor:pointer;padding:0;">Ver mi historial →</button></div>`;
+  const historyLink = `<div style="text-align:center;margin-top:16px;"><button onclick="window.__kioskStep='history'; window.__kioskHistoryMonth=null; renderTab();" style="background:none;border:none;color:var(--primary);font-size:12.5px;cursor:pointer;padding:0;">Ver mi historial →</button></div>`;
 
   // HOME: un único botón grande según el estado del día
   if (closedToday && !openEntry) {
