@@ -502,8 +502,10 @@ function goHome(){
   if (window.__showingContactoDetail && !contactoConfirmLeaveEdit()) return;
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
+  if (!flotaConfirmLeaveForm()) return;
   window.__decaFormDirty = false;
   window.__direccionFormDirty = false;
+  window.__flotaFormDirty = false;
   window.__contactoFormDirty = false;
   window.__showingContactoDetail = false;
   window.__contactoDetailId = null;
@@ -519,8 +521,10 @@ async function setTab(id){
   if (window.__showingContactoDetail && !contactoConfirmLeaveEdit()) return;
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
+  if (!flotaConfirmLeaveForm()) return;
   window.__decaFormDirty = false;
   window.__direccionFormDirty = false;
+  window.__flotaFormDirty = false;
   window.__contactoFormDirty = false;
   currentTab = id;
   // Pulsar la pestaña del panel siempre lleva a su pantalla principal
@@ -610,6 +614,7 @@ const HOME_MODULES = {
   admin: { color: '#1B3A6B', icon: 'shield', description: 'Usuarios y permisos de acceso al panel.' },
   administracion: { color: '#5C6670', icon: 'settings', description: 'Razón social, NIF y dirección de tus contactos.' },
   direcciones: { color: '#2E6F95', icon: 'pin', description: 'Agenda de lugares: naves, muelles, carga y descarga.' },
+  flota: { color: '#C1443D', icon: 'truck', description: 'Tractoras y remolques con sus vencimientos.' },
 };
 const HOME_GROUPS = {
   'Almacén': { icon: 'home' },
@@ -626,6 +631,7 @@ function tplInicio(){
     if (t.id === 'administracion') {
       g.items.push({ ...t, action: 'openContactosFromHome()' });
       g.items.push({ id: 'direcciones', label: 'Direcciones', group: t.group, action: 'openDireccionesFromHome()' });
+      g.items.push({ id: 'flota', label: 'Flota', group: t.group, action: 'openFlotaFromHome()' });
     } else g.items.push(t);
   });
   return `
@@ -719,6 +725,11 @@ function computeBreadcrumbSegments(){
   if (currentTab === 'administracion') {
     if (window.__administracionView === 'contactos') return [{label:'Administración', onclick:'backToAdministracionHome()'}, {label:'Contactos', onclick:null}];
     if (window.__administracionView === 'direcciones') return [{label:'Administración', onclick:'backToAdministracionHome()'}, {label:'Direcciones', onclick:null}];
+    if (window.__administracionView === 'flota') return [{label:'Administración', onclick:'backToAdministracionHome()'}, {label:'Flota', onclick:null}];
+    if (window.__administracionView === 'flotaForm') {
+      const fl = window.__flotaFormId ? flota.find(v=>v.id===window.__flotaFormId) : null;
+      return [{label:'Administración', onclick:'backToAdministracionHome()'}, {label:'Flota', onclick:'backToFlota()'}, {label: fl ? fl.matricula : 'Nuevo vehículo', onclick:null}];
+    }
     if (window.__administracionView === 'direccionForm') {
       const dr = window.__direccionFormId ? direcciones.find(d=>d.id===window.__direccionFormId) : null;
       return [{label:'Administración', onclick:'backToAdministracionHome()'}, {label:'Direcciones', onclick:'backToDirecciones()'}, {label: dr ? dr.nombre : 'Nueva dirección', onclick:null}];
@@ -762,10 +773,13 @@ function tplAdministracion(){
   if (window.__administracionView === 'contactos') return tplContactosPage();
   if (window.__administracionView === 'direcciones') return tplDireccionesPage();
   if (window.__administracionView === 'direccionForm') return tplDireccionFormPage();
+  if (window.__administracionView === 'flota') return tplFlotaPage();
+  if (window.__administracionView === 'flotaForm') return tplFlotaFormPage();
   return `
     <div style="max-width:1080px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;">
       ${autonomosHomeCard('users', '#5C6670', 'Contactos', 'Agenda de contactos: razón social, NIF y dirección.', 'openContactosModule()')}
       ${autonomosHomeCard('pin', '#2E6F95', 'Direcciones', 'Agenda de lugares: naves, muelles, puntos de carga y descarga.', 'openDireccionesModule()')}
+      ${autonomosHomeCard('truck', '#C1443D', 'Flota', 'Tractoras y remolques con sus vencimientos.', 'openFlotaModule()')}
     </div>`;
 }
 function openContactosModule(){
@@ -778,8 +792,9 @@ function openContactosModule(){
   renderHeader(); renderTab();
 }
 function backToAdministracionHome(){
-  if (!direccionConfirmLeaveForm()) return;
+  if (!direccionConfirmLeaveForm() || !flotaConfirmLeaveForm()) return;
   window.__direccionFormDirty = false;
+  window.__flotaFormDirty = false;
   window.__administracionView = 'home';
   renderHeader(); renderTab();
 }
@@ -1312,6 +1327,388 @@ async function deleteDireccion(id){
   await loadDirecciones();
   window.__direccionFormDirty = false;
   window.__administracionView = 'direcciones';
+  renderHeader(); renderTab();
+}
+
+/* ---- Flota: tractoras y remolques (matrícula, marca, modelo y vencimientos) ---- */
+let flota = [];
+async function loadFlota(){
+  const { data } = await supabaseClient.from('flota').select('*').order('matricula', { ascending: true });
+  flota = (data||[]).map(v => ({
+    id: v.id, tipo: v.tipo || 'tractora', matricula: v.matricula, marca: v.marca || '', modelo: v.modelo || '',
+    itvVence: v.itv_vence || '', seguroVence: v.seguro_vence || '', tacografoVence: v.tacografo_vence || '', archived: !!v.archived,
+  }));
+}
+const FLOTA_TIPOS = { tractora: 'Tractora', remolque: 'Remolque' };
+const FLOTA_VENCIMIENTOS = [['itvVence','ITV'], ['seguroVence','Seguro'], ['tacografoVence','Tacógrafo']];
+// El tacógrafo solo lo llevan las tractoras.
+function flotaVencimientosDe(v){ return FLOTA_VENCIMIENTOS.filter(([k]) => k !== 'tacografoVence' || v.tipo === 'tractora'); }
+function flotaVencStatus(dateStr){
+  if (!dateStr) return { text: 'Sin fecha', color: 'var(--mutedFaint)' };
+  const days = Math.round((new Date(dateStr + 'T00:00:00') - new Date(today() + 'T00:00:00')) / 86400000);
+  if (days < 0) return { text: `${fmtDateY(dateStr)} · vencida`, color: 'var(--danger)' };
+  if (days <= 30) return { text: `${fmtDateY(dateStr)} · en ${days} día${days!==1?'s':''}`, color: '#B7791F' };
+  return { text: fmtDateY(dateStr), color: 'var(--muted)' };
+}
+function flotaConfirmLeaveForm(){
+  if (window.__administracionView === 'flotaForm' && window.__flotaFormDirty) {
+    return confirm('Tienes cambios sin guardar. ¿Seguro que quieres salir sin guardar?');
+  }
+  return true;
+}
+function openFlotaModule(){
+  window.__administracionView = 'flota';
+  window.__flotaView = 'activos';
+  window.__flotaTipos = [];
+  window.__flotaSearch = '';
+  window.__flotaFilterOpen = false;
+  window.__flotaPage = 0;
+  renderHeader(); renderTab();
+}
+async function openFlotaFromHome(){
+  await setTab('administracion');
+  if (currentTab === 'administracion') openFlotaModule();
+}
+function backToFlota(){
+  if (!flotaConfirmLeaveForm()) return;
+  window.__flotaFormDirty = false;
+  window.__administracionView = 'flota';
+  renderHeader(); renderTab();
+}
+function flotaFilteredList(){
+  const archivedView = (window.__flotaView || 'activos') === 'archivados';
+  const tipos = window.__flotaTipos || [];
+  const search = (window.__flotaSearch || '').toLowerCase();
+  const list = flota.filter(v => !!v.archived === archivedView
+    && (!tipos.length || tipos.includes(v.tipo))
+    && (!search || v.matricula.toLowerCase().includes(search) || v.marca.toLowerCase().includes(search) || v.modelo.toLowerCase().includes(search)));
+  return { list, archivedView, search, tipos };
+}
+function flotaCardHtml(v, archivedView){
+  const venc = flotaVencimientosDe(v).map(([k, label]) => {
+    const st = flotaVencStatus(v[k]);
+    return `<div style="display:flex;justify-content:space-between;gap:8px;"><span style="color:var(--mutedFaint);">${label}</span><span style="color:${st.color};text-align:right;">${esc(st.text)}</span></div>`;
+  }).join('');
+  return `
+    <div class="card" style="cursor:pointer;display:flex;gap:14px;align-items:flex-start;padding:18px;${archivedView?'opacity:0.7;':''}" onclick="openFlotaForm('${v.id}')">
+      <div style="width:56px;height:56px;border-radius:10px;flex-shrink:0;border:1px solid var(--border);background:var(--panel2);display:flex;align-items:center;justify-content:center;">${homeIcon(HOME_ICON_PATHS.truck, 26, 'var(--mutedFaint)', 1.5)}</div>
+      <div style="min-width:0;flex:1;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:2px;">
+          <span style="font-family:var(--display);font-size:16px;font-weight:700;letter-spacing:.3px;">${esc(v.matricula)}</span>
+          <span style="font-size:10px;text-transform:uppercase;letter-spacing:.3px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:2px 8px;color:var(--muted);">${esc(FLOTA_TIPOS[v.tipo]||v.tipo)}</span>
+          ${archivedView?'<span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;">· archivado</span>':''}
+        </div>
+        <div style="font-size:12.5px;color:var(--muted);margin-bottom:8px;">${[v.marca, v.modelo].filter(Boolean).map(esc).join(' ') || '<span style="color:var(--mutedFaint);">Sin marca ni modelo</span>'}</div>
+        <div style="display:flex;flex-direction:column;gap:3px;font-size:12px;">${venc}</div>
+      </div>
+    </div>`;
+}
+const FLOTA_PAGE_SIZE = 80;
+function flotaGoToPage(delta){
+  window.__flotaPage = Math.max(0, (window.__flotaPage||0) + delta);
+  refreshFlotaListBody();
+}
+function tplFlotaPaginationHtml(){
+  const total = flotaFilteredList().list.length;
+  const totalPages = Math.max(1, Math.ceil(total / FLOTA_PAGE_SIZE));
+  const page = Math.min(window.__flotaPage||0, totalPages-1);
+  return `
+    <span>${total ? page * FLOTA_PAGE_SIZE + 1 : 0}-${Math.min(total, (page+1) * FLOTA_PAGE_SIZE)} / ${total}</span>
+    <button class="btn btn-ghost" style="padding:4px 9px;" ${page<=0?'disabled':''} onclick="flotaGoToPage(-1)">‹</button>
+    <button class="btn btn-ghost" style="padding:4px 9px;" ${page>=totalPages-1?'disabled':''} onclick="flotaGoToPage(1)">›</button>`;
+}
+function flotaListBodyHtml(){
+  const { list, archivedView, search, tipos } = flotaFilteredList();
+  if (!list.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search || tipos.length ? 'Ningún vehículo coincide con el filtro.' : archivedView ? 'No hay vehículos archivados.' : 'Todavía no hay ningún vehículo creado.'}</div>`;
+  const totalPages = Math.max(1, Math.ceil(list.length / FLOTA_PAGE_SIZE));
+  if ((window.__flotaPage||0) > totalPages - 1) window.__flotaPage = totalPages - 1;
+  const page = window.__flotaPage || 0;
+  const pageList = list.slice(page * FLOTA_PAGE_SIZE, (page + 1) * FLOTA_PAGE_SIZE);
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">${pageList.map(v=>flotaCardHtml(v, archivedView)).join('')}</div>`;
+}
+function refreshFlotaListBody(){
+  const el = document.getElementById('flota-list-body');
+  if (el) el.innerHTML = flotaListBodyHtml();
+  const pag = document.getElementById('flota-pagination');
+  if (pag) pag.innerHTML = tplFlotaPaginationHtml();
+}
+function toggleFlotaTipoFilter(tipo, checked){
+  const cur = window.__flotaTipos || [];
+  window.__flotaTipos = checked ? [...cur, tipo] : cur.filter(t=>t!==tipo);
+  window.__flotaPage = 0;
+  renderTab();
+}
+function tplFlotaPage(){
+  const archivedView = (window.__flotaView || 'activos') === 'archivados';
+  const tipos = window.__flotaTipos || [];
+  const filterCount = (archivedView ? 1 : 0) + tipos.length;
+  const check = (checked, onchange, label) => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 4px;cursor:pointer;white-space:nowrap;">
+      <input type="checkbox" ${checked?'checked':''} onchange="${onchange}" style="width:auto;" /> ${label}
+    </label>`;
+  return `
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:22px;">
+      <div style="width:48px;height:48px;border-radius:12px;background:rgba(193,68,61,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        ${homeIcon(HOME_ICON_PATHS.truck, 24, '#C1443D')}
+      </div>
+      <div>
+        <div style="font-family:var(--display);font-size:22px;">Flota</div>
+        <div style="font-size:12.5px;color:var(--mutedFaint);">Tractoras y remolques con sus vencimientos de ITV, seguro y tacógrafo.</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-self:start;">
+        <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
+          <input placeholder="Buscar por matrícula, marca o modelo…" value="${esc(window.__flotaSearch||'')}" oninput="window.__flotaSearch=this.value; window.__flotaPage=0; refreshFlotaListBody();" style="padding-left:34px;" />
+          <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+        </div>
+        ${archivedView ? '' : `<button class="btn btn-primary" onclick="openFlotaForm()">+ Nuevo vehículo</button>`}
+      </div>
+      <div style="position:relative;justify-self:center;">
+        <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__flotaFilterOpen=!window.__flotaFilterOpen; renderTab();">Filtros${filterCount?` (${filterCount})`:''} ▾</button>
+        ${window.__flotaFilterOpen ? `
+          <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:190px;">
+            ${check(archivedView, "window.__flotaView=this.checked?'archivados':'activos'; window.__flotaPage=0; renderTab();", 'Archivados')}
+            <div style="height:1px;background:var(--border);margin:6px 0;"></div>
+            ${Object.entries(FLOTA_TIPOS).map(([k, label]) => check(tipos.includes(k), `toggleFlotaTipoFilter('${k}', this.checked)`, label + 's')).join('')}
+          </div>` : ''}
+      </div>
+      <div id="flota-pagination" style="display:flex;align-items:center;gap:8px;justify-self:end;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplFlotaPaginationHtml()}</div>
+    </div>
+    <div id="flota-list-body">${flotaListBodyHtml()}</div>`;
+}
+
+/* ---- Flota: historial de cambios ---- */
+let flotaHistorialCache = {};
+async function loadFlotaHistorial(vehiculoId){
+  const { data } = await supabaseClient.from('flota_historial').select('*').eq('vehiculo_id', vehiculoId).order('created_at', { ascending: false });
+  return (data||[]).map(h => ({ id: h.id, createdAt: h.created_at, usuario: h.usuario || '', resumen: h.resumen }));
+}
+async function logFlotaHistorial(vehiculoId, resumen){
+  if (!resumen) return;
+  const usuario = currentUserEmail();
+  const { data } = await supabaseClient.from('flota_historial').insert({ vehiculo_id: vehiculoId, usuario, resumen }).select().single();
+  if (!data) return;
+  flotaHistorialCache[vehiculoId] = [{ id: data.id, createdAt: data.created_at, usuario, resumen }, ...(flotaHistorialCache[vehiculoId]||[])];
+}
+const FLOTA_FIELD_LABELS = {
+  tipo: 'Tipo', matricula: 'Matrícula', marca: 'Marca', modelo: 'Modelo',
+  itvVence: 'ITV', seguroVence: 'Seguro', tacografoVence: 'Tacógrafo',
+};
+function buildFlotaChangeSummary(before, after){
+  const lines = [];
+  Object.keys(FLOTA_FIELD_LABELS).forEach(key => {
+    const isDate = /Vence$/.test(key);
+    const show = v => !v ? '—' : isDate ? fmtDateY(v) : key === 'tipo' ? (FLOTA_TIPOS[v]||v) : v;
+    if ((before[key]||'') !== (after[key]||'')) lines.push(`${FLOTA_FIELD_LABELS[key]}: "${show(before[key])}" → "${show(after[key])}"`);
+  });
+  return lines;
+}
+function flotaHistorialBodyHtml(){
+  const editing = window.__flotaFormId ? flota.find(v=>v.id===window.__flotaFormId) : null;
+  const historial = window.__flotaHistorial;
+  if (!editing) return `<div style="color:var(--mutedFaint);font-size:12.5px;">Se empezará a registrar en cuanto guardes el vehículo.</div>`;
+  if (historial === null || historial === undefined) return `<div style="color:var(--mutedFaint);font-size:12.5px;">Cargando…</div>`;
+  if (!historial.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay cambios registrados.</div>`;
+  return historial.map(h => `
+    <div style="padding:10px 0;border-bottom:1px solid var(--border);">
+      <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:3px;">${fmtDateHora(h.createdAt)}${h.usuario?' · '+esc(h.usuario):''}</div>
+      <div style="font-size:12.5px;color:var(--text);white-space:pre-line;">${esc(h.resumen)}</div>
+    </div>`).join('');
+}
+
+/* ---- Flota: ficha (vista / edición), como la de Direcciones y Contactos ---- */
+function openFlotaForm(editId, keepNav){
+  if (!keepNav) window.__flotaNavIds = flotaFilteredList().list.map(v=>v.id);
+  window.__administracionView = 'flotaForm';
+  window.__flotaFormId = editId || null;
+  window.__flotaFormDirty = false;
+  window.__flotaEditMode = !editId;
+  window.__flotaActionMenuOpen = false;
+  window.__flotaHistorial = editId ? (flotaHistorialCache[editId] || null) : [];
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
+  if (editId) {
+    loadFlotaHistorial(editId).then(list => {
+      flotaHistorialCache[editId] = list;
+      if (window.__administracionView === 'flotaForm' && window.__flotaFormId === editId) {
+        window.__flotaHistorial = list;
+        const el = document.getElementById('fl-historial-body');
+        if (el) el.innerHTML = flotaHistorialBodyHtml();
+      }
+    });
+  }
+}
+function flotaNavGoto(offset){
+  const ids = window.__flotaNavIds || [];
+  const idx = ids.indexOf(window.__flotaFormId);
+  if (idx === -1 || !ids.length) return;
+  if (!flotaConfirmLeaveForm()) return;
+  openFlotaForm(ids[(idx + offset + ids.length) % ids.length], true);
+}
+function enterFlotaEditMode(){
+  window.__flotaEditMode = true;
+  window.__flotaFormDirty = false;
+  window.__flotaActionMenuOpen = false;
+  renderTab();
+}
+function exitFlotaEditMode(){
+  if (!flotaConfirmLeaveForm()) return;
+  window.__flotaFormDirty = false;
+  if (!window.__flotaFormId) { backToFlota(); return; }
+  window.__flotaEditMode = false;
+  renderTab();
+}
+function newVehiculo(){
+  if (!flotaConfirmLeaveForm()) return;
+  openFlotaForm(null, true);
+}
+function onFlotaTipoChange(){
+  const f = document.getElementById('fl-tacografo-field');
+  if (f) f.style.display = document.getElementById('fl-tipo').value === 'tractora' ? '' : 'none';
+}
+function tplFlotaViewCard(v){
+  const venc = flotaVencimientosDe(v).map(([k, label]) => {
+    const st = flotaVencStatus(v[k]);
+    return contactoFieldBlock(label, `<span style="color:${st.color};">${esc(st.text)}</span>`);
+  }).join('');
+  return `
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
+      <span style="font-family:var(--display);font-size:19px;">${esc(v.matricula)}</span>
+      <span style="font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:3px 10px;color:var(--muted);">${esc(FLOTA_TIPOS[v.tipo]||v.tipo)}</span>
+      ${v.archived?'<span style="font-size:11px;color:var(--danger);text-transform:uppercase;">· archivado</span>':''}
+    </div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:18px;">${[v.marca, v.modelo].filter(Boolean).map(esc).join(' ') || 'Sin marca ni modelo'}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">${venc}</div>`;
+}
+function tplFlotaFormPage(){
+  const editId = window.__flotaFormId;
+  const editing = editId ? flota.find(v=>v.id===editId) : null;
+  const v = editing || { tipo: 'tractora' };
+  const editMode = window.__flotaEditMode || !editing;
+  const submitLabel = editing ? 'Guardar' : 'Añadir';
+  const navIds = window.__flotaNavIds || [];
+  const navIdx = editId ? navIds.indexOf(editId) : -1;
+  const arrowBtn = (offset, title, ch) => `<button onclick="flotaNavGoto(${offset})" title="${title}" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13px;">${ch}</button>`;
+  const dateField = (id, label, val, extra) => `<div class="field" ${extra||''}><label>${label}</label><input id="${id}" type="date" value="${esc(val||'')}" /></div>`;
+  return `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div style="width:48px;height:48px;border-radius:12px;background:rgba(193,68,61,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          ${homeIcon(HOME_ICON_PATHS.truck, 24, '#C1443D')}
+        </div>
+        <div>
+          <div style="font-family:var(--display);font-size:22px;">${editing ? esc(editing.matricula) : 'Nuevo vehículo'}</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">Tractoras y remolques con sus vencimientos de ITV, seguro y tacógrafo.</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        ${editing ? `
+          <div style="position:relative;">
+            <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__flotaActionMenuOpen=!window.__flotaActionMenuOpen; renderTab();">Acción ▾</button>
+            ${window.__flotaActionMenuOpen ? `
+              <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:0;margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:190px;">
+                <button class="btn btn-ghost" style="width:100%;justify-content:flex-start;white-space:nowrap;color:${editing.archived?'var(--success)':'var(--danger)'};" onclick="window.__flotaActionMenuOpen=false; setFlotaArchived('${editing.id}', ${!editing.archived})">${editing.archived?'Restaurar':'Archivar'}</button>
+                ${editing.archived ? `<button class="btn btn-ghost" style="width:100%;justify-content:flex-start;white-space:nowrap;color:var(--danger);margin-top:4px;" onclick="window.__flotaActionMenuOpen=false; deleteVehiculo('${editing.id}')">Eliminar definitivamente</button>` : ''}
+              </div>` : ''}
+          </div>` : ''}
+        ${navIdx>-1 && navIds.length>1 ? `
+          <div style="display:flex;align-items:center;gap:4px;">
+            ${arrowBtn(-1, 'Vehículo anterior', '←')}
+            <span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${navIdx+1}/${navIds.length}</span>
+            ${arrowBtn(1, 'Vehículo siguiente', '→')}
+          </div>` : ''}
+        ${!editMode ? `<button class="btn btn-ghost" onclick="enterFlotaEditMode()">Editar</button>` : ''}
+        <button class="btn btn-ghost" onclick="newVehiculo()">+ Nuevo</button>
+        ${editMode ? `<button class="btn btn-primary fl-submit-btn" onclick="submitFlotaForm('${editId||''}')">${submitLabel}</button>` : ''}
+      </div>
+    </div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+    <div style="flex:2;min-width:360px;">
+    ${!editMode ? `
+    <div class="card">${tplFlotaViewCard(v)}</div>
+    <div id="fl-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
+    ` : `
+    <div class="card" oninput="window.__flotaFormDirty=true;" onchange="window.__flotaFormDirty=true;">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:180px;"><label>Tipo</label>
+          <select id="fl-tipo" onchange="onFlotaTipoChange()">${Object.entries(FLOTA_TIPOS).map(([k,l])=>`<option value="${k}" ${v.tipo===k?'selected':''}>${l}</option>`).join('')}</select>
+        </div>
+        <div class="field" style="flex:2;min-width:220px;"><label>Matrícula</label><input id="fl-matricula" maxlength="15" style="text-transform:uppercase;" oninput="uppercaseInput(this)" value="${esc(v.matricula||'')}" /></div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:220px;"><label>Marca</label><input id="fl-marca" maxlength="60" placeholder="Ej. Volvo" value="${esc(v.marca||'')}" /></div>
+        <div class="field" style="flex:1;min-width:220px;"><label>Modelo</label><input id="fl-modelo" maxlength="60" placeholder="Ej. FH 460" value="${esc(v.modelo||'')}" /></div>
+      </div>
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12px;color:var(--muted);letter-spacing:.4px;margin:6px 0 10px;">Vencimientos</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        ${dateField('fl-itv', 'ITV', v.itvVence, 'style="flex:1;min-width:180px;"')}
+        ${dateField('fl-seguro', 'Seguro', v.seguroVence, 'style="flex:1;min-width:180px;"')}
+        <div id="fl-tacografo-field" style="flex:1;min-width:180px;${v.tipo==='tractora'?'':'display:none;'}">${dateField('fl-tacografo', 'Tacógrafo', v.tacografoVence, '')}</div>
+      </div>
+    </div>
+    <div id="fl-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
+      <button class="btn btn-ghost" onclick="exitFlotaEditMode()">Cancelar</button>
+      <button class="btn btn-primary fl-submit-btn" onclick="submitFlotaForm('${editId||''}')">${submitLabel}</button>
+    </div>
+    `}
+    </div>
+    <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Historial de cambios</div>
+      <div id="fl-historial-body">${flotaHistorialBodyHtml()}</div>
+    </div>
+    </div>`;
+}
+async function submitFlotaForm(editId){
+  const errEl = document.getElementById('fl-error');
+  errEl.textContent = '';
+  const val = id => document.getElementById(id).value.trim();
+  const matricula = val('fl-matricula').toUpperCase();
+  if (!matricula) { errEl.textContent = 'Indica la matrícula.'; return; }
+  const tipo = val('fl-tipo');
+  const payload = {
+    tipo, matricula, marca: val('fl-marca') || null, modelo: val('fl-modelo') || null,
+    itv_vence: val('fl-itv') || null, seguro_vence: val('fl-seguro') || null,
+    tacografo_vence: tipo === 'tractora' ? (val('fl-tacografo') || null) : null,
+  };
+  const btns = [...document.querySelectorAll('.fl-submit-btn')];
+  btns.forEach(b => b.disabled = true);
+  const before = editId ? { ...flota.find(v=>v.id===editId) } : null;
+  const res = editId
+    ? await supabaseClient.from('flota').update(payload).eq('id', editId).select()
+    : await supabaseClient.from('flota').insert(payload).select();
+  if (res.error || !res.data || !res.data.length) {
+    const dup = res.error && (res.error.code === '23505' || /duplicate|unique/i.test(res.error.message||''));
+    errEl.textContent = dup ? 'Ya existe un vehículo con esa matrícula.' : 'No se pudo guardar: ' + (res.error && res.error.message ? res.error.message : 'sin permiso o error desconocido.');
+    btns.forEach(b => b.disabled = false);
+    return;
+  }
+  const after = { tipo, matricula, marca: payload.marca || '', modelo: payload.modelo || '', itvVence: payload.itv_vence || '', seguroVence: payload.seguro_vence || '', tacografoVence: payload.tacografo_vence || '' };
+  const changeLines = before ? buildFlotaChangeSummary(before, after) : ['Vehículo creado.'];
+  const savedId = editId || res.data[0].id;
+  if (changeLines.length) await logFlotaHistorial(savedId, changeLines.join('\n'));
+  await loadFlota();
+  window.__flotaNavIds = flotaFilteredList().list.map(v=>v.id);
+  openFlotaForm(savedId, true);
+}
+async function setFlotaArchived(id, archived){
+  const errEl = document.getElementById('fl-error');
+  const { data, error } = await supabaseClient.from('flota').update({ archived }).eq('id', id).select();
+  if (error || !data || !data.length) { if (errEl) errEl.textContent = 'No se pudo actualizar: ' + (error && error.message ? error.message : 'sin permiso.'); return; }
+  await logFlotaHistorial(id, archived ? 'Archivado.' : 'Restaurado.');
+  await loadFlota();
+  openFlotaForm(id, true);
+}
+async function deleteVehiculo(id){
+  const v = flota.find(x=>x.id===id);
+  if (!v || !confirm(`¿Eliminar definitivamente ${v.matricula}? Esta acción no se puede deshacer.`)) return;
+  const errEl = document.getElementById('fl-error');
+  const { error } = await supabaseClient.from('flota').delete().eq('id', id);
+  if (error) { if (errEl) errEl.textContent = 'No se pudo eliminar: ' + error.message; return; }
+  await loadFlota();
+  window.__flotaFormDirty = false;
+  window.__administracionView = 'flota';
   renderHeader(); renderTab();
 }
 
@@ -6413,7 +6810,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
     return;
   }
 
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones()]);
+  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
