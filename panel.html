@@ -4960,10 +4960,14 @@ async function buildAndUploadDecaPdf(fields, storagePath, existingUrl){
     if (signError || !signedData) throw new Error('No se pudo generar la URL de descarga.');
     url = signedData.signedUrl;
   }
-  const qrPngDataUrl = qrDataUrl(url, 6);
-
   const { PDFDocument, StandardFonts, rgb } = PDFLib;
-  const pdfDoc = await PDFDocument.create();
+  // Cada celdilla del QR se dibuja grande (12 px) para que quede nítido al
+  // escalarlo a tamaño real en la primera página.
+  const qrPng = dataUrlToUint8Array(qrDataUrl(url, 12));
+
+  // Página con toda la información del DeCA (sin QR): es lo que se ve al
+  // escanear el código y también la segunda página del PDF del conductor.
+  const drawInfoPage = async (pdfDoc) => {
   const page = pdfDoc.addPage([595.28, 841.89]);
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -5007,17 +5011,44 @@ async function buildAndUploadDecaPdf(fields, storagePath, existingUrl){
   y -= 10;
   page.drawText(`Generado el ${new Date().toLocaleString('es-ES')} · Qualified Logistics`, { x: marginX, y, size: 8, font, color: rgb(0.6,0.6,0.6) });
 
-  const qrImage = await pdfDoc.embedPng(dataUrlToUint8Array(qrPngDataUrl));
-  const qrSize = 110;
-  page.drawImage(qrImage, { x: 595.28 - marginX - qrSize, y: 60, width: qrSize, height: qrSize });
-  page.drawText('Escanea para descargar el documento:', { x: 595.28 - marginX - qrSize, y: 60 + qrSize + 6, size: 8, font, color: rgb(0.4,0.4,0.4) });
-  const urlLines = wrapPdfText(url, font, 7, qrSize);
-  urlLines.forEach((line,i) => page.drawText(line, { x: 595.28 - marginX - qrSize, y: 50 - i*9, size: 7, font, color: rgb(0.4,0.4,0.4) }));
+  };
 
-  const pdfBytes = await pdfDoc.save();
-  const { error: uploadError } = await supabaseClient.storage.from(DOCS_BUCKET).upload(storagePath, new Blob([pdfBytes], { type: 'application/pdf' }), { upsert: true, contentType: 'application/pdf' });
+  // 1) Lo que abre el QR: solo la información (misma ruta y URL de siempre).
+  const infoDoc = await PDFDocument.create();
+  await drawInfoPage(infoDoc);
+  const infoBytes = await infoDoc.save();
+  const { error: uploadError } = await supabaseClient.storage.from(DOCS_BUCKET).upload(storagePath, new Blob([infoBytes], { type: 'application/pdf' }), { upsert: true, contentType: 'application/pdf' });
   if (uploadError) throw new Error('No se pudo subir el PDF.');
+
+  // 2) El PDF que se entrega al conductor: página 1 solo el QR, centrado y a
+  // un tamaño cómodo de escanear (unos 12 cm de lado con su margen blanco);
+  // página 2 la información.
+  const driverDoc = await PDFDocument.create();
+  const qrPage = driverDoc.addPage([595.28, 841.89]);
+  const qrImage = await driverDoc.embedPng(qrPng);
+  const qrSize = 340;
+  qrPage.drawImage(qrImage, { x: (595.28 - qrSize) / 2, y: (841.89 - qrSize) / 2, width: qrSize, height: qrSize });
+  await drawInfoPage(driverDoc);
+  const driverBytes = await driverDoc.save();
+  const { error: driverError } = await supabaseClient.storage.from(DOCS_BUCKET).upload(decaDriverPath(storagePath), new Blob([driverBytes], { type: 'application/pdf' }), { upsert: true, contentType: 'application/pdf' });
+  if (driverError) throw new Error('No se pudo subir el PDF del conductor.');
   return { url };
+}
+// El PDF del conductor vive junto al de consulta: mismo nombre + "-conductor".
+function decaDriverPath(storagePath){ return String(storagePath).replace(/\.pdf$/i, '') + '-conductor.pdf'; }
+async function openDecaDriverPdf(id){
+  const d = decaDocuments.find(x=>x.id===id);
+  if (!d) return;
+  const w = window.open('', '_blank');
+  let url = null;
+  if (d.pdfStoragePath) {
+    const { data } = await supabaseClient.storage.from(DOCS_BUCKET).createSignedUrl(decaDriverPath(d.pdfStoragePath), 3600);
+    url = data ? data.signedUrl : null;
+  }
+  // Un DeCA anterior a este formato no tiene PDF de conductor aparte hasta
+  // que se vuelve a guardar: se abre el único PDF que tiene.
+  url = url || d.pdfUrl;
+  if (w) w.location = url; else window.location.href = url;
 }
 
 /* ---- DeCA: formulario crear/editar ---- */
@@ -5094,7 +5125,7 @@ function tplDecaFormPage(){
         </div>
         <div>
           <div style="font-family:var(--display);font-size:22px;">${editing ? 'Editar DeCA' + (editing.codigo ? ' ' + esc(editing.codigo) : '') : 'Nuevo DeCA'}</div>
-          <div style="font-size:12.5px;color:var(--mutedFaint);">Al guardar se genera (o regenera) el PDF con su código QR de descarga.</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">Al guardar se genera (o regenera) el PDF para el conductor: página 1 con el QR y página 2 con la información.</div>
         </div>
       </div>
     </div>
@@ -5221,8 +5252,8 @@ function openDecaViewModal(id){
           <div style="font-size:11px;color:var(--mutedFaint);word-break:break-all;">${esc(d.pdfUrl)}</div>
         </div>
         <div style="display:flex;gap:10px;">
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="copyDecaLink('${esc(d.pdfUrl)}')">📋 Copiar enlace</button>
-          <a class="btn btn-primary" style="flex:1;justify-content:center;text-decoration:none;" href="${esc(d.pdfUrl)}" target="_blank" rel="noopener">Abrir PDF</a>
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" title="El enlace que abre el QR (solo la información)" onclick="copyDecaLink('${esc(d.pdfUrl)}')">Copiar enlace del QR</button>
+          <button class="btn btn-primary" style="flex:1;justify-content:center;" title="Página 1: QR · Página 2: información" onclick="openDecaDriverPdf('${d.id}')">PDF para el conductor</button>
         </div>` : `<div style="color:var(--mutedFaint);font-size:12.5px;">Sin PDF generado.</div>`}
       </div>
     </div>`;
@@ -5253,7 +5284,7 @@ function confirmDeleteDeca(id){
 async function deleteDeca(id){
   const d = decaDocuments.find(x=>x.id===id);
   if (!d) return;
-  if (d.pdfStoragePath) await supabaseClient.storage.from(DOCS_BUCKET).remove([d.pdfStoragePath]);
+  if (d.pdfStoragePath) await supabaseClient.storage.from(DOCS_BUCKET).remove([d.pdfStoragePath, decaDriverPath(d.pdfStoragePath)]);
   await supabaseClient.from('deca_documents').delete().eq('id', id);
   decaDocuments = decaDocuments.filter(x=>x.id!==id);
   closeModal();
