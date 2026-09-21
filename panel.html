@@ -629,6 +629,7 @@ const HOME_ICON_PATHS = {
   arrow: '<line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline>',
   edit: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>',
   pin: '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>',
   building: '<rect x="4" y="3" width="16" height="18" rx="1"></rect><rect x="8" y="7" width="2" height="2"></rect><rect x="14" y="7" width="2" height="2"></rect><rect x="8" y="12" width="2" height="2"></rect><rect x="14" y="12" width="2" height="2"></rect><rect x="10" y="17" width="4" height="4"></rect>',
 };
 const HOME_MODULES = {
@@ -4862,6 +4863,7 @@ function decaListBodyHtml(){
               <td style="color:var(--muted);">${esc(d.mercanciaNaturaleza)}</td>
               <td style="white-space:nowrap;">
                 <button onclick="event.stopPropagation(); openDecaViewModal('${d.id}');" title="Ver" style="background:none;border:none;color:var(--muted);font-size:14px;padding:2px 4px;">👁</button>
+                <button onclick="event.stopPropagation(); downloadDecaPdf('${d.id}');" title="Descargar PDF (${esc(decaPdfFileName(d))})" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;">${homeIcon(HOME_ICON_PATHS.download, 15, 'currentColor', 2)}</button>
                 <button onclick="event.stopPropagation(); openDecaForm('${d.id}');" title="Editar" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
                 <button onclick="event.stopPropagation(); confirmDeleteDeca('${d.id}');" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);font-size:14px;padding:2px 4px;">🗑</button>
               </td>
@@ -5101,6 +5103,28 @@ async function decaBuildPdfs(fields, url){
 }
 // El PDF del conductor vive junto al de consulta: mismo nombre + "-conductor".
 function decaDriverPath(storagePath){ return String(storagePath).replace(/\.pdf$/i, '') + '-conductor.pdf'; }
+// El archivo descargado se llama como el número del DeCA (p. ej. 2026-1000.pdf).
+function decaPdfFileName(d){
+  const base = String((d && d.codigo) || '').trim().replace(/[\\/:*?"<>|]+/g, '-');
+  return (base || 'DeCA') + '.pdf';
+}
+async function downloadDecaPdf(id){
+  const d = decaDocuments.find(x=>x.id===id);
+  if (!d) return;
+  try {
+    if (!d.pdfUrl) throw new Error('este DeCA no tiene enlace de descarga.');
+    const { driverBytes } = await decaBuildPdfs(d, d.pdfUrl);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([driverBytes], { type: 'application/pdf' }));
+    a.download = decaPdfFileName(d);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  } catch (err) {
+    alert('No se pudo descargar el PDF: ' + (err && err.message ? err.message : 'error desconocido.'));
+  }
+}
 // El PDF del conductor se genera siempre al momento con los datos actuales
 // del DeCA y el diseño vigente, y se abre desde el propio navegador: así nunca
 // aparece una versión antigua guardada en caché o en el almacenamiento.
@@ -5353,8 +5377,9 @@ function openDecaViewModal(id){
           <div style="font-size:11px;color:var(--mutedFaint);word-break:break-all;">${esc(d.pdfUrl)}</div>
         </div>
         <div style="display:flex;gap:10px;">
+          <button class="btn btn-primary" style="flex:1;justify-content:center;" title="Página 1: QR · Página 2: información. El archivo se llama ${esc(decaPdfFileName(d))}" onclick="downloadDecaPdf('${d.id}')">Descargar PDF</button>
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" title="Página 1: QR · Página 2: información" onclick="openDecaDriverPdf('${d.id}')">Abrir PDF</button>
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" title="El enlace que abre el QR (solo la información)" onclick="copyDecaLink('${esc(d.pdfUrl)}')">Copiar enlace del QR</button>
-          <button class="btn btn-primary" style="flex:1;justify-content:center;" title="Página 1: QR · Página 2: información" onclick="openDecaDriverPdf('${d.id}')">PDF para el conductor</button>
         </div>` : `<div style="color:var(--mutedFaint);font-size:12.5px;">Sin PDF generado.</div>`}
       </div>
     </div>`;
