@@ -1274,11 +1274,11 @@ async function submitDireccionForm(editId){
   const errEl = document.getElementById('dr-error');
   errEl.textContent = '';
   const nombre = document.getElementById('dr-nombre').value.trim();
-  if (!nombre) { errEl.textContent = 'Indica al menos el nombre del lugar.'; return; }
+  if (!nombre) { showFormError(errEl, 'Indica al menos el nombre del lugar.'); return; }
   const val = id => document.getElementById(id).value.trim();
-  if (window.__hrError) { errEl.textContent = 'Revisa los horarios: ' + window.__hrError; return; }
+  if (window.__hrError) { showFormError(errEl, 'Revisa los horarios: ' + window.__hrError); return; }
   const mapsUrl = val('dr-maps');
-  if (mapsUrl && !safeMapsUrl(mapsUrl)) { errEl.textContent = 'El enlace de Google Maps debe empezar por http:// o https://.'; return; }
+  if (mapsUrl && !safeMapsUrl(mapsUrl)) { showFormError(errEl, 'El enlace de Google Maps debe empezar por http:// o https://.'); return; }
   const payload = {
     nombre, calle1: val('dr-calle1') || null, calle2: val('dr-calle2') || null,
     codigo_postal: val('dr-cp') || null, ciudad: val('dr-ciudad') || null, provincia: val('dr-provincia') || null,
@@ -1292,7 +1292,7 @@ async function submitDireccionForm(editId){
     ? await supabaseClient.from('direcciones').update(payload).eq('id', editId).select()
     : await supabaseClient.from('direcciones').insert(payload).select();
   if (res.error || !res.data || !res.data.length) {
-    errEl.textContent = 'No se pudo guardar: ' + (res.error && res.error.message ? res.error.message : 'sin permiso o error desconocido.');
+    showFormError(errEl, 'No se pudo guardar: ' + (res.error && res.error.message ? res.error.message : 'sin permiso o error desconocido.'));
     btns.forEach(b => b.disabled = false);
     return;
   }
@@ -1713,15 +1713,21 @@ function tplFlotaFormPage(){
     </div>
     </div>`;
 }
+// Muestra el error de un formulario y lo acerca a la vista: con el botón
+// Guardar arriba, el aviso de abajo pasaba desapercibido.
+function showFormError(errEl, msg){
+  errEl.textContent = msg;
+  if (msg) errEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
 async function submitFlotaForm(editId){
   const errEl = document.getElementById('fl-error');
   errEl.textContent = '';
   const val = id => document.getElementById(id).value.trim();
   const matricula = val('fl-matricula').toUpperCase();
-  if (!matricula) { errEl.textContent = 'Indica la matrícula.'; return; }
+  if (!matricula) { showFormError(errEl, 'Indica la matrícula.'); return; }
   const tipo = val('fl-tipo');
   if (tipo === 'tractora' && !/^\d{4}-[A-Z]{3}$/.test(matricula)) {
-    errEl.textContent = 'La matrícula de una tractora debe tener 4 números, un guion y 3 letras (por ejemplo 1234-ABC).';
+    showFormError(errEl, 'La matrícula de una tractora debe tener 4 números, un guion y 3 letras (por ejemplo 1234-ABC).');
     return;
   }
   const payload = {
@@ -1738,8 +1744,12 @@ async function submitFlotaForm(editId){
     ? await supabaseClient.from('flota').update(payload).eq('id', editId).select()
     : await supabaseClient.from('flota').insert(payload).select();
   if (res.error || !res.data || !res.data.length) {
-    const dup = res.error && (res.error.code === '23505' || /duplicate|unique/i.test(res.error.message||''));
-    errEl.textContent = dup ? 'Ya existe un vehículo con esa matrícula.' : 'No se pudo guardar: ' + (res.error && res.error.message ? res.error.message : 'sin permiso o error desconocido.');
+    const msg = (res.error && res.error.message) || '';
+    const dup = res.error && (res.error.code === '23505' || /duplicate|unique/i.test(msg));
+    const missingColumn = /numero_flota|numero_bastidor|propietario|schema cache|column/i.test(msg);
+    showFormError(errEl, dup ? 'Ya existe un vehículo con esa matrícula.'
+      : missingColumn ? 'Falta ejecutar en Supabase el SQL de Número de flota, Nº de bastidor y Propietario (archivo flota-numero-bastidor-propietario-schema.sql). Detalle: ' + msg
+      : 'No se pudo guardar: ' + (msg || 'sin permiso o error desconocido.'));
     btns.forEach(b => b.disabled = false);
     return;
   }
@@ -2267,7 +2277,7 @@ async function submitContactoForm(editId){
   const ciudad = document.getElementById('ct-ciudad').value.trim();
   const provincia = document.getElementById('ct-provincia').value.trim();
   const pais = document.getElementById('ct-pais').value.trim();
-  if (!nombre) { errEl.textContent = 'Indica al menos el nombre.'; return; }
+  if (!nombre) { showFormError(errEl, 'Indica al menos el nombre.'); return; }
   const fields = { nombre, nombreComercial, nif, esClienteAlmacen, esTransportista, esAutonomos, warehouseIds, calle1, calle2, codigoPostal, ciudad, provincia, pais };
   const dbPayload = {
     nombre, nombre_comercial: nombreComercial || null, nif: nif || null, calle1: calle1 || null, calle2: calle2 || null,
@@ -2300,7 +2310,7 @@ async function submitContactoForm(editId){
     await Promise.all([loadClients(), loadCompanies()]);
     openContactoModal(contactoId);
   } catch (error) {
-    errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'error desconocido.');
+    showFormError(errEl, 'No se pudo guardar: ' + (error && error.message ? error.message : 'error desconocido.'));
   }
 }
 // Un contacto puede ser a la vez cliente de almacén y/o autónomos — estos
