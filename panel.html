@@ -1576,7 +1576,28 @@ function newVehiculo(){
   if (!flotaConfirmLeaveForm()) return;
   openFlotaForm(null, true);
 }
+// Matrícula de tractora: 4 números, un guion y 3 letras (1234-ABC). El campo
+// solo deja escribir ese formato; en remolques es libre y se pasa a mayúsculas.
+function flotaFormatMatriculaTractora(raw){
+  const up = (raw || '').toUpperCase();
+  const digits = (up.match(/\d/g) || []).slice(0, 4).join('');
+  const letters = digits.length === 4 ? (up.match(/[A-Z]/g) || []).slice(0, 3).join('') : '';
+  const dash = digits.length === 4 && (letters.length > 0 || /^\d{4}-/.test(up));
+  return digits + (dash ? '-' : '') + letters;
+}
+function onFlotaMatriculaInput(el){
+  const tipo = document.getElementById('fl-tipo').value;
+  const next = tipo === 'tractora' ? flotaFormatMatriculaTractora(el.value) : el.value.toUpperCase();
+  if (next !== el.value) el.value = next;
+}
 function onFlotaTipoChange(){
+  const mat = document.getElementById('fl-matricula');
+  if (mat) {
+    const tractora = document.getElementById('fl-tipo').value === 'tractora';
+    mat.maxLength = tractora ? 8 : 15;
+    mat.placeholder = tractora ? '1234-ABC' : '';
+    onFlotaMatriculaInput(mat);
+  }
   const dl = document.getElementById('fl-marcas-datalist');
   if (dl) dl.innerHTML = flotaMarcasOptionsHtml(document.getElementById('fl-tipo').value);
   const f = document.getElementById('fl-tacografo-field');
@@ -1654,7 +1675,7 @@ function tplFlotaFormPage(){
         <div class="field" style="flex:1;min-width:180px;"><label>Tipo</label>
           <select id="fl-tipo" onchange="onFlotaTipoChange()">${Object.entries(FLOTA_TIPOS).map(([k,l])=>`<option value="${k}" ${v.tipo===k?'selected':''}>${l}</option>`).join('')}</select>
         </div>
-        <div class="field" style="flex:2;min-width:220px;"><label>Matrícula</label><input id="fl-matricula" maxlength="15" style="text-transform:uppercase;" oninput="uppercaseInput(this)" value="${esc(v.matricula||'')}" /></div>
+        <div class="field" style="flex:2;min-width:220px;"><label>Matrícula</label><input id="fl-matricula" maxlength="${v.tipo==='tractora'?8:15}" placeholder="${v.tipo==='tractora'?'1234-ABC':''}" style="text-transform:uppercase;" oninput="onFlotaMatriculaInput(this)" value="${esc(v.matricula||'')}" /></div>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         <div class="field" style="flex:1;min-width:220px;"><label>Marca</label><input id="fl-marca" maxlength="60" list="fl-marcas-datalist" placeholder="Elige una marca o escribe otra" value="${esc(v.marca||'')}" />
@@ -1699,6 +1720,10 @@ async function submitFlotaForm(editId){
   const matricula = val('fl-matricula').toUpperCase();
   if (!matricula) { errEl.textContent = 'Indica la matrícula.'; return; }
   const tipo = val('fl-tipo');
+  if (tipo === 'tractora' && !/^\d{4}-[A-Z]{3}$/.test(matricula)) {
+    errEl.textContent = 'La matrícula de una tractora debe tener 4 números, un guion y 3 letras (por ejemplo 1234-ABC).';
+    return;
+  }
   const payload = {
     tipo, matricula, marca: val('fl-marca') || null, modelo: val('fl-modelo') || null,
     itv_vence: val('fl-itv') || null, seguro_vence: val('fl-seguro') || null,
