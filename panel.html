@@ -791,7 +791,7 @@ async function loadDirecciones(){
   direcciones = (data||[]).map(d => ({
     id: d.id, nombre: d.nombre, calle1: d.calle1 || '', calle2: d.calle2 || '', codigoPostal: d.codigo_postal || '',
     ciudad: d.ciudad || '', provincia: d.provincia || '', pais: d.pais || '',
-    contactoId: d.contacto_id || null, observaciones: d.observaciones || '', mapsUrl: d.google_maps_url || '', archived: !!d.archived,
+    telefono: d.telefono || '', horarios: d.horarios || '', observaciones: d.observaciones || '', mapsUrl: d.google_maps_url || '', archived: !!d.archived,
   }));
 }
 async function openContactosFromHome(){
@@ -830,7 +830,6 @@ function direccionesFilteredList(){
   return { list, archivedView, search };
 }
 function direccionCardHtml(d, archivedView){
-  const co = d.contactoId ? contactos.find(c=>c.id===d.contactoId) : null;
   const dir = cargadorDireccionCompleta(d);
   return `
     <div class="card" style="cursor:pointer;display:flex;gap:14px;align-items:flex-start;padding:18px;${archivedView?'opacity:0.7;':''}" onclick="openDireccionForm('${d.id}')">
@@ -838,7 +837,8 @@ function direccionCardHtml(d, archivedView){
       <div style="min-width:0;flex:1;">
         <div style="font-family:var(--display);font-size:15px;font-weight:700;line-height:1.35;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;">${esc(d.nombre)}${archivedView?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;font-weight:400;">· archivada</span>':''}</div>
         <div style="font-size:12.5px;color:var(--muted);">${dir ? esc(dir) : '—'}</div>
-        ${co ? `<div style="font-size:12px;color:var(--mutedFaint);margin-top:3px;">${esc(co.nombre)}</div>` : ''}
+        ${d.telefono ? `<div style="font-size:12px;color:var(--muted);margin-top:3px;">${esc(d.telefono)}</div>` : ''}
+        ${d.horarios ? `<div style="font-size:12px;color:var(--mutedFaint);margin-top:2px;">${esc(d.horarios)}</div>` : ''}
         ${safeMapsUrl(d.mapsUrl) ? `<a href="${esc(safeMapsUrl(d.mapsUrl))}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();" style="display:inline-block;margin-top:6px;font-size:12px;color:var(--primary);text-decoration:none;">Ver en Google Maps ↗</a>` : ''}
       </div>
     </div>`;
@@ -902,7 +902,8 @@ async function logDireccionHistorial(direccionId, resumen){
 }
 const DIRECCION_FIELD_LABELS = {
   nombre: 'Nombre del lugar', calle1: 'Calle 1', calle2: 'Calle 2', codigoPostal: 'Código postal',
-  ciudad: 'Ciudad', provincia: 'Provincia', pais: 'País', mapsUrl: 'Enlace de Google Maps', observaciones: 'Observaciones',
+  ciudad: 'Ciudad', provincia: 'Provincia', pais: 'País', mapsUrl: 'Enlace de Google Maps',
+  telefono: 'Teléfono', horarios: 'Horarios', observaciones: 'Observaciones',
 };
 function safeMapsUrl(url){ return /^https?:\/\//i.test(url||'') ? url : ''; }
 function buildDireccionChangeSummary(before, after){
@@ -912,10 +913,6 @@ function buildDireccionChangeSummary(before, after){
     const newVal = (after[key]||'').toString();
     if (oldVal !== newVal) lines.push(`${DIRECCION_FIELD_LABELS[key]}: "${oldVal||'—'}" → "${newVal||'—'}"`);
   });
-  if ((before.contactoId||null) !== (after.contactoId||null)) {
-    const nameOf = id => id ? ((contactos.find(c=>c.id===id)||{}).nombre || '—') : '—';
-    lines.push(`Contacto de referencia: "${nameOf(before.contactoId)}" → "${nameOf(after.contactoId)}"`);
-  }
   return lines;
 }
 function openDireccionForm(editId){
@@ -953,7 +950,6 @@ function tplDireccionFormPage(){
   const editing = editId ? direcciones.find(d=>d.id===editId) : null;
   const d = editing || {};
   const submitLabel = editing ? 'Guardar' : 'Añadir';
-  const contactOptions = contactos.filter(c => !c.archived || c.id === d.contactoId);
   return `
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
       <div style="display:flex;align-items:center;gap:14px;">
@@ -991,14 +987,11 @@ function tplDireccionFormPage(){
         <input id="dr-maps" type="url" maxlength="500" placeholder="https://maps.app.goo.gl/…" value="${esc(d.mapsUrl||'')}" />
         ${safeMapsUrl(d.mapsUrl) ? `<a href="${esc(safeMapsUrl(d.mapsUrl))}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:5px;font-size:12px;color:var(--primary);text-decoration:none;">Abrir en Google Maps ↗</a>` : ''}
       </div>
-      <div class="field">
-        <label>Contacto de referencia (opcional)</label>
-        <select id="dr-contacto">
-          <option value="">— Ninguno —</option>
-          ${contactOptions.map(c=>`<option value="${c.id}" ${d.contactoId===c.id?'selected':''}>${esc(c.nombre)}${c.archived?' (archivado)':''}</option>`).join('')}
-        </select>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:220px;"><label>Teléfono</label><input id="dr-telefono" type="tel" maxlength="30" placeholder="Ej. +34 938 00 00 00" value="${esc(d.telefono||'')}" /></div>
+        <div class="field" style="flex:2;min-width:260px;"><label>Horarios</label><input id="dr-horarios" maxlength="200" placeholder="Ej. L-V 8:00–14:00 y 15:00–18:00 · Sáb cerrado" value="${esc(d.horarios||'')}" /></div>
       </div>
-      <div class="field" style="margin-bottom:0;"><label>Observaciones (opcional)</label><textarea id="dr-observaciones" maxlength="500" placeholder="Horarios, cómo llegar, teléfono del muelle…" style="min-height:90px;">${esc(d.observaciones||'')}</textarea></div>
+      <div class="field" style="margin-bottom:0;"><label>Observaciones (opcional)</label><textarea id="dr-observaciones" maxlength="500" placeholder="Cómo llegar, indicaciones para el conductor…" style="min-height:90px;">${esc(d.observaciones||'')}</textarea></div>
     </div>
     <div id="dr-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
@@ -1026,7 +1019,7 @@ async function submitDireccionForm(editId){
   const payload = {
     nombre, calle1: val('dr-calle1') || null, calle2: val('dr-calle2') || null,
     codigo_postal: val('dr-cp') || null, ciudad: val('dr-ciudad') || null, provincia: val('dr-provincia') || null,
-    pais: val('dr-pais') || null, contacto_id: document.getElementById('dr-contacto').value || null,
+    pais: val('dr-pais') || null, telefono: val('dr-telefono') || null, horarios: val('dr-horarios') || null,
     observaciones: val('dr-observaciones') || null, google_maps_url: mapsUrl || null,
   };
   const btns = [...document.querySelectorAll('.dr-submit-btn')];
@@ -1043,7 +1036,7 @@ async function submitDireccionForm(editId){
   const after = {
     nombre, calle1: payload.calle1 || '', calle2: payload.calle2 || '', codigoPostal: payload.codigo_postal || '',
     ciudad: payload.ciudad || '', provincia: payload.provincia || '', pais: payload.pais || '',
-    observaciones: payload.observaciones || '', mapsUrl: payload.google_maps_url || '', contactoId: payload.contacto_id,
+    observaciones: payload.observaciones || '', mapsUrl: payload.google_maps_url || '', telefono: payload.telefono || '', horarios: payload.horarios || '',
   };
   const changeLines = before ? buildDireccionChangeSummary(before, after) : ['Dirección creada.'];
   if (changeLines.length) await logDireccionHistorial(editId || res.data[0].id, changeLines.join('\n'));
