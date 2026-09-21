@@ -4963,6 +4963,18 @@ async function buildAndUploadDecaPdf(fields, storagePath, existingUrl){
     if (signError || !signedData) throw new Error('No se pudo generar la URL de descarga.');
     url = signedData.signedUrl;
   }
+  const { infoBytes } = await decaBuildPdfs(fields, url);
+  // Solo se guarda el PDF que abre el QR (misma ruta y URL de siempre). El
+  // PDF del conductor no se guarda: se genera al momento, con los datos y el
+  // diseño actuales, cada vez que se pulsa "PDF para el conductor".
+  const { error: uploadError } = await supabaseClient.storage.from(DOCS_BUCKET).upload(storagePath, new Blob([infoBytes], { type: 'application/pdf' }), { upsert: true, contentType: 'application/pdf', cacheControl: '0' });
+  if (uploadError) throw new Error('No se pudo subir el PDF.');
+  return { url };
+}
+// Genera en memoria los dos PDF del DeCA: el de consulta (solo información,
+// el que abre el QR) y el del conductor (página 1 solo el QR, página 2 la
+// información). `url` es el enlace del QR.
+async function decaBuildPdfs(fields, url){
   const { PDFDocument, StandardFonts, rgb } = PDFLib;
   // Cada celdilla del QR se dibuja grande (12 px) para que quede nítido al
   // escalarlo a tamaño real en la primera página.
@@ -5069,12 +5081,10 @@ async function buildAndUploadDecaPdf(fields, storagePath, existingUrl){
     page.drawText('Documento generado electrónicamente · Qualified Logistics', { x: mx, y: y - 29, size: 7.5, font, color: gray });
   };
 
-  // 1) Lo que abre el QR: solo la información (misma ruta y URL de siempre).
+  // 1) Lo que abre el QR: solo la información.
   const infoDoc = await PDFDocument.create();
   await drawInfoPage(infoDoc);
   const infoBytes = await infoDoc.save();
-  const { error: uploadError } = await supabaseClient.storage.from(DOCS_BUCKET).upload(storagePath, new Blob([infoBytes], { type: 'application/pdf' }), { upsert: true, contentType: 'application/pdf', cacheControl: '0' });
-  if (uploadError) throw new Error('No se pudo subir el PDF.');
 
   // 2) El PDF que se entrega al conductor: página 1 solo el QR, centrado y a
   // un tamaño cómodo de escanear (unos 12 cm de lado con su margen blanco);
@@ -5086,34 +5096,26 @@ async function buildAndUploadDecaPdf(fields, storagePath, existingUrl){
   qrPage.drawImage(qrImage, { x: (595.28 - qrSize) / 2, y: (841.89 - qrSize) / 2, width: qrSize, height: qrSize });
   await drawInfoPage(driverDoc);
   const driverBytes = await driverDoc.save();
-  const { error: driverError } = await supabaseClient.storage.from(DOCS_BUCKET).upload(decaDriverPath(storagePath), new Blob([driverBytes], { type: 'application/pdf' }), { upsert: true, contentType: 'application/pdf', cacheControl: '0' });
-  if (driverError) throw new Error('No se pudo subir el PDF del conductor.');
-  return { url };
+  return { infoBytes, driverBytes };
 }
 // El PDF del conductor vive junto al de consulta: mismo nombre + "-conductor".
 function decaDriverPath(storagePath){ return String(storagePath).replace(/\.pdf$/i, '') + '-conductor.pdf'; }
+// El PDF del conductor se genera siempre al momento con los datos actuales
+// del DeCA y el diseño vigente, y se abre desde el propio navegador: así nunca
+// aparece una versión antigua guardada en caché o en el almacenamiento.
 async function openDecaDriverPdf(id){
   const d = decaDocuments.find(x=>x.id===id);
   if (!d) return;
   const w = window.open('', '_blank');
-  const signDriver = async () => {
-    const { data } = await supabaseClient.storage.from(DOCS_BUCKET).createSignedUrl(decaDriverPath(d.pdfStoragePath), 3600);
-    return data ? data.signedUrl : null;
-  };
-  let url = null;
   try {
-    if (d.pdfStoragePath) {
-      url = await signDriver();
-      // Un DeCA creado antes del formato actual no tiene PDF de conductor:
-      // se genera ahora con el diseño nuevo (misma ruta y mismo enlace del QR).
-      if (!url && d.pdfUrl) {
-        await buildAndUploadDecaPdf(d, d.pdfStoragePath, d.pdfUrl);
-        url = await signDriver();
-      }
-    }
-  } catch (err) { /* si falla, se abre el PDF que ya existe */ }
-  url = url || d.pdfUrl;
-  if (w) w.location = url; else window.location.href = url;
+    if (!d.pdfUrl) throw new Error('este DeCA no tiene enlace de descarga.');
+    const { driverBytes } = await decaBuildPdfs(d, d.pdfUrl);
+    const blobUrl = URL.createObjectURL(new Blob([driverBytes], { type: 'application/pdf' }));
+    if (w) w.location = blobUrl; else window.location.href = blobUrl;
+  } catch (err) {
+    if (w) w.close();
+    alert('No se pudo generar el PDF: ' + (err && err.message ? err.message : 'error desconocido.'));
+  }
 }
 
 /* ---- DeCA: formulario crear/editar ---- */
@@ -5273,6 +5275,9 @@ function backToDecaList(){
   const required = ['cargadorNombre','cargadorNif','transportistaNombre','transportistaNif','origen','destino','mercanciaNaturaleza','mercanciaPeso','fechaTransporte','matriculaTractora'];
   if (required.some(k => !fields[k])) { errEl.textContent = 'Rellena todos los campos obligatorios.'; return; }
   btns.forEach(b => { b.disabled = true; b.textContent = 'Generando PDF…'; });
+  // La pestaña del PDF se abre ya, dentro del clic (si se abriera después de
+  // esperar al servidor, el navegador la bloquearía como ventana emergente).
+  const pdfTab = window.open('', '_blank');
   try {
     const editing = editId ? decaDocuments.find(d=>d.id===editId) : null;
     const storagePath = editing && editing.pdfStoragePath ? editing.pdfStoragePath : `deca/${nextId()}.pdf`;
@@ -5302,11 +5307,18 @@ function backToDecaList(){
       if (data.codigo) await buildAndUploadDecaPdf({ ...fields, codigo: data.codigo }, storagePath, url);
       decaDocuments.unshift({ id: data.id, codigo: data.codigo || '', ...fields, pdfStoragePath: storagePath, pdfUrl: url });
     }
+    // Se muestra el PDF del conductor recién generado (QR + casillas).
+    try {
+      const saved = decaDocuments.find(d => d.id === newId);
+      const { driverBytes } = await decaBuildPdfs(saved, saved.pdfUrl);
+      if (pdfTab) pdfTab.location = URL.createObjectURL(new Blob([driverBytes], { type: 'application/pdf' }));
+    } catch (e) { if (pdfTab) pdfTab.close(); }
     window.__decaFormDirty = false;
     window.__traficoView = 'deca';
     renderHeader(); renderTab();
     openDecaViewModal(newId);
   } catch (err) {
+    if (pdfTab) pdfTab.close();
     errEl.textContent = 'No se pudo generar/guardar el DeCA: ' + (err && err.message ? err.message : 'error desconocido.');
     btns.forEach(b => { b.disabled = false; b.textContent = editId ? 'Guardar y regenerar PDF' : 'Generar DeCA'; });
   }
