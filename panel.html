@@ -1336,9 +1336,11 @@ async function loadFlota(){
   const { data } = await supabaseClient.from('flota').select('*').order('matricula', { ascending: true });
   flota = (data||[]).map(v => ({
     id: v.id, tipo: v.tipo || 'tractora', matricula: v.matricula, marca: v.marca || '', modelo: v.modelo || '',
-    itvVence: v.itv_vence || '', seguroVence: v.seguro_vence || '', tacografoVence: v.tacografo_vence || '', archived: !!v.archived,
+    itvVence: v.itv_vence || '', seguroVence: v.seguro_vence || '', tacografoVence: v.tacografo_vence || '',
+    numeroFlota: v.numero_flota || '', bastidor: v.numero_bastidor || '', propietario: v.propietario || '', archived: !!v.archived,
   }));
 }
+const FLOTA_PROPIETARIOS = ['QUALIFIED', 'LA LOGISTICA ORGANIZADA SANT RAMON 95 SL', 'OBRES I SERVEIS BALSARENY'];
 const FLOTA_TIPOS = { tractora: 'Tractora', remolque: 'Remolque' };
 // Marcas habituales en Europa, que el campo Marca sugiere según el tipo
 // (se puede escribir cualquier otra).
@@ -1390,7 +1392,7 @@ function flotaFilteredList(){
   const search = (window.__flotaSearch || '').toLowerCase();
   const list = flota.filter(v => !!v.archived === archivedView
     && (!tipos.length || tipos.includes(v.tipo))
-    && (!search || v.matricula.toLowerCase().includes(search) || v.marca.toLowerCase().includes(search) || v.modelo.toLowerCase().includes(search)));
+    && (!search || [v.matricula, v.marca, v.modelo, v.numeroFlota, v.bastidor].some(x => (x||'').toLowerCase().includes(search))));
   return { list, archivedView, search, tipos };
 }
 function flotaCardHtml(v, archivedView){
@@ -1407,7 +1409,8 @@ function flotaCardHtml(v, archivedView){
           <span style="font-size:10px;text-transform:uppercase;letter-spacing:.3px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:2px 8px;color:var(--muted);">${esc(FLOTA_TIPOS[v.tipo]||v.tipo)}</span>
           ${archivedView?'<span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;">· archivado</span>':''}
         </div>
-        <div style="font-size:12.5px;color:var(--muted);margin-bottom:8px;">${[v.marca, v.modelo].filter(Boolean).map(esc).join(' ') || '<span style="color:var(--mutedFaint);">Sin marca ni modelo</span>'}</div>
+        <div style="font-size:12.5px;color:var(--muted);margin-bottom:2px;">${[v.marca, v.modelo].filter(Boolean).map(esc).join(' ') || '<span style="color:var(--mutedFaint);">Sin marca ni modelo</span>'}</div>
+        <div style="font-size:12px;color:var(--mutedFaint);margin-bottom:8px;">${v.numeroFlota ? 'Flota Nº ' + esc(v.numeroFlota) : 'Sin nº de flota'}${v.propietario ? ' · ' + esc(v.propietario) : ''}</div>
         <div style="display:flex;flex-direction:column;gap:3px;font-size:12px;">${venc}</div>
       </div>
     </div>`;
@@ -1503,6 +1506,7 @@ async function logFlotaHistorial(vehiculoId, resumen){
 const FLOTA_FIELD_LABELS = {
   tipo: 'Tipo', matricula: 'Matrícula', marca: 'Marca', modelo: 'Modelo',
   itvVence: 'ITV', seguroVence: 'Seguro', tacografoVence: 'Tacógrafo',
+  numeroFlota: 'Número de flota', bastidor: 'Nº de bastidor', propietario: 'Propietario',
 };
 function buildFlotaChangeSummary(before, after){
   const lines = [];
@@ -1590,6 +1594,11 @@ function tplFlotaViewCard(v){
       ${v.archived?'<span style="font-size:11px;color:var(--danger);text-transform:uppercase;">· archivado</span>':''}
     </div>
     <div style="font-size:13px;color:var(--muted);margin-bottom:18px;">${[v.marca, v.modelo].filter(Boolean).map(esc).join(' ') || 'Sin marca ni modelo'}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;margin-bottom:18px;">
+      ${contactoFieldBlock('Número de flota', v.numeroFlota ? esc(v.numeroFlota) : '—')}
+      ${contactoFieldBlock('Nº de bastidor', v.bastidor ? esc(v.bastidor) : '—')}
+      ${contactoFieldBlock('Propietario', v.propietario ? esc(v.propietario) : '—')}
+    </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">${venc}</div>`;
 }
 function tplFlotaFormPage(){
@@ -1652,6 +1661,17 @@ function tplFlotaFormPage(){
           <datalist id="fl-marcas-datalist">${flotaMarcasOptionsHtml(v.tipo)}</datalist></div>
         <div class="field" style="flex:1;min-width:220px;"><label>Modelo</label><input id="fl-modelo" maxlength="60" placeholder="Ej. FH 460" value="${esc(v.modelo||'')}" /></div>
       </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:160px;"><label>Número de flota</label><input id="fl-numero-flota" maxlength="20" value="${esc(v.numeroFlota||'')}" /></div>
+        <div class="field" style="flex:2;min-width:220px;"><label>Nº de bastidor</label><input id="fl-bastidor" maxlength="17" style="text-transform:uppercase;" oninput="uppercaseInput(this)" value="${esc(v.bastidor||'')}" /></div>
+      </div>
+      <div class="field">
+        <label>Propietario</label>
+        <select id="fl-propietario">
+          <option value="">— Elige el propietario —</option>
+          ${FLOTA_PROPIETARIOS.map(p => `<option value="${esc(p)}" ${v.propietario===p?'selected':''}>${esc(p)}</option>`).join('')}
+        </select>
+      </div>
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12px;color:var(--muted);letter-spacing:.4px;margin:6px 0 10px;">Vencimientos</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         ${dateField('fl-itv', 'ITV', v.itvVence, 'style="flex:1;min-width:180px;"')}
@@ -1683,6 +1703,8 @@ async function submitFlotaForm(editId){
     tipo, matricula, marca: val('fl-marca') || null, modelo: val('fl-modelo') || null,
     itv_vence: val('fl-itv') || null, seguro_vence: val('fl-seguro') || null,
     tacografo_vence: tipo === 'tractora' ? (val('fl-tacografo') || null) : null,
+    numero_flota: val('fl-numero-flota') || null, numero_bastidor: val('fl-bastidor').toUpperCase() || null,
+    propietario: val('fl-propietario') || null,
   };
   const btns = [...document.querySelectorAll('.fl-submit-btn')];
   btns.forEach(b => b.disabled = true);
@@ -1696,7 +1718,7 @@ async function submitFlotaForm(editId){
     btns.forEach(b => b.disabled = false);
     return;
   }
-  const after = { tipo, matricula, marca: payload.marca || '', modelo: payload.modelo || '', itvVence: payload.itv_vence || '', seguroVence: payload.seguro_vence || '', tacografoVence: payload.tacografo_vence || '' };
+  const after = { tipo, matricula, marca: payload.marca || '', modelo: payload.modelo || '', itvVence: payload.itv_vence || '', seguroVence: payload.seguro_vence || '', tacografoVence: payload.tacografo_vence || '', numeroFlota: payload.numero_flota || '', bastidor: payload.numero_bastidor || '', propietario: payload.propietario || '' };
   const changeLines = before ? buildFlotaChangeSummary(before, after) : ['Vehículo creado.'];
   const savedId = editId || res.data[0].id;
   if (changeLines.length) await logFlotaHistorial(savedId, changeLines.join('\n'));
