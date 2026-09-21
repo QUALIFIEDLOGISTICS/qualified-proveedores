@@ -17,6 +17,9 @@ create table if not exists public.flota (
   itv_vence date,
   seguro_vence date,
   tacografo_vence date,
+  numero_flota text,
+  numero_bastidor text,
+  propietario text,
   archived boolean not null default false
 );
 create unique index if not exists flota_matricula_unica on public.flota (upper(matricula));
