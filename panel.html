@@ -887,6 +887,156 @@ function tplDireccionesPage(){
     <div id="direcciones-list-body">${direccionesListBodyHtml()}</div>`;
 }
 function onDireccionCpInput(){ return autofillCiudadProvinciaFromCp('dr'); }
+/* ---- Direcciones: selector semanal de horarios ----
+   Se elige por día (abierto/cerrado y hasta dos tramos) y se guarda como
+   texto legible en la columna "horarios", p. ej.
+   "Lun–Vie 8:00–14:00 y 15:00–18:00 · Sáb–Dom cerrado".
+   Ese mismo formato se vuelve a leer al editar; un texto libre antiguo se
+   respeta tal cual hasta que se elige algo en el selector. */
+const HR_DAYS = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
+const HR_TIMES = (() => { const a = []; for (let m = 0; m <= 1440; m += 30) a.push(String(Math.floor(m/60)).padStart(2,'0') + ':' + String(m%60).padStart(2,'0')); return a; })();
+function hrEmptyState(){ return HR_DAYS.map(() => ({ open: false, ranges: [['08:00','14:00']] })); }
+function hrShort(t){ return t.replace(/^0/, ''); }
+function hrPad(t){ return t.length === 4 ? '0' + t : t; }
+function hrFormatRanges(ranges){
+  if (ranges.length === 1 && ranges[0][0] === '00:00' && ranges[0][1] === '24:00') return '24 h';
+  return ranges.map(r => `${hrShort(r[0])}–${hrShort(r[1])}`).join(' y ');
+}
+function hrGenerate(state){
+  if (!state.some(d => d.open)) return '';
+  const labels = state.map(d => d.open && d.ranges.length ? hrFormatRanges(d.ranges) : 'cerrado');
+  const parts = [];
+  for (let i = 0; i < 7; ) {
+    let j = i;
+    while (j + 1 < 7 && labels[j+1] === labels[i]) j++;
+    parts.push(`${i === j ? HR_DAYS[i] : HR_DAYS[i] + '–' + HR_DAYS[j]} ${labels[i]}`);
+    i = j + 1;
+  }
+  return parts.join(' · ');
+}
+function hrParse(text){
+  if (!text) return null;
+  const state = HR_DAYS.map(() => ({ open: false, ranges: [['08:00','14:00']] }));
+  const dayRe = HR_DAYS.join('|');
+  const partRe = new RegExp(`^(${dayRe})(?:–(${dayRe}))? (.+)$`);
+  for (const part of text.split(' · ')) {
+    const m = part.match(partRe);
+    if (!m) return null;
+    const i = HR_DAYS.indexOf(m[1]);
+    const j = m[2] ? HR_DAYS.indexOf(m[2]) : i;
+    if (j < i) return null;
+    let open = false, ranges = [['08:00','14:00']];
+    if (m[3] === 'cerrado') { /* día cerrado */ }
+    else if (m[3] === '24 h') { open = true; ranges = [['00:00','24:00']]; }
+    else {
+      const rs = m[3].split(' y ').map(s => s.match(/^(\d{1,2}:\d{2})–(\d{1,2}:\d{2})$/));
+      if (!rs.length || rs.length > 2 || rs.some(r => !r)) return null;
+      open = true; ranges = rs.map(r => [hrPad(r[1]), hrPad(r[2])]);
+    }
+    for (let k = i; k <= j; k++) state[k] = { open, ranges: ranges.map(r => r.slice()) };
+  }
+  return state;
+}
+function hrError(state){
+  for (let i = 0; i < 7; i++) {
+    const d = state[i];
+    if (!d.open) continue;
+    const [a, b] = d.ranges[0];
+    if (!(a < b)) return `${HR_DAYS[i]}: la hora de cierre debe ser posterior a la de apertura.`;
+    if (d.ranges[1]) {
+      const [c, e] = d.ranges[1];
+      if (!c || !e) return `${HR_DAYS[i]}: completa la apertura y el cierre del segundo tramo.`;
+      if (!(c >= b)) return `${HR_DAYS[i]}: el segundo tramo debe empezar después de que acabe el primero.`;
+      if (!(c < e)) return `${HR_DAYS[i]}: la hora de cierre del segundo tramo debe ser posterior a la de apertura.`;
+    }
+  }
+  return '';
+}
+function hrTimeSelect(dayIdx, slot, pos, value, allowBlank){
+  const opts = (allowBlank ? `<option value="">—</option>` : '') + HR_TIMES.map(t => `<option value="${t}" ${t===value?'selected':''}>${t}</option>`).join('');
+  return `<select onchange="hrSetTime(${dayIdx},${slot},${pos},this.value)" style="width:auto;padding:5px 6px;font-size:12.5px;">${opts}</select>`;
+}
+function hrRender(){
+  const state = window.__hrState;
+  const rows = document.getElementById('hr-rows');
+  if (rows) rows.innerHTML = state.map((d, i) => `
+    <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;">
+      <label style="display:flex;align-items:center;gap:6px;width:64px;font-size:13px;cursor:pointer;">
+        <input type="checkbox" ${d.open?'checked':''} onchange="hrToggleDay(${i},this.checked)" style="width:auto;" /> ${HR_DAYS[i]}
+      </label>
+      ${d.open ? `
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--muted);">
+          ${hrTimeSelect(i,0,0,d.ranges[0][0],false)} a ${hrTimeSelect(i,0,1,d.ranges[0][1],false)}
+          <span style="margin-left:6px;">y</span>
+          ${hrTimeSelect(i,1,0,d.ranges[1]?d.ranges[1][0]:'',true)} a ${hrTimeSelect(i,1,1,d.ranges[1]?d.ranges[1][1]:'',true)}
+        </div>` : `<span style="font-size:12.5px;color:var(--mutedFaint);">Cerrado</span>`}
+    </div>`).join('');
+  const err = hrError(state);
+  const text = hrGenerate(state);
+  const prev = document.getElementById('hr-preview');
+  if (prev) prev.innerHTML = err ? `<span style="color:var(--danger);">${esc(err)}</span>` : (text ? `Se guardará como: <b>${esc(text)}</b>` : 'Ningún día abierto: no se guardará ningún horario.');
+  const legacy = document.getElementById('hr-legacy');
+  if (legacy) legacy.style.display = (window.__hrLegacy && !window.__hrTouched) ? '' : 'none';
+  const hidden = document.getElementById('dr-horarios');
+  if (hidden && window.__hrTouched) hidden.value = err ? '' : text;
+  window.__hrError = window.__hrTouched ? err : '';
+}
+function hrTouch(){ window.__hrTouched = true; window.__direccionFormDirty = true; hrRender(); }
+function hrToggleDay(i, checked){
+  const d = window.__hrState[i];
+  d.open = checked;
+  if (checked && !d.ranges.length) d.ranges = [['08:00','14:00']];
+  hrTouch();
+}
+function hrSetTime(i, slot, pos, value){
+  const d = window.__hrState[i];
+  if (slot === 0) d.ranges[0][pos] = value;
+  else {
+    if (!d.ranges[1]) d.ranges[1] = ['',''];
+    d.ranges[1][pos] = value;
+    if (!d.ranges[1][0] && !d.ranges[1][1]) d.ranges.length = 1;
+  }
+  hrTouch();
+}
+function hrPreset(name){
+  const st = window.__hrState;
+  const set = (days, ranges) => days.forEach(i => { st[i] = { open: true, ranges: ranges.map(r => r.slice()) }; });
+  const close = days => days.forEach(i => { st[i] = { open: false, ranges: [['08:00','14:00']] }; });
+  if (name === 'clear') close([0,1,2,3,4,5,6]);
+  else if (name === '24h') set([0,1,2,3,4,5,6], [['00:00','24:00']]);
+  else {
+    const map = { 'lv-8-14': [['08:00','14:00']], 'lv-8-18': [['08:00','18:00']], 'lv-partido': [['08:00','13:00'],['15:00','18:00']] };
+    set([0,1,2,3,4], map[name]); close([5,6]);
+  }
+  hrTouch();
+}
+function hrCopyMonday(){
+  const st = window.__hrState;
+  for (let i = 1; i <= 4; i++) st[i] = { open: st[0].open, ranges: st[0].ranges.map(r => r.slice()) };
+  hrTouch();
+}
+function tplHorariosEditor(current){
+  const parsed = hrParse(current);
+  window.__hrState = parsed || hrEmptyState();
+  window.__hrLegacy = current && !parsed ? current : '';
+  window.__hrTouched = false;
+  window.__hrError = '';
+  const btn = (label, name) => `<button type="button" class="btn btn-ghost" style="padding:5px 10px;font-size:12px;" onclick="hrPreset('${name}')">${label}</button>`;
+  return `
+    <div class="field">
+      <label>Horarios</label>
+      <input type="hidden" id="dr-horarios" value="${esc(current||'')}" />
+      <div id="hr-legacy" style="display:none;font-size:12px;color:var(--muted);background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:8px;">
+        Horario actual (texto libre): <b>${esc(current||'')}</b><br>Si eliges horarios aquí abajo, sustituirán a este texto.
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+        ${btn('Lun–Vie 8:00–14:00','lv-8-14')}${btn('Lun–Vie 8:00–18:00','lv-8-18')}${btn('Lun–Vie 8–13 y 15–18','lv-partido')}${btn('24 horas','24h')}${btn('Limpiar','clear')}
+        <button type="button" class="btn btn-ghost" style="padding:5px 10px;font-size:12px;" onclick="hrCopyMonday()" title="Copia el horario del lunes al martes, miércoles, jueves y viernes">Copiar lunes a Lun–Vie</button>
+      </div>
+      <div id="hr-rows" style="border-top:1px solid var(--border);"></div>
+      <div id="hr-preview" style="font-size:12.5px;color:var(--muted);margin-top:8px;"></div>
+    </div>`;
+}
 /* ---- Direcciones: historial de cambios (quién cambió qué y cuándo) ---- */
 let direccionHistorialCache = {};
 async function loadDireccionHistorial(direccionId){
@@ -921,6 +1071,7 @@ function openDireccionForm(editId){
   window.__direccionFormDirty = false;
   window.__direccionHistorial = editId ? (direccionHistorialCache[editId] || null) : [];
   renderHeader(); renderTab();
+  hrRender();
   window.scrollTo(0, 0);
   if (editId) {
     loadDireccionHistorial(editId).then(list => {
@@ -987,10 +1138,8 @@ function tplDireccionFormPage(){
         <input id="dr-maps" type="url" maxlength="500" placeholder="https://maps.app.goo.gl/…" value="${esc(d.mapsUrl||'')}" />
         ${safeMapsUrl(d.mapsUrl) ? `<a href="${esc(safeMapsUrl(d.mapsUrl))}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:5px;font-size:12px;color:var(--primary);text-decoration:none;">Abrir en Google Maps ↗</a>` : ''}
       </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <div class="field" style="flex:1;min-width:220px;"><label>Teléfono</label><input id="dr-telefono" type="tel" maxlength="30" placeholder="Ej. +34 938 00 00 00" value="${esc(d.telefono||'')}" /></div>
-        <div class="field" style="flex:2;min-width:260px;"><label>Horarios</label><input id="dr-horarios" maxlength="200" placeholder="Ej. L-V 8:00–14:00 y 15:00–18:00 · Sáb cerrado" value="${esc(d.horarios||'')}" /></div>
-      </div>
+      <div class="field" style="max-width:320px;"><label>Teléfono</label><input id="dr-telefono" type="tel" maxlength="30" placeholder="Ej. +34 938 00 00 00" value="${esc(d.telefono||'')}" /></div>
+      ${tplHorariosEditor(d.horarios||'')}
       <div class="field" style="margin-bottom:0;"><label>Observaciones (opcional)</label><textarea id="dr-observaciones" maxlength="500" placeholder="Cómo llegar, indicaciones para el conductor…" style="min-height:90px;">${esc(d.observaciones||'')}</textarea></div>
     </div>
     <div id="dr-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
@@ -1014,6 +1163,7 @@ async function submitDireccionForm(editId){
   const nombre = document.getElementById('dr-nombre').value.trim();
   if (!nombre) { errEl.textContent = 'Indica al menos el nombre del lugar.'; return; }
   const val = id => document.getElementById(id).value.trim();
+  if (window.__hrError) { errEl.textContent = 'Revisa los horarios: ' + window.__hrError; return; }
   const mapsUrl = val('dr-maps');
   if (mapsUrl && !safeMapsUrl(mapsUrl)) { errEl.textContent = 'El enlace de Google Maps debe empezar por http:// o https://.'; return; }
   const payload = {
