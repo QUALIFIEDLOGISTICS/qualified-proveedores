@@ -51,6 +51,12 @@
   .modal-box{width:100%;max-width:460px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:22px;max-height:88vh;overflow-y:auto;}
   .modal-title{margin:0;font-family:var(--display);font-size:19px;letter-spacing:.3px;text-transform:uppercase;}
   .close-x{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;}
+  #combo-panel{position:fixed;display:none;z-index:70;box-sizing:border-box;max-height:260px;overflow-y:auto;padding:6px;background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:0 14px 34px rgba(15,30,60,.18);}
+  .combo-item{display:flex;flex-direction:column;gap:1px;padding:8px 11px;border-radius:7px;cursor:pointer;line-height:1.35;}
+  .combo-item:hover,.combo-item.active{background:rgba(27,58,107,.08);}
+  .combo-main{font-size:13.5px;color:var(--text);}
+  .combo-main b{color:var(--primary);}
+  .combo-sub{font-size:11.5px;color:var(--mutedFaint);}
 
   /* Tabla financiera (histórico semanal de autónomos) */
   .fin-table{
@@ -1678,7 +1684,7 @@ function tplFlotaFormPage(){
         <div class="field" style="flex:2;min-width:220px;"><label>Matrícula</label><input id="fl-matricula" maxlength="${v.tipo==='tractora'?8:15}" placeholder="${v.tipo==='tractora'?'1234-ABC':''}" style="text-transform:uppercase;" oninput="onFlotaMatriculaInput(this)" value="${esc(v.matricula||'')}" /></div>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <div class="field" style="flex:1;min-width:220px;"><label>Marca</label><input id="fl-marca" maxlength="60" list="fl-marcas-datalist" placeholder="Elige una marca o escribe otra" value="${esc(v.marca||'')}" />
+        <div class="field" style="flex:1;min-width:220px;"><label>Marca</label><input id="fl-marca" maxlength="60" data-combo="fl-marcas-datalist" autocomplete="off" placeholder="Elige una marca o escribe otra" value="${esc(v.marca||'')}" />
           <datalist id="fl-marcas-datalist">${flotaMarcasOptionsHtml(v.tipo)}</datalist></div>
         <div class="field" style="flex:1;min-width:220px;"><label>Modelo</label><input id="fl-modelo" maxlength="60" placeholder="Ej. FH 460" value="${esc(v.modelo||'')}" /></div>
       </div>
@@ -1813,6 +1819,110 @@ function contactoLogoThumbHtml(c){
   return `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:var(--panel2);">${homeIcon(HOME_ICON_PATHS.building, 32, 'var(--mutedFaint)', 1.5)}</div>`;
 }
 const CONTACTO_ROLE_LABELS = { cliente: 'Cliente de almacén', transportista: 'Transportista', autonomos: 'Autónomos' };
+/* ---- Desplegable de sugerencias con el estilo de la app ----
+   Sustituye al desplegable nativo del navegador (datalist), que no se puede
+   diseñar. Un input con data-combo="idDeUnDatalist" toma sus opciones de ese
+   datalist; se puede seguir escribiendo cualquier texto libre. */
+const Combo = { input: null, items: [], active: -1, picking: false };
+function comboPanel(){
+  let p = document.getElementById('combo-panel');
+  if (!p) {
+    p = document.createElement('div');
+    p.id = 'combo-panel';
+    p.addEventListener('mousedown', e => e.preventDefault());
+    p.addEventListener('click', e => { const it = e.target.closest('[data-idx]'); if (it) comboPick(Number(it.dataset.idx)); });
+    document.body.appendChild(p);
+  }
+  return p;
+}
+function comboHide(){
+  const p = document.getElementById('combo-panel');
+  if (p) p.style.display = 'none';
+  Combo.input = null; Combo.items = []; Combo.active = -1;
+}
+function comboPosition(){
+  const p = document.getElementById('combo-panel');
+  if (!p || !Combo.input || p.style.display === 'none') return;
+  if (!document.body.contains(Combo.input)) { comboHide(); return; }
+  const r = Combo.input.getBoundingClientRect();
+  p.style.left = r.left + 'px';
+  p.style.width = r.width + 'px';
+  const h = Math.min(p.scrollHeight, 260);
+  const below = window.innerHeight - r.bottom;
+  p.style.top = (below < h + 12 && r.top > h + 12 ? r.top - h - 6 : r.bottom + 6) + 'px';
+}
+function comboOpen(input, showAll){
+  const dl = document.getElementById(input.dataset.combo);
+  if (!dl) return;
+  const q = showAll ? '' : input.value.trim().toLowerCase();
+  const all = [...dl.options].map(o => ({ value: o.value, label: (o.label && o.label !== o.value) ? o.label : '' }));
+  const items = (q ? all.filter(o => o.value.toLowerCase().includes(q) || o.label.toLowerCase().includes(q)) : all).slice(0, 100);
+  Combo.input = input; Combo.items = items; Combo.active = -1;
+  const p = comboPanel();
+  if (!items.length) { p.style.display = 'none'; return; }
+  const mark = txt => {
+    if (!q) return esc(txt);
+    const i = txt.toLowerCase().indexOf(q);
+    return i < 0 ? esc(txt) : esc(txt.slice(0, i)) + '<b>' + esc(txt.slice(i, i + q.length)) + '</b>' + esc(txt.slice(i + q.length));
+  };
+  p.innerHTML = items.map((o, i) => `<div class="combo-item" data-idx="${i}"><span class="combo-main">${mark(o.value)}</span>${o.label ? `<span class="combo-sub">${mark(o.label)}</span>` : ''}</div>`).join('');
+  p.style.display = 'block';
+  comboPosition();
+}
+function comboSetActive(i){
+  const p = document.getElementById('combo-panel');
+  if (!p) return;
+  Combo.active = i;
+  [...p.children].forEach((el, k) => el.classList.toggle('active', k === i));
+  const el = p.children[i];
+  if (el) el.scrollIntoView({ block: 'nearest' });
+}
+function comboPick(i){
+  const it = Combo.items[i], input = Combo.input;
+  if (!it || !input) return;
+  Combo.picking = true;
+  input.value = it.value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  Combo.picking = false;
+  comboHide();
+}
+document.addEventListener('focusin', e => {
+  const t = e.target;
+  if (t.tagName === 'INPUT' && !t.getAttribute('autocomplete') && !['password','checkbox','radio','file','hidden'].includes(t.type)) t.setAttribute('autocomplete', 'off');
+  if (t.dataset && t.dataset.combo) comboOpen(t, true);
+});
+document.addEventListener('input', e => {
+  if (Combo.picking) return;
+  const t = e.target;
+  if (t.dataset && t.dataset.combo) comboOpen(t, false);
+});
+document.addEventListener('keydown', e => {
+  const t = e.target;
+  if (!t.dataset || !t.dataset.combo) return;
+  const p = document.getElementById('combo-panel');
+  const open = p && p.style.display !== 'none' && Combo.input === t;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (!open) { comboOpen(t, true); return; }
+    const n = Combo.items.length;
+    comboSetActive(e.key === 'ArrowDown' ? (Combo.active + 1) % n : (Combo.active - 1 + n) % n);
+  } else if (e.key === 'Enter' && open && Combo.active >= 0) {
+    e.preventDefault();
+    comboPick(Combo.active);
+  } else if (e.key === 'Escape' && open) {
+    e.stopPropagation();
+    comboHide();
+  } else if (e.key === 'Tab') comboHide();
+});
+document.addEventListener('mousedown', e => {
+  if (!Combo.input) return;
+  if (e.target === Combo.input || e.target.closest('#combo-panel')) return;
+  comboHide();
+});
+document.addEventListener('focusout', e => { if (e.target === Combo.input) setTimeout(() => { if (document.activeElement !== Combo.input) comboHide(); }, 0); });
+window.addEventListener('resize', comboPosition);
+window.addEventListener('scroll', comboPosition, true);
 function uppercaseInput(el){
   const pos = el.selectionStart;
   el.value = el.value.toUpperCase();
@@ -4818,7 +4928,7 @@ function tplDecaFormFields(e){
         ${decaSectionTitle('Cargador contractual')}
         <div class="field">
           <label>Nombre o razón social</label>
-          <input id="dc-cargador-nombre" maxlength="150" list="dc-cargadores-datalist" oninput="onDecaCargadorInput()" placeholder="Escribe para buscar entre tus contactos" value="${esc(e.cargadorNombre||'')}" />
+          <input id="dc-cargador-nombre" maxlength="150" data-combo="dc-cargadores-datalist" autocomplete="off" oninput="onDecaCargadorInput()" placeholder="Escribe para buscar entre tus contactos" value="${esc(e.cargadorNombre||'')}" />
           <datalist id="dc-cargadores-datalist">
             ${contactos.filter(c=>!c.archived).map(c=>`<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('')}
           </datalist>
@@ -4830,7 +4940,7 @@ function tplDecaFormFields(e){
         ${decaSectionTitle('Transportista efectivo')}
         <div class="field">
           <label>Nombre o razón social</label>
-          <input id="dc-transportista-nombre" maxlength="150" list="dc-transportistas-datalist" oninput="onDecaTransportistaInput()" placeholder="Elige entre tus transportistas" value="${esc(e.transportistaNombre||'')}" />
+          <input id="dc-transportista-nombre" maxlength="150" data-combo="dc-transportistas-datalist" autocomplete="off" oninput="onDecaTransportistaInput()" placeholder="Elige entre tus transportistas" value="${esc(e.transportistaNombre||'')}" />
           <datalist id="dc-transportistas-datalist">
             ${contactos.filter(c=>!c.archived && c.esTransportista).map(c=>`<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('')}
           </datalist>
@@ -4844,8 +4954,8 @@ function tplDecaFormFields(e){
       <div class="card">
         ${decaSectionTitle('Envío')}
         <div style="display:flex;gap:10px;">
-          <div class="field" style="flex:1;"><label>Origen</label><input id="dc-origen" maxlength="150" list="dc-direcciones-datalist" placeholder="Elige una dirección de tu agenda" value="${esc(e.origen||'')}" /></div>
-          <div class="field" style="flex:1;"><label>Destino</label><input id="dc-destino" maxlength="150" list="dc-direcciones-datalist" placeholder="Elige una dirección de tu agenda" value="${esc(e.destino||'')}" /></div>
+          <div class="field" style="flex:1;"><label>Origen</label><input id="dc-origen" maxlength="150" data-combo="dc-direcciones-datalist" autocomplete="off" placeholder="Elige una dirección de tu agenda" value="${esc(e.origen||'')}" /></div>
+          <div class="field" style="flex:1;"><label>Destino</label><input id="dc-destino" maxlength="150" data-combo="dc-direcciones-datalist" autocomplete="off" placeholder="Elige una dirección de tu agenda" value="${esc(e.destino||'')}" /></div>
           <datalist id="dc-direcciones-datalist">
             ${direcciones.filter(d=>!d.archived).map(d => `<option value="${esc(decaDireccionText(d))}" label="${esc(d.nombre)}">`).join('')}
           </datalist>
