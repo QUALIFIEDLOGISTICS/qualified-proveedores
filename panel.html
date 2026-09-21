@@ -807,6 +807,7 @@ function openDireccionesModule(){
   window.__direccionesView = 'activos';
   window.__direccionesSearch = '';
   window.__direccionesFilterOpen = false;
+  window.__direccionesPage = 0;
   renderHeader(); renderTab();
 }
 function backToDirecciones(){
@@ -826,31 +827,60 @@ function direccionesFilteredList(){
   const search = (window.__direccionesSearch || '').toLowerCase();
   const list = direcciones.filter(d => !!d.archived === archivedView && (!search
     || d.nombre.toLowerCase().includes(search)
-    || cargadorDireccionCompleta(d).toLowerCase().includes(search)));
+    || cargadorDireccionCompleta(d).toLowerCase().includes(search)
+    || (d.telefono||'').toLowerCase().includes(search)));
   return { list, archivedView, search };
 }
+// Cada tarjeta muestra siempre los mismos datos (código postal, ciudad,
+// teléfono, horario y enlace de Google Maps); si falta alguno se indica.
 function direccionCardHtml(d, archivedView){
-  const dir = cargadorDireccionCompleta(d);
+  const empty = txt => `<span style="color:var(--mutedFaint);">${txt}</span>`;
+  const cpCiudad = [d.codigoPostal, d.ciudad].filter(Boolean).join(' ');
+  const maps = safeMapsUrl(d.mapsUrl);
   return `
     <div class="card" style="cursor:pointer;display:flex;gap:14px;align-items:flex-start;padding:18px;${archivedView?'opacity:0.7;':''}" onclick="openDireccionForm('${d.id}')">
       <div style="width:56px;height:56px;border-radius:10px;flex-shrink:0;border:1px solid var(--border);background:var(--panel2);display:flex;align-items:center;justify-content:center;">${homeIcon(HOME_ICON_PATHS.pin, 26, 'var(--mutedFaint)', 1.5)}</div>
       <div style="min-width:0;flex:1;">
-        <div style="font-family:var(--display);font-size:15px;font-weight:700;line-height:1.35;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;">${esc(d.nombre)}${archivedView?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;font-weight:400;">· archivada</span>':''}</div>
-        <div style="font-size:12.5px;color:var(--muted);">${dir ? esc(dir) : '—'}</div>
-        ${d.telefono ? `<div style="font-size:12px;color:var(--muted);margin-top:3px;">${esc(d.telefono)}</div>` : ''}
-        ${d.horarios ? `<div style="font-size:12px;color:var(--mutedFaint);margin-top:2px;">${esc(d.horarios)}</div>` : ''}
-        ${safeMapsUrl(d.mapsUrl) ? `<a href="${esc(safeMapsUrl(d.mapsUrl))}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();" style="display:inline-block;margin-top:6px;font-size:12px;color:var(--primary);text-decoration:none;">Ver en Google Maps ↗</a>` : ''}
+        <div style="font-family:var(--display);font-size:15px;font-weight:700;line-height:1.35;margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;">${esc(d.nombre)}${archivedView?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;font-weight:400;">· archivada</span>':''}</div>
+        <div style="display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:var(--muted);">
+          <div>${cpCiudad ? esc(cpCiudad) : empty('Sin código postal ni ciudad')}</div>
+          <div>${d.telefono ? esc(d.telefono) : empty('Sin teléfono')}</div>
+          <div title="${esc(d.horarios||'')}" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${d.horarios ? esc(d.horarios) : empty('Sin horario')}</div>
+          <div>${maps ? `<a href="${esc(maps)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();" style="color:var(--primary);text-decoration:none;">Ver en Google Maps ↗</a>` : empty('Sin enlace de Google Maps')}</div>
+        </div>
       </div>
     </div>`;
+}
+const DIRECCIONES_PAGE_SIZE = 80;
+function direccionesGoToPage(delta){
+  window.__direccionesPage = Math.max(0, (window.__direccionesPage||0) + delta);
+  refreshDireccionesListBody();
+}
+function tplDireccionesPaginationHtml(){
+  const total = direccionesFilteredList().list.length;
+  const totalPages = Math.max(1, Math.ceil(total / DIRECCIONES_PAGE_SIZE));
+  const page = Math.min(window.__direccionesPage||0, totalPages-1);
+  const rangeStart = total ? page * DIRECCIONES_PAGE_SIZE + 1 : 0;
+  const rangeEnd = Math.min(total, (page+1) * DIRECCIONES_PAGE_SIZE);
+  return `
+    <span>${rangeStart}-${rangeEnd} / ${total}</span>
+    <button class="btn btn-ghost" style="padding:4px 9px;" ${page<=0?'disabled':''} onclick="direccionesGoToPage(-1)">‹</button>
+    <button class="btn btn-ghost" style="padding:4px 9px;" ${page>=totalPages-1?'disabled':''} onclick="direccionesGoToPage(1)">›</button>`;
 }
 function direccionesListBodyHtml(){
   const { list, archivedView, search } = direccionesFilteredList();
   if (!list.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search ? 'Ninguna dirección coincide con la búsqueda.' : archivedView ? 'No hay direcciones archivadas.' : 'Todavía no hay ninguna dirección creada.'}</div>`;
-  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">${list.map(d=>direccionCardHtml(d, archivedView)).join('')}</div>`;
+  const totalPages = Math.max(1, Math.ceil(list.length / DIRECCIONES_PAGE_SIZE));
+  if ((window.__direccionesPage||0) > totalPages - 1) window.__direccionesPage = totalPages - 1;
+  const page = window.__direccionesPage || 0;
+  const pageList = list.slice(page * DIRECCIONES_PAGE_SIZE, (page + 1) * DIRECCIONES_PAGE_SIZE);
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">${pageList.map(d=>direccionCardHtml(d, archivedView)).join('')}</div>`;
 }
 function refreshDireccionesListBody(){
   const el = document.getElementById('direcciones-list-body');
   if (el) el.innerHTML = direccionesListBodyHtml();
+  const pag = document.getElementById('direcciones-pagination');
+  if (pag) pag.innerHTML = tplDireccionesPaginationHtml();
 }
 function tplDireccionesPage(){
   const archivedView = (window.__direccionesView || 'activos') === 'archivados';
@@ -867,7 +897,7 @@ function tplDireccionesPage(){
     <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-self:start;">
         <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
-          <input placeholder="Buscar por nombre o dirección…" value="${esc(window.__direccionesSearch||'')}" oninput="window.__direccionesSearch=this.value; refreshDireccionesListBody();" style="padding-left:34px;" />
+          <input placeholder="Buscar por nombre o dirección…" value="${esc(window.__direccionesSearch||'')}" oninput="window.__direccionesSearch=this.value; window.__direccionesPage=0; refreshDireccionesListBody();" style="padding-left:34px;" />
           <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
         </div>
         ${archivedView ? '' : `<button class="btn btn-primary" onclick="openDireccionForm()">+ Nueva dirección</button>`}
@@ -877,12 +907,12 @@ function tplDireccionesPage(){
         ${window.__direccionesFilterOpen ? `
           <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:190px;">
             <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 4px;cursor:pointer;white-space:nowrap;">
-              <input type="checkbox" ${archivedView?'checked':''} onchange="window.__direccionesView=this.checked?'archivados':'activos'; renderTab();" style="width:auto;" />
+              <input type="checkbox" ${archivedView?'checked':''} onchange="window.__direccionesView=this.checked?'archivados':'activos'; window.__direccionesPage=0; renderTab();" style="width:auto;" />
               Archivadas
             </label>
           </div>` : ''}
       </div>
-      <div></div>
+      <div id="direcciones-pagination" style="display:flex;align-items:center;gap:8px;justify-self:end;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplDireccionesPaginationHtml()}</div>
     </div>
     <div id="direcciones-list-body">${direccionesListBodyHtml()}</div>`;
 }
