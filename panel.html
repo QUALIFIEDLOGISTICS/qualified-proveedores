@@ -958,6 +958,7 @@ function hrTimeSelect(dayIdx, slot, pos, value, allowBlank){
 }
 function hrRender(){
   const state = window.__hrState;
+  if (!state || !document.getElementById('hr-rows')) return;
   const rows = document.getElementById('hr-rows');
   if (rows) rows.innerHTML = state.map((d, i) => `
     <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;">
@@ -1065,10 +1066,15 @@ function buildDireccionChangeSummary(before, after){
   });
   return lines;
 }
-function openDireccionForm(editId){
+// La ficha funciona como la de Contactos: se abre en modo vista, "Editar"
+// activa el formulario, y las flechas recorren la lista que se estaba viendo.
+function openDireccionForm(editId, keepNav){
+  if (!keepNav) window.__direccionNavIds = direccionesFilteredList().list.map(d=>d.id);
   window.__administracionView = 'direccionForm';
   window.__direccionFormId = editId || null;
   window.__direccionFormDirty = false;
+  window.__direccionEditMode = !editId;
+  window.__direccionActionMenuOpen = false;
   window.__direccionHistorial = editId ? (direccionHistorialCache[editId] || null) : [];
   renderHeader(); renderTab();
   hrRender();
@@ -1083,6 +1089,46 @@ function openDireccionForm(editId){
       }
     });
   }
+}
+function direccionNavGoto(offset){
+  const ids = window.__direccionNavIds || [];
+  const idx = ids.indexOf(window.__direccionFormId);
+  if (idx === -1 || !ids.length) return;
+  if (!direccionConfirmLeaveForm()) return;
+  openDireccionForm(ids[(idx + offset + ids.length) % ids.length], true);
+}
+function enterDireccionEditMode(){
+  window.__direccionEditMode = true;
+  window.__direccionFormDirty = false;
+  window.__direccionActionMenuOpen = false;
+  renderTab();
+  hrRender();
+}
+function exitDireccionEditMode(){
+  if (!direccionConfirmLeaveForm()) return;
+  window.__direccionFormDirty = false;
+  if (!window.__direccionFormId) { backToDirecciones(); return; }
+  window.__direccionEditMode = false;
+  renderTab();
+}
+function newDireccion(){
+  if (!direccionConfirmLeaveForm()) return;
+  openDireccionForm(null, true);
+}
+function tplDireccionViewCard(d){
+  const dir = cargadorDireccionCompleta(d);
+  const tel = d.telefono ? `<a href="tel:${esc(d.telefono.replace(/[^\d+]/g,''))}" style="color:var(--primary);text-decoration:none;">${esc(d.telefono)}</a>` : '—';
+  const horarios = d.horarios ? d.horarios.split(' · ').map(esc).join('<br>') : '—';
+  const maps = safeMapsUrl(d.mapsUrl) ? `<a href="${esc(safeMapsUrl(d.mapsUrl))}" target="_blank" rel="noopener noreferrer" style="color:var(--primary);text-decoration:none;">Abrir en Google Maps ↗</a>` : '—';
+  return `
+    <div style="font-family:var(--display);font-size:19px;margin-bottom:18px;">${esc(d.nombre)}${d.archived?' <span style="font-size:11px;color:var(--danger);text-transform:uppercase;">· archivada</span>':''}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;margin-bottom:${d.observaciones?'16px':'0'};">
+      ${contactoFieldBlock('Dirección', dir ? esc(dir) : '—')}
+      ${contactoFieldBlock('Teléfono', tel)}
+      ${contactoFieldBlock('Horarios', horarios)}
+      ${contactoFieldBlock('Google Maps', maps)}
+    </div>
+    ${d.observaciones ? contactoFieldBlock('Observaciones', `<span style="white-space:pre-line;">${esc(d.observaciones)}</span>`) : ''}`;
 }
 function direccionHistorialBodyHtml(){
   const editing = window.__direccionFormId ? direcciones.find(d=>d.id===window.__direccionFormId) : null;
@@ -1100,7 +1146,11 @@ function tplDireccionFormPage(){
   const editId = window.__direccionFormId;
   const editing = editId ? direcciones.find(d=>d.id===editId) : null;
   const d = editing || {};
+  const editMode = window.__direccionEditMode || !editing;
   const submitLabel = editing ? 'Guardar' : 'Añadir';
+  const navIds = window.__direccionNavIds || [];
+  const navIdx = editId ? navIds.indexOf(editId) : -1;
+  const arrowBtn = (offset, title, ch) => `<button onclick="direccionNavGoto(${offset})" title="${title}" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13px;">${ch}</button>`;
   return `
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
       <div style="display:flex;align-items:center;gap:14px;">
@@ -1108,17 +1158,37 @@ function tplDireccionFormPage(){
           ${homeIcon(HOME_ICON_PATHS.pin, 24, '#2E6F95')}
         </div>
         <div>
-          <div style="font-family:var(--display);font-size:22px;">${editing ? 'Editar dirección' : 'Nueva dirección'}</div>
-          <div style="font-size:12.5px;color:var(--mutedFaint);">Un lugar con su dirección completa, enlazable a un contacto.</div>
+          <div style="font-family:var(--display);font-size:22px;">${editing ? esc(editing.nombre) : 'Nueva dirección'}</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">Agenda de lugares: naves, muelles, puntos de carga y descarga.</div>
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        <button class="btn btn-ghost" onclick="backToDirecciones()">Cancelar</button>
-        <button class="btn btn-primary dr-submit-btn" onclick="submitDireccionForm('${editId||''}')">${submitLabel}</button>
+        ${editing ? `
+          <div style="position:relative;">
+            <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__direccionActionMenuOpen=!window.__direccionActionMenuOpen; renderTab(); if (window.__direccionEditMode) hrRender();">Acción ▾</button>
+            ${window.__direccionActionMenuOpen ? `
+              <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:0;margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:190px;">
+                <button class="btn btn-ghost" style="width:100%;justify-content:flex-start;white-space:nowrap;color:${editing.archived?'var(--success)':'var(--danger)'};" onclick="window.__direccionActionMenuOpen=false; ${editing.archived?`unarchiveDireccion('${editing.id}')`:`archiveDireccion('${editing.id}')`}">${editing.archived?'Restaurar':'Archivar'}</button>
+                ${editing.archived ? `<button class="btn btn-ghost" style="width:100%;justify-content:flex-start;white-space:nowrap;color:var(--danger);margin-top:4px;" onclick="window.__direccionActionMenuOpen=false; deleteDireccion('${editing.id}')">Eliminar definitivamente</button>` : ''}
+              </div>` : ''}
+          </div>` : ''}
+        ${navIdx>-1 && navIds.length>1 ? `
+          <div style="display:flex;align-items:center;gap:4px;">
+            ${arrowBtn(-1, 'Dirección anterior', '←')}
+            <span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${navIdx+1}/${navIds.length}</span>
+            ${arrowBtn(1, 'Dirección siguiente', '→')}
+          </div>` : ''}
+        ${!editMode ? `<button class="btn btn-ghost" onclick="enterDireccionEditMode()">Editar</button>` : ''}
+        <button class="btn btn-ghost" onclick="newDireccion()">+ Nuevo</button>
+        ${editMode ? `<button class="btn btn-primary dr-submit-btn" onclick="submitDireccionForm('${editId||''}')">${submitLabel}</button>` : ''}
       </div>
     </div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
     <div style="flex:2;min-width:360px;">
+    ${!editMode ? `
+    <div class="card">${tplDireccionViewCard(d)}</div>
+    <div id="dr-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
+    ` : `
     <div class="card" oninput="window.__direccionFormDirty=true;" onchange="window.__direccionFormDirty=true;">
       <div class="field"><label>Nombre del lugar</label><input id="dr-nombre" maxlength="150" placeholder="Ej. Nave Balsareny, Muelle 3 Cliente X" value="${esc(d.nombre||'')}" /></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
@@ -1143,13 +1213,11 @@ function tplDireccionFormPage(){
       <div class="field" style="margin-bottom:0;"><label>Observaciones (opcional)</label><textarea id="dr-observaciones" maxlength="500" placeholder="Cómo llegar, indicaciones para el conductor…" style="min-height:90px;">${esc(d.observaciones||'')}</textarea></div>
     </div>
     <div id="dr-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;">
-      ${editing ? `<button class="btn btn-ghost" style="color:${editing.archived?'var(--success)':'var(--danger)'};" onclick="${editing.archived?`unarchiveDireccion('${editing.id}')`:`archiveDireccion('${editing.id}')`}">${editing.archived?'Restaurar':'Archivar'}</button>` : ''}
-      ${editing && editing.archived ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="deleteDireccion('${editing.id}')">Eliminar definitivamente</button>` : ''}
-      <div style="flex:1;"></div>
-      <button class="btn btn-ghost" onclick="backToDirecciones()">Cancelar</button>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
+      <button class="btn btn-ghost" onclick="exitDireccionEditMode()">Cancelar</button>
       <button class="btn btn-primary dr-submit-btn" onclick="submitDireccionForm('${editId||''}')">${submitLabel}</button>
     </div>
+    `}
     </div>
     <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Historial de cambios</div>
@@ -1189,11 +1257,11 @@ async function submitDireccionForm(editId){
     observaciones: payload.observaciones || '', mapsUrl: payload.google_maps_url || '', telefono: payload.telefono || '', horarios: payload.horarios || '',
   };
   const changeLines = before ? buildDireccionChangeSummary(before, after) : ['Dirección creada.'];
-  if (changeLines.length) await logDireccionHistorial(editId || res.data[0].id, changeLines.join('\n'));
+  const savedId = editId || res.data[0].id;
+  if (changeLines.length) await logDireccionHistorial(savedId, changeLines.join('\n'));
   await loadDirecciones();
-  window.__direccionFormDirty = false;
-  window.__administracionView = 'direcciones';
-  renderHeader(); renderTab();
+  window.__direccionNavIds = direccionesFilteredList().list.map(d=>d.id);
+  openDireccionForm(savedId, true);
 }
 async function setDireccionArchived(id, archived){
   const errEl = document.getElementById('dr-error');
@@ -1201,9 +1269,7 @@ async function setDireccionArchived(id, archived){
   if (error || !data || !data.length) { if (errEl) errEl.textContent = 'No se pudo actualizar: ' + (error && error.message ? error.message : 'sin permiso.'); return; }
   await logDireccionHistorial(id, archived ? 'Archivada.' : 'Restaurada.');
   await loadDirecciones();
-  window.__direccionFormDirty = false;
-  window.__administracionView = 'direcciones';
-  renderHeader(); renderTab();
+  openDireccionForm(id, true);
 }
 function archiveDireccion(id){ return setDireccionArchived(id, true); }
 function unarchiveDireccion(id){ return setDireccionArchived(id, false); }
