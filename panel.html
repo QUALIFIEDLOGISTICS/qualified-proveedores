@@ -57,6 +57,12 @@
   .combo-main{font-size:13.5px;color:var(--text);}
   .combo-main b{color:var(--primary);}
   .combo-sub{font-size:11.5px;color:var(--mutedFaint);}
+  .combo-item.selected .combo-main{color:var(--primary);font-weight:600;}
+  .combo-item.selected::after{content:"\2713";position:absolute;right:12px;color:var(--primary);font-size:12px;}
+  .combo-item{position:relative;}
+  .combo-item.disabled{opacity:.45;cursor:default;}
+  select{appearance:none;-webkit-appearance:none;padding-right:32px !important;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2369727C' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important;background-repeat:no-repeat !important;background-position:right 12px center !important;background-size:12px 8px !important;}
+  select:disabled{cursor:default;opacity:.6;}
 
   /* Tabla financiera (histórico semanal de autónomos) */
   .fin-table{
@@ -1846,7 +1852,7 @@ function comboPosition(){
   if (!document.body.contains(Combo.input)) { comboHide(); return; }
   const r = Combo.input.getBoundingClientRect();
   p.style.left = r.left + 'px';
-  p.style.width = r.width + 'px';
+  p.style.width = (Combo.input.tagName === 'SELECT' ? Math.max(r.width, 160) : r.width) + 'px';
   const h = Math.min(p.scrollHeight, 260);
   const below = window.innerHeight - r.bottom;
   p.style.top = (below < h + 12 && r.top > h + 12 ? r.top - h - 6 : r.bottom + 6) + 'px';
@@ -1859,6 +1865,7 @@ function comboOpen(input, showAll){
   const items = (q ? all.filter(o => o.value.toLowerCase().includes(q) || o.label.toLowerCase().includes(q)) : all).slice(0, 100);
   Combo.input = input; Combo.items = items; Combo.active = -1;
   const p = comboPanel();
+  p.style.minWidth = '';
   if (!items.length) { p.style.display = 'none'; return; }
   const mark = txt => {
     if (!q) return esc(txt);
@@ -1879,13 +1886,28 @@ function comboSetActive(i){
 }
 function comboPick(i){
   const it = Combo.items[i], input = Combo.input;
-  if (!it || !input) return;
+  if (!it || !input || it.disabled) return;
   Combo.picking = true;
   input.value = it.value;
-  input.dispatchEvent(new Event('input', { bubbles: true }));
+  if (input.tagName !== 'SELECT') input.dispatchEvent(new Event('input', { bubbles: true }));
   input.dispatchEvent(new Event('change', { bubbles: true }));
   Combo.picking = false;
   comboHide();
+}
+// Los <select> del navegador abren una lista del sistema que no se puede
+// diseñar: se intercepta el clic y se abre este mismo panel. El select sigue
+// en su sitio (con su valor y su onchange), solo cambia la lista desplegada.
+function comboOpenSelect(sel){
+  const items = [...sel.options].filter(o => !o.hidden).map(o => ({ value: o.value, text: o.textContent.trim(), disabled: o.disabled, selected: o.value === sel.value }));
+  Combo.input = sel; Combo.items = items; Combo.active = Math.max(0, items.findIndex(i => i.selected));
+  Combo.typeahead = ''; Combo.typeaheadAt = 0;
+  const p = comboPanel();
+  if (!items.length) { p.style.display = 'none'; return; }
+  p.innerHTML = items.map((o, i) => `<div class="combo-item${o.selected?' selected':''}${o.disabled?' disabled':''}${i===Combo.active?' active':''}" data-idx="${i}"><span class="combo-main">${o.text ? esc(o.text) : '&nbsp;'}</span></div>`).join('');
+  p.style.display = 'block';
+  p.style.minWidth = Math.max(sel.getBoundingClientRect().width, 160) + 'px';
+  comboPosition();
+  comboSetActive(Combo.active);
 }
 document.addEventListener('focusin', e => {
   const t = e.target;
@@ -1897,8 +1919,32 @@ document.addEventListener('input', e => {
   const t = e.target;
   if (t.dataset && t.dataset.combo) comboOpen(t, false);
 });
+function comboIsSelect(el){ return !!el && el.tagName === 'SELECT' && !el.multiple && !el.disabled && !el.hasAttribute('data-native'); }
 document.addEventListener('keydown', e => {
   const t = e.target;
+  if (comboIsSelect(t)) {
+    const p = document.getElementById('combo-panel');
+    const open = p && p.style.display !== 'none' && Combo.input === t;
+    if (!open) {
+      if (e.key === 'Enter' || e.key === ' ' || (e.altKey && e.key === 'ArrowDown')) { e.preventDefault(); comboOpenSelect(t); }
+      return;
+    }
+    const n = Combo.items.length;
+    const step = dir => { let i = Combo.active; for (let k = 0; k < n; k++) { i = (i + dir + n) % n; if (!Combo.items[i].disabled) break; } comboSetActive(i); };
+    if (e.key === 'ArrowDown') { e.preventDefault(); step(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); step(-1); }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (Combo.active >= 0 && !Combo.items[Combo.active].disabled) comboPick(Combo.active); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); comboHide(); }
+    else if (e.key === 'Tab') comboHide();
+    else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+      const now = Date.now();
+      Combo.typeahead = (now - Combo.typeaheadAt > 800 ? '' : Combo.typeahead) + e.key.toLowerCase();
+      Combo.typeaheadAt = now;
+      const idx = Combo.items.findIndex(i => !i.disabled && i.text.toLowerCase().startsWith(Combo.typeahead));
+      if (idx >= 0) comboSetActive(idx);
+    }
+    return;
+  }
   if (!t.dataset || !t.dataset.combo) return;
   const p = document.getElementById('combo-panel');
   const open = p && p.style.display !== 'none' && Combo.input === t;
@@ -1916,6 +1962,15 @@ document.addEventListener('keydown', e => {
   } else if (e.key === 'Tab') comboHide();
 });
 document.addEventListener('mousedown', e => {
+  const sel = e.target.closest && e.target.closest('select');
+  if (comboIsSelect(sel)) {
+    e.preventDefault();
+    const p = document.getElementById('combo-panel');
+    const wasOpen = p && p.style.display !== 'none' && Combo.input === sel;
+    sel.focus();
+    if (wasOpen) comboHide(); else comboOpenSelect(sel);
+    return;
+  }
   if (!Combo.input) return;
   if (e.target === Combo.input || e.target.closest('#combo-panel')) return;
   comboHide();
