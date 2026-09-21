@@ -57,6 +57,8 @@
   .combo-main{font-size:13.5px;color:var(--text);}
   .combo-main b{color:var(--primary);}
   .combo-sub{font-size:11.5px;color:var(--mutedFaint);}
+  .deca-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start;}
+  @media (max-width:820px){.deca-grid{grid-template-columns:1fr;}}
   .combo-item.selected .combo-main{color:var(--primary);font-weight:600;}
   .combo-item.selected::after{content:"\2713";position:absolute;right:12px;color:var(--primary);font-size:12px;}
   .combo-item{position:relative;}
@@ -4880,6 +4882,7 @@ async function loadDecaDocuments(){
     mercanciaNaturaleza: d.mercancia_naturaleza, mercanciaPeso: d.mercancia_peso,
     fechaTransporte: d.fecha_transporte,
     matriculaTractora: d.matricula_tractora, matriculaRemolque: d.matricula_remolque || '', observaciones: d.observaciones || '',
+    creacionFecha: d.creacion_fecha || '', creacionHora: d.creacion_hora ? String(d.creacion_hora).slice(0, 8) : '',
     pdfStoragePath: d.pdf_storage_path || null, pdfUrl: d.pdf_url || null,
   }));
 }
@@ -5029,7 +5032,11 @@ async function buildAndUploadDecaPdf(fields, storagePath, existingUrl){
     // Rejilla de casillas
     const half = W / 2;
     let y = top - hH;
-    const r1 = 122, r2 = 92, r3 = 74, r4 = 66, r5 = 170;
+    const r1 = 122, r2 = 92, r3 = 74, r4 = 66, r4b = 62, r5 = 150;
+    const creacionFecha = fields.creacionFecha
+      ? new Date(fields.creacionFecha + 'T00:00:00').toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' })
+      : '—';
+    const creacionHora = dash(fields.creacionHora ? (fields.creacionHora.length === 5 ? fields.creacionHora + ':00' : fields.creacionHora) : '');
     box(mx, y, half, r1, 1, 'Cargador contractual', [
       { text: dash(fields.cargadorNombre), bold: true, size: 11.5, gap: 4 },
       { text: 'NIF: ' + dash(fields.cargadorNif), size: 10 },
@@ -5051,12 +5058,15 @@ async function buildAndUploadDecaPdf(fields, storagePath, existingUrl){
     box(mx, y, half, r4, 8, 'Matrícula tractora', [{ text: dash(fields.matriculaTractora), bold: true, size: 15 }]);
     box(mx + half, y, half, r4, 9, 'Matrícula remolque', [{ text: fields.matriculaRemolque && fields.matriculaRemolque.trim() ? fields.matriculaRemolque.trim() : 'No aplica', bold: true, size: 15 }]);
     y -= r4;
-    box(mx, y, W, r5, 10, 'Observaciones', [{ text: dash(fields.observaciones), size: 10.5 }]);
+    box(mx, y, half, r4b, 10, 'Fecha de creación', [{ text: creacionFecha, bold: true, size: 12.5 }]);
+    box(mx + half, y, half, r4b, 11, 'Hora de creación', [{ text: creacionHora, bold: true, size: 12.5 }]);
+    y -= r4b;
+    box(mx, y, W, r5, 12, 'Observaciones', [{ text: dash(fields.observaciones), size: 10.5 }]);
     y -= r5;
 
     // Pie
     page.drawText('Art. 147 LOTT / art. 222 ROTT — Orden FOM 2861/2012', { x: mx, y: y - 18, size: 7.5, font, color: gray });
-    page.drawText(`Documento generado electrónicamente el ${new Date().toLocaleString('es-ES')} · Qualified Logistics`, { x: mx, y: y - 29, size: 7.5, font, color: gray });
+    page.drawText('Documento generado electrónicamente · Qualified Logistics', { x: mx, y: y - 29, size: 7.5, font, color: gray });
   };
 
   // 1) Lo que abre el QR: solo la información (misma ruta y URL de siempre).
@@ -5104,12 +5114,17 @@ function decaDireccionText(d){
   const dir = cargadorDireccionCompleta(d);
   return (dir ? `${d.nombre}, ${dir}` : d.nombre).slice(0, 150);
 }
+function decaSetCreacionAhora(){
+  document.getElementById('dc-creacion-fecha').value = today();
+  document.getElementById('dc-creacion-hora').value = new Date().toTimeString().slice(0, 8);
+  window.__decaFormDirty = true;
+}
 function decaSectionTitle(txt){
   return `<div style="font-family:var(--display);text-transform:uppercase;font-size:12px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">${txt}</div>`;
 }
 function tplDecaFormFields(e){
   return `
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px;margin-bottom:18px;align-items:start;">
+    <div class="deca-grid" style="margin-bottom:18px;">
       <div class="card">
         ${decaSectionTitle('Cargador contractual')}
         <div class="field">
@@ -5151,6 +5166,15 @@ function tplDecaFormFields(e){
           <div class="field" style="flex:1;"><label>Peso</label><input id="dc-mercancia-peso" maxlength="30" placeholder="Ej. 12.500 kg" value="${esc(e.mercanciaPeso||'')}" /></div>
         </div>
         <div class="field"><label>Fecha del transporte</label><input id="dc-fecha" type="date" value="${e.fechaTransporte||today()}" /></div>
+      </div>
+      <div class="card">
+        ${decaSectionTitle('Información de creación')}
+        <div style="font-size:12px;color:var(--mutedFaint);margin:-4px 0 12px;">Fecha y hora en que se creó el documento, tal como aparecerán impresas en el PDF.</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <div class="field" style="flex:1;min-width:150px;"><label>Fecha de creación</label><input id="dc-creacion-fecha" type="date" value="${esc(e.id ? (e.creacionFecha||'') : (e.creacionFecha||today()))}" /></div>
+          <div class="field" style="flex:1;min-width:150px;"><label>Hora de creación (h:min:s)</label><input id="dc-creacion-hora" type="time" step="1" value="${esc(e.id ? (e.creacionHora||'') : (e.creacionHora||new Date().toTimeString().slice(0,8)))}" /></div>
+        </div>
+        <button type="button" class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px;" onclick="decaSetCreacionAhora()">Poner la fecha y hora de ahora</button>
       </div>
       <div class="card" style="grid-column:1 / -1;">
         ${decaSectionTitle('Observaciones')}
@@ -5234,6 +5258,8 @@ function backToDecaList(){
     matriculaTractora: document.getElementById('dc-matricula-tractora').value.trim(),
     matriculaRemolque: document.getElementById('dc-matricula-remolque').value.trim(),
     observaciones: document.getElementById('dc-observaciones').value.trim(),
+    creacionFecha: document.getElementById('dc-creacion-fecha').value,
+    creacionHora: document.getElementById('dc-creacion-hora').value,
   };
   const required = ['cargadorNombre','cargadorNif','transportistaNombre','transportistaNif','origen','destino','mercanciaNaturaleza','mercanciaPeso','fechaTransporte','matriculaTractora'];
   if (required.some(k => !fields[k])) { errEl.textContent = 'Rellena todos los campos obligatorios.'; return; }
@@ -5249,6 +5275,8 @@ function backToDecaList(){
       mercancia_naturaleza: fields.mercanciaNaturaleza, mercancia_peso: fields.mercanciaPeso,
       fecha_transporte: fields.fechaTransporte,
       matricula_tractora: fields.matriculaTractora, matricula_remolque: fields.matriculaRemolque || null, observaciones: fields.observaciones || null,
+      creacion_fecha: fields.creacionFecha || null,
+      creacion_hora: fields.creacionHora ? (fields.creacionHora.length === 5 ? fields.creacionHora + ':00' : fields.creacionHora) : null,
       pdf_storage_path: storagePath, pdf_url: url, updated_at: new Date().toISOString(),
     };
     let newId = editId;
@@ -5292,6 +5320,7 @@ function openDecaViewModal(id){
           <div><b>Mercancía:</b> ${esc(d.mercanciaNaturaleza)} · ${esc(d.mercanciaPeso)}</div>
           <div><b>Matrícula tractora:</b> ${esc(d.matriculaTractora)}${d.matriculaRemolque ? ` · <b>Remolque:</b> ${esc(d.matriculaRemolque)}` : ''}</div>
           <div><b>Fecha:</b> ${fmtDateY(d.fechaTransporte)}</div>
+          ${d.creacionFecha ? `<div><b>Creación:</b> ${fmtDateY(d.creacionFecha)}${d.creacionHora ? ' · ' + esc(d.creacionHora) : ''}</div>` : ''}
           ${d.observaciones ? `<div><b>Observaciones:</b> ${esc(d.observaciones)}</div>` : ''}
         </div>
         ${d.pdfUrl ? `
