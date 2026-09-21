@@ -63,6 +63,11 @@
   .combo-item.disabled{opacity:.45;cursor:default;}
   select{appearance:none;-webkit-appearance:none;padding-right:32px !important;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2369727C' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important;background-repeat:no-repeat !important;background-position:right 12px center !important;background-size:12px 8px !important;}
   select:disabled{cursor:default;opacity:.6;}
+  input.switch{appearance:none;-webkit-appearance:none;flex-shrink:0;width:38px !important;height:22px;padding:0 !important;border:none !important;border-radius:99px;background:var(--border) !important;position:relative;cursor:pointer;transition:background .15s;}
+  input.switch::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .15s;}
+  input.switch:checked{background:var(--success) !important;}
+  input.switch:checked::after{left:19px;}
+  input.switch:disabled{opacity:.55;cursor:default;}
 
   /* Tabla financiera (histórico semanal de autónomos) */
   .fin-table{
@@ -515,9 +520,11 @@ function goHome(){
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
   if (!flotaConfirmLeaveForm()) return;
+  if (!adminConfirmLeave()) return;
   window.__decaFormDirty = false;
   window.__direccionFormDirty = false;
   window.__flotaFormDirty = false;
+  window.__adminFormDirty = false;
   window.__contactoFormDirty = false;
   window.__showingContactoDetail = false;
   window.__contactoDetailId = null;
@@ -534,9 +541,11 @@ async function setTab(id){
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
   if (!flotaConfirmLeaveForm()) return;
+  if (!adminConfirmLeave()) return;
   window.__decaFormDirty = false;
   window.__direccionFormDirty = false;
   window.__flotaFormDirty = false;
+  window.__adminFormDirty = false;
   window.__contactoFormDirty = false;
   currentTab = id;
   // Pulsar la pestaña del panel siempre lleva a su pantalla principal
@@ -553,7 +562,11 @@ async function setTab(id){
     window.__contactosPage = 0;
   }
   if (id === 'trafico') { window.__traficoView = 'home'; }
-  if (id === 'admin') await loadAllProfiles();
+  if (id === 'admin') {
+    window.__adminView = 'list'; window.__adminEditMode = false; window.__adminSearch = '';
+    window.__adminFilters = []; window.__adminFilterOpen = false; window.__adminFormDirty = false;
+    await loadAllProfiles();
+  }
   saveLastTab();
   renderHeader(); renderTab();
 }
@@ -747,6 +760,13 @@ function computeBreadcrumbSegments(){
       return [{label:'Administración', onclick:'backToAdministracionHome()'}, {label:'Direcciones', onclick:'backToDirecciones()'}, {label: dr ? dr.nombre : 'Nueva dirección', onclick:null}];
     }
     return [{label:'Administración', onclick:null}];
+  }
+  if (currentTab === 'admin') {
+    if (window.__adminView === 'ficha') {
+      const u = adminCurrentUser();
+      return [{label:'Gestión de Permisos', onclick:'backToAdminList()'}, {label: u ? u.email : 'Usuario', onclick:null}];
+    }
+    return [{label:'Gestión de Permisos', onclick:null}];
   }
   const tab = TABS.concat([ADMIN_TAB]).find(t=>t.id===currentTab);
   return tab ? [{label:tab.label, onclick:null}] : [];
@@ -6953,99 +6973,371 @@ async function loadAllProfiles(){
   const { data } = await supabaseClient.from('profiles').select('*').order('email');
   ALL_PROFILES = (data||[]).map(p => ({ id: p.id, email: p.email, isAdmin: p.is_admin, allowedTabs: p.allowed_tabs || [], driverId: p.driver_id || null, canEditSchedule: p.can_edit_schedule || false }));
 }
-async function setProfileDriver(userId, driverId){
-  await supabaseClient.from('profiles').update({ driver_id: driverId || null }).eq('id', userId);
-  const p = ALL_PROFILES.find(x=>x.id===userId);
-  if (p) p.driverId = driverId || null;
-  if (userId === CURRENT_USER_ID) PROFILE.driverId = driverId || null;
-  renderTab();
-}
-async function toggleProfileAdmin(userId, checked){
-  await supabaseClient.from('profiles').update({ is_admin: checked }).eq('id', userId);
-  const p = ALL_PROFILES.find(x=>x.id===userId);
-  if (p) p.isAdmin = checked;
-  if (userId === CURRENT_USER_ID) { PROFILE.isAdmin = checked; }
-  renderTab();
-}
-async function toggleProfileTab(userId, tabId, checked){
-  const p = ALL_PROFILES.find(x=>x.id===userId);
-  if (!p) return;
-  const newTabs = checked ? [...new Set([...p.allowedTabs, tabId])] : p.allowedTabs.filter(t=>t!==tabId);
-  const update = { allowed_tabs: newTabs };
-  const clearSchedule = tabId === 'citas' && !checked; // sin Citas no tiene sentido poder tocar el horario
-  if (clearSchedule) update.can_edit_schedule = false;
-  await supabaseClient.from('profiles').update(update).eq('id', userId);
-  p.allowedTabs = newTabs;
-  if (clearSchedule) p.canEditSchedule = false;
-  if (userId === CURRENT_USER_ID) {
-    PROFILE.allowedTabs = newTabs;
-    if (clearSchedule) PROFILE.canEditSchedule = false;
-  }
-  renderTab();
-}
-async function toggleProfileSchedule(userId, checked){
-  await supabaseClient.from('profiles').update({ can_edit_schedule: checked }).eq('id', userId);
-  const p = ALL_PROFILES.find(x=>x.id===userId);
-  if (p) p.canEditSchedule = checked;
-  if (userId === CURRENT_USER_ID) PROFILE.canEditSchedule = checked;
-  renderTab();
-}
-function tabLabelShort(t){ return t.label.replace(/^[^\wÁ-ÿ]+/,''); }
 function driverLabel(d){ const co = companies.find(c=>c.id===d.companyId); return `${d.name}${co?' · '+co.name:''}`; }
-// Sub-permisos anidados por pestaña: cada entrada añade un icono ⚙ junto a
-// la casilla de esa pestaña que abre un mini-panel flotante con sus propias
-// casillas. Añadir aquí una pestaña nueva es lo único que hace falta cuando
-// surja otro sub-permiso (p.ej. Documentos → subir archivos).
-const TAB_SUBPERMS = {
-  citas: (p) => `
-    <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;white-space:nowrap;">
-      <input type="checkbox" ${(p.isAdmin||p.canEditSchedule)?'checked':''} ${(p.isAdmin || !p.allowedTabs.includes('citas'))?'disabled':''} onchange="toggleProfileSchedule('${p.id}', this.checked)" />
-      Puede editar el horario del almacén
-    </label>`,
+
+/* ---- Gestión de permisos: lista de usuarios y ficha por usuario ----
+   Los permisos siguen siendo los mismos de la tabla "profiles" (administrador,
+   pestañas permitidas, editar horario y conductor vinculado); solo cambia
+   cómo se ven y se editan. Los roles son atajos que rellenan las pestañas. */
+const PERM_ROLES = {
+  admin: { label: 'Administrador', hint: 'Ve y puede hacerlo todo, incluida esta pantalla.' },
+  organizador: { label: 'Organizador de almacén', tabs: ['clientes','citas','documentos'], schedule: true, hint: 'Gestiona el día a día del almacén: clientes, franjas y documentos, y puede cambiar el horario.' },
+  trafico: { label: 'Tráfico', tabs: ['trafico','autonomos','fichajes'], hint: 'Tráfico (DECA), autónomos y fichajes.' },
+  administracion: { label: 'Administración', tabs: ['administracion'], hint: 'Contactos, direcciones y flota.' },
+  fichaje: { label: 'Solo fichaje (conductor)', tabs: [], hint: 'Solo ve la pantalla para fichar su jornada; hay que vincularle un conductor.' },
+  custom: { label: 'Personalizado', hint: 'Elige a mano qué módulos ve.' },
 };
-function toggleSubpanel(userId, tabId){
-  const key = userId+':'+tabId;
-  window.__openSubpanel = (window.__openSubpanel === key) ? null : key;
+function permState(p){ return { isAdmin: !!p.isAdmin, allowedTabs: (p.allowedTabs||[]).slice(), canEditSchedule: !!p.canEditSchedule, driverId: p.driverId || null }; }
+function permDetectRole(s){
+  if (s.isAdmin) return 'admin';
+  const tabs = [...s.allowedTabs].sort().join(',');
+  if (!tabs && (s.driverId || s.wantsFichaje)) return 'fichaje';
+  for (const k of ['organizador','trafico','administracion']) {
+    const r = PERM_ROLES[k];
+    if ([...r.tabs].sort().join(',') === tabs && !!r.schedule === !!s.canEditSchedule) return k;
+  }
+  return 'custom';
+}
+function permRoleLabel(s){
+  const role = permDetectRole(s);
+  return role === 'custom' && !s.allowedTabs.length ? 'Sin permisos' : PERM_ROLES[role].label;
+}
+function permApplyRole(d, role){
+  d.isAdmin = role === 'admin';
+  const r = PERM_ROLES[role];
+  if (r && r.tabs) { d.allowedTabs = r.tabs.slice(); d.canEditSchedule = !!r.schedule; }
+}
+function permModuleGroups(){
+  const groups = [];
+  TABS.forEach(t => {
+    let g = groups.find(x => x.name === t.group);
+    if (!g) { g = { name: t.group, items: [] }; groups.push(g); }
+    g.items.push(t);
+  });
+  return groups;
+}
+function permHasTab(s, id){ return s.isAdmin || s.allowedTabs.includes(id); }
+// El módulo "administracion" da acceso a Contactos, Direcciones y Flota.
+function permLabel(t){ return t.id === 'administracion' ? 'Administración' : t.label; }
+function permDesc(t){ return t.id === 'administracion' ? 'Contactos, direcciones y flota.' : ((HOME_MODULES[t.id]||{}).description || ''); }
+function permAvatar(p, size){
+  return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:var(--primary);color:var(--primary-text);display:flex;align-items:center;justify-content:center;font-family:var(--display);font-size:${Math.round(size*0.42)}px;font-weight:700;flex-shrink:0;">${esc((p.email||'?').trim().charAt(0).toUpperCase())}</div>`;
+}
+function adminCurrentUser(){ return window.__adminUserId ? ALL_PROFILES.find(x=>x.id===window.__adminUserId) : null; }
+function adminConfirmLeave(){
+  if (window.__adminView === 'ficha' && window.__adminEditMode && window.__adminFormDirty) {
+    return confirm('Tienes cambios sin guardar. ¿Seguro que quieres salir sin guardar?');
+  }
+  return true;
+}
+function backToAdminList(){
+  if (!adminConfirmLeave()) return;
+  window.__adminFormDirty = false;
+  window.__adminEditMode = false;
+  window.__adminView = 'list';
+  renderHeader(); renderTab();
+}
+
+/* ---- historial de cambios de permisos ---- */
+let adminHistorialCache = {};
+let adminHistorialUnavailable = false;
+async function loadAdminHistorial(profileId){
+  const { data, error } = await supabaseClient.from('profile_historial').select('*').eq('profile_id', profileId).order('created_at', { ascending: false });
+  adminHistorialUnavailable = !!error;
+  return (data||[]).map(h => ({ id: h.id, createdAt: h.created_at, usuario: h.usuario || '', resumen: h.resumen }));
+}
+async function logAdminHistorial(profileId, resumen){
+  if (!resumen) return;
+  const usuario = currentUserEmail();
+  const { data, error } = await supabaseClient.from('profile_historial').insert({ profile_id: profileId, usuario, resumen }).select().single();
+  if (error || !data) return;
+  adminHistorialCache[profileId] = [{ id: data.id, createdAt: data.created_at, usuario, resumen }, ...(adminHistorialCache[profileId]||[])];
+}
+function adminHistorialBodyHtml(){
+  const h = window.__adminHistorial;
+  if (adminHistorialUnavailable) return `<div style="color:var(--mutedFaint);font-size:12.5px;">El historial todavía no está activado: falta ejecutar en Supabase el SQL <b>permisos-historial-schema.sql</b>.</div>`;
+  if (h === null || h === undefined) return `<div style="color:var(--mutedFaint);font-size:12.5px;">Cargando…</div>`;
+  if (!h.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay cambios registrados.</div>`;
+  return h.map(x => `
+    <div style="padding:10px 0;border-bottom:1px solid var(--border);">
+      <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:3px;">${fmtDateHora(x.createdAt)}${x.usuario?' · '+esc(x.usuario):''}</div>
+      <div style="font-size:12.5px;color:var(--text);white-space:pre-line;">${esc(x.resumen)}</div>
+    </div>`).join('');
+}
+function adminChangeSummary(before, after){
+  const lines = [];
+  const rb = permRoleLabel(before), ra = permRoleLabel(after);
+  if (rb !== ra) lines.push(`Rol: "${rb}" → "${ra}"`);
+  const label = id => { const t = TABS.find(x=>x.id===id); return t ? permLabel(t) : id; };
+  const added = after.allowedTabs.filter(t => !before.allowedTabs.includes(t)).map(label);
+  const removed = before.allowedTabs.filter(t => !after.allowedTabs.includes(t)).map(label);
+  if (added.length) lines.push(`Módulos añadidos: ${added.join(', ')}`);
+  if (removed.length) lines.push(`Módulos quitados: ${removed.join(', ')}`);
+  const sb = before.allowedTabs.includes('citas') && before.canEditSchedule, sa = after.allowedTabs.includes('citas') && after.canEditSchedule;
+  if (sb !== sa) lines.push(`Puede editar el horario del almacén: ${sa ? 'sí' : 'no'}`);
+  if ((before.driverId||null) !== (after.driverId||null)) {
+    const nm = id => id ? driverLabel(drivers.find(d=>d.id===id) || { name: '—', companyId: null }) : '—';
+    lines.push(`Conductor vinculado: "${nm(before.driverId)}" → "${nm(after.driverId)}"`);
+  }
+  return lines;
+}
+
+/* ---- lista ---- */
+function adminFilteredList(){
+  const q = (window.__adminSearch || '').toLowerCase();
+  const f = window.__adminFilters || [];
+  return ALL_PROFILES.filter(p => (!q || p.email.toLowerCase().includes(q))
+    && (!f.includes('admin') || p.isAdmin)
+    && (!f.includes('driver') || p.driverId));
+}
+function adminCardHtml(p){
+  const s = permState(p);
+  const modules = s.isAdmin ? 'Acceso total' : `${s.allowedTabs.length} módulo${s.allowedTabs.length!==1?'s':''}`;
+  const dr = p.driverId ? drivers.find(d=>d.id===p.driverId) : null;
+  return `
+    <div class="card" style="cursor:pointer;display:flex;gap:14px;align-items:flex-start;padding:18px;" onclick="openAdminUser('${p.id}')">
+      ${permAvatar(p, 46)}
+      <div style="min-width:0;flex:1;">
+        <div style="font-family:var(--display);font-size:14.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;">${esc(p.email)}${p.id===CURRENT_USER_ID?' <span style="font-size:11px;color:var(--mutedFaint);font-weight:400;">(tú)</span>':''}</div>
+        <div style="margin:6px 0 4px;"><span style="font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;background:${s.isAdmin?'rgba(27,58,107,.1)':'var(--panel2)'};border:1px solid ${s.isAdmin?'rgba(27,58,107,.3)':'var(--border)'};border-radius:99px;padding:2px 9px;color:${s.isAdmin?'var(--primary)':'var(--muted)'};">${esc(permRoleLabel(s))}</span></div>
+        <div style="font-size:12px;color:var(--muted);">${modules}</div>
+        ${dr ? `<div style="font-size:12px;color:var(--mutedFaint);margin-top:2px;">Conductor: ${esc(dr.name)}</div>` : ''}
+      </div>
+    </div>`;
+}
+function adminListBodyHtml(){
+  const list = adminFilteredList();
+  if (!list.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${(window.__adminSearch || (window.__adminFilters||[]).length) ? 'Ningún usuario coincide con el filtro.' : 'Sin usuarios todavía.'}</div>`;
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">${list.map(adminCardHtml).join('')}</div>`;
+}
+function refreshAdminListBody(){
+  const el = document.getElementById('admin-list-body');
+  if (el) el.innerHTML = adminListBodyHtml();
+  const c = document.getElementById('admin-count');
+  if (c) c.textContent = `${adminFilteredList().length} usuario${adminFilteredList().length!==1?'s':''}`;
+}
+function toggleAdminFilter(key, checked){
+  const cur = window.__adminFilters || [];
+  window.__adminFilters = checked ? [...cur, key] : cur.filter(k=>k!==key);
   renderTab();
+}
+function tplAdminList(){
+  const f = window.__adminFilters || [];
+  const check = (key, label) => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 4px;cursor:pointer;white-space:nowrap;">
+      <input type="checkbox" ${f.includes(key)?'checked':''} onchange="toggleAdminFilter('${key}', this.checked)" style="width:auto;" /> ${label}
+    </label>`;
+  const n = adminFilteredList().length;
+  return `
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:8px;">
+      <div style="width:48px;height:48px;border-radius:12px;background:rgba(27,58,107,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        ${homeIcon(HOME_ICON_PATHS.shield, 24, '#1B3A6B')}
+      </div>
+      <div>
+        <div style="font-family:var(--display);font-size:22px;">Usuarios y permisos</div>
+        <div style="font-size:12.5px;color:var(--mutedFaint);">Quién puede entrar y qué módulos ve cada persona.</div>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--mutedFaint);margin:0 0 18px 62px;line-height:1.5;">Para dar de alta a alguien nuevo, créalo en Supabase → Authentication → Users; aparecerá aquí en cuanto exista.</div>
+    <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:16px;">
+      <div style="position:relative;max-width:320px;">
+        <input placeholder="Buscar por correo…" value="${esc(window.__adminSearch||'')}" oninput="window.__adminSearch=this.value; refreshAdminListBody();" style="padding-left:34px;" />
+        <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+      </div>
+      <div style="position:relative;justify-self:center;">
+        <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__adminFilterOpen=!window.__adminFilterOpen; renderTab();">Filtros${f.length?` (${f.length})`:''} ▾</button>
+        ${window.__adminFilterOpen ? `
+          <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:220px;">
+            ${check('admin', 'Solo administradores')}
+            ${check('driver', 'Con conductor vinculado')}
+          </div>` : ''}
+      </div>
+      <div id="admin-count" style="justify-self:end;font-size:12.5px;color:var(--muted);">${n} usuario${n!==1?'s':''}</div>
+    </div>
+    <div id="admin-list-body">${adminListBodyHtml()}</div>`;
+}
+
+/* ---- ficha de usuario ---- */
+function openAdminUser(id, keepNav){
+  if (!keepNav) window.__adminNavIds = adminFilteredList().map(p=>p.id);
+  window.__adminView = 'ficha';
+  window.__adminUserId = id;
+  window.__adminEditMode = false;
+  window.__adminFormDirty = false;
+  window.__adminDraft = null;
+  window.__adminHistorial = adminHistorialCache[id] || null;
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
+  loadAdminHistorial(id).then(list => {
+    adminHistorialCache[id] = list;
+    if (window.__adminView === 'ficha' && window.__adminUserId === id) {
+      window.__adminHistorial = list;
+      const el = document.getElementById('admin-historial-body');
+      if (el) el.innerHTML = adminHistorialBodyHtml();
+    }
+  });
+}
+function adminNavGoto(offset){
+  const ids = window.__adminNavIds || [];
+  const idx = ids.indexOf(window.__adminUserId);
+  if (idx === -1 || !ids.length) return;
+  if (!adminConfirmLeave()) return;
+  openAdminUser(ids[(idx + offset + ids.length) % ids.length], true);
+}
+function adminEnterEdit(){
+  const p = adminCurrentUser();
+  if (!p) return;
+  window.__adminDraft = permState(p);
+  window.__adminEditMode = true;
+  window.__adminFormDirty = false;
+  renderTab();
+}
+function adminExitEdit(){
+  if (!adminConfirmLeave()) return;
+  window.__adminEditMode = false;
+  window.__adminFormDirty = false;
+  window.__adminDraft = null;
+  renderTab();
+}
+function adminDraftRole(role){ permApplyRole(window.__adminDraft, role); window.__adminDraft.wantsFichaje = role === 'fichaje'; window.__adminFormDirty = true; renderTab(); }
+function adminDraftTab(tabId, checked){
+  const d = window.__adminDraft;
+  d.wantsFichaje = false;
+  d.allowedTabs = checked ? [...new Set([...d.allowedTabs, tabId])] : d.allowedTabs.filter(t => t !== tabId);
+  if (tabId === 'citas' && !checked) d.canEditSchedule = false;
+  window.__adminFormDirty = true; renderTab();
+}
+function adminDraftSchedule(checked){ window.__adminDraft.canEditSchedule = checked; window.__adminFormDirty = true; renderTab(); }
+function adminDraftDriver(id){ window.__adminDraft.driverId = id || null; window.__adminFormDirty = true; renderTab(); }
+async function adminSaveUser(){
+  const p = adminCurrentUser(), d = window.__adminDraft;
+  const errEl = document.getElementById('admin-error');
+  if (!p || !d) return;
+  if (errEl) errEl.textContent = '';
+  if (permDetectRole(d) === 'fichaje' && !d.driverId) { showFormError(errEl, 'Un usuario "solo fichaje" necesita un conductor vinculado.'); return; }
+  if (p.id === CURRENT_USER_ID && p.isAdmin && !d.isAdmin && !confirm('Te vas a quitar a ti mismo el permiso de administrador y perderás el acceso a esta pantalla. ¿Seguro?')) return;
+  const update = { is_admin: d.isAdmin, allowed_tabs: d.allowedTabs, can_edit_schedule: d.allowedTabs.includes('citas') ? d.canEditSchedule : false, driver_id: d.driverId };
+  const btns = [...document.querySelectorAll('.admin-save-btn')];
+  btns.forEach(b => b.disabled = true);
+  const { data, error } = await supabaseClient.from('profiles').update(update).eq('id', p.id).select();
+  if (error || !data || !data.length) {
+    showFormError(errEl, 'No se pudo guardar: ' + (error && error.message ? error.message : 'sin permiso.'));
+    btns.forEach(b => b.disabled = false);
+    return;
+  }
+  const before = permState(p);
+  const after = { ...d, canEditSchedule: update.can_edit_schedule };
+  const lines = adminChangeSummary(before, after);
+  if (lines.length) await logAdminHistorial(p.id, lines.join('\n'));
+  Object.assign(p, { isAdmin: d.isAdmin, allowedTabs: d.allowedTabs.slice(), canEditSchedule: update.can_edit_schedule, driverId: d.driverId });
+  if (p.id === CURRENT_USER_ID) Object.assign(PROFILE, { isAdmin: p.isAdmin, allowedTabs: p.allowedTabs.slice(), canEditSchedule: p.canEditSchedule, driverId: p.driverId });
+  window.__adminHistorial = adminHistorialCache[p.id] || window.__adminHistorial;
+  window.__adminEditMode = false;
+  window.__adminFormDirty = false;
+  window.__adminDraft = null;
+  renderTab();
+}
+function tplAdminViewCard(p){
+  const s = permState(p);
+  const dr = p.driverId ? drivers.find(d=>d.id===p.driverId) : null;
+  const chip = (t) => {
+    const on = permHasTab(s, t.id);
+    return `<span style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;padding:5px 11px;border-radius:99px;${on?'background:rgba(63,143,95,.12);color:#2F7A4B;border:1px solid rgba(63,143,95,.35);':'background:var(--panel2);color:var(--mutedFaint);border:1px dashed var(--border);'}">${on?'✓':'—'} ${esc(permLabel(t))}</span>`;
+  };
+  return `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;margin-bottom:22px;">
+      ${contactoFieldBlock('Rol', `${esc(permRoleLabel(s))}<div style="font-size:11.5px;color:var(--mutedFaint);margin-top:2px;">${esc(PERM_ROLES[permDetectRole(s)].hint)}</div>`)}
+      ${contactoFieldBlock('Conductor vinculado', dr ? esc(driverLabel(dr)) : '—')}
+    </div>
+    ${permModuleGroups().map(g => `
+      <div style="margin-bottom:16px;">
+        <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--mutedFaint);margin-bottom:8px;">${esc(g.name)}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">${g.items.map(chip).join('')}</div>
+        ${g.items.some(t=>t.id==='citas') && permHasTab(s,'citas') ? `<div style="font-size:12px;color:var(--muted);margin-top:8px;">Puede editar el horario del almacén: <b>${(s.isAdmin||s.canEditSchedule)?'sí':'no'}</b></div>` : ''}
+      </div>`).join('')}`;
+}
+function tplAdminEditForm(p){
+  const d = window.__adminDraft;
+  const role = permDetectRole(d);
+  return `
+    <div class="card" style="margin-bottom:12px;">
+      <div class="field">
+        <label>Rol</label>
+        <select onchange="adminDraftRole(this.value)">
+          ${Object.entries(PERM_ROLES).map(([k, r]) => `<option value="${k}" ${role===k?'selected':''}>${esc(r.label)}</option>`).join('')}
+        </select>
+        <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">${esc(PERM_ROLES[role].hint)}</div>
+      </div>
+      <div class="field" style="margin-bottom:0;">
+        <label>Conductor vinculado</label>
+        <select onchange="adminDraftDriver(this.value)">
+          <option value="">— Ninguno —</option>
+          ${drivers.map(dr=>`<option value="${dr.id}" ${d.driverId===dr.id?'selected':''}>${esc(driverLabel(dr))}</option>`).join('')}
+        </select>
+        <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">Para cuentas que solo fichan: si no tiene módulos marcados, solo verá la pantalla de fichaje.</div>
+      </div>
+    </div>
+    ${permModuleGroups().map(g => `
+      <div class="card" style="margin-bottom:12px;">
+        <div style="font-family:var(--display);text-transform:uppercase;font-size:12px;color:var(--muted);letter-spacing:.4px;margin-bottom:6px;">${esc(g.name)}</div>
+        ${g.items.map(t => `
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 0;border-top:1px solid var(--border);">
+            <div style="min-width:0;">
+              <div style="font-size:13.5px;font-weight:600;">${esc(permLabel(t))}</div>
+              <div style="font-size:12px;color:var(--mutedFaint);">${esc(permDesc(t))}</div>
+              ${t.id==='citas' ? `
+                <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);margin-top:8px;cursor:pointer;${permHasTab(d,'citas')?'':'opacity:.5;'}">
+                  <input type="checkbox" ${(d.isAdmin||d.canEditSchedule)?'checked':''} ${(d.isAdmin||!d.allowedTabs.includes('citas'))?'disabled':''} onchange="adminDraftSchedule(this.checked)" style="width:auto;" />
+                  Puede editar el horario del almacén
+                </label>` : ''}
+            </div>
+            <input type="checkbox" class="switch" ${permHasTab(d,t.id)?'checked':''} ${d.isAdmin?'disabled':''} onchange="adminDraftTab('${t.id}', this.checked)" />
+          </div>`).join('')}
+      </div>`).join('')}
+    <div id="admin-error" style="color:var(--danger);font-size:12.5px;margin:8px 0;"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
+      <button class="btn btn-ghost" onclick="adminExitEdit()">Cancelar</button>
+      <button class="btn btn-primary admin-save-btn" onclick="adminSaveUser()">Guardar</button>
+    </div>`;
+}
+function tplAdminFicha(){
+  const p = adminCurrentUser();
+  if (!p) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Usuario no encontrado.</div>`;
+  const editMode = !!window.__adminEditMode;
+  const ids = window.__adminNavIds || [];
+  const idx = ids.indexOf(p.id);
+  const arrow = (offset, title, ch) => `<button onclick="adminNavGoto(${offset})" title="${title}" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13px;">${ch}</button>`;
+  return `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
+      <div style="display:flex;align-items:center;gap:14px;min-width:0;">
+        ${permAvatar(p, 48)}
+        <div style="min-width:0;">
+          <div style="font-family:var(--display);font-size:22px;overflow:hidden;text-overflow:ellipsis;">${esc(p.email)}${p.id===CURRENT_USER_ID?' <span style="font-size:12px;color:var(--mutedFaint);font-weight:400;">(tú)</span>':''}</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">${esc(permRoleLabel(permState(editMode && window.__adminDraft ? window.__adminDraft : p)))}</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        ${idx>-1 && ids.length>1 ? `
+          <div style="display:flex;align-items:center;gap:4px;">
+            ${arrow(-1, 'Usuario anterior', '←')}
+            <span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${idx+1}/${ids.length}</span>
+            ${arrow(1, 'Usuario siguiente', '→')}
+          </div>` : ''}
+        ${!editMode ? `<button class="btn btn-ghost" onclick="adminEnterEdit()">Editar</button>` : `<button class="btn btn-primary admin-save-btn" onclick="adminSaveUser()">Guardar</button>`}
+      </div>
+    </div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+      <div style="flex:2;min-width:360px;">
+        ${editMode && window.__adminDraft ? tplAdminEditForm(p) : `<div class="card">${tplAdminViewCard(p)}</div>`}
+      </div>
+      <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
+        <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Historial de cambios</div>
+        <div id="admin-historial-body">${adminHistorialBodyHtml()}</div>
+      </div>
+    </div>`;
 }
 function tplAdmin(){
-  return `
-    <div style="font-size:12.5px;color:var(--muted);margin-bottom:16px;line-height:1.5;">
-      Para dar de alta un proveedor nuevo, créalo en <strong>Supabase → Authentication → Users</strong> — en cuanto exista, aparecerá aquí para marcarle qué pestañas ve. Las pestañas con un icono ⚙ tienen sub-permisos propios — pulsa el icono para abrirlos. Para que una cuenta solo pueda fichar su jornada, vincúlala a un conductor en la última columna (ignora las pestañas marcadas).
-    </div>
-    <div class="card" style="padding:0;overflow-x:auto;">
-      <table><thead><tr>
-        <th>Correo</th><th style="text-align:center;">Admin</th>
-        ${TABS.map(t=>`<th style="text-align:center;">${esc(tabLabelShort(t))}</th>`).join('')}
-        <th>Conductor vinculado</th>
-      </tr></thead><tbody>
-        ${ALL_PROFILES.map(p => `
-          <tr>
-            <td>${esc(p.email)}${p.id===CURRENT_USER_ID?' <span style="color:var(--mutedFaint);font-size:11px;">(tú)</span>':''}</td>
-            <td style="text-align:center;"><input type="checkbox" ${p.isAdmin?'checked':''} onchange="toggleProfileAdmin('${p.id}', this.checked)" /></td>
-            ${TABS.map(t => `
-              <td style="text-align:center;position:relative;">
-                <input type="checkbox" ${(p.isAdmin||p.allowedTabs.includes(t.id))?'checked':''} ${p.isAdmin?'disabled':''} onchange="toggleProfileTab('${p.id}','${t.id}', this.checked)" />
-                ${TAB_SUBPERMS[t.id] ? `
-                  <button type="button" onclick="toggleSubpanel('${p.id}','${t.id}')" title="Sub-permisos de ${esc(tabLabelShort(t))}" style="background:none;border:none;color:var(--muted);font-size:11px;cursor:pointer;vertical-align:middle;margin-left:2px;padding:2px;">⚙</button>
-                  ${window.__openSubpanel === (p.id+':'+t.id) ? `
-                    <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;text-align:left;margin-top:6px;">
-                      <div style="font-size:10px;color:var(--mutedFaint);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;white-space:nowrap;">Sub-permisos de ${esc(tabLabelShort(t))}</div>
-                      ${TAB_SUBPERMS[t.id](p)}
-                      <button type="button" onclick="toggleSubpanel('${p.id}','${t.id}')" style="display:block;margin-top:10px;background:none;border:none;color:var(--primary);font-size:11.5px;cursor:pointer;padding:0;">Cerrar</button>
-                    </div>` : ''}
-                ` : ''}
-              </td>`
-            ).join('')}
-            <td>
-              <select onchange="setProfileDriver('${p.id}', this.value)" style="min-width:170px;">
-                <option value="">— Ninguno —</option>
-                ${drivers.map(d=>`<option value="${d.id}" ${p.driverId===d.id?'selected':''}>${esc(driverLabel(d))}</option>`).join('')}
-              </select>
-            </td>
-          </tr>`).join('') || `<tr><td colspan="${3+TABS.length}" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin usuarios todavía</td></tr>`}
-      </tbody></table>
-    </div>`;
+  return window.__adminView === 'ficha' ? tplAdminFicha() : tplAdminList();
 }
 
 /* ============================= INICIO ============================= */
