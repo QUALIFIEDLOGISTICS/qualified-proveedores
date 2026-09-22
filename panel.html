@@ -27,6 +27,9 @@
   body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);}
   table{border-collapse:collapse;width:100%;}
   th{text-align:left;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--border);}
+  th.th-sort{cursor:pointer;user-select:none;white-space:nowrap;}
+  th.th-sort:hover{color:var(--text);}
+  th.th-sort .th-sort-arrow{display:inline-block;margin-left:4px;font-size:10px;opacity:.3;}
   td{padding:11px 12px;font-size:13.5px;border-bottom:1px solid var(--border);}
   tr:last-child td{border-bottom:none;}
   .dr-row:hover td{background:var(--panel2);}
@@ -316,6 +319,65 @@ async function loadMovements(){
 }
 
 const fmtDate = (d) => new Date(d).toLocaleDateString('es-ES',{day:'2-digit',month:'short'});
+
+// ============================================================
+// Ordenar tablas al pulsar la cabecera de una columna — en toda la
+// web: alfabético (texto), numérico o por fecha, según el tipo de
+// columna. Es puro, sobre el DOM ya pintado: reordena las <tr> de la
+// tabla que contiene el <th> pulsado, no toca los datos ni vuelve a
+// pintar la pantalla. Se pinta un <th> ordenable con thSort(...), y
+// si el texto visible de la celda no es directamente comparable
+// (fechas en "21 sept", importes con "€", etc.) se añade en el <td>
+// un data-sort-value="" con el valor real (ISO, número) a usar.
+function thSort(label, type, extra){
+  return `<th class="th-sort" data-sort-type="${type||'text'}" onclick="sortTableByHeader(this)" ${extra||''}>${esc(label)}<span class="th-sort-arrow">⇅</span></th>`;
+}
+function sortTableByHeader(th){
+  const table = th.closest('table');
+  const headRow = th.parentElement;
+  if (!table || !headRow) return;
+  const ths = [...headRow.children];
+  const colIndex = ths.indexOf(th);
+  const tbody = table.querySelector('tbody');
+  if (!tbody) return;
+  const rows = [...tbody.children].filter(r => r.tagName === 'TR');
+  const sameCol = table.getAttribute('data-sort-col') === String(colIndex);
+  const dir = (sameCol && table.getAttribute('data-sort-dir') === 'asc') ? 'desc' : 'asc';
+  table.setAttribute('data-sort-col', String(colIndex));
+  table.setAttribute('data-sort-dir', dir);
+  const type = th.getAttribute('data-sort-type') || 'text';
+  const valueOf = (row) => {
+    const cell = row.children[colIndex];
+    if (!cell) return '';
+    return cell.hasAttribute('data-sort-value') ? cell.getAttribute('data-sort-value') : cell.textContent.trim();
+  };
+  const collator = new Intl.Collator('es', { sensitivity: 'base', numeric: true });
+  rows.sort((a, b) => {
+    const va = valueOf(a), vb = valueOf(b);
+    if (type === 'number') {
+      // El signo menos de los importes con eurSigned/eur2 negativos es el
+      // carácter Unicode "−" (U+2212), no el guion normal "-": hay que
+      // normalizarlo antes de quitar el resto de símbolos (€, h, m, etc.)
+      // o los importes negativos se leerían como positivos.
+      const clean = (s) => parseFloat(String(s).replace(/−/g,'-').replace(/\./g,'').replace(',', '.').replace(/[^0-9.\-]/g,''));
+      const na = clean(va), nb = clean(vb);
+      return (isNaN(na)?-Infinity:na) - (isNaN(nb)?-Infinity:nb);
+    }
+    if (type === 'date') {
+      const da = Date.parse(va), db = Date.parse(vb);
+      return (isNaN(da)?-Infinity:da) - (isNaN(db)?-Infinity:db);
+    }
+    return collator.compare(String(va), String(vb));
+  });
+  if (dir === 'desc') rows.reverse();
+  rows.forEach(r => tbody.appendChild(r));
+  ths.forEach((h, i) => {
+    const arrow = h.querySelector('.th-sort-arrow');
+    if (!arrow) return;
+    arrow.textContent = i === colIndex ? (dir === 'asc' ? '▲' : '▼') : '⇅';
+    arrow.style.opacity = i === colIndex ? '1' : '.3';
+  });
+}
 // dd/mm/aaaa — para el listado del DeCA, donde se pidió este formato exacto.
 function fmtDateDMY(d){
   if (!d) return '—';
@@ -2636,20 +2698,20 @@ function tplResumen(){
     </div>
     <div class="card" style="margin-bottom:22px;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:13.5px;margin-bottom:12px;">Mercancía por cliente</div>
-      <table><thead><tr><th>Cliente</th><th>Palets en almacén</th></tr></thead><tbody>
+      <table><thead><tr>${thSort('Cliente','text')}${thSort('Palets en almacén','number')}</tr></thead><tbody>
         ${rows.map(r=>`<tr><td>${esc(r.name)}</td><td>${r.qty}</td></tr>`).join('') || `<tr><td colspan="2" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin mercancía todavía</td></tr>`}
       </tbody></table>
     </div>
     <div class="card">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:13.5px;margin-bottom:12px;">Últimos movimientos</div>
-      <table><thead><tr><th>Tipo</th><th>Palet</th><th>Cliente</th><th>Fecha</th></tr></thead><tbody>
+      <table><thead><tr>${thSort('Tipo','text')}${thSort('Palet','text')}${thSort('Cliente','text')}${thSort('Fecha','date')}</tr></thead><tbody>
         ${movs.slice(0,5).map(m=>{
           const p = palletById(m.palletId);
           return `<tr>
             <td style="color:${m.type==='entrada'?'var(--success)':'var(--danger)'};text-transform:capitalize;">${m.type==='entrada'?'↑':'↓'} ${esc(m.type)}</td>
             <td>${esc(p ? (p.reference||p.description) : '—')}</td>
             <td>${esc(clientName(m.clientId))}</td>
-            <td style="color:var(--muted);">${fmtDate(m.date)}</td>
+            <td style="color:var(--muted);" data-sort-value="${esc(m.date||'')}">${fmtDate(m.date)}</td>
           </tr>`;
         }).join('') || `<tr><td colspan="4" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin movimientos todavía</td></tr>`}
       </tbody></table>
@@ -2668,16 +2730,16 @@ function tplMercancia(){
       <button class="btn btn-primary" onclick="openPalletModal()">+ Nueva entrada de palet</button>
     </div>
     <div class="card" style="padding:0;overflow:hidden;">
-      <table><thead><tr><th>Referencia</th><th>Cliente</th><th>Mercancía</th><th>Cantidad</th><th>Ubicación</th><th>Entrada</th><th>Estado</th><th></th></tr></thead><tbody>
+      <table><thead><tr>${thSort('Referencia','text')}${thSort('Cliente','text')}${thSort('Mercancía','text')}${thSort('Cantidad','number')}${thSort('Ubicación','text')}${thSort('Entrada','date')}${thSort('Estado','text')}<th></th></tr></thead><tbody>
         ${list.map(p=>`
           <tr>
             <td style="font-family:var(--mono);color:var(--muted);font-size:12px;">${esc(p.reference||'—')}</td>
             <td>${esc(clientName(p.clientId))}</td>
             <td>${esc(p.description)}</td>
-            <td>${p.quantity} ${esc(p.unit||'')}</td>
+            <td data-sort-value="${p.quantity}">${p.quantity} ${esc(p.unit||'')}</td>
             <td style="color:var(--muted);">${esc(p.location||'—')}</td>
-            <td style="color:var(--muted);">${fmtDate(p.dateIn)}</td>
-            <td>${p.status==='en almacén' ? '<span class="badge" style="background:#3F8F5F;">En almacén</span>' : '<span class="badge" style="background:#9AA2AB;">Salido</span>'}</td>
+            <td style="color:var(--muted);" data-sort-value="${esc(p.dateIn||'')}">${fmtDate(p.dateIn)}</td>
+            <td data-sort-value="${p.status==='en almacén'?'En almacén':'Salido'}">${p.status==='en almacén' ? '<span class="badge" style="background:#3F8F5F;">En almacén</span>' : '<span class="badge" style="background:#9AA2AB;">Salido</span>'}</td>
             <td>${p.status==='en almacén' ? `<button onclick="openSalidaModal('${p.id}')" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:11px;padding:4px 8px;">Dar salida</button>` : ''}</td>
           </tr>`).join('') || `<tr><td colspan="8" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin mercancía registrada</td></tr>`}
       </tbody></table>
@@ -3870,15 +3932,15 @@ function tplDocumentos(){
       <div style="flex:1;min-width:160px;"><input placeholder="Buscar por cliente…" value="${esc(window.__docSearch||'')}" onkeyup="window.__docSearch=this.value; renderTab();" /></div>
     </div>
     <div class="card" style="padding:0;overflow:hidden;">
-      <table><thead><tr><th>Fecha</th><th>Hora</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th>Adjuntos</th></tr></thead><tbody>
+      <table><thead><tr>${thSort('Fecha','date')}${thSort('Hora','text')}${thSort('Cliente','text')}${thSort('Tipo','text')}${thSort('Estado','text')}${thSort('Adjuntos','number')}</tr></thead><tbody>
         ${rows.map(r => `
           <tr onclick="openFromDocumentos('${r.kind}','${r.id}','${r.date}')" style="cursor:pointer;">
-            <td>${fmtDate(r.date)}</td>
+            <td data-sort-value="${esc(r.date||'')}">${fmtDate(r.date)}</td>
             <td style="color:var(--muted);">${r.time || '<span style="color:var(--mutedFaint);">sin hora</span>'}</td>
             <td>${esc(clientName(r.clientId))}</td>
             <td style="text-transform:capitalize;color:var(--muted);">${esc(r.type)}</td>
             <td><span style="text-transform:capitalize;color:${APPT_STATUS_COLORS[r.status]};font-weight:600;font-size:12px;">${esc(r.status)}</span></td>
-            <td>${r.attachments.length ? `<span style="color:var(--primary);">📎 ${r.attachments.length}</span>` : `<span style="color:var(--mutedFaint);">— sin adjuntar</span>`}</td>
+            <td data-sort-value="${r.attachments.length}">${r.attachments.length ? `<span style="color:var(--primary);">📎 ${r.attachments.length}</span>` : `<span style="color:var(--mutedFaint);">— sin adjuntar</span>`}</td>
           </tr>`).join('') || `<tr><td colspan="6" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin resultados en este rango de fechas</td></tr>`}
       </tbody></table>
     </div>`;
@@ -3903,15 +3965,15 @@ function tplMovimientos(){
   const movs = [...movements[currentWarehouseId]].sort((a,b)=>b.date.localeCompare(a.date));
   return `
     <div class="card" style="padding:0;overflow:hidden;">
-      <table><thead><tr><th>Tipo</th><th>Palet</th><th>Cliente</th><th>Cantidad</th><th>Fecha</th><th>Referencia</th></tr></thead><tbody>
+      <table><thead><tr>${thSort('Tipo','text')}${thSort('Palet','text')}${thSort('Cliente','text')}${thSort('Cantidad','number')}${thSort('Fecha','date')}${thSort('Referencia','text')}</tr></thead><tbody>
         ${movs.map(m=>{
           const p = palletById(m.palletId);
           return `<tr>
             <td style="color:${m.type==='entrada'?'var(--success)':'var(--danger)'};text-transform:capitalize;">${m.type==='entrada'?'↑':'↓'} ${esc(m.type)}</td>
             <td>${esc(p ? (p.reference||p.description) : '—')}</td>
             <td>${esc(clientName(m.clientId))}</td>
-            <td>${m.quantity}</td>
-            <td style="color:var(--muted);">${fmtDate(m.date)}</td>
+            <td data-sort-value="${m.quantity}">${m.quantity}</td>
+            <td style="color:var(--muted);" data-sort-value="${esc(m.date||'')}">${fmtDate(m.date)}</td>
             <td style="color:var(--muted);font-size:12.5px;">${esc(m.ref||'')}</td>
           </tr>`;
         }).join('') || `<tr><td colspan="6" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin movimientos</td></tr>`}
@@ -4634,8 +4696,8 @@ function dashboardTable(stats){
       <table>
         <thead><tr>
           ${th('driverName','Conductor')}
-          <th>Empresa</th>
-          <th>Modalidad</th>
+          ${th('companyName','Empresa')}
+          ${th('modalityLabel','Modalidad')}
           ${th('days','Días')}
           ${th('km','Km')}
           ${th('hours','Horas')}
@@ -4646,7 +4708,7 @@ function dashboardTable(stats){
           ${th('costeTotal','Coste total')}
           ${th('eurKm','€/km')}
           ${th('eurHora','€/hora')}
-          <th>Estado</th>
+          ${th('archived','Estado')}
         </tr></thead>
         <tbody>
           ${sorted.map(s => {
@@ -4694,7 +4756,9 @@ function tplAutonomosDashboardBody(){
 
   let stats = candidateDrivers.map(d => {
     const s = dashboardDriverStats(d, info);
-    return s ? { ...s, driverName: d.name } : null;
+    if (!s) return null;
+    const co = companies.find(c=>c.id===d.companyId);
+    return { ...s, driverName: d.name, companyName: co ? co.name : '', modalityLabel: d.modality==='piso_movil' ? 'Piso Móvil' : 'Plaza', archived: !!d.archived };
   }).filter(Boolean);
 
   if (filterExtras==='con') stats = stats.filter(s=>s.kmExtra>0||s.hoursExtra>0);
@@ -4862,13 +4926,13 @@ function decaListBodyHtml(){
     <div class="card" style="padding:0;overflow-x:auto;">
       <table>
         <thead><tr>
-          <th>Código</th><th>Fecha</th><th>Cargador contractual</th><th>Transportista efectivo</th><th>Origen</th><th>Destino</th><th>Mat. tractora</th><th>Mat. remolque</th><th>Mercancía</th><th>Acciones</th>
+          ${thSort('Código','text')}${thSort('Fecha','date')}${thSort('Cargador contractual','text')}${thSort('Transportista efectivo','text')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Mat. tractora','text')}${thSort('Mat. remolque','text')}${thSort('Mercancía','text')}<th>Acciones</th>
         </tr></thead>
         <tbody>
           ${list.map(d => `
             <tr class="dr-row" style="cursor:pointer;" onclick="openDecaViewModal('${d.id}')">
               <td style="font-weight:600;font-family:var(--mono);font-size:12.5px;">${esc(d.codigo||'—')}</td>
-              <td style="color:var(--muted);">${fmtDateDMY(d.fechaTransporte)}</td>
+              <td style="color:var(--muted);" data-sort-value="${esc(d.fechaTransporte||'')}">${fmtDateDMY(d.fechaTransporte)}</td>
               <td style="font-weight:600;">${esc(d.cargadorNombre)}</td>
               <td style="color:var(--muted);">${esc(d.transportistaNombre)}</td>
               <td style="color:var(--muted);min-width:170px;max-width:260px;white-space:normal;">${esc(decaLugarNombre(d.origen))}</td>
@@ -5595,35 +5659,35 @@ function driversListBodyHtml(){
     <div class="card" style="padding:0;overflow-x:auto;">
       <table class="dr-table">
         <thead><tr>
-          <th>Nº Flota</th>
-          <th>Conductor</th>
-          <th>DNI</th>
-          <th>Empresa</th>
-          <th>Matrícula vehículo</th>
-          <th>Modalidad</th>
-          <th>€/Día</th>
-          <th>€/Km Extra</th>
-          <th>€/Hora Extra</th>
-          <th>Máx. Km/Día</th>
-          <th>Máx. H/Día</th>
-          <th>Indexación</th>
-          <th>Estado</th>
+          ${thSort('Nº Flota','number')}
+          ${thSort('Conductor','text')}
+          ${thSort('DNI','text')}
+          ${thSort('Empresa','text')}
+          ${thSort('Matrícula vehículo','text')}
+          ${thSort('Modalidad','text')}
+          ${thSort('€/Día','number')}
+          ${thSort('€/Km Extra','number')}
+          ${thSort('€/Hora Extra','number')}
+          ${thSort('Máx. Km/Día','number')}
+          ${thSort('Máx. H/Día','number')}
+          ${thSort('Indexación','text')}
+          ${thSort('Estado','text')}
           <th>Acciones</th>
         </tr></thead>
         <tbody>
           ${rows.map(({d, co, openNow, modalityBadge, statusDot, rate}) => `
             <tr class="dr-row" style="cursor:pointer;${d.archived?'opacity:0.65;':''}" onclick="openDriverDetail('${d.id}')">
-              <td style="color:var(--muted);">${d.fleetNumber?esc(d.fleetNumber):'—'}</td>
+              <td style="color:var(--muted);" data-sort-value="${d.fleetNumber||''}">${d.fleetNumber?esc(d.fleetNumber):'—'}</td>
               <td style="font-weight:600;">${esc(d.name)}${openNow?' <span class="badge" style="background:#D9A72C;">Jornada abierta</span>':''}</td>
               <td style="color:var(--muted);font-family:var(--mono);font-size:12.5px;">${esc(d.dni||'—')}</td>
               <td style="color:var(--muted);">${esc(co?co.name:'—')}</td>
               <td style="color:var(--muted);font-family:var(--mono);font-size:12.5px;">${d.truckPlate?esc(d.truckPlate):'—'}</td>
               <td>${modalityBadge}</td>
-              <td style="color:var(--muted);">${rate?eur2(rate.priceDay):'—'}</td>
-              <td style="color:var(--muted);">${rate?eur2(rate.priceKmExtra):'—'}</td>
-              <td style="color:var(--muted);">${rate?eur2(rate.priceHourExtra):'—'}</td>
-              <td style="color:var(--muted);">${rate?rate.maxKmDay:'—'}</td>
-              <td style="color:var(--muted);">${rate?rate.maxHoursDay:'—'}</td>
+              <td style="color:var(--muted);" data-sort-value="${rate?rate.priceDay:''}">${rate?eur2(rate.priceDay):'—'}</td>
+              <td style="color:var(--muted);" data-sort-value="${rate?rate.priceKmExtra:''}">${rate?eur2(rate.priceKmExtra):'—'}</td>
+              <td style="color:var(--muted);" data-sort-value="${rate?rate.priceHourExtra:''}">${rate?eur2(rate.priceHourExtra):'—'}</td>
+              <td style="color:var(--muted);" data-sort-value="${rate?rate.maxKmDay:''}">${rate?rate.maxKmDay:'—'}</td>
+              <td style="color:var(--muted);" data-sort-value="${rate?rate.maxHoursDay:''}">${rate?rate.maxHoursDay:'—'}</td>
               <td style="color:var(--muted);">${rate?(rate.hasIndexation!==false?'Sí':'No'):'—'}</td>
               <td>${statusDot}</td>
               <td style="white-space:nowrap;">
@@ -5900,16 +5964,16 @@ function tplDriverDetail(){
       </div>
       <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:10px;">Cada tarifa se aplica desde su fecha en adelante, hasta que empiece la siguiente. Así, si cambias un precio, las semanas ya pasadas no se recalculan con el precio nuevo.</div>
       <div class="card" style="padding:0;overflow:hidden;">
-        <table><thead><tr><th>Vigente desde</th><th>€/día</th><th>€/km extra</th><th>€/h extra</th><th>Máx km/día</th><th>Máx h/día</th><th>Indexación</th><th></th></tr></thead><tbody>
+        <table><thead><tr>${thSort('Vigente desde','date')}${thSort('€/día','number')}${thSort('€/km extra','number')}${thSort('€/h extra','number')}${thSort('Máx km/día','number')}${thSort('Máx h/día','number')}${thSort('Indexación','text')}<th></th></tr></thead><tbody>
           ${rateHistory.filter(r=>r.driverId===d.id).sort((a,b)=>b.validFrom.localeCompare(a.validFrom)).map(r => `
             <tr ${readOnly?'':`onclick="openRateModal('${d.id}','${r.id}')" style="cursor:pointer;"`}>
-              <td>${fmtDateY(r.validFrom)}${r.note ? ` <span title="${esc(r.note)}" style="cursor:help;">📝</span>` : ''}</td>
-              <td>${eur2(r.priceDay)}</td>
-              <td>${eur2(r.priceKmExtra)}</td>
-              <td>${eur2(r.priceHourExtra)}</td>
+              <td data-sort-value="${esc(r.validFrom||'')}">${fmtDateY(r.validFrom)}${r.note ? ` <span title="${esc(r.note)}" style="cursor:help;">📝</span>` : ''}</td>
+              <td data-sort-value="${r.priceDay}">${eur2(r.priceDay)}</td>
+              <td data-sort-value="${r.priceKmExtra}">${eur2(r.priceKmExtra)}</td>
+              <td data-sort-value="${r.priceHourExtra}">${eur2(r.priceHourExtra)}</td>
               <td>${r.maxKmDay}</td>
               <td>${r.maxHoursDay}</td>
-              <td>${r.hasIndexation!==false ? '<span class="badge" style="background:#3F8F5F;">Sí</span>' : '<span class="badge" style="background:var(--mutedFaint);">No</span>'}</td>
+              <td data-sort-value="${r.hasIndexation!==false?'Si':'No'}">${r.hasIndexation!==false ? '<span class="badge" style="background:#3F8F5F;">Sí</span>' : '<span class="badge" style="background:var(--mutedFaint);">No</span>'}</td>
               <td>${readOnly ? '' : `<button onclick="event.stopPropagation(); deleteRate('${r.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>`}</td>
             </tr>`).join('') || `<tr><td colspan="8" style="color:var(--mutedFaint);text-align:center;padding:16px;">Sin tarifas registradas</td></tr>`}
         </tbody></table>
@@ -5986,21 +6050,21 @@ function tplDriverDetail(){
       `}
     </div>
     <div class="card" style="padding:0;overflow-x:auto;margin-bottom:14px;">
-      <table><thead><tr><th>Fecha</th><th>Estado</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km inicial</th><th>Km final</th><th>Km recorridos</th><th>Incidencias</th><th title="Excluir días/km/horas de este día del cálculo normal (a la carta) y/o pagar un importe manual.">Cálculo</th><th>Foto inicio</th><th>Foto cierre</th><th></th></tr></thead><tbody>
+      <table><thead><tr>${thSort('Fecha','date')}${thSort('Estado','text')}${thSort('Entrada','text')}${thSort('Salida','text')}${thSort('Horas','number')}${thSort('Km inicial','number')}${thSort('Km final','number')}${thSort('Km recorridos','number')}${thSort('Incidencias','number')}<th title="Excluir días/km/horas de este día del cálculo normal (a la carta) y/o pagar un importe manual.">Cálculo</th><th>Foto inicio</th><th>Foto cierre</th><th></th></tr></thead><tbody>
         ${dailyEntries.filter(f=>f.driverId===d.id && f.date.startsWith(String(year))
             && Number(f.date.slice(5,7))-1===Number(month)
             && (weekFilter==='todas' || getISOWeek(f.date).week===Number(weekFilter))
           ).sort((a,b)=>a.date.localeCompare(b.date)).map(f => { const inc = incidentsForDay(d.id, f.date); const hasNote = driverNotes.some(n=>n.driverId===d.id && n.date===f.date); const rowBg = f.autoClosed ? 'rgba(193,68,61,0.12)' : hasNote ? 'rgba(217,167,44,0.18)' : null; return `
           <tr ${rowBg?`style="background:${rowBg};"`:''}>
-            <td>${fmtDate(f.date)}${hasNote?' <span title="Este día tiene una anotación — mira más abajo." style="cursor:help;">📌</span>':''}</td>
-            <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}${autoClosedBadgeHtml(f)}</td>
+            <td data-sort-value="${esc(f.date||'')}">${fmtDate(f.date)}${hasNote?' <span title="Este día tiene una anotación — mira más abajo." style="cursor:help;">📌</span>':''}</td>
+            <td data-sort-value="${f.status==='abierta'?'Jornada abierta':'Cerrada'}">${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}${autoClosedBadgeHtml(f)}</td>
             <td style="color:var(--muted);">${f.timeIn}</td>
             <td style="color:var(--muted);">${f.timeOut||'—'}</td>
-            <td style="${f.excludeHours?'color:var(--mutedFaint);text-decoration:line-through;':''}">${f.timeOut ? fmtHoursMin(fichajeHours(f)) : '—'}</td>
-            <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmStart ?? '—'}</td>
-            <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmEnd ?? '—'}</td>
-            <td style="font-weight:600;${f.excludeKm?'color:var(--mutedFaint);text-decoration:line-through;':''}">${f.km!=null ? f.km+' km' : '—'}</td>
-            <td>
+            <td style="${f.excludeHours?'color:var(--mutedFaint);text-decoration:line-through;':''}" data-sort-value="${f.timeOut?fichajeHours(f):''}">${f.timeOut ? fmtHoursMin(fichajeHours(f)) : '—'}</td>
+            <td style="color:var(--muted);font-family:var(--mono);font-size:12px;" data-sort-value="${f.kmStart??''}">${f.kmStart ?? '—'}</td>
+            <td style="color:var(--muted);font-family:var(--mono);font-size:12px;" data-sort-value="${f.kmEnd??''}">${f.kmEnd ?? '—'}</td>
+            <td style="font-weight:600;${f.excludeKm?'color:var(--mutedFaint);text-decoration:line-through;':''}" data-sort-value="${f.km??''}">${f.km!=null ? f.km+' km' : '—'}</td>
+            <td data-sort-value="${inc.length}">
               ${readOnly
                 ? (inc.length ? `<span style="color:var(--danger);font-size:10.5px;">⚠ ${inc.length}</span>` : `<span style="color:var(--mutedFaint);font-size:10.5px;">—</span>`)
                 : `<button onclick="openIncidentsModal('${d.id}', '${f.date}')" title="Ver o añadir incidencias de este día" style="background:none;border:1px solid var(--border);border-radius:5px;color:${inc.length?'var(--danger)':'var(--muted)'};font-size:10.5px;padding:3px 7px;white-space:nowrap;">${inc.length ? '⚠ '+inc.length : '+ Incidencia'}</button>`}
@@ -6054,47 +6118,47 @@ function tplDriverDetail(){
             <th colspan="2" class="fin-neto">Neto</th>
           </tr>
           <tr class="fin-col-row">
-            <th class="fin-first fin-center" title="${monthRows ? 'Mes del año (1-12).' : 'Número de semana del año (calendario ISO).'}">${monthRows ? 'Mes' : 'Semana'}</th>
-            <th class="fin-num fin-center fin-g-jornada fin-g-start" title="Jornadas trabajadas ${monthRows?'ese mes':'esa semana'} — incluye los días con importe manual aunque estén excluidos del €/día. El €/día se calcula solo sobre los días no excluidos.">Días</th>
-            <th class="fin-num fin-g-jornada" title="Kilómetros totales recorridos ${monthRows?'ese mes':'esa semana'}.">Km</th>
-            <th class="fin-num fin-g-jornada" title="Horas totales trabajadas ${monthRows?'ese mes':'esa semana'}.">Horas</th>
-            <th class="fin-num fin-g-jornada" title="Km − (máx. km/día × días trabajados). Positivo si se ha superado el máximo permitido.">Km extra</th>
-            <th class="fin-num fin-g-jornada" title="Horas − (máx. horas/día × días trabajados). Positivo si se ha superado el máximo permitido.">H. extra</th>
-            <th class="fin-num fin-g-ingresos fin-g-start" title="Días trabajados × precio/día de la tarifa vigente ${monthRows?'ese mes':'esa semana'}.">€/día</th>
-            <th class="fin-num fin-g-ingresos" title="Se coge el valor más alto entre el importe de km extra y el de horas extra de cada semana. Nunca se suman los dos, solo se cobra el mayor.">Extra</th>
-            <th class="fin-num fin-g-ingresos" title="Suma de los suplementos registrados ${monthRows?'ese mes':'esa semana'} (fecha, importe y motivo).${monthRows?'':' Haz clic para ver el detalle.'}">Suplem.</th>
-            <th class="fin-num fin-g-ingresos" title="Importe manual de los días marcados como excluidos del cálculo normal (ver Fichajes diarios). Se paga tal cual, en vez de €/día y km/h extra para esos días.">Manual</th>
-            <th class="fin-num fin-g-ingresos" title="€/día + Extra + Suplementos + Manual.">Ingreso</th>
-            <th class="fin-num fin-g-gastos fin-g-start" title="Suma de los repostajes registrados ${monthRows?'ese mes':'esa semana'} (litros × precio/litro).${monthRows?'':' Haz clic para ver el detalle.'}">Gasoil</th>
-            <th class="fin-num fin-g-gastos" title="Suma de los peajes registrados ${monthRows?'ese mes':'esa semana'} (fecha, importe y motivo).${monthRows?'':' Haz clic para ver el detalle.'} Se descuenta del ingreso.">Peajes</th>
-            <th class="fin-num fin-g-gastos" title="Suma de otros gastos registrados ${monthRows?'ese mes':'esa semana'} (fecha, importe y motivo).${monthRows?'':' Haz clic para ver el detalle.'} Se descuenta del ingreso.">Otros</th>
-            <th class="fin-num fin-g-gastos" title="Gasoil + Peajes + Otros. Se descuenta del ingreso.">Total</th>
-            ${driverIndexed ? `<th class="fin-num fin-g-ajustes fin-g-start" title="Importe por días × % de indexación del mes al que pertenece cada semana. Puede subir o bajar el neto.">Indexación</th>` : ''}
-            <th class="fin-num fin-neto" title="Ingreso − Gastos + Indexación. Lo que queda finalmente ${monthRows?'ese mes':'esa semana'}.">Neto</th>
-            <th class="fin-num fin-eurkm" title="(Ingreso + Indexación) ÷ Km recorridos ${monthRows?'ese mes':'esa semana'}. Lo que se saca por cada kilómetro.">€/Km</th>
+            <th class="fin-first fin-center th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="${monthRows ? 'Mes del año (1-12).' : 'Número de semana del año (calendario ISO).'}">${monthRows ? 'Mes' : 'Semana'}<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-center fin-g-jornada fin-g-start th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Jornadas trabajadas ${monthRows?'ese mes':'esa semana'} — incluye los días con importe manual aunque estén excluidos del €/día. El €/día se calcula solo sobre los días no excluidos.">Días<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-jornada th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Kilómetros totales recorridos ${monthRows?'ese mes':'esa semana'}.">Km<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-jornada th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Horas totales trabajadas ${monthRows?'ese mes':'esa semana'}.">Horas<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-jornada th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Km − (máx. km/día × días trabajados). Positivo si se ha superado el máximo permitido.">Km extra<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-jornada th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Horas − (máx. horas/día × días trabajados). Positivo si se ha superado el máximo permitido.">H. extra<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-ingresos fin-g-start th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Días trabajados × precio/día de la tarifa vigente ${monthRows?'ese mes':'esa semana'}.">€/día<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-ingresos th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Se coge el valor más alto entre el importe de km extra y el de horas extra de cada semana. Nunca se suman los dos, solo se cobra el mayor.">Extra<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-ingresos th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Suma de los suplementos registrados ${monthRows?'ese mes':'esa semana'} (fecha, importe y motivo).${monthRows?'':' Haz clic para ver el detalle.'}">Suplem.<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-ingresos th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Importe manual de los días marcados como excluidos del cálculo normal (ver Fichajes diarios). Se paga tal cual, en vez de €/día y km/h extra para esos días.">Manual<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-ingresos th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="€/día + Extra + Suplementos + Manual.">Ingreso<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-gastos fin-g-start th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Suma de los repostajes registrados ${monthRows?'ese mes':'esa semana'} (litros × precio/litro).${monthRows?'':' Haz clic para ver el detalle.'}">Gasoil<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-gastos th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Suma de los peajes registrados ${monthRows?'ese mes':'esa semana'} (fecha, importe y motivo).${monthRows?'':' Haz clic para ver el detalle.'} Se descuenta del ingreso.">Peajes<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-gastos th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Suma de otros gastos registrados ${monthRows?'ese mes':'esa semana'} (fecha, importe y motivo).${monthRows?'':' Haz clic para ver el detalle.'} Se descuenta del ingreso.">Otros<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-gastos th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Gasoil + Peajes + Otros. Se descuenta del ingreso.">Total<span class="th-sort-arrow">⇅</span></th>
+            ${driverIndexed ? `<th class="fin-num fin-g-ajustes fin-g-start th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Importe por días × % de indexación del mes al que pertenece cada semana. Puede subir o bajar el neto.">Indexación<span class="th-sort-arrow">⇅</span></th>` : ''}
+            <th class="fin-num fin-neto th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Ingreso − Gastos + Indexación. Lo que queda finalmente ${monthRows?'ese mes':'esa semana'}.">Neto<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-eurkm th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="(Ingreso + Indexación) ÷ Km recorridos ${monthRows?'ese mes':'esa semana'}. Lo que se saca por cada kilómetro.">€/Km<span class="th-sort-arrow">⇅</span></th>
           </tr>
         </thead>
         <tbody>
           ${monthRows ? monthRows.map(r => `
             <tr class="fin-row">
-              <td class="fin-first fin-center" style="font-weight:600;" title="${MONTH_NAMES[r.month]}">${r.month+1}</td>
-              <td class="fin-num fin-center fin-g-jornada fin-g-start" style="color:var(--muted);">${r.daysCount}</td>
-              <td class="fin-num fin-g-jornada" style="color:var(--muted);">${r.km}</td>
-              <td class="fin-num fin-g-jornada" style="color:var(--muted);">${fmtHoursMin(r.hours)}</td>
-              <td class="fin-num fin-g-jornada" style="color:var(--muted);">${r.kmExtra>0?'+':''}${r.kmExtra.toFixed(1)}</td>
-              <td class="fin-num fin-g-jornada" style="color:var(--muted);">${r.hoursExtra>0?'+':''}${fmtHoursMin(r.hoursExtra)}</td>
-              <td class="fin-num fin-g-ingresos fin-g-start" style="color:var(--muted);">${eur2(r.dayAmount)}</td>
-              <td class="fin-num fin-g-ingresos">${r.extraCharge>0 ? `<span class="fin-pill" style="background:rgba(63,143,95,0.12);color:var(--success);">+${eur2(r.extraCharge)}</span>` : `<span style="color:var(--mutedFaint);">—</span>`}</td>
-              <td class="fin-num fin-g-ingresos" style="color:${r.supplements?'var(--muted)':'var(--mutedFaint)'};">${r.supplements ? eur2(r.supplements) : '—'}</td>
-              <td class="fin-num fin-g-ingresos" style="color:${r.manualAmount?'var(--primary)':'var(--mutedFaint)'};font-weight:600;">${r.manualAmount ? eur2(r.manualAmount) : '—'}</td>
-              <td class="fin-num fin-g-ingresos" style="font-weight:700;">${eur2(r.totalIngreso)}</td>
-              <td class="fin-num fin-g-gastos fin-g-start" style="color:${r.gasoil?'var(--danger)':'var(--mutedFaint)'};">${r.gasoil ? eur2(r.gasoil) : '—'}</td>
-              <td class="fin-num fin-g-gastos" style="color:${r.peajes?'var(--danger)':'var(--mutedFaint)'};">${r.peajes ? eur2(r.peajes) : '—'}</td>
-              <td class="fin-num fin-g-gastos" style="color:${r.otros?'var(--danger)':'var(--mutedFaint)'};">${r.otros ? eur2(r.otros) : '—'}</td>
-              <td class="fin-num fin-g-gastos" style="color:${r.gastosTotal?'var(--danger)':'var(--mutedFaint)'};font-weight:600;">${r.gastosTotal ? '−'+eur2(r.gastosTotal) : '—'}</td>
-              ${driverIndexed ? `<td class="fin-num fin-g-ajustes fin-g-start" style="color:${r.idxAmount<0?'var(--danger)':r.idxAmount>0?'var(--success)':'var(--mutedFaint)'};font-weight:600;" title="${r.idxPct}% sobre ${eur2(r.dayAmount)}">${r.idxAmount ? eurSigned(r.idxAmount) : '—'}</td>` : ''}
-              <td class="fin-num fin-neto" style="font-weight:800;color:var(--primary);font-size:13.5px;">${eur2(r.neto)}</td>
-              <td class="fin-num fin-eurkm" style="color:var(--muted);font-weight:600;">${r.km ? eur2((r.totalIngreso+r.idxAmount)/r.km) : '—'}</td>
+              <td class="fin-first fin-center" style="font-weight:600;" data-sort-value="${r.month+1}" title="${MONTH_NAMES[r.month]}">${r.month+1}</td>
+              <td class="fin-num fin-center fin-g-jornada fin-g-start" style="color:var(--muted);" data-sort-value="${r.daysCount}">${r.daysCount}</td>
+              <td class="fin-num fin-g-jornada" style="color:var(--muted);" data-sort-value="${r.km}">${r.km}</td>
+              <td class="fin-num fin-g-jornada" style="color:var(--muted);" data-sort-value="${r.hours}">${fmtHoursMin(r.hours)}</td>
+              <td class="fin-num fin-g-jornada" style="color:var(--muted);" data-sort-value="${r.kmExtra}">${r.kmExtra>0?'+':''}${r.kmExtra.toFixed(1)}</td>
+              <td class="fin-num fin-g-jornada" style="color:var(--muted);" data-sort-value="${r.hoursExtra}">${r.hoursExtra>0?'+':''}${fmtHoursMin(r.hoursExtra)}</td>
+              <td class="fin-num fin-g-ingresos fin-g-start" style="color:var(--muted);" data-sort-value="${r.dayAmount}">${eur2(r.dayAmount)}</td>
+              <td class="fin-num fin-g-ingresos" data-sort-value="${r.extraCharge}">${r.extraCharge>0 ? `<span class="fin-pill" style="background:rgba(63,143,95,0.12);color:var(--success);">+${eur2(r.extraCharge)}</span>` : `<span style="color:var(--mutedFaint);">—</span>`}</td>
+              <td class="fin-num fin-g-ingresos" style="color:${r.supplements?'var(--muted)':'var(--mutedFaint)'};" data-sort-value="${r.supplements||0}">${r.supplements ? eur2(r.supplements) : '—'}</td>
+              <td class="fin-num fin-g-ingresos" style="color:${r.manualAmount?'var(--primary)':'var(--mutedFaint)'};font-weight:600;" data-sort-value="${r.manualAmount||0}">${r.manualAmount ? eur2(r.manualAmount) : '—'}</td>
+              <td class="fin-num fin-g-ingresos" style="font-weight:700;" data-sort-value="${r.totalIngreso}">${eur2(r.totalIngreso)}</td>
+              <td class="fin-num fin-g-gastos fin-g-start" style="color:${r.gasoil?'var(--danger)':'var(--mutedFaint)'};" data-sort-value="${r.gasoil||0}">${r.gasoil ? eur2(r.gasoil) : '—'}</td>
+              <td class="fin-num fin-g-gastos" style="color:${r.peajes?'var(--danger)':'var(--mutedFaint)'};" data-sort-value="${r.peajes||0}">${r.peajes ? eur2(r.peajes) : '—'}</td>
+              <td class="fin-num fin-g-gastos" style="color:${r.otros?'var(--danger)':'var(--mutedFaint)'};" data-sort-value="${r.otros||0}">${r.otros ? eur2(r.otros) : '—'}</td>
+              <td class="fin-num fin-g-gastos" style="color:${r.gastosTotal?'var(--danger)':'var(--mutedFaint)'};font-weight:600;" data-sort-value="${r.gastosTotal?-r.gastosTotal:0}">${r.gastosTotal ? '−'+eur2(r.gastosTotal) : '—'}</td>
+              ${driverIndexed ? `<td class="fin-num fin-g-ajustes fin-g-start" style="color:${r.idxAmount<0?'var(--danger)':r.idxAmount>0?'var(--success)':'var(--mutedFaint)'};font-weight:600;" data-sort-value="${r.idxAmount||0}" title="${r.idxPct}% sobre ${eur2(r.dayAmount)}">${r.idxAmount ? eurSigned(r.idxAmount) : '—'}</td>` : ''}
+              <td class="fin-num fin-neto" style="font-weight:800;color:var(--primary);font-size:13.5px;" data-sort-value="${r.neto}">${eur2(r.neto)}</td>
+              <td class="fin-num fin-eurkm" style="color:var(--muted);font-weight:600;" data-sort-value="${r.km ? (r.totalIngreso+r.idxAmount)/r.km : ''}">${r.km ? eur2((r.totalIngreso+r.idxAmount)/r.km) : '—'}</td>
             </tr>`).join('') || `<tr><td colspan="${driverIndexed?18:17}" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin datos registrados en ${year}</td></tr>`
           : rows.map(({e,c}) => {
             const idxPct = driverIndexed ? getIndexPercent(d.id, e.year, e._splitMonth !== undefined ? e._splitMonth : weekMonth(e.year, e.week)) : 0;
@@ -6102,24 +6166,24 @@ function tplDriverDetail(){
             const rowNeto = c.neto + idxAmount;
             return `
             <tr class="fin-row">
-              <td class="fin-first fin-center" style="font-weight:600;" ${e._splitMonth!==undefined?`title="Semana repartida entre dos meses — aquí solo se cuentan los días de ${MONTH_NAMES[e._splitMonth]}."`:''}>${e.week}${e._splitMonth!==undefined?' ✂️':''}</td>
-              <td class="fin-num fin-center fin-g-jornada fin-g-start" style="color:var(--muted);" onclick="event.stopPropagation();">${e.daysCount}</td>
-              <td class="fin-num fin-g-jornada" style="color:var(--muted);" onclick="event.stopPropagation();">${e.km}</td>
-              <td class="fin-num fin-g-jornada" style="color:var(--muted);" onclick="event.stopPropagation();">${fmtHoursMin(e.hours)}</td>
-              <td class="fin-num fin-g-jornada" style="color:${c.extraCharge>0 && c.kmExtraAmount===c.extraCharge?'var(--success)':'var(--muted)'};font-weight:${c.extraCharge>0 && c.kmExtraAmount===c.extraCharge?'700':'400'};" onclick="event.stopPropagation();" title="${c.extraCharge>0 && c.kmExtraAmount===c.extraCharge?'Esto es lo que se está pagando en Total Extra.':''}">${c.kmExtra>0?'+':''}${c.kmExtra.toFixed(1)}</td>
-              <td class="fin-num fin-g-jornada" style="color:${c.extraCharge>0 && c.hoursExtraAmount===c.extraCharge?'var(--success)':'var(--muted)'};font-weight:${c.extraCharge>0 && c.hoursExtraAmount===c.extraCharge?'700':'400'};" onclick="event.stopPropagation();" title="${c.extraCharge>0 && c.hoursExtraAmount===c.extraCharge?'Esto es lo que se está pagando en Total Extra.':''}">${c.hoursExtra>0?'+':''}${fmtHoursMin(c.hoursExtra)}</td>
-              <td class="fin-num fin-g-ingresos fin-g-start" style="color:var(--muted);" onclick="event.stopPropagation();">${eur2(c.dayAmount)}</td>
-              <td class="fin-num fin-g-ingresos" onclick="event.stopPropagation();">${c.extraCharge>0 ? `<span class="fin-pill" style="background:rgba(63,143,95,0.12);color:var(--success);">+${eur2(c.extraCharge)}</span>` : `<span style="color:var(--mutedFaint);">—</span>`}</td>
-              <td class="fin-num fin-g-ingresos" ${readOnly?'':`style="color:var(--primary);text-decoration:underline;cursor:pointer;" onclick="event.stopPropagation(); openSupplementModal('${d.id}', ${e.year}, ${e.week});"`}>${e.supplements ? eur2(e.supplements) : '—'}</td>
-              <td class="fin-num fin-g-ingresos" style="color:${e.manualAmount?'var(--primary)':'var(--mutedFaint)'};font-weight:600;" onclick="event.stopPropagation();">${e.manualAmount ? eur2(e.manualAmount) : '—'}</td>
-              <td class="fin-num fin-g-ingresos" style="font-weight:700;" onclick="event.stopPropagation();">${eur2(c.totalIngreso)}</td>
-              <td class="fin-num fin-g-gastos fin-g-start" style="color:${e.gasoil?'var(--danger)':'var(--mutedFaint)'};${readOnly?'':'text-decoration:underline;cursor:pointer;'}" ${readOnly?'':`onclick="event.stopPropagation(); openFuelModal('${d.id}', ${e.year}, ${e.week});"`}>${e.gasoil ? eur2(e.gasoil) : '—'}</td>
-              <td class="fin-num fin-g-gastos" style="color:${e.peajes?'var(--danger)':'var(--mutedFaint)'};${readOnly?'':'text-decoration:underline;cursor:pointer;'}" ${readOnly?'':`onclick="event.stopPropagation(); openExpenseModal('${d.id}', ${e.year}, ${e.week}, 'peaje');"`}>${e.peajes ? eur2(e.peajes) : '—'}</td>
-              <td class="fin-num fin-g-gastos" style="color:${e.otros?'var(--danger)':'var(--mutedFaint)'};${readOnly?'':'text-decoration:underline;cursor:pointer;'}" ${readOnly?'':`onclick="event.stopPropagation(); openExpenseModal('${d.id}', ${e.year}, ${e.week}, 'otro');"`}>${e.otros ? eur2(e.otros) : '—'}</td>
-              <td class="fin-num fin-g-gastos" style="color:${c.gastosTotal?'var(--danger)':'var(--mutedFaint)'};font-weight:600;" onclick="event.stopPropagation();">${c.gastosTotal ? '−'+eur2(c.gastosTotal) : '—'}</td>
-              ${driverIndexed ? `<td class="fin-num fin-g-ajustes fin-g-start" style="color:${idxAmount<0?'var(--danger)':idxAmount>0?'var(--success)':'var(--mutedFaint)'};font-weight:600;" title="${idxPct}% sobre ${eur2(c.dayAmount)}" onclick="event.stopPropagation();">${idxAmount ? eurSigned(idxAmount) : '—'}</td>` : ''}
-              <td class="fin-num fin-neto" style="font-weight:800;color:var(--primary);font-size:13.5px;" onclick="event.stopPropagation();">${eur2(rowNeto)}</td>
-              <td class="fin-num fin-eurkm" style="color:var(--muted);font-weight:600;" onclick="event.stopPropagation();">${e.km ? eur2((c.totalIngreso+idxAmount)/e.km) : '—'}</td>
+              <td class="fin-first fin-center" style="font-weight:600;" data-sort-value="${e.week}" ${e._splitMonth!==undefined?`title="Semana repartida entre dos meses — aquí solo se cuentan los días de ${MONTH_NAMES[e._splitMonth]}."`:''}>${e.week}${e._splitMonth!==undefined?' ✂️':''}</td>
+              <td class="fin-num fin-center fin-g-jornada fin-g-start" style="color:var(--muted);" data-sort-value="${e.daysCount}" onclick="event.stopPropagation();">${e.daysCount}</td>
+              <td class="fin-num fin-g-jornada" style="color:var(--muted);" data-sort-value="${e.km}" onclick="event.stopPropagation();">${e.km}</td>
+              <td class="fin-num fin-g-jornada" style="color:var(--muted);" data-sort-value="${e.hours}" onclick="event.stopPropagation();">${fmtHoursMin(e.hours)}</td>
+              <td class="fin-num fin-g-jornada" style="color:${c.extraCharge>0 && c.kmExtraAmount===c.extraCharge?'var(--success)':'var(--muted)'};font-weight:${c.extraCharge>0 && c.kmExtraAmount===c.extraCharge?'700':'400'};" data-sort-value="${c.kmExtra}" onclick="event.stopPropagation();" title="${c.extraCharge>0 && c.kmExtraAmount===c.extraCharge?'Esto es lo que se está pagando en Total Extra.':''}">${c.kmExtra>0?'+':''}${c.kmExtra.toFixed(1)}</td>
+              <td class="fin-num fin-g-jornada" style="color:${c.extraCharge>0 && c.hoursExtraAmount===c.extraCharge?'var(--success)':'var(--muted)'};font-weight:${c.extraCharge>0 && c.hoursExtraAmount===c.extraCharge?'700':'400'};" data-sort-value="${c.hoursExtra}" onclick="event.stopPropagation();" title="${c.extraCharge>0 && c.hoursExtraAmount===c.extraCharge?'Esto es lo que se está pagando en Total Extra.':''}">${c.hoursExtra>0?'+':''}${fmtHoursMin(c.hoursExtra)}</td>
+              <td class="fin-num fin-g-ingresos fin-g-start" style="color:var(--muted);" data-sort-value="${c.dayAmount}" onclick="event.stopPropagation();">${eur2(c.dayAmount)}</td>
+              <td class="fin-num fin-g-ingresos" data-sort-value="${c.extraCharge}" onclick="event.stopPropagation();">${c.extraCharge>0 ? `<span class="fin-pill" style="background:rgba(63,143,95,0.12);color:var(--success);">+${eur2(c.extraCharge)}</span>` : `<span style="color:var(--mutedFaint);">—</span>`}</td>
+              <td class="fin-num fin-g-ingresos" data-sort-value="${e.supplements||0}" ${readOnly?'':`style="color:var(--primary);text-decoration:underline;cursor:pointer;" onclick="event.stopPropagation(); openSupplementModal('${d.id}', ${e.year}, ${e.week});"`}>${e.supplements ? eur2(e.supplements) : '—'}</td>
+              <td class="fin-num fin-g-ingresos" style="color:${e.manualAmount?'var(--primary)':'var(--mutedFaint)'};font-weight:600;" data-sort-value="${e.manualAmount||0}" onclick="event.stopPropagation();">${e.manualAmount ? eur2(e.manualAmount) : '—'}</td>
+              <td class="fin-num fin-g-ingresos" style="font-weight:700;" data-sort-value="${c.totalIngreso}" onclick="event.stopPropagation();">${eur2(c.totalIngreso)}</td>
+              <td class="fin-num fin-g-gastos fin-g-start" style="color:${e.gasoil?'var(--danger)':'var(--mutedFaint)'};${readOnly?'':'text-decoration:underline;cursor:pointer;'}" data-sort-value="${e.gasoil||0}" ${readOnly?'':`onclick="event.stopPropagation(); openFuelModal('${d.id}', ${e.year}, ${e.week});"`}>${e.gasoil ? eur2(e.gasoil) : '—'}</td>
+              <td class="fin-num fin-g-gastos" style="color:${e.peajes?'var(--danger)':'var(--mutedFaint)'};${readOnly?'':'text-decoration:underline;cursor:pointer;'}" data-sort-value="${e.peajes||0}" ${readOnly?'':`onclick="event.stopPropagation(); openExpenseModal('${d.id}', ${e.year}, ${e.week}, 'peaje');"`}>${e.peajes ? eur2(e.peajes) : '—'}</td>
+              <td class="fin-num fin-g-gastos" style="color:${e.otros?'var(--danger)':'var(--mutedFaint)'};${readOnly?'':'text-decoration:underline;cursor:pointer;'}" data-sort-value="${e.otros||0}" ${readOnly?'':`onclick="event.stopPropagation(); openExpenseModal('${d.id}', ${e.year}, ${e.week}, 'otro');"`}>${e.otros ? eur2(e.otros) : '—'}</td>
+              <td class="fin-num fin-g-gastos" style="color:${c.gastosTotal?'var(--danger)':'var(--mutedFaint)'};font-weight:600;" data-sort-value="${c.gastosTotal?-c.gastosTotal:0}" onclick="event.stopPropagation();">${c.gastosTotal ? '−'+eur2(c.gastosTotal) : '—'}</td>
+              ${driverIndexed ? `<td class="fin-num fin-g-ajustes fin-g-start" style="color:${idxAmount<0?'var(--danger)':idxAmount>0?'var(--success)':'var(--mutedFaint)'};font-weight:600;" data-sort-value="${idxAmount||0}" title="${idxPct}% sobre ${eur2(c.dayAmount)}" onclick="event.stopPropagation();">${idxAmount ? eurSigned(idxAmount) : '—'}</td>` : ''}
+              <td class="fin-num fin-neto" style="font-weight:800;color:var(--primary);font-size:13.5px;" data-sort-value="${rowNeto}" onclick="event.stopPropagation();">${eur2(rowNeto)}</td>
+              <td class="fin-num fin-eurkm" style="color:var(--muted);font-weight:600;" data-sort-value="${e.km ? (c.totalIngreso+idxAmount)/e.km : ''}" onclick="event.stopPropagation();">${e.km ? eur2((c.totalIngreso+idxAmount)/e.km) : '—'}</td>
             </tr>`;
           }).join('') || `<tr><td colspan="${driverIndexed?18:17}" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin semanas registradas en ${year}</td></tr>`}
         </tbody>
@@ -6266,11 +6330,11 @@ function tplPisoMovilDetail(d){
       </div>
       <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:10px;">Cada comisión se aplica desde su fecha en adelante, hasta que empiece la siguiente. Así, si cambias el %, los meses ya pasados no se recalculan con el nuevo.</div>
       <div class="card" style="padding:0;overflow:hidden;">
-        <table><thead><tr><th>Vigente desde</th><th>% Comisión</th><th></th></tr></thead><tbody>
+        <table><thead><tr>${thSort('Vigente desde','date')}${thSort('% Comisión','number')}<th></th></tr></thead><tbody>
           ${mobileCommissionRates.filter(r=>r.driverId===d.id).sort((a,b)=>b.validFrom.localeCompare(a.validFrom)).map(r => `
             <tr ${readOnly?'':`onclick="openCommissionModal('${d.id}','${r.id}')" style="cursor:pointer;"`}>
-              <td>${fmtDateY(r.validFrom)}</td>
-              <td>${r.commissionPercent}%</td>
+              <td data-sort-value="${esc(r.validFrom||'')}">${fmtDateY(r.validFrom)}</td>
+              <td data-sort-value="${r.commissionPercent}">${r.commissionPercent}%</td>
               <td>${readOnly ? '' : `<button onclick="event.stopPropagation(); deleteCommissionRate('${r.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>`}</td>
             </tr>`).join('') || `<tr><td colspan="3" style="color:var(--mutedFaint);text-align:center;padding:16px;">Sin comisión registrada — se usará 0%.</td></tr>`}
         </tbody></table>
@@ -6304,17 +6368,17 @@ function tplPisoMovilDetail(d){
     </div>
 
     <div class="card" style="padding:0;overflow-x:auto;margin-bottom:22px;">
-      <table><thead><tr><th>Mes</th><th>Facturación</th><th>Km</th><th title="Facturación ÷ Km.">€/Km Fact.</th><th>% Comisión</th><th>Comisión</th><th>Total a cobrar</th><th title="(Facturación − Comisión) ÷ Km.">€/Km Neto</th><th></th></tr></thead><tbody>
+      <table><thead><tr>${thSort('Mes','number')}${thSort('Facturación','number')}${thSort('Km','number')}${thSort('€/Km Fact.','number','title="Facturación ÷ Km."')}${thSort('% Comisión','number')}${thSort('Comisión','number')}${thSort('Total a cobrar','number')}${thSort('€/Km Neto','number','title="(Facturación − Comisión) ÷ Km."')}<th></th></tr></thead><tbody>
         ${rows.map(({e,commissionPercent,commission,total,eurPerKm,eurPerKmNeto}) => `
           <tr ${readOnly?'':`onclick="openBillingModal('${d.id}','${e.id}')" style="cursor:pointer;"`}>
-            <td style="text-transform:capitalize;">${MONTH_NAMES[e.month]} ${e.year}</td>
-            <td>${eur2(e.billingAmount)}</td>
-            <td>${e.km ? e.km.toLocaleString('es-ES')+' km' : '—'}</td>
-            <td>${eurPerKm!=null ? eur2(eurPerKm) : '—'}</td>
-            <td>${commissionPercent}%</td>
-            <td style="color:var(--danger);">−${eur2(commission)}</td>
-            <td style="font-weight:700;">${eur2(total)}</td>
-            <td>${eurPerKmNeto!=null ? eur2(eurPerKmNeto) : '—'}</td>
+            <td style="text-transform:capitalize;" data-sort-value="${e.year*12+e.month}">${MONTH_NAMES[e.month]} ${e.year}</td>
+            <td data-sort-value="${e.billingAmount}">${eur2(e.billingAmount)}</td>
+            <td data-sort-value="${e.km||''}">${e.km ? e.km.toLocaleString('es-ES')+' km' : '—'}</td>
+            <td data-sort-value="${eurPerKm??''}">${eurPerKm!=null ? eur2(eurPerKm) : '—'}</td>
+            <td data-sort-value="${commissionPercent}">${commissionPercent}%</td>
+            <td style="color:var(--danger);" data-sort-value="${commission}">−${eur2(commission)}</td>
+            <td style="font-weight:700;" data-sort-value="${total}">${eur2(total)}</td>
+            <td data-sort-value="${eurPerKmNeto??''}">${eurPerKmNeto!=null ? eur2(eurPerKmNeto) : '—'}</td>
             <td>${readOnly ? '' : `<button onclick="event.stopPropagation(); deleteBilling('${e.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>`}</td>
           </tr>`).join('') || `<tr><td colspan="9" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin facturación registrada en este periodo.</td></tr>`}
       </tbody></table>
@@ -6587,14 +6651,14 @@ function tplKiosk(){
         <button ${month>=current?'disabled':''} onclick="kioskShiftHistoryMonth(1)" title="Mes siguiente" style="${arrowStyle(month>=current)}">→</button>
       </div>
       <div class="card" style="padding:0;overflow-x:auto;">
-        <table><thead><tr><th>Fecha</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km</th></tr></thead><tbody>
+        <table><thead><tr>${thSort('Fecha','date')}${thSort('Entrada','text')}${thSort('Salida','text')}${thSort('Horas','number')}${thSort('Km','number')}</tr></thead><tbody>
           ${closedEntries.map(f => `
             <tr>
-              <td>${fmtDate(f.date)}</td>
+              <td data-sort-value="${esc(f.date||'')}">${fmtDate(f.date)}</td>
               <td style="color:var(--muted);">${f.timeIn}</td>
               <td style="color:var(--muted);">${f.timeOut}</td>
-              <td>${fmtHoursMin(fichajeHours(f))}</td>
-              <td style="font-weight:600;">${f.km} km</td>
+              <td data-sort-value="${fichajeHours(f)}">${fmtHoursMin(fichajeHours(f))}</td>
+              <td style="font-weight:600;" data-sort-value="${f.km}">${f.km} km</td>
             </tr>`).join('') || `<tr><td colspan="5" style="color:var(--mutedFaint);text-align:center;padding:20px;">${month===current ? 'Todavía no tienes jornadas cerradas este mes.' : 'No hay jornadas cerradas este mes.'}</td></tr>`}
         </tbody></table>
       </div>`);
@@ -6790,17 +6854,17 @@ function tplFichajesDriverDetail(){
       </div>
     </div>
     <div class="card" style="padding:0;overflow-x:auto;">
-      <table><thead><tr><th>Fecha</th><th>Estado</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Km inicial</th><th>Km final</th><th>Km recorridos</th><th>Foto inicio</th><th>Foto cierre</th></tr></thead><tbody>
+      <table><thead><tr>${thSort('Fecha','date')}${thSort('Estado','text')}${thSort('Entrada','text')}${thSort('Salida','text')}${thSort('Horas','number')}${thSort('Km inicial','number')}${thSort('Km final','number')}${thSort('Km recorridos','number')}<th>Foto inicio</th><th>Foto cierre</th></tr></thead><tbody>
         ${entries.map(f => `
           <tr ${f.autoClosed?'style="background:rgba(193,68,61,0.12);"':''}>
-            <td>${fmtDate(f.date)}</td>
-            <td>${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}${autoClosedBadgeHtml(f)}</td>
+            <td data-sort-value="${esc(f.date||'')}">${fmtDate(f.date)}</td>
+            <td data-sort-value="${f.status==='abierta'?'Jornada abierta':'Cerrada'}">${f.status==='abierta' ? '<span class="badge" style="background:#D9A72C;">Jornada abierta</span>' : '<span class="badge" style="background:#3F8F5F;">Cerrada</span>'}${autoClosedBadgeHtml(f)}</td>
             <td style="color:var(--muted);">${f.timeIn}</td>
             <td style="color:var(--muted);">${f.timeOut||'—'}</td>
-            <td>${f.timeOut ? fmtHoursMin(fichajeHours(f)) : '—'}</td>
-            <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmStart ?? '—'}</td>
-            <td style="color:var(--muted);font-family:var(--mono);font-size:12px;">${f.kmEnd ?? '—'}</td>
-            <td style="font-weight:600;">${f.km!=null ? f.km+' km' : '—'}</td>
+            <td data-sort-value="${f.timeOut?fichajeHours(f):''}">${f.timeOut ? fmtHoursMin(fichajeHours(f)) : '—'}</td>
+            <td style="color:var(--muted);font-family:var(--mono);font-size:12px;" data-sort-value="${f.kmStart??''}">${f.kmStart ?? '—'}</td>
+            <td style="color:var(--muted);font-family:var(--mono);font-size:12px;" data-sort-value="${f.kmEnd??''}">${f.kmEnd ?? '—'}</td>
+            <td style="font-weight:600;" data-sort-value="${f.km??''}">${f.km!=null ? f.km+' km' : '—'}</td>
             <td>${photoThumb(f.photoIn)}</td>
             <td>${photoThumb(f.photoOut)}</td>
           </tr>`).join('') || `<tr><td colspan="10" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin fichajes registrados en ${year}</td></tr>`}
