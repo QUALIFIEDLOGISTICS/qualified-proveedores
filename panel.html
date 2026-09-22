@@ -4895,7 +4895,7 @@ async function loadDecaDocuments(){
   decaDocuments = (data||[]).map(d => ({
     id: d.id, createdAt: d.created_at, codigo: d.codigo || '',
     cargadorNombre: d.cargador_nombre, cargadorNif: d.cargador_nif, cargadorDomicilio: d.cargador_domicilio || '',
-    transportistaNombre: d.transportista_nombre, transportistaNif: d.transportista_nif,
+    transportistaNombre: d.transportista_nombre, transportistaNif: d.transportista_nif, transportistaDomicilio: d.transportista_domicilio || '',
     origen: d.origen, destino: d.destino,
     mercanciaNaturaleza: d.mercancia_naturaleza, mercanciaPeso: d.mercancia_peso,
     fechaTransporte: d.fecha_transporte,
@@ -5035,6 +5035,23 @@ async function decaBuildPdfs(fields, url){
       }
     };
     const dash = v => (v && String(v).trim()) ? String(v).trim() : '—';
+    // Una dirección completa viene como "calle1, calle2, cp ciudad, provincia,
+    // país" (formato de cargadorDireccionCompleta): se separa en dos líneas,
+    // la de las calles y la del cp/provincia/país, para pintarlas una debajo
+    // de la otra en la casilla.
+    const splitDomicilioLineas = (s) => {
+      const str = String(s || '').trim();
+      if (!str) return [];
+      const m = str.match(/^(.*?),\s*(\d[\d\s-]{3,7}[^,]*(?:,.*)?)$/);
+      return m ? [m[1].trim(), m[2].trim()] : [str];
+    };
+    // Origen/destino se guardan como "Nombre, dirección completa": separa el
+    // nombre de la empresa del resto de la dirección.
+    const splitLugarNombreResto = (s) => {
+      const str = String(s || '').trim();
+      const i = str.indexOf(',');
+      return i >= 0 ? [str.slice(0, i).trim(), str.slice(i + 1).trim()] : [str, ''];
+    };
     const fecha = fields.fechaTransporte
       ? new Date(fields.fechaTransporte + 'T00:00:00').toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' })
       : '—';
@@ -5069,16 +5086,24 @@ async function decaBuildPdfs(fields, url){
     const creacionHora = dash(fields.creacionHora ? (fields.creacionHora.length === 5 ? fields.creacionHora + ':00' : fields.creacionHora) : '');
     box(mx, y, half, r1, 1, 'Cargador contractual', [
       { text: dash(fields.cargadorNombre), bold: true, size: 11.5, gap: 4 },
-      { text: 'NIF: ' + dash(fields.cargadorNif), size: 10 },
-      { text: dash(fields.cargadorDomicilio), size: 9.5, color: gray },
+      { text: 'NIF: ' + dash(fields.cargadorNif), size: 10, gap: 3 },
+      ...splitDomicilioLineas(fields.cargadorDomicilio).map(t => ({ text: t, size: 9.5, color: gray })),
     ]);
     box(mx + half, y, half, r1, 2, 'Transportista efectivo', [
       { text: dash(fields.transportistaNombre), bold: true, size: 11.5, gap: 4 },
-      { text: 'NIF: ' + dash(fields.transportistaNif), size: 10 },
+      { text: 'NIF: ' + dash(fields.transportistaNif), size: 10, gap: 3 },
+      ...splitDomicilioLineas(fields.transportistaDomicilio).map(t => ({ text: t, size: 9.5, color: gray })),
     ]);
     y -= r1;
-    box(mx, y, half, r2, 3, 'Lugar de origen (carga)', [{ text: dash(fields.origen), bold: true, size: 11 }]);
-    box(mx + half, y, half, r2, 4, 'Lugar de destino (descarga)', [{ text: dash(fields.destino), bold: true, size: 11 }]);
+    const origenParts = splitLugarNombreResto(fields.origen), destinoParts = splitLugarNombreResto(fields.destino);
+    box(mx, y, half, r2, 3, 'Lugar de origen (carga)', [
+      { text: dash(origenParts[0]), bold: true, size: 11, gap: 3 },
+      ...splitDomicilioLineas(origenParts[1]).map(t => ({ text: t, size: 9.5, color: gray })),
+    ]);
+    box(mx + half, y, half, r2, 4, 'Lugar de destino (descarga)', [
+      { text: dash(destinoParts[0]), bold: true, size: 11, gap: 3 },
+      ...splitDomicilioLineas(destinoParts[1]).map(t => ({ text: t, size: 9.5, color: gray })),
+    ]);
     y -= r2;
     const w5 = half, w6 = (W - half) / 2;
     box(mx, y, w5, r3, 5, 'Naturaleza de la mercancía', [{ text: dash(fields.mercanciaNaturaleza), bold: true, size: 11 }]);
@@ -5198,6 +5223,7 @@ function tplDecaFormFields(e){
           </datalist>
         </div>
         <div class="field"><label>NIF</label><input id="dc-transportista-nif" maxlength="20" value="${esc(e.transportistaNif||'')}" /></div>
+        <div class="field"><label>Domicilio</label><input id="dc-transportista-domicilio" maxlength="250" value="${esc(e.transportistaDomicilio||'')}" /></div>
         <div style="display:flex;gap:10px;">
           <div class="field" style="flex:1;"><label>Matrícula tractora</label><input id="dc-matricula-tractora" maxlength="15" value="${esc(e.matriculaTractora||'')}" /></div>
           <div class="field" style="flex:1;"><label>Matrícula remolque</label><input id="dc-matricula-remolque" maxlength="15" value="${esc(e.matriculaRemolque||'')}" /></div>
@@ -5261,7 +5287,10 @@ function tplDecaFormPage(){
 }function onDecaTransportistaInput(){
   const val = document.getElementById('dc-transportista-nombre').value;
   const match = contactos.find(c => !c.archived && c.esTransportista && c.nombre === val);
-  if (match) document.getElementById('dc-transportista-nif').value = match.nif || '';
+  if (match) {
+    document.getElementById('dc-transportista-nif').value = match.nif || '';
+    document.getElementById('dc-transportista-domicilio').value = cargadorDireccionCompleta(match);
+  }
 }
 function onDecaCargadorInput(){
   const val = document.getElementById('dc-cargador-nombre').value;
@@ -5301,6 +5330,7 @@ function backToDecaList(){
     cargadorDomicilio: document.getElementById('dc-cargador-domicilio').value.trim(),
     transportistaNombre: document.getElementById('dc-transportista-nombre').value.trim(),
     transportistaNif: document.getElementById('dc-transportista-nif').value.trim(),
+    transportistaDomicilio: document.getElementById('dc-transportista-domicilio').value.trim(),
     origen: document.getElementById('dc-origen').value.trim(),
     destino: document.getElementById('dc-destino').value.trim(),
     mercanciaNaturaleza: document.getElementById('dc-mercancia-naturaleza').value.trim(),
@@ -5324,7 +5354,7 @@ function backToDecaList(){
     const { url } = await buildAndUploadDecaPdf({ ...fields, codigo: editing ? editing.codigo : '' }, storagePath, editing ? editing.pdfUrl : null);
     const dbPayload = {
       cargador_nombre: fields.cargadorNombre, cargador_nif: fields.cargadorNif, cargador_domicilio: fields.cargadorDomicilio || null,
-      transportista_nombre: fields.transportistaNombre, transportista_nif: fields.transportistaNif,
+      transportista_nombre: fields.transportistaNombre, transportista_nif: fields.transportistaNif, transportista_domicilio: fields.transportistaDomicilio || null,
       origen: fields.origen, destino: fields.destino,
       mercancia_naturaleza: fields.mercanciaNaturaleza, mercancia_peso: fields.mercanciaPeso,
       fecha_transporte: fields.fechaTransporte,
