@@ -5345,10 +5345,13 @@ async function decaQrShareBlob(d){
 }
 // Envía solo la imagen del QR (no el PDF de dos páginas) — pensado para
 // mandarla rápido por WhatsApp o correo al conductor: la enseña en la
-// pantalla del móvil y el agente la escanea directamente desde ahí. Usa el
-// panel para compartir del propio móvil (si el navegador lo permite) para
-// que aparezca WhatsApp/Correo entre las opciones; si no, descarga la
-// imagen para adjuntarla a mano.
+// pantalla del móvil y el agente la escanea directamente desde ahí.
+// Tres métodos, de mejor a peor según lo que permita el navegador:
+//   1) Móvil con panel de compartir nativo (aparece WhatsApp si está instalada).
+//   2) Escritorio con Portapapeles: copia la imagen y abre WhatsApp Web —
+//      solo hay que abrir la conversación del conductor y pegar (Ctrl+V).
+//   3) Si ninguno de los anteriores funciona: descarga la imagen para
+//      adjuntarla a mano.
 async function shareDecaQr(id){
   const d = decaDocuments.find(x=>x.id===id);
   if (!d) return;
@@ -5357,12 +5360,21 @@ async function shareDecaQr(id){
     const blob = await decaQrShareBlob(d);
     const fileName = `QR-${decaPdfFileName(d)}`.replace(/\.pdf$/i, '.png');
     const file = new File([blob], fileName, { type: 'image/png' });
+
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({ files: [file], title: `QR DeCA ${d.codigo || ''}`.trim(), text: 'Escanee este código para ver el DeCA.' });
       return;
     }
-    // Sin panel de compartir (navegador de escritorio, normalmente): se
-    // descarga la imagen para adjuntarla a mano en WhatsApp Web o el correo.
+
+    if (navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        window.open('https://web.whatsapp.com/', '_blank');
+        alert('Imagen del QR copiada. En la pestaña de WhatsApp Web que se acaba de abrir, entra en la conversación con el conductor y pega la imagen con Ctrl+V para enviarla.');
+        return;
+      } catch (clipErr) { /* el portapapeles ha fallado: se cae al método de descargar */ }
+    }
+
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = fileName;
@@ -5370,7 +5382,7 @@ async function shareDecaQr(id){
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-    alert('Tu navegador no permite compartir directamente: se ha descargado la imagen del QR (' + fileName + ') para que la adjuntes tú mismo en WhatsApp o el correo.');
+    alert('Se ha descargado la imagen del QR (' + fileName + '). En WhatsApp Web, pulsa el icono del clip 📎 → Fotos y vídeos, y elige el archivo descargado.');
   } catch (err) {
     if (err && err.name === 'AbortError') return; // el usuario cerró el panel de compartir
     alert('No se pudo compartir el QR: ' + (err && err.message ? err.message : 'error desconocido.'));
@@ -5615,7 +5627,7 @@ function openDecaViewModal(id){
           <div id="deca-qr-holder" style="display:flex;justify-content:center;margin-bottom:10px;"></div>
           <div style="font-size:11px;color:var(--mutedFaint);word-break:break-all;">${esc(d.pdfUrl)}</div>
         </div>
-        <button class="btn btn-primary" style="width:100%;justify-content:center;margin-bottom:10px;" title="Manda solo la imagen del QR (no el PDF) para que el conductor la enseñe en el móvil" onclick="shareDecaQr('${d.id}')">📤 Enviar QR al conductor (WhatsApp / correo)</button>
+        <button class="btn btn-primary" style="width:100%;justify-content:center;margin-bottom:10px;" title="Manda solo la imagen del QR (no el PDF) para que el conductor la enseñe en el móvil. En el ordenador: copia la imagen y abre WhatsApp Web para pegarla (Ctrl+V)." onclick="shareDecaQr('${d.id}')">📤 Enviar QR al conductor (WhatsApp / correo)</button>
         <div style="display:flex;gap:10px;">
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" title="Página 1: QR · Página 2: información. El archivo se llama ${esc(decaPdfFileName(d))}" onclick="downloadDecaPdf('${d.id}')">Descargar PDF</button>
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" title="Página 1: QR · Página 2: información" onclick="openDecaDriverPdf('${d.id}')">Abrir PDF</button>
