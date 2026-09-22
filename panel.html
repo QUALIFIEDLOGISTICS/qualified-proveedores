@@ -5075,6 +5075,24 @@ async function buildAndUploadDecaPdf(fields, storagePath, existingUrl){
   if (uploadError) throw new Error('No se pudo subir el PDF.');
   return { url };
 }
+// Código de Verificación Electrónica (CVE), al estilo de los documentos
+// oficiales españoles: no es un cifrado ni una firma, es un identificador
+// corto y ESTABLE para este DeCA — sale siempre igual porque se calcula a
+// partir de la URL del QR, que no cambia en toda la vida del documento (se
+// reutiliza al editar). Sirve para que, a simple vista, se vea que el
+// documento lleva un código de verificación — la comprobación real es el
+// QR, que enlaza siempre a los datos vivos de este DeCA.
+function decaCveCode(url){
+  let h1 = 0, h2 = 0;
+  const s = String(url || '');
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = (h1 * 31 + c) >>> 0;
+    h2 = (h2 * 131 + c) >>> 0;
+  }
+  const hex = (h1.toString(16) + h2.toString(16)).toUpperCase().padStart(16, '0');
+  return `QL-${hex.slice(0, 4)}-${hex.slice(4, 8)}`;
+}
 // Genera en memoria los dos PDF del DeCA: el de consulta (solo información,
 // el que abre el QR) y el del conductor (página 1 solo el QR, página 2 la
 // información). `url` es el enlace del QR.
@@ -5083,24 +5101,7 @@ async function decaBuildPdfs(fields, url){
   // Cada celdilla del QR se dibuja grande (12 px) para que quede nítido al
   // escalarlo a tamaño real en la primera página.
   const qrPng = dataUrlToUint8Array(qrDataUrl(url, 12));
-  // Código de Verificación Electrónica (CVE), al estilo de los documentos
-  // oficiales españoles: no es un cifrado ni una firma, es un identificador
-  // corto y ESTABLE para este DeCA — sale siempre igual porque se calcula
-  // a partir de la URL del QR, que no cambia en toda la vida del documento
-  // (se reutiliza al editar). Sirve para que, a simple vista, se vea que el
-  // documento lleva un código de verificación — la comprobación real es el
-  // QR, que enlaza siempre a los datos vivos de este DeCA.
-  const cveCode = (() => {
-    let h1 = 0, h2 = 0;
-    const s = String(url || '');
-    for (let i = 0; i < s.length; i++) {
-      const c = s.charCodeAt(i);
-      h1 = (h1 * 31 + c) >>> 0;
-      h2 = (h2 * 131 + c) >>> 0;
-    }
-    const hex = (h1.toString(16) + h2.toString(16)).toUpperCase().padStart(16, '0');
-    return `QL-${hex.slice(0, 4)}-${hex.slice(4, 8)}`;
-  })();
+  const cveCode = decaCveCode(url);
 
   // Página con toda la información del DeCA (sin QR): es lo que se ve al
   // escanear el código y también la segunda página del PDF del conductor.
@@ -5313,6 +5314,66 @@ async function openDecaDriverPdf(id){
   } catch (err) {
     if (w) w.close();
     alert('No se pudo generar el PDF: ' + (err && err.message ? err.message : 'error desconocido.'));
+  }
+}
+// Imagen (PNG) lista para enviar por WhatsApp o correo: solo el QR, con el
+// número de DeCA y un texto explicativo — así, aunque se envíe suelta sin
+// el resto de la app alrededor, quien la reciba (o el agente que la ve en
+// la pantalla del conductor) entiende qué es y qué tiene que hacer.
+async function decaQrShareBlob(d){
+  const qrSize = 640, pad = 48, labelH = 130;
+  const canvas = document.createElement('canvas');
+  canvas.width = qrSize + pad * 2;
+  canvas.height = qrSize + pad * 2 + labelH;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const qrImg = new Image();
+  await new Promise((resolve, reject) => { qrImg.onload = resolve; qrImg.onerror = reject; qrImg.src = qrDataUrl(d.pdfUrl, 14); });
+  ctx.drawImage(qrImg, pad, pad, qrSize, qrSize);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#1B2430';
+  ctx.font = 'bold 30px Arial';
+  ctx.fillText(`DeCA ${d.codigo || ''}`.trim(), canvas.width / 2, pad + qrSize + 44);
+  ctx.fillStyle = '#69727C';
+  ctx.font = '20px Arial';
+  ctx.fillText('Escanee este código para ver el documento', canvas.width / 2, pad + qrSize + 76);
+  ctx.fillStyle = '#1B3A6B';
+  ctx.font = 'bold 20px Arial';
+  ctx.fillText(`CVE: ${decaCveCode(d.pdfUrl)}`, canvas.width / 2, pad + qrSize + 106);
+  return await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+}
+// Envía solo la imagen del QR (no el PDF de dos páginas) — pensado para
+// mandarla rápido por WhatsApp o correo al conductor: la enseña en la
+// pantalla del móvil y el agente la escanea directamente desde ahí. Usa el
+// panel para compartir del propio móvil (si el navegador lo permite) para
+// que aparezca WhatsApp/Correo entre las opciones; si no, descarga la
+// imagen para adjuntarla a mano.
+async function shareDecaQr(id){
+  const d = decaDocuments.find(x=>x.id===id);
+  if (!d) return;
+  if (!d.pdfUrl) { alert('Este DeCA no tiene enlace de QR todavía.'); return; }
+  try {
+    const blob = await decaQrShareBlob(d);
+    const fileName = `QR-${decaPdfFileName(d)}`.replace(/\.pdf$/i, '.png');
+    const file = new File([blob], fileName, { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: `QR DeCA ${d.codigo || ''}`.trim(), text: 'Escanee este código para ver el DeCA.' });
+      return;
+    }
+    // Sin panel de compartir (navegador de escritorio, normalmente): se
+    // descarga la imagen para adjuntarla a mano en WhatsApp Web o el correo.
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    alert('Tu navegador no permite compartir directamente: se ha descargado la imagen del QR (' + fileName + ') para que la adjuntes tú mismo en WhatsApp o el correo.');
+  } catch (err) {
+    if (err && err.name === 'AbortError') return; // el usuario cerró el panel de compartir
+    alert('No se pudo compartir el QR: ' + (err && err.message ? err.message : 'error desconocido.'));
   }
 }
 
@@ -5554,8 +5615,9 @@ function openDecaViewModal(id){
           <div id="deca-qr-holder" style="display:flex;justify-content:center;margin-bottom:10px;"></div>
           <div style="font-size:11px;color:var(--mutedFaint);word-break:break-all;">${esc(d.pdfUrl)}</div>
         </div>
+        <button class="btn btn-primary" style="width:100%;justify-content:center;margin-bottom:10px;" title="Manda solo la imagen del QR (no el PDF) para que el conductor la enseñe en el móvil" onclick="shareDecaQr('${d.id}')">📤 Enviar QR al conductor (WhatsApp / correo)</button>
         <div style="display:flex;gap:10px;">
-          <button class="btn btn-primary" style="flex:1;justify-content:center;" title="Página 1: QR · Página 2: información. El archivo se llama ${esc(decaPdfFileName(d))}" onclick="downloadDecaPdf('${d.id}')">Descargar PDF</button>
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" title="Página 1: QR · Página 2: información. El archivo se llama ${esc(decaPdfFileName(d))}" onclick="downloadDecaPdf('${d.id}')">Descargar PDF</button>
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" title="Página 1: QR · Página 2: información" onclick="openDecaDriverPdf('${d.id}')">Abrir PDF</button>
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" title="El enlace que abre el QR (solo la información)" onclick="copyDecaLink('${esc(d.pdfUrl)}')">Copiar enlace del QR</button>
         </div>` : `<div style="color:var(--mutedFaint);font-size:12.5px;">Sin PDF generado.</div>`}
