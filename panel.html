@@ -5069,6 +5069,24 @@ async function decaBuildPdfs(fields, url){
   // Cada celdilla del QR se dibuja grande (12 px) para que quede nítido al
   // escalarlo a tamaño real en la primera página.
   const qrPng = dataUrlToUint8Array(qrDataUrl(url, 12));
+  // Código de Verificación Electrónica (CVE), al estilo de los documentos
+  // oficiales españoles: no es un cifrado ni una firma, es un identificador
+  // corto y ESTABLE para este DeCA — sale siempre igual porque se calcula
+  // a partir de la URL del QR, que no cambia en toda la vida del documento
+  // (se reutiliza al editar). Sirve para que, a simple vista, se vea que el
+  // documento lleva un código de verificación — la comprobación real es el
+  // QR, que enlaza siempre a los datos vivos de este DeCA.
+  const cveCode = (() => {
+    let h1 = 0, h2 = 0;
+    const s = String(url || '');
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      h1 = (h1 * 31 + c) >>> 0;
+      h2 = (h2 * 131 + c) >>> 0;
+    }
+    const hex = (h1.toString(16) + h2.toString(16)).toUpperCase().padStart(16, '0');
+    return `QL-${hex.slice(0, 4)}-${hex.slice(4, 8)}`;
+  })();
 
   // Página con toda la información del DeCA (sin QR): es lo que se ve al
   // escanear el código y también la segunda página del PDF del conductor.
@@ -5083,8 +5101,9 @@ async function decaBuildPdfs(fields, url){
 
     // Casilla numerada al estilo de la carta de porte CMR: recuadro con el
     // número y el título arriba a la izquierda y el dato debajo.
-    const box = (x, yTop, w, h, num, label, items) => {
-      page.drawRectangle({ x, y: yTop - h, width: w, height: h, borderColor: lineCol, borderWidth: 0.8 });
+    const box = (x, yTop, w, h, num, label, items, opts) => {
+      opts = opts || {};
+      page.drawRectangle({ x, y: yTop - h, width: w, height: h, color: opts.fill, borderColor: opts.borderColor || lineCol, borderWidth: opts.borderWidth || 0.8 });
       let lx = x + 6;
       if (num) {
         page.drawRectangle({ x: x + 4, y: yTop - 16, width: 14, height: 12, color: accent });
@@ -5092,7 +5111,7 @@ async function decaBuildPdfs(fields, url){
         page.drawText(String(num), { x: x + 4 + (14 - nw) / 2, y: yTop - 13.2, size: 8, font: bold, color: rgb(1, 1, 1) });
         lx = x + 23;
       }
-      page.drawText(String(label).toUpperCase(), { x: lx, y: yTop - 13, size: 6.8, font: bold, color: gray });
+      page.drawText(String(label).toUpperCase(), { x: lx, y: yTop - 13, size: 6.8, font: bold, color: opts.labelColor || gray });
       let y = yTop - 32;
       const bottom = yTop - h + 8;
       for (const it of items) {
@@ -5200,6 +5219,17 @@ async function decaBuildPdfs(fields, url){
     box(mx, y, W, r5, 12, 'Observaciones', [{ text: dash(fields.observaciones), size: 10.5 }]);
     y -= r5;
 
+    // Sello de verificación electrónica — no reemplaza al QR (que es la
+    // comprobación real, siempre con los datos vivos), pero da al documento
+    // ese "peso" de sellado oficial que se pide para presentarlo a una
+    // autoridad: código estable + momento exacto de creación.
+    const rStamp = 50;
+    box(mx, y, W, rStamp, null, 'Sello de verificación electrónica', [
+      { text: `CVE: ${cveCode}   ·   Verificado el ${creacionFecha}${creacionHora !== '—' ? ' a las ' + creacionHora : ''}`, bold: true, size: 10.5, color: accent, gap: 3 },
+      { text: 'La autenticidad de este documento puede comprobarse escaneando el código QR de la portada.', size: 8.5, color: gray },
+    ], { fill: rgb(0.94, 0.96, 0.99), borderColor: accent, borderWidth: 1.2, labelColor: accent });
+    y -= rStamp;
+
     // Pie
     page.drawText('Art. 147 LOTT / art. 222 ROTT — Orden FOM 2861/2012', { x: mx, y: y - 18, size: 7.5, font, color: gray });
     page.drawText('Documento generado electrónicamente · Qualified Logistics', { x: mx, y: y - 29, size: 7.5, font, color: gray });
@@ -5216,8 +5246,16 @@ async function decaBuildPdfs(fields, url){
   const driverDoc = await PDFDocument.create();
   const qrPage = driverDoc.addPage([595.28, 841.89]);
   const qrImage = await driverDoc.embedPng(qrPng);
+  const qrFont = await driverDoc.embedFont(StandardFonts.Helvetica);
+  const qrBold = await driverDoc.embedFont(StandardFonts.HelveticaBold);
+  const qrGray = rgb(0.42, 0.45, 0.5), qrAccent = rgb(0.106, 0.227, 0.42);
   const qrSize = 340;
-  qrPage.drawImage(qrImage, { x: (595.28 - qrSize) / 2, y: (841.89 - qrSize) / 2, width: qrSize, height: qrSize });
+  const qrY = (841.89 - qrSize) / 2;
+  qrPage.drawImage(qrImage, { x: (595.28 - qrSize) / 2, y: qrY, width: qrSize, height: qrSize });
+  const caption = 'Escanee este código para verificar la autenticidad del documento';
+  qrPage.drawText(caption, { x: (595.28 - qrFont.widthOfTextAtSize(caption, 10)) / 2, y: qrY - 28, size: 10, font: qrFont, color: qrGray });
+  const cveLine = `CVE: ${cveCode}`;
+  qrPage.drawText(cveLine, { x: (595.28 - qrBold.widthOfTextAtSize(cveLine, 11)) / 2, y: qrY - 46, size: 11, font: qrBold, color: qrAccent });
   await drawInfoPage(driverDoc);
   const driverBytes = await driverDoc.save();
   return { infoBytes, driverBytes };
