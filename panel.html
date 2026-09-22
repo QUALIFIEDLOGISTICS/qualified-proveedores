@@ -5346,12 +5346,13 @@ async function decaQrShareBlob(d){
 // Envía solo la imagen del QR (no el PDF de dos páginas) — pensado para
 // mandarla rápido por WhatsApp o correo al conductor: la enseña en la
 // pantalla del móvil y el agente la escanea directamente desde ahí.
-// Tres métodos, de mejor a peor según lo que permita el navegador:
 //   1) Móvil con panel de compartir nativo (aparece WhatsApp si está instalada).
-//   2) Escritorio con Portapapeles: copia la imagen y abre WhatsApp Web —
-//      solo hay que abrir la conversación del conductor y pegar (Ctrl+V).
-//   3) Si ninguno de los anteriores funciona: descarga la imagen para
-//      adjuntarla a mano.
+//   2) Escritorio: SIEMPRE se descarga la imagen (es lo único 100% fiable
+//      en cualquier navegador) y, si el navegador lo permite, además se
+//      copia al portapapeles como atajo — pero sin abrir ninguna pestaña
+//      nueva de WhatsApp Web (si se abre una sin sesión iniciada, pide
+//      escanear un código y no hay donde pegar). Se usa la que ya tenga
+//      abierta el propio usuario.
 async function shareDecaQr(id){
   const d = decaDocuments.find(x=>x.id===id);
   if (!d) return;
@@ -5366,13 +5367,9 @@ async function shareDecaQr(id){
       return;
     }
 
+    let copiedOk = false;
     if (navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
-      try {
-        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-        window.open('https://web.whatsapp.com/', '_blank');
-        alert('Imagen del QR copiada. En la pestaña de WhatsApp Web que se acaba de abrir, entra en la conversación con el conductor y pega la imagen con Ctrl+V para enviarla.');
-        return;
-      } catch (clipErr) { /* el portapapeles ha fallado: se cae al método de descargar */ }
+      try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); copiedOk = true; } catch (clipErr) { /* no pasa nada, se sigue solo con la descarga */ }
     }
 
     const a = document.createElement('a');
@@ -5382,7 +5379,12 @@ async function shareDecaQr(id){
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-    alert('Se ha descargado la imagen del QR (' + fileName + '). En WhatsApp Web, pulsa el icono del clip 📎 → Fotos y vídeos, y elige el archivo descargado.');
+    alert(
+      (copiedOk
+        ? 'Imagen del QR descargada (' + fileName + ') y copiada al portapapeles.\n\nVe a tu WhatsApp Web (la pestaña que ya tengas abierta, no hace falta abrir una nueva), entra en la conversación del conductor y pega con Ctrl+V.'
+        : 'Imagen del QR descargada (' + fileName + ').')
+      + '\n\nSi no se pega, adjúntala a mano: icono del clip 📎 → Fotos y vídeos → elige el archivo descargado.'
+    );
   } catch (err) {
     if (err && err.name === 'AbortError') return; // el usuario cerró el panel de compartir
     alert('No se pudo compartir el QR: ' + (err && err.message ? err.message : 'error desconocido.'));
