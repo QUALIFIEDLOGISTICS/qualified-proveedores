@@ -3570,8 +3570,6 @@ function openQuickCreateModal(mode){
   const end = new Date(base);
   end.setDate(end.getDate() + ((7 - (base.getDay() || 7)) % 7));
   const dayNames = [['1','L'],['2','M'],['3','X'],['4','J'],['5','V'],['6','S'],['0','D']];
-  const times = quickCreateTimeOptions();
-  const defaultStart = times.includes(480) ? 480 : times[0];
   document.getElementById('modal-slot').innerHTML = `
     <div class="modal-overlay">
       <div class="modal-box">
@@ -3582,7 +3580,7 @@ function openQuickCreateModal(mode){
         ${list.length ? '' : `<div style="color:var(--danger);font-size:12.5px;margin-bottom:12px;">Antes de apuntar, da de alta al cliente en Contactos (marcado como cliente de almacén).</div>`}
         <div class="field"><label>Cliente</label><select id="qu-client" onchange="refreshQuickCreatePreview()">${list.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
         <div style="display:flex;gap:10px;">
-          <div class="field" style="flex:1;"><label>Camiones por día</label><input id="qu-count" type="number" min="1" max="20" value="2" oninput="refreshQuickCreatePreview()" /></div>
+          <div class="field" style="flex:1;"><label>Camiones por día</label><input id="qu-count" type="number" min="1" max="20" value="2" oninput="renderQuickTruckRows(); refreshQuickCreatePreview();" /></div>
           <div class="field" style="flex:1;"><label>Tipo</label>
             <select id="qu-type"><option value="descarga">Descarga</option><option value="carga">Carga</option></select>
           </div>
@@ -3594,26 +3592,8 @@ function openQuickCreateModal(mode){
           </select>
         </div>
         <div id="qu-hour-box" style="display:${mode==='conhora'?'block':'none'};">
-          <div style="display:flex;gap:10px;">
-            <div class="field" style="flex:1;"><label>Hora del primero</label>
-              <select id="qu-start" onchange="refreshQuickCreatePreview()">${times.map(m=>`<option value="${minToTime(m)}" ${m===defaultStart?'selected':''}>${minToTime(m)}</option>`).join('')}</select>
-            </div>
-            <div class="field" style="flex:1;"><label>Duración de cada uno</label>
-              <select id="qu-duration" onchange="refreshQuickCreatePreview()">
-                <option value="30">30 minutos</option>
-                <option value="60" selected>1 hora</option>
-                <option value="120">2 horas</option>
-              </select>
-            </div>
-          </div>
-          <div class="field"><label>Separación entre los camiones de un mismo día</label>
-            <select id="qu-gap" onchange="refreshQuickCreatePreview()">
-              <option value="seguidos" selected>Uno detrás de otro (seguidos)</option>
-              <option value="0">Todos a la misma hora (a la vez)</option>
-              <option value="30">Cada 30 minutos</option>
-              <option value="60">Cada 1 hora</option>
-            </select>
-          </div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Elige la hora y la duración de cada camión del día (se repiten igual todos los días del rango).</div>
+          <div id="qu-trucks"></div>
         </div>
         <div style="display:flex;gap:10px;">
           <div class="field" style="flex:1;"><label>Desde</label><input id="qu-from" type="date" value="${toDateStr(base)}" oninput="refreshQuickCreatePreview()" /></div>
@@ -3638,11 +3618,54 @@ function openQuickCreateModal(mode){
         </div>
       </div>
     </div>`;
+  renderQuickTruckRows();
   refreshQuickCreatePreview();
 }
+// Una fila por camión del día (hora y duración de cada uno). Al cambiar el
+// número de camiones se conservan los valores ya elegidos; los nuevos
+// empiezan justo cuando acaba el anterior.
+function renderQuickTruckRows(){
+  const box = document.getElementById('qu-trucks');
+  if (!box) return;
+  const count = Math.max(0, Math.min(20, parseInt(document.getElementById('qu-count').value, 10) || 0));
+  const times = quickCreateTimeOptions();
+  if (!times.length) { box.innerHTML = '<div style="color:var(--danger);font-size:12.5px;">El almacén no tiene ningún horario abierto.</div>'; return; }
+  const prev = [];
+  for (let i = 0; i < count; i++) {
+    const s = document.getElementById('qu-t-start-' + i), d = document.getElementById('qu-t-dur-' + i);
+    prev.push(s && d ? { start: s.value, dur: d.value } : null);
+  }
+  let nextMin = times.includes(480) ? 480 : times[0];
+  const rows = [];
+  for (let i = 0; i < count; i++) {
+    let start, dur;
+    if (prev[i]) { start = prev[i].start; dur = prev[i].dur; }
+    else {
+      dur = i > 0 ? rows[i-1].dur : '60';
+      const m = times.includes(nextMin) ? nextMin : (times.find(t => t >= nextMin) ?? times[times.length - 1]);
+      start = minToTime(m);
+    }
+    rows.push({ start, dur });
+    nextMin = timeToMin(start) + Number(dur);
+  }
+  box.innerHTML = rows.map((r, i) => `
+    <div style="display:flex;gap:10px;align-items:center;">
+      <div style="width:62px;flex-shrink:0;font-size:12.5px;color:var(--muted);font-weight:600;">Camión ${i+1}</div>
+      <div class="field" style="flex:1;">
+        <select id="qu-t-start-${i}" onchange="refreshQuickCreatePreview()">${times.map(m => `<option value="${minToTime(m)}" ${minToTime(m)===r.start?'selected':''}>${minToTime(m)}</option>`).join('')}</select>
+      </div>
+      <div class="field" style="flex:1;">
+        <select id="qu-t-dur-${i}" onchange="refreshQuickCreatePreview()">
+          <option value="30" ${r.dur==='30'?'selected':''}>30 min</option>
+          <option value="60" ${r.dur==='60'?'selected':''}>1 hora</option>
+          <option value="120" ${r.dur==='120'?'selected':''}>2 horas</option>
+        </select>
+      </div>
+    </div>`).join('');
+}
 // Calcula qué se va a crear. Sin hora: `count` camiones sueltos por día. Con
-// hora: `count` reservas por día empezando a la hora indicada y separadas
-// según se haya elegido; cada una se comprueba contra el horario de ESE día
+// hora: una reserva por cada camión del día, con la hora y duración que se
+// haya puesto a cada uno; cada una se comprueba contra el horario de ESE día
 // y contra las reservas que ya hay (máximo LANES a la vez), y las que no
 // caben se omiten y se cuentan aparte.
 function quickCreatePlan(){
@@ -3668,23 +3691,23 @@ function quickCreatePlan(){
     dates.forEach(date => { for (let i = 0; i < count; i++) plan.items.push({ date }); });
     return plan;
   }
-  const startEl = document.getElementById('qu-start');
-  const firstMin = startEl && startEl.value ? timeToMin(startEl.value) : null;
-  const duration = Number(document.getElementById('qu-duration').value) || 60;
-  const gapVal = document.getElementById('qu-gap').value;
-  const step = gapVal === 'seguidos' ? duration : Number(gapVal) || 0;
-  if (firstMin == null) return plan;
+  const trucks = [];
+  for (let i = 0; i < count; i++) {
+    const s = document.getElementById('qu-t-start-' + i), d = document.getElementById('qu-t-dur-' + i);
+    if (s && s.value) trucks.push({ min: timeToMin(s.value), dur: Number(d && d.value) || 60 });
+  }
+  if (!trucks.length) return plan;
   dates.forEach(date => {
     const sched = daySchedule(currentWarehouseId, date);
     const busy = appointments[currentWarehouseId].filter(a => a.date === date).map(a => ({ s: timeToMin(a.start), e: timeToMin(a.start) + a.duration }));
-    for (let i = 0; i < count; i++) {
-      const s = firstMin + i * step, e = s + duration;
-      if (!fitsInARange(sched.ranges, s, e)) { plan.skippedFit++; continue; }
+    trucks.forEach(t => {
+      const s = t.min, e = s + t.dur;
+      if (!fitsInARange(sched.ranges, s, e)) { plan.skippedFit++; return; }
       const overlap = busy.filter(b => s < b.e && e > b.s).length;
-      if (overlap >= LANES) { plan.skippedFull++; continue; }
+      if (overlap >= LANES) { plan.skippedFull++; return; }
       busy.push({ s, e });
-      plan.items.push({ date, start: minToTime(s), duration });
-    }
+      plan.items.push({ date, start: minToTime(s), duration: t.dur });
+    });
   });
   return plan;
 }
