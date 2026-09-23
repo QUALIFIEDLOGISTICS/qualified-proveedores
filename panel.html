@@ -1955,7 +1955,7 @@ async function loadContactos(){
   const { data } = await supabaseClient.from('contactos').select('*,contacto_warehouses(warehouse_id)').order('nombre', { ascending: true });
   contactos = (data||[]).map(c => ({
     id: c.id, nombre: c.nombre, nombreComercial: c.nombre_comercial || '', nif: c.nif || '', archived: !!c.archived,
-    esClienteAlmacen: !!c.es_cliente_almacen, esTransportista: !!c.es_transportista, esAutonomos: !!c.es_autonomos,
+    esClienteAlmacen: !!c.es_cliente_almacen, esClienteTransporte: !!c.es_cliente_transporte, esTransportista: !!c.es_transportista, esAutonomos: !!c.es_autonomos,
     warehouseIds: (c.contacto_warehouses||[]).map(cw=>cw.warehouse_id),
     calle1: c.calle1 || '', calle2: c.calle2 || '', codigoPostal: c.codigo_postal || '',
     ciudad: c.ciudad || '', provincia: c.provincia || '', pais: c.pais || '',
@@ -1980,7 +1980,18 @@ function contactoLogoThumbHtml(c){
   if (url) return `<img src="${esc(url)}" style="width:100%;height:100%;object-fit:contain;background:#fff;" />`;
   return `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:var(--panel2);">${homeIcon(HOME_ICON_PATHS.building, 32, 'var(--mutedFaint)', 1.5)}</div>`;
 }
-const CONTACTO_ROLE_LABELS = { cliente: 'Cliente de almacén', transportista: 'Transportista', autonomos: 'Autónomos' };
+const CONTACTO_ROLE_LABELS = { cliente: 'Cliente de almacén', clientetransporte: 'Cliente de transporte', transportista: 'Transportista', autonomos: 'Autónomos' };
+const CONTACTO_ROLE_COLORS = { cliente: '#2E6F95', clientetransporte: '#C98A2E', transportista: '#3F8F5F', autonomos: '#8A4A35' };
+// Roles que tiene un contacto, en el orden en que se muestran.
+function contactoRoles(c){
+  return [c.esClienteAlmacen&&'cliente', c.esClienteTransporte&&'clientetransporte', c.esTransportista&&'transportista', c.esAutonomos&&'autonomos'].filter(Boolean);
+}
+// Etiquetas de color, una por rol, para distinguir de un vistazo qué es
+// cada contacto (en la lista y en la ficha).
+function contactoRoleBadgesHtml(c, size){
+  const s = size === 'lg' ? { fs: 11, pad: '3px 10px' } : { fs: 10.5, pad: '2px 8px' };
+  return contactoRoles(c).map(r => `<span style="font-size:${s.fs}px;font-weight:600;background:${CONTACTO_ROLE_COLORS[r]}1A;color:${CONTACTO_ROLE_COLORS[r]};border:1px solid ${CONTACTO_ROLE_COLORS[r]}40;border-radius:99px;padding:${s.pad};white-space:nowrap;">${esc(CONTACTO_ROLE_LABELS[r])}</span>`).join('');
+}
 /* ---- Desplegable de sugerencias con el estilo de la app ----
    Sustituye al desplegable nativo del navegador (datalist), que no se puede
    diseñar. Un input con data-combo="idDeUnDatalist" toma sus opciones de ese
@@ -2153,8 +2164,7 @@ function tplContactosPaginationHtml(){
 }
 function tplContactosPage(){
   const view = window.__contactosView || 'activos';
-  const roleFilters = window.__contactosRoleFilters || [];
-  const filterCount = (view==='archivados'?1:0) + roleFilters.length;
+  const filterCount = view==='archivados' ? 1 : 0;
   return `
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
       <div style="display:flex;align-items:center;gap:14px;">
@@ -2167,6 +2177,7 @@ function tplContactosPage(){
         </div>
       </div>
     </div>
+    <div id="contactos-role-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;">${tplContactosRoleTabsHtml()}</div>
     <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-self:start;">
         <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
@@ -2185,26 +2196,38 @@ function tplContactosPage(){
 }
 function tplContactosFilterDropdown(){
   const view = window.__contactosView || 'activos';
-  const roleFilters = window.__contactosRoleFilters || [];
-  const roleOptions = [['cliente',CONTACTO_ROLE_LABELS.cliente], ['transportista',CONTACTO_ROLE_LABELS.transportista], ['autonomos',CONTACTO_ROLE_LABELS.autonomos]];
   return `
     <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:190px;">
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 4px;cursor:pointer;white-space:nowrap;">
         <input type="checkbox" ${view==='archivados'?'checked':''} onchange="window.__contactosView=this.checked?'archivados':'activos'; window.__contactosPage=0; renderTab();" style="width:auto;" />
         Archivados
       </label>
-      <div style="height:1px;background:var(--border);margin:6px 0;"></div>
-      ${roleOptions.map(([val,label]) => `
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 4px;cursor:pointer;white-space:nowrap;">
-          <input type="checkbox" ${roleFilters.includes(val)?'checked':''} onchange="toggleContactoRoleFilter('${val}', this.checked)" style="width:auto;" />
-          ${esc(label)}
-        </label>
-      `).join('')}
     </div>`;
 }
-function toggleContactoRoleFilter(role, checked){
-  const cur = window.__contactosRoleFilters || [];
-  window.__contactosRoleFilters = checked ? [...cur, role] : cur.filter(r=>r!==role);
+// Pestañas por rol encima de la lista de Contactos (con cuántos hay de cada
+// tipo). Solo se puede elegir una: "Todos" o un rol concreto. "Sin rol" solo
+// aparece si hay contactos a los que todavía no se les ha marcado ninguno.
+function contactosRoleTabsList(){
+  const archivedView = (window.__contactosView || 'activos') === 'archivados';
+  const base = contactos.filter(c => !!c.archived === archivedView);
+  const tabs = [
+    { key: '', label: 'Todos', n: base.length },
+    { key: 'cliente', label: 'Clientes de almacén', n: base.filter(c=>c.esClienteAlmacen).length },
+    { key: 'clientetransporte', label: 'Clientes de transporte', n: base.filter(c=>c.esClienteTransporte).length },
+    { key: 'transportista', label: 'Transportistas', n: base.filter(c=>c.esTransportista).length },
+    { key: 'autonomos', label: 'Autónomos', n: base.filter(c=>c.esAutonomos).length },
+  ];
+  const sinRol = base.filter(c => !contactoRoles(c).length).length;
+  if (sinRol) tabs.push({ key: 'sinrol', label: 'Sin rol', n: sinRol });
+  return tabs;
+}
+function tplContactosRoleTabsHtml(){
+  const active = (window.__contactosRoleFilters || [])[0] || '';
+  return contactosRoleTabsList().map(t => `
+    <button class="btn ${t.key===active?'btn-primary':'btn-ghost'}" onclick="setContactoRoleTab('${t.key}')">${esc(t.label)} <span style="opacity:.7;font-weight:400;">${t.n}</span></button>`).join('');
+}
+function setContactoRoleTab(key){
+  window.__contactosRoleFilters = key ? [key] : [];
   window.__contactosPage = 0;
   renderTab();
 }
@@ -2226,6 +2249,7 @@ function contactoCardHtml(c, archivedView, opts){
         ${hasNombreComercial ? `<div style="font-size:12px;color:var(--muted);margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;">${esc(c.nombreComercial)}</div>` : ''}
         <div style="font-size:12.5px;color:var(--muted);">${lugar ? esc(lugar) : '—'}</div>
         ${c.nif ? `<div style="font-size:12px;color:var(--mutedFaint);">${esc(c.nif)}</div>` : ''}
+        ${o.showRoles && contactoRoles(c).length ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;">${contactoRoleBadgesHtml(c)}</div>` : ''}
         ${o.footerHtml || ''}
       </div>
     </div>`;
@@ -2241,7 +2265,12 @@ function contactosFilteredList(){
   const search = (window.__contactosSearch || '').toLowerCase();
   let list = contactos.filter(c => !!c.archived === archivedView);
   if (roleFilters.length) {
-    list = list.filter(c => roleFilters.some(r => r==='cliente' ? c.esClienteAlmacen : r==='transportista' ? c.esTransportista : c.esAutonomos));
+    list = list.filter(c => roleFilters.some(r =>
+      r==='cliente' ? c.esClienteAlmacen
+      : r==='clientetransporte' ? c.esClienteTransporte
+      : r==='transportista' ? c.esTransportista
+      : r==='sinrol' ? !contactoRoles(c).length
+      : c.esAutonomos));
   }
   list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || c.nif.toLowerCase().includes(search));
   return { list, archivedView, search, roleFilters };
@@ -2260,7 +2289,7 @@ function contactosListBodyHtml(){
   if ((window.__contactosPage||0) > totalPages - 1) window.__contactosPage = totalPages - 1;
   const page = window.__contactosPage || 0;
   const pageList = list.slice(page * CONTACTOS_PAGE_SIZE, (page + 1) * CONTACTOS_PAGE_SIZE);
-  return contactosGridHtml(pageList, archivedView);
+  return contactosGridHtml(pageList, archivedView, { showRoles: true });
 }
 function toggleCtWarehousesBlock(){
   document.getElementById('ct-warehouses-block').style.display = document.getElementById('ct-rol-cliente').checked ? 'block' : 'none';
@@ -2304,7 +2333,7 @@ function buildContactoChangeSummary(before, after){
     const newVal = (after[key]||'').toString();
     if (oldVal !== newVal) lines.push(`${CONTACTO_FIELD_LABELS[key]}: "${oldVal||'—'}" → "${newVal||'—'}"`);
   });
-  [['esClienteAlmacen','Cliente de almacén'], ['esTransportista','Transportista'], ['esAutonomos','Autónomos']].forEach(([key,label]) => {
+  [['esClienteAlmacen','Cliente de almacén'], ['esClienteTransporte','Cliente de transporte'], ['esTransportista','Transportista'], ['esAutonomos','Autónomos']].forEach(([key,label]) => {
     if (!!before[key] !== !!after[key]) lines.push(after[key] ? `Marcado como ${label}` : `Desmarcado como ${label}`);
   });
   const beforeWh = (before.warehouseIds||[]).slice().sort().join(',');
@@ -2445,7 +2474,6 @@ function contactoFieldBlock(label, valueHtml){
   </div>`;
 }
 function tplContactoViewCard(editing){
-  const roleTags = [editing.esClienteAlmacen&&'cliente', editing.esTransportista&&'transportista', editing.esAutonomos&&'autonomos'].filter(Boolean);
   const direccion = cargadorDireccionCompleta(editing);
   const warehouseNames = (editing.warehouseIds||[]).map(id=>(WAREHOUSES.find(w=>w.id===id)||{}).name).filter(Boolean);
   return `
@@ -2459,7 +2487,7 @@ function tplContactoViewCard(editing){
         ${window.__contactoDetailLogoUrl ? `<img src="${esc(window.__contactoDetailLogoUrl)}" style="width:100%;height:100%;object-fit:contain;" />` : `<span style="color:var(--mutedFaint);font-size:11px;">Sin logo</span>`}
       </div>
     </div>
-    ${roleTags.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;">${roleTags.map(r=>`<span style="font-size:11px;text-transform:uppercase;letter-spacing:.3px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:3px 10px;color:var(--muted);">${esc(CONTACTO_ROLE_LABELS[r])}</span>`).join('')}</div>` : ''}
+    ${contactoRoles(editing).length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;">${contactoRoleBadgesHtml(editing, 'lg')}</div>` : ''}
     <div style="height:1px;background:var(--border);margin-bottom:16px;"></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;margin-bottom:20px;">
       ${contactoFieldBlock('Dirección', direccion ? esc(direccion) : '—')}
@@ -2511,6 +2539,10 @@ function tplContactoEditForm(c, editing, editId){
               ${esc(w.name)}
             </label>`).join('')}
         </div>
+        <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px;">
+          <input type="checkbox" id="ct-rol-transporte-cliente" ${c.esClienteTransporte?'checked':''} style="width:auto;" /> Cliente de transporte
+        </label>
+        <div style="margin:0 0 6px 24px;font-size:12px;color:var(--mutedFaint);">Empresa para la que hacéis transportes: aparece como cargador contractual al crear un DeCA.</div>
         <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px;">
           <input type="checkbox" id="ct-rol-transportista" ${(c.esTransportista||c.esAutonomos)?'checked':''} ${c.esAutonomos?'disabled':''} style="width:auto;" /> Transportista
         </label>
@@ -2589,6 +2621,7 @@ async function submitContactoForm(editId){
   const nombreComercial = document.getElementById('ct-nombre-comercial').value.trim();
   const nif = document.getElementById('ct-nif').value.trim();
   const esClienteAlmacen = document.getElementById('ct-rol-cliente').checked;
+  const esClienteTransporte = document.getElementById('ct-rol-transporte-cliente').checked;
   const esAutonomos = document.getElementById('ct-rol-autonomos').checked;
   const esTransportista = document.getElementById('ct-rol-transportista').checked || esAutonomos;
   const warehouseIds = esClienteAlmacen ? [...document.querySelectorAll('.ct-warehouse:checked')].map(el=>el.value) : [];
@@ -2599,11 +2632,11 @@ async function submitContactoForm(editId){
   const provincia = document.getElementById('ct-provincia').value.trim();
   const pais = document.getElementById('ct-pais').value.trim();
   if (!nombre) { showFormError(errEl, 'Indica al menos el nombre.'); return; }
-  const fields = { nombre, nombreComercial, nif, esClienteAlmacen, esTransportista, esAutonomos, warehouseIds, calle1, calle2, codigoPostal, ciudad, provincia, pais };
+  const fields = { nombre, nombreComercial, nif, esClienteAlmacen, esClienteTransporte, esTransportista, esAutonomos, warehouseIds, calle1, calle2, codigoPostal, ciudad, provincia, pais };
   const dbPayload = {
     nombre, nombre_comercial: nombreComercial || null, nif: nif || null, calle1: calle1 || null, calle2: calle2 || null,
     codigo_postal: codigoPostal || null, ciudad: ciudad || null, provincia: provincia || null, pais: pais || null,
-    es_cliente_almacen: esClienteAlmacen, es_transportista: esTransportista, es_autonomos: esAutonomos,
+    es_cliente_almacen: esClienteAlmacen, es_cliente_transporte: esClienteTransporte, es_transportista: esTransportista, es_autonomos: esAutonomos,
   };
   try {
     let contactoId = editId;
@@ -5522,10 +5555,9 @@ function tplDecaFormFields(e){
         ${decaSectionTitle('Cargador contractual')}
         <div class="field">
           <label>Nombre o razón social</label>
-          <input id="dc-cargador-nombre" maxlength="150" data-combo="dc-cargadores-datalist" autocomplete="off" oninput="onDecaCargadorInput()" placeholder="Escribe para buscar entre tus contactos" value="${esc(e.cargadorNombre||'')}" />
-          <datalist id="dc-cargadores-datalist">
-            ${contactos.filter(c=>!c.archived).map(c=>`<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('')}
-          </datalist>
+          <input id="dc-cargador-nombre" maxlength="150" data-combo="dc-cargadores-datalist" autocomplete="off" oninput="onDecaCargadorInput()" placeholder="Elige entre tus clientes de transporte" value="${esc(e.cargadorNombre||'')}" />
+          <datalist id="dc-cargadores-datalist">${decaCargadoresOptionsHtml()}</datalist>
+          <button type="button" onclick="openQuickCargadorModal()" style="background:none;border:none;padding:5px 0 0;font-size:12.5px;color:var(--primary);cursor:pointer;">+ Crear cargador que no esté en la lista</button>
         </div>
         <div class="field"><label>NIF</label><input id="dc-cargador-nif" maxlength="20" value="${esc(e.cargadorNif||'')}" /></div>
         <div class="field"><label>Domicilio</label><input id="dc-cargador-domicilio" maxlength="250" value="${esc(e.cargadorDomicilio||'')}" /></div>
@@ -5611,10 +5643,95 @@ function tplDecaFormPage(){
 }
 function onDecaCargadorInput(){
   const val = document.getElementById('dc-cargador-nombre').value;
-  const match = contactos.find(c => !c.archived && c.nombre === val);
+  const match = contactos.find(c => !c.archived && c.esClienteTransporte && c.nombre === val);
   if (match) {
     document.getElementById('dc-cargador-nif').value = match.nif || '';
     document.getElementById('dc-cargador-domicilio').value = cargadorDireccionCompleta(match);
+  }
+}
+// El cargador contractual se elige solo entre los contactos marcados como
+// "Cliente de transporte" (antes salían todos los contactos, mezclados).
+function decaCargadoresOptionsHtml(){
+  return contactos.filter(c=>!c.archived && c.esClienteTransporte).map(c=>`<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('');
+}
+// Alta rápida de un cargador sin salir del DeCA: crea el contacto (ya marcado
+// como cliente de transporte) y rellena los datos del cargador en el formulario.
+function openQuickCargadorModal(){
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <h3 class="modal-title">Nuevo cargador contractual</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Se guarda en Contactos como cliente de transporte, y se rellena en este DeCA. Los demás datos los puedes completar después en su ficha.</div>
+        <div class="field"><label>Razón social</label><input id="qc-nombre" maxlength="150" style="text-transform:uppercase;" oninput="uppercaseInput(this)" value="${esc((document.getElementById('dc-cargador-nombre')||{}).value||'')}" /></div>
+        <div class="field"><label>NIF</label><input id="qc-nif" maxlength="20" style="text-transform:uppercase;" oninput="uppercaseInput(this)" /></div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Calle 1</label><input id="qc-calle1" maxlength="150" /></div>
+          <div class="field" style="flex:1;"><label>Calle 2</label><input id="qc-calle2" maxlength="150" /></div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Código postal</label><input id="qc-cp" maxlength="10" oninput="autofillCiudadProvinciaFromCp('qc')" /></div>
+          <div class="field" style="flex:2;"><label>Ciudad</label><input id="qc-ciudad" maxlength="100" onblur="this.value = formatCiudad(this.value);" /></div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Provincia</label><input id="qc-provincia" maxlength="100" /></div>
+          <div class="field" style="flex:1;"><label>País</label><select id="qc-pais">${paisOptionsHtml('España')}</select></div>
+        </div>
+        <div id="qc-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button id="qc-submit" class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitQuickCargador()">Crear y usar</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const el = document.getElementById('qc-nombre'); if (el) el.focus(); }, 0);
+}
+async function submitQuickCargador(){
+  const errEl = document.getElementById('qc-error');
+  errEl.textContent = '';
+  const v = id => document.getElementById(id).value.trim();
+  const nombre = v('qc-nombre').toUpperCase(), nif = v('qc-nif').toUpperCase();
+  if (!nombre) { errEl.textContent = 'Indica la razón social.'; return; }
+  const fill = (c) => {
+    document.getElementById('dc-cargador-nombre').value = c.nombre;
+    document.getElementById('dc-cargador-nif').value = c.nif || '';
+    document.getElementById('dc-cargador-domicilio').value = cargadorDireccionCompleta(c);
+    const dl = document.getElementById('dc-cargadores-datalist');
+    if (dl) dl.innerHTML = decaCargadoresOptionsHtml();
+    window.__decaFormDirty = true;
+    closeModal();
+  };
+  // Si ya existe un contacto con ese NIF o ese nombre no se duplica: se usa.
+  const dup = contactos.find(c => !c.archived && ((nif && c.nif && c.nif.toUpperCase() === nif) || c.nombre.toUpperCase() === nombre));
+  const btn = document.getElementById('qc-submit');
+  btn.disabled = true;
+  try {
+    if (dup) {
+      if (!dup.esClienteTransporte) {
+        const { data, error } = await supabaseClient.from('contactos').update({ es_cliente_transporte: true }).eq('id', dup.id).select();
+        if (error || !data || !data.length) throw (error || new Error('ya existe un contacto con ese nombre o NIF, pero no tienes permiso para marcarlo como cliente de transporte. Pídelo a Administración.'));
+        dup.esClienteTransporte = true;
+        await logContactoHistorial(dup.id, 'Marcado como Cliente de transporte (desde el DeCA).');
+      }
+      fill(dup);
+      return;
+    }
+    const row = {
+      nombre, nif: nif || null, calle1: v('qc-calle1') || null, calle2: v('qc-calle2') || null, codigo_postal: v('qc-cp') || null,
+      ciudad: v('qc-ciudad') || null, provincia: v('qc-provincia') || null, pais: v('qc-pais') || null, es_cliente_transporte: true,
+    };
+    const { data, error } = await supabaseClient.from('contactos').insert(row).select().single();
+    if (error || !data) throw (error || new Error('sin permiso o error desconocido.'));
+    const c = { id: data.id, nombre, nombreComercial: '', nif, archived: false, esClienteAlmacen: false, esClienteTransporte: true, esTransportista: false, esAutonomos: false, warehouseIds: [],
+      calle1: row.calle1 || '', calle2: row.calle2 || '', codigoPostal: row.codigo_postal || '', ciudad: row.ciudad || '', provincia: row.provincia || '', pais: row.pais || '', logoStoragePath: null };
+    contactos.push(c);
+    contactos.sort((a,b) => a.nombre.localeCompare(b.nombre));
+    await logContactoHistorial(c.id, 'Contacto creado (alta rápida desde el DeCA) como Cliente de transporte.');
+    fill(c);
+  } catch (err) {
+    errEl.textContent = 'No se pudo crear: ' + (err && err.message ? err.message : 'error desconocido.');
+    btn.disabled = false;
   }
 }
 function openDecaForm(editId){
