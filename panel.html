@@ -621,7 +621,7 @@ function clientName(cid){ return (clients.find(c=>c.id===cid)||{}).name || '—'
 function palletById(pid){ return pallets[currentWarehouseId].find(p=>p.id===pid); }
 
 function switchWarehouse(id){
-  currentWarehouseId = id; window.__invSearch='';
+  currentWarehouseId = id; window.__invSearch=''; window.__clientesPage = 0;
   saveLastTab();
   renderHeader(); renderTab();
 }
@@ -1983,6 +1983,7 @@ async function refreshContactoLogoThumbnails(){
   if (window.__showingContactoDetail) return;
   if (currentTab === 'administracion' && window.__administracionView === 'contactos') refreshContactosListBody();
   if (currentTab === 'autonomos' && window.__autonomosView === 'empresas') refreshCompaniesListBody();
+  if (currentTab === 'clientes') refreshClientesListBody();
 }
 function contactoLogoThumbHtml(c){
   const url = contactoLogoUrlCache[c.id];
@@ -2904,38 +2905,99 @@ function tplMercancia(){
     </div>`;
 }
 
+// Panel de Clientes de un almacén: mismas tarjetas (logo, nombre, ciudad, NIF),
+// buscador y paginación que Contactos, pero solo con los clientes de almacén.
+// Pestañas: Activos (los asignados a este almacén), Sin asignar (a ningún
+// almacén todavía) y Archivados.
+const CLIENTES_PAGE_SIZE = 80;
+function clientesFilteredList(){
+  const view = window.__clientsView || 'activos';
+  const search = (window.__clientesSearch || '').toLowerCase();
+  const base = contactos.filter(c => c.esClienteAlmacen);
+  let list;
+  if (view === 'archivados') list = base.filter(c => c.archived && c.warehouseIds.includes(currentWarehouseId));
+  else if (view === 'sinasignar') list = base.filter(c => !c.archived && c.warehouseIds.length === 0);
+  else list = base.filter(c => !c.archived && c.warehouseIds.includes(currentWarehouseId));
+  list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || (c.nombreComercial||'').toLowerCase().includes(search) || (c.nif||'').toLowerCase().includes(search));
+  return { view, search, list };
+}
+function clientesGoToPage(delta){
+  window.__clientesPage = Math.max(0, (window.__clientesPage||0) + delta);
+  refreshClientesListBody();
+}
+function tplClientesPaginationHtml(){
+  const total = clientesFilteredList().list.length;
+  const totalPages = Math.max(1, Math.ceil(total / CLIENTES_PAGE_SIZE));
+  const page = Math.min(window.__clientesPage||0, totalPages-1);
+  const rangeStart = total ? page * CLIENTES_PAGE_SIZE + 1 : 0;
+  const rangeEnd = Math.min(total, (page+1) * CLIENTES_PAGE_SIZE);
+  return `
+    <span>${rangeStart}-${rangeEnd} / ${total}</span>
+    <button class="btn btn-ghost" style="padding:4px 9px;" ${page<=0?'disabled':''} onclick="clientesGoToPage(-1)">‹</button>
+    <button class="btn btn-ghost" style="padding:4px 9px;" ${page>=totalPages-1?'disabled':''} onclick="clientesGoToPage(1)">›</button>`;
+}
+function refreshClientesListBody(){
+  const el = document.getElementById('clientes-list-body');
+  if (el) el.innerHTML = clientesListBodyHtml();
+  const pagEl = document.getElementById('clientes-pagination');
+  if (pagEl) pagEl.innerHTML = tplClientesPaginationHtml();
+}
+function clientesListBodyHtml(){
+  const { view, search, list } = clientesFilteredList();
+  window.__contactoNavContext = { label: 'Clientes', ids: list.map(c=>c.id) };
+  if (!list.length) {
+    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search ? 'Ningún cliente coincide con la búsqueda.' : view==='archivados' ? 'No hay clientes archivados.' : view==='sinasignar' ? 'Todos los clientes tienen almacén asignado.' : 'Sin clientes todavía.'}</div>`;
+  }
+  const totalPages = Math.max(1, Math.ceil(list.length / CLIENTES_PAGE_SIZE));
+  if ((window.__clientesPage||0) > totalPages - 1) window.__clientesPage = totalPages - 1;
+  const page = window.__clientesPage || 0;
+  const pageList = list.slice(page * CLIENTES_PAGE_SIZE, (page + 1) * CLIENTES_PAGE_SIZE);
+  return contactosGridHtml(pageList, view === 'archivados', c => {
+    const activos = view==='sinasignar' ? 0 : pallets[currentWarehouseId].filter(p=>p.clientId===c.id && p.status==='en almacén').length;
+    return { footerHtml: view==='sinasignar'
+      ? `<div style="margin-top:8px;font-size:12px;color:var(--danger);">Sin almacén asignado</div>`
+      : `<div style="margin-top:8px;font-size:12px;color:var(--primary);">${activos} palet${activos!==1?'s':''} en almacén</div>` };
+  });
+}
+function setClientesView(view){
+  window.__clientsView = view;
+  window.__clientesPage = 0;
+  renderTab();
+}
 function tplClientes(){
   const view = window.__clientsView || 'activos';
-  const unassignedCount = clients.filter(c => c.warehouseIds.length === 0 && !c.archived).length;
-  let list;
-  if (view === 'archivados') list = clients.filter(c => c.warehouseIds.includes(currentWarehouseId) && c.archived);
-  else if (view === 'sinasignar') list = clients.filter(c => c.warehouseIds.length === 0 && !c.archived);
-  else list = clients.filter(c => c.warehouseIds.includes(currentWarehouseId) && !c.archived);
-  window.__contactoNavContext = { label: 'Clientes', ids: list.map(c=>c.id) };
-
+  const wh = currentWh();
+  const base = contactos.filter(c => c.esClienteAlmacen);
+  const unassignedCount = base.filter(c => !c.archived && c.warehouseIds.length === 0).length;
   return `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn ${view==='activos'?'btn-primary':'btn-ghost'}" onclick="window.__clientsView='activos'; renderTab();">Activos</button>
-        <button class="btn ${view==='sinasignar'?'btn-primary':'btn-ghost'}" onclick="window.__clientsView='sinasignar'; renderTab();">⚠ Sin asignar (${unassignedCount})</button>
-        <button class="btn ${view==='archivados'?'btn-primary':'btn-ghost'}" onclick="window.__clientsView='archivados'; renderTab();">🗄 Archivados</button>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div style="width:48px;height:48px;border-radius:12px;background:rgba(92,102,112,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          ${homeIcon(HOME_ICON_PATHS.users, 24, '#5C6670')}
+        </div>
+        <div>
+          <div style="font-family:var(--display);font-size:22px;">Clientes</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">Clientes de almacén${wh ? ' de ' + esc(wh.name) : ''}.</div>
+        </div>
       </div>
-      ${view==='archivados' ? '' : `<button class="btn btn-primary" onclick='openContactoModal(null, {esClienteAlmacen:true, warehouseIds:["${currentWarehouseId}"]})'>+ Nuevo cliente</button>`}
     </div>
-    ${view==='sinasignar' ? `<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Estos clientes todavía no están asignados a ningún almacén. Ábrelos para marcarles uno o varios.</div>` : ''}
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;">
-      ${list.map(c=>{
-        const activos = view==='sinasignar' ? 0 : pallets[currentWarehouseId].filter(p=>p.clientId===c.id && p.status==='en almacén').length;
-        return `<div class="card" style="position:relative;${view==='archivados'?'opacity:0.7;':''}">
-          <div onclick="openContactoModal('${c.id}')" style="cursor:pointer;">
-            <div style="font-family:var(--display);font-size:15.5px;margin-bottom:4px;">${esc(c.name)}${view==='archivados'?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;">· archivado</span>':''}</div>
-          </div>
-          ${view==='sinasignar'
-            ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:12px;color:var(--danger);">Sin almacén asignado</div>`
-            : `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:12px;color:var(--primary);">${activos} palet${activos!==1?'s':''} en almacén</div>`}
-        </div>`;
-      }).join('') || `<div style="color:var(--mutedFaint);">${view==='archivados'?'No hay clientes archivados.':view==='sinasignar'?'Todos los clientes tienen almacén asignado.':'Sin clientes todavía'}</div>`}
-    </div>`;
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;">
+      <button class="btn ${view==='activos'?'btn-primary':'btn-ghost'}" onclick="setClientesView('activos')">Activos</button>
+      <button class="btn ${view==='sinasignar'?'btn-primary':'btn-ghost'}" onclick="setClientesView('sinasignar')">⚠ Sin asignar (${unassignedCount})</button>
+      <button class="btn ${view==='archivados'?'btn-primary':'btn-ghost'}" onclick="setClientesView('archivados')">🗄 Archivados</button>
+    </div>
+    ${view==='sinasignar' ? `<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Estos clientes todavía no están asignados a ningún almacén. Ábrelos y asígnales uno o varios en la sección Almacén.</div>` : ''}
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
+          <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__clientesSearch||'')}" oninput="window.__clientesSearch=this.value; window.__clientesPage=0; refreshClientesListBody();" style="padding-left:34px;" />
+          <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+        </div>
+        ${view==='archivados' ? '' : `<button class="btn btn-primary" onclick='openContactoModal(null, {esClienteAlmacen:true, warehouseIds:["${currentWarehouseId}"]})'>+ Nuevo cliente</button>`}
+      </div>
+      <div id="clientes-pagination" style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplClientesPaginationHtml()}</div>
+    </div>
+    <div id="clientes-list-body">${clientesListBodyHtml()}</div>`;
 }
 
 // Cada reserva del día se coloca en una columna (0 o 1) fija para todo su
