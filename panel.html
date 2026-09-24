@@ -657,7 +657,7 @@ async function setTab(id){
     window.__administracionView = 'home';
     window.__showingContactoDetail = false;
     window.__contactosView = 'activos';
-    window.__contactosRoleFilters = [];
+    window.__contactosGroup = ""; window.__contactosType = "";
     window.__contactosSearch = '';
     window.__contactosFilterOpen = false;
     window.__contactosPage = 0;
@@ -919,7 +919,7 @@ function tplAdministracion(){
 function openContactosModule(){
   window.__administracionView = 'contactos';
   window.__contactosView = 'activos';
-  window.__contactosRoleFilters = [];
+  window.__contactosGroup = ""; window.__contactosType = "";
   window.__contactosSearch = '';
   window.__contactosFilterOpen = false;
   window.__contactosPage = 0;
@@ -2170,7 +2170,8 @@ function tplContactosPage(){
         </div>
       </div>
     </div>
-    <div id="contactos-role-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;">${tplContactosRoleTabsHtml()}</div>
+    <div id="contactos-role-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:${(window.__contactosGroup==='clientes'||window.__contactosGroup==='proveedores')?'8':'16'}px;">${tplContactosRoleTabsHtml()}</div>
+    ${(window.__contactosGroup==='clientes'||window.__contactosGroup==='proveedores') ? `<div id="contactos-type-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;">${tplContactosTypeTabsHtml()}</div>` : ''}
     <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-self:start;">
         <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
@@ -2197,30 +2198,55 @@ function tplContactosFilterDropdown(){
       </label>
     </div>`;
 }
-// Pestañas por rol encima de la lista de Contactos (con cuántos hay de cada
-// tipo). Solo se puede elegir una: "Todos" o un rol concreto. "Sin rol" solo
-// aparece si hay contactos a los que todavía no se les ha marcado ninguno.
-function contactosRoleTabsList(){
+// Pestañas de Contactos: Todos · Clientes · Proveedores (con cuántos hay de
+// cada uno). "Sin clasificar" solo aparece si hay contactos a los que todavía
+// no se les ha marcado si son cliente o proveedor. Al elegir Clientes o
+// Proveedores aparece debajo un segundo filtro por tipo.
+const CONTACTO_GROUP_TYPES = {
+  clientes: [['almacen', 'Almacén', c => c.esClienteAlmacen], ['transporte', 'Transporte', c => c.esClienteTransporte]],
+  proveedores: [['transportista', 'Transportistas', c => c.esTransportista], ['autonomo', 'Autónomos', c => c.esAutonomos]],
+};
+function contactoInGroup(c, group){
+  if (group === 'clientes') return !!(c.esClienteAlmacen || c.esClienteTransporte);
+  if (group === 'proveedores') return !!(c.esTransportista || c.esAutonomos);
+  if (group === 'sinclasificar') return !contactoRoles(c).length;
+  return true;
+}
+function contactosBaseList(){
   const archivedView = (window.__contactosView || 'activos') === 'archivados';
-  const base = contactos.filter(c => !!c.archived === archivedView);
-  const tabs = [
-    { key: '', label: 'Todos', n: base.length },
-    { key: 'cliente', label: 'Clientes de almacén', n: base.filter(c=>c.esClienteAlmacen).length },
-    { key: 'clientetransporte', label: 'Clientes de transporte', n: base.filter(c=>c.esClienteTransporte).length },
-    { key: 'transportista', label: 'Transportistas', n: base.filter(c=>c.esTransportista).length },
-    { key: 'autonomos', label: 'Autónomos', n: base.filter(c=>c.esAutonomos).length },
-  ];
-  const sinRol = base.filter(c => !contactoRoles(c).length).length;
-  if (sinRol) tabs.push({ key: 'sinrol', label: 'Sin rol', n: sinRol });
-  return tabs;
+  return contactos.filter(c => !!c.archived === archivedView);
 }
 function tplContactosRoleTabsHtml(){
-  const active = (window.__contactosRoleFilters || [])[0] || '';
-  return contactosRoleTabsList().map(t => `
+  const base = contactosBaseList();
+  const active = window.__contactosGroup || '';
+  const tabs = [
+    { key: '', label: 'Todos', n: base.length },
+    { key: 'clientes', label: 'Clientes', n: base.filter(c => contactoInGroup(c, 'clientes')).length },
+    { key: 'proveedores', label: 'Proveedores', n: base.filter(c => contactoInGroup(c, 'proveedores')).length },
+  ];
+  const sinClasificar = base.filter(c => contactoInGroup(c, 'sinclasificar')).length;
+  if (sinClasificar) tabs.push({ key: 'sinclasificar', label: 'Sin clasificar', n: sinClasificar });
+  return tabs.map(t => `
     <button class="btn ${t.key===active?'btn-primary':'btn-ghost'}" onclick="setContactoRoleTab('${t.key}')">${esc(t.label)} <span style="opacity:.7;font-weight:400;">${t.n}</span></button>`).join('');
 }
+function tplContactosTypeTabsHtml(){
+  const group = window.__contactosGroup || '';
+  const types = CONTACTO_GROUP_TYPES[group];
+  if (!types) return '';
+  const inGroup = contactosBaseList().filter(c => contactoInGroup(c, group));
+  const active = window.__contactosType || '';
+  const chips = [['', 'Todos', inGroup.length], ...types.map(([key, label, test]) => [key, label, inGroup.filter(test).length])];
+  return chips.map(([key, label, n]) => `
+    <button class="btn ${key===active?'btn-primary':'btn-ghost'}" style="padding:4px 12px;font-size:12.5px;" onclick="setContactoTypeTab('${key}')">${esc(label)} <span style="opacity:.7;font-weight:400;">${n}</span></button>`).join('');
+}
 function setContactoRoleTab(key){
-  window.__contactosRoleFilters = key ? [key] : [];
+  window.__contactosGroup = key;
+  window.__contactosType = '';
+  window.__contactosPage = 0;
+  renderTab();
+}
+function setContactoTypeTab(key){
+  window.__contactosType = key;
   window.__contactosPage = 0;
   renderTab();
 }
@@ -2253,16 +2279,15 @@ const CONTACTOS_PAGE_SIZE = 80;
 function contactosFilteredList(){
   const view = window.__contactosView || 'activos';
   const archivedView = view === 'archivados';
-  const roleFilters = window.__contactosRoleFilters || [];
+  const group = window.__contactosGroup || '';
+  const type = window.__contactosType || '';
+  const roleFilters = group ? [group] : [];
   const search = (window.__contactosSearch || '').toLowerCase();
   let list = contactos.filter(c => !!c.archived === archivedView);
-  if (roleFilters.length) {
-    list = list.filter(c => roleFilters.some(r =>
-      r==='cliente' ? c.esClienteAlmacen
-      : r==='clientetransporte' ? c.esClienteTransporte
-      : r==='transportista' ? c.esTransportista
-      : r==='sinrol' ? !contactoRoles(c).length
-      : c.esAutonomos));
+  if (group) list = list.filter(c => contactoInGroup(c, group));
+  if (group && type && CONTACTO_GROUP_TYPES[group]) {
+    const t = CONTACTO_GROUP_TYPES[group].find(x => x[0] === type);
+    if (t) list = list.filter(t[2]);
   }
   list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || c.nif.toLowerCase().includes(search));
   return { list, archivedView, search, roleFilters };
@@ -2283,18 +2308,14 @@ function contactosListBodyHtml(){
   const pageList = list.slice(page * CONTACTOS_PAGE_SIZE, (page + 1) * CONTACTOS_PAGE_SIZE);
   return contactosGridHtml(pageList, archivedView);
 }
-function toggleCtWarehousesBlock(){
-  document.getElementById('ct-warehouses-block').style.display = document.getElementById('ct-rol-cliente').checked ? 'block' : 'none';
-}
-// Todo Autónomo es Transportista (son las empresas de transporte que
-// trabajan para Qualified Logistics, y para eso hace falta que tengan
-// camión) — al marcar Autónomos, Transportista se marca solo y se
-// bloquea para que no se pueda desmarcar por error.
-function toggleCtTransportistaImplied(){
-  const auton = document.getElementById('ct-rol-autonomos').checked;
-  const transp = document.getElementById('ct-rol-transportista');
-  if (auton) { transp.checked = true; transp.disabled = true; }
-  else { transp.disabled = false; }
+// Los interruptores Cliente / Proveedor muestran u ocultan sus tipos. Al
+// apagar uno se desmarcan sus tipos (al guardar no quedan roles a medias).
+function toggleCtRelations(){
+  [['ct-es-cliente','ct-cliente-block',['ct-rol-cliente','ct-rol-transporte-cliente']], ['ct-es-proveedor','ct-proveedor-block',['ct-rol-transportista','ct-rol-autonomos']]].forEach(([sw, block, boxes]) => {
+    const on = document.getElementById(sw).checked;
+    document.getElementById(block).style.display = on ? 'block' : 'none';
+    if (!on) boxes.forEach(id => { document.getElementById(id).checked = false; });
+  });
 }
 let contactoHistorialCache = {};
 async function loadContactoHistorial(contactoId){
@@ -2446,7 +2467,7 @@ function exitContactoEditMode(){
 }
 function contactoPresetForNavLabel(label){
   if (label === 'Clientes') return { esClienteAlmacen: true, warehouseIds: [currentWarehouseId] };
-  if (label === 'Empresas') return { esAutonomos: true };
+  if (label === 'Empresas') return { esAutonomos: true, esTransportista: true };
   return null;
 }
 function newContactoFromContext(){
@@ -2465,6 +2486,15 @@ function contactoFieldBlock(label, valueHtml){
     <div style="font-size:13.5px;color:var(--text);">${valueHtml}</div>
   </div>`;
 }
+// "Cliente (almacén, transporte) · Proveedor (transportista, autónomo)".
+function contactoTipoTexto(c){
+  const parts = [];
+  const cl = [c.esClienteAlmacen && 'almacén', c.esClienteTransporte && 'transporte'].filter(Boolean);
+  if (cl.length) parts.push(`Cliente (${cl.join(', ')})`);
+  const pr = [c.esTransportista && 'transportista', c.esAutonomos && 'autónomo'].filter(Boolean);
+  if (pr.length) parts.push(`Proveedor (${pr.join(', ')})`);
+  return parts.join(' · ') || 'Sin clasificar';
+}
 function tplContactoViewCard(editing){
   const direccion = cargadorDireccionCompleta(editing);
   const warehouseNames = (editing.warehouseIds||[]).map(id=>(WAREHOUSES.find(w=>w.id===id)||{}).name).filter(Boolean);
@@ -2481,13 +2511,13 @@ function tplContactoViewCard(editing){
     </div>
     <div style="height:1px;background:var(--border);margin-bottom:16px;"></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;margin-bottom:20px;">
+      ${contactoFieldBlock('Tipo', esc(contactoTipoTexto(editing)))}
       ${contactoFieldBlock('Dirección', direccion ? esc(direccion) : '—')}
       ${editing.esClienteAlmacen ? contactoFieldBlock('Almacenes', warehouseNames.length ? esc(warehouseNames.join(', ')) : '—') : ''}
     </div>
     ${tplContactoArchiveActions(editing)}`;
 }
 function tplContactoEditForm(c, editing, editId){
-  const warehouseIds = c.warehouseIds || [];
   return `
       <div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:6px;">
         <div style="flex:1;min-width:0;">
@@ -2518,28 +2548,33 @@ function tplContactoEditForm(c, editing, editId){
         <div class="field" style="flex:1;"><label>País</label><select id="ct-pais">${paisOptionsHtml(c.pais)}</select></div>
       </div>
       <div class="field">
-        <label>Roles</label>
-        <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px;">
-          <input type="checkbox" id="ct-rol-cliente" ${c.esClienteAlmacen?'checked':''} onchange="toggleCtWarehousesBlock()" style="width:auto;" /> Cliente de almacén
+        <label>Tipo de contacto</label>
+        <label style="display:flex;align-items:center;gap:10px;padding:6px 0;font-size:13.5px;font-weight:600;">
+          <input type="checkbox" class="switch" id="ct-es-cliente" ${(c.esClienteAlmacen||c.esClienteTransporte)?'checked':''} onchange="toggleCtRelations()" /> Cliente
         </label>
-        <div id="ct-warehouses-block" style="display:${c.esClienteAlmacen?'block':'none'};margin:0 0 6px 24px;">
-          ${WAREHOUSES.map(w => `
-            <label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;color:var(--muted);">
-              <input type="checkbox" class="ct-warehouse" value="${w.id}" ${warehouseIds.includes(w.id)?'checked':''} style="width:auto;" />
-              <span style="width:8px;height:8px;border-radius:99px;background:${w.color};display:inline-block;"></span>
-              ${esc(w.name)}
-            </label>`).join('')}
+        <div id="ct-cliente-block" style="display:${(c.esClienteAlmacen||c.esClienteTransporte)?'block':'none'};margin:0 0 8px 48px;">
+          <label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;">
+            <input type="checkbox" id="ct-rol-cliente" ${c.esClienteAlmacen?'checked':''} style="width:auto;" /> Almacén
+          </label>
+          <div style="margin:0 0 4px 24px;font-size:12px;color:var(--mutedFaint);">Los almacenes de cada cliente se asignan desde el panel de Clientes.</div>
+          <label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;">
+            <input type="checkbox" id="ct-rol-transporte-cliente" ${c.esClienteTransporte?'checked':''} style="width:auto;" /> Transporte
+          </label>
+          <div style="margin:0 0 4px 24px;font-size:12px;color:var(--mutedFaint);">Empresa para la que hacéis transportes: aparece como cargador contractual al crear un DeCA.</div>
         </div>
-        <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px;">
-          <input type="checkbox" id="ct-rol-transporte-cliente" ${c.esClienteTransporte?'checked':''} style="width:auto;" /> Cliente de transporte
+        <label style="display:flex;align-items:center;gap:10px;padding:6px 0;font-size:13.5px;font-weight:600;">
+          <input type="checkbox" class="switch" id="ct-es-proveedor" ${(c.esTransportista||c.esAutonomos)?'checked':''} onchange="toggleCtRelations()" /> Proveedor
         </label>
-        <div style="margin:0 0 6px 24px;font-size:12px;color:var(--mutedFaint);">Empresa para la que hacéis transportes: aparece como cargador contractual al crear un DeCA.</div>
-        <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px;">
-          <input type="checkbox" id="ct-rol-transportista" ${(c.esTransportista||c.esAutonomos)?'checked':''} ${c.esAutonomos?'disabled':''} style="width:auto;" /> Transportista
-        </label>
-        <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px;">
-          <input type="checkbox" id="ct-rol-autonomos" ${c.esAutonomos?'checked':''} onchange="toggleCtTransportistaImplied()" style="width:auto;" /> Autónomos
-        </label>
+        <div id="ct-proveedor-block" style="display:${(c.esTransportista||c.esAutonomos)?'block':'none'};margin:0 0 4px 48px;">
+          <label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;">
+            <input type="checkbox" id="ct-rol-transportista" ${c.esTransportista?'checked':''} style="width:auto;" /> Transportista
+          </label>
+          <div style="margin:0 0 4px 24px;font-size:12px;color:var(--mutedFaint);">Aparece como transportista efectivo al crear un DeCA.</div>
+          <label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;">
+            <input type="checkbox" id="ct-rol-autonomos" ${c.esAutonomos?'checked':''} style="width:auto;" /> Autónomo
+          </label>
+          <div style="margin:0 0 4px 24px;font-size:12px;color:var(--mutedFaint);">Empresa con conductores que ficha en la app (módulo Autónomos).</div>
+        </div>
       </div>
       <div id="ct-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
       <div style="display:flex;gap:10px;">
@@ -2547,6 +2582,51 @@ function tplContactoEditForm(c, editing, editId){
         <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitContactoForm('${editId||''}')">${editing?'Guardar cambios':'Añadir'}</button>
       </div>
       ${editing && editing.archived ? `<button type="button" onclick="confirmDeleteContacto('${editing.id}')" style="width:100%;text-align:center;background:none;border:1px dashed var(--border);border-radius:6px;padding:8px;color:var(--danger);font-size:12.5px;margin-top:10px;cursor:pointer;">🗑 Eliminar definitivamente</button>` : ''}`;
+}
+// Sección "Almacén" de un cliente de almacén (se ve al abrirlo desde el panel
+// de Clientes): en qué almacenes trabaja. Aquí irán también sus tarifas.
+function tplContactoAlmacenCard(c){
+  const ids = c.warehouseIds || [];
+  return `
+    <div class="card" style="margin-top:20px;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:6px;">Almacén</div>
+      <div style="font-size:12px;color:var(--mutedFaint);margin-bottom:10px;">En qué almacenes trabaja este cliente. Solo aparece en las reservas y la mercancía de los que marques.${ids.length ? '' : ' <b style="color:var(--danger);">Todavía no tiene ninguno asignado.</b>'}</div>
+      ${WAREHOUSES.map(w => `
+        <label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13.5px;">
+          <input type="checkbox" class="ct-wh-edit" value="${w.id}" ${ids.includes(w.id)?'checked':''} style="width:auto;" />
+          <span style="width:8px;height:8px;border-radius:99px;background:${w.color};display:inline-block;"></span>
+          ${esc(w.name)}
+        </label>`).join('')}
+      <div id="ct-wh-error" style="color:var(--danger);font-size:12.5px;margin:8px 0 0;"></div>
+      <button id="ct-wh-save" class="btn btn-primary" style="margin-top:10px;" onclick="saveContactoWarehouses('${c.id}')">Guardar almacenes</button>
+    </div>`;
+}
+async function saveContactoWarehouses(id){
+  const c = contactos.find(x=>x.id===id);
+  if (!c) return;
+  const errEl = document.getElementById('ct-wh-error');
+  errEl.textContent = '';
+  const ids = [...document.querySelectorAll('.ct-wh-edit:checked')].map(el=>el.value);
+  const before = (c.warehouseIds || []).slice().sort().join(',');
+  if (ids.slice().sort().join(',') === before) { errEl.textContent = 'No has cambiado ningún almacén.'; return; }
+  const btn = document.getElementById('ct-wh-save');
+  btn.disabled = true;
+  try {
+    const { error: delError } = await supabaseClient.from('contacto_warehouses').delete().eq('contacto_id', id);
+    if (delError) throw delError;
+    if (ids.length) {
+      const { error: insError } = await supabaseClient.from('contacto_warehouses').insert(ids.map(wid => ({ contacto_id: id, warehouse_id: wid })));
+      if (insError) throw insError;
+    }
+    c.warehouseIds = ids;
+    const names = ids.map(wid => (WAREHOUSES.find(w=>w.id===wid)||{}).name).filter(Boolean).join(', ') || 'ninguno';
+    await logContactoHistorial(id, `Almacenes asignados: ${names}`);
+    await loadClients();
+    renderTab();
+  } catch (error) {
+    errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'error desconocido.');
+    btn.disabled = false;
+  }
 }
 function tplContactoDetailPage(){
   const editId = window.__contactoDetailId;
@@ -2589,8 +2669,11 @@ function tplContactoDetailPage(){
       </div>
     </div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
-    <div class="card" style="flex:2;min-width:360px;" ${editMode ? 'oninput="window.__contactoFormDirty=true;" onchange="window.__contactoFormDirty=true;"' : ''}>
+    <div style="flex:2;min-width:360px;">
+    <div class="card" ${editMode ? 'oninput="window.__contactoFormDirty=true;" onchange="window.__contactoFormDirty=true;"' : ''}>
       ${editMode ? tplContactoEditForm(c, editing, editId) : tplContactoViewCard(editing)}
+    </div>
+    ${!editMode && editing && editing.esClienteAlmacen && nav && nav.label === 'Clientes' ? tplContactoAlmacenCard(editing) : ''}
     </div>
     <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Historial de cambios</div>
@@ -2611,11 +2694,21 @@ async function submitContactoForm(editId){
   const nombre = document.getElementById('ct-nombre').value.trim();
   const nombreComercial = document.getElementById('ct-nombre-comercial').value.trim();
   const nif = document.getElementById('ct-nif').value.trim();
-  const esClienteAlmacen = document.getElementById('ct-rol-cliente').checked;
-  const esClienteTransporte = document.getElementById('ct-rol-transporte-cliente').checked;
-  const esAutonomos = document.getElementById('ct-rol-autonomos').checked;
-  const esTransportista = document.getElementById('ct-rol-transportista').checked || esAutonomos;
-  const warehouseIds = esClienteAlmacen ? [...document.querySelectorAll('.ct-warehouse:checked')].map(el=>el.value) : [];
+  // Los tipos solo cuentan si su interruptor (Cliente / Proveedor) está activo.
+  const esCliente = document.getElementById('ct-es-cliente').checked;
+  const esProveedor = document.getElementById('ct-es-proveedor').checked;
+  const esClienteAlmacen = esCliente && document.getElementById('ct-rol-cliente').checked;
+  const esClienteTransporte = esCliente && document.getElementById('ct-rol-transporte-cliente').checked;
+  const esTransportista = esProveedor && document.getElementById('ct-rol-transportista').checked;
+  const esAutonomos = esProveedor && document.getElementById('ct-rol-autonomos').checked;
+  if (esCliente && !esClienteAlmacen && !esClienteTransporte) { showFormError(errEl, 'Marca de qué tipo es el cliente: almacén y/o transporte.'); return; }
+  if (esProveedor && !esTransportista && !esAutonomos) { showFormError(errEl, 'Marca de qué tipo es el proveedor: transportista y/o autónomo.'); return; }
+  // Los almacenes ya no se eligen aquí (se asignan desde el panel de Clientes):
+  // al editar se respetan los que tiene; al crear desde el panel de Clientes se
+  // le pone el almacén desde el que se está creando.
+  const prevContacto = editId ? contactos.find(x=>x.id===editId) : null;
+  const prevWarehouseIds = prevContacto ? (prevContacto.warehouseIds || []).slice() : [];
+  const warehouseIds = !esClienteAlmacen ? [] : prevContacto ? prevWarehouseIds : ((window.__contactoDetailPreset && window.__contactoDetailPreset.warehouseIds) || []);
   const calle1 = document.getElementById('ct-calle1').value.trim();
   const calle2 = document.getElementById('ct-calle2').value.trim();
   const codigoPostal = document.getElementById('ct-cp').value.trim();
@@ -2645,11 +2738,15 @@ async function submitContactoForm(editId){
       contactos.sort((a,b) => a.nombre.localeCompare(b.nombre));
       changeLines = ['Contacto creado.'];
     }
-    let { error: whDeleteError } = await supabaseClient.from('contacto_warehouses').delete().eq('contacto_id', contactoId);
-    if (whDeleteError) throw whDeleteError;
-    if (warehouseIds.length) {
+    // Solo se tocan los almacenes si hace falta: al crear un cliente de almacén
+    // (para dejarle el almacén de origen) o al dejar de ser cliente de almacén
+    // (se le quitan). Editar otros datos no modifica sus almacenes.
+    if (!editId && warehouseIds.length) {
       const { error: whInsertError } = await supabaseClient.from('contacto_warehouses').insert(warehouseIds.map(wid=>({ contacto_id: contactoId, warehouse_id: wid })));
       if (whInsertError) throw whInsertError;
+    } else if (editId && !esClienteAlmacen && prevWarehouseIds.length) {
+      const { error: whDeleteError } = await supabaseClient.from('contacto_warehouses').delete().eq('contacto_id', contactoId);
+      if (whDeleteError) throw whDeleteError;
     }
     if (changeLines.length) await logContactoHistorial(contactoId, changeLines.join('\n'));
     await Promise.all([loadClients(), loadCompanies()]);
