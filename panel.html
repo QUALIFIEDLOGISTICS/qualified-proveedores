@@ -618,10 +618,9 @@ function visibleTabs(){
 
 function currentWh(){ return WAREHOUSES.find(w=>w.id===currentWarehouseId); }
 function clientName(cid){ return (clients.find(c=>c.id===cid)||{}).name || '—'; }
-function palletById(pid){ return pallets[currentWarehouseId].find(p=>p.id===pid); }
 
 function switchWarehouse(id){
-  currentWarehouseId = id; window.__invSearch=''; window.__clientesPage = 0;
+  currentWarehouseId = id; window.__clientesPage = 0;
   saveLastTab();
   renderHeader(); renderTab();
 }
@@ -715,10 +714,9 @@ function renderHeader(){
     document.getElementById('wh-sub').textContent = '';
     return;
   }
-  titleRow.innerHTML = `
-    <select onchange="switchWarehouse(this.value)" style="${PLAIN_TITLE_STYLE}font-size:20px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:6px 12px;color:var(--text);cursor:pointer;max-width:100%;">
-      ${WAREHOUSES.map(w=>`<option value="${w.id}" ${w.id===currentWarehouseId?'selected':''}>${esc(w.name)}</option>`).join('')}
-    </select>`;
+  // Almacén (Clientes, Franjas horarias, Documentos): el selector de almacén
+  // vive ahora en la barra del propio módulo.
+  titleRow.innerHTML = `<div style="${PLAIN_TITLE_STYLE}">Almacén</div>`;
   document.getElementById('wh-sub').textContent = '';
 }
 
@@ -742,6 +740,7 @@ const HOME_ICON_PATHS = {
   building: '<rect x="4" y="3" width="16" height="18" rx="1"></rect><rect x="8" y="7" width="2" height="2"></rect><rect x="14" y="7" width="2" height="2"></rect><rect x="8" y="12" width="2" height="2"></rect><rect x="14" y="12" width="2" height="2"></rect><rect x="10" y="17" width="4" height="4"></rect>',
 };
 const HOME_MODULES = {
+  almacen: { color: '#2E6F95', icon: 'home', description: 'Clientes, franjas horarias y documentos de cada almacén.' },
   clientes: { color: '#2E6F95', icon: 'users', description: 'Clientes y almacenes asignados.' },
   citas: { color: '#3F8F5F', icon: 'calendar', description: 'Reserva y control de franjas horarias de carga y descarga.' },
   documentos: { color: '#7C5CBF', icon: 'file', description: 'Documentación asociada a cada almacén.' },
@@ -765,7 +764,10 @@ function tplInicio(){
   items.forEach(t => {
     let g = groups.find(g => g.name === t.group);
     if (!g) { g = { name: t.group, items: [] }; groups.push(g); }
-    if (t.id === 'administracion') {
+    if (isAlmacenTab(t.id)) {
+      // Clientes, Franjas horarias y Documentos: una sola tarjeta "Almacén".
+      if (!g.items.some(x => x.id === 'almacen')) g.items.push({ id: 'almacen', label: 'Almacén', group: t.group, action: `setTab('${almacenDefaultSection()}')` });
+    } else if (t.id === 'administracion') {
       g.items.push({ ...t, action: 'openContactosFromHome()' });
       g.items.push({ id: 'direcciones', label: 'Direcciones', group: t.group, action: 'openDireccionesFromHome()' });
       g.items.push({ id: 'flota', label: 'Flota', group: t.group, action: 'openFlotaFromHome()' });
@@ -818,7 +820,7 @@ function computeBreadcrumbSegments(){
     const label = nav ? nav.label : 'Contactos';
     const ancestors = {
       'Contactos': [{label:'Administración', onclick:"contactoBreadcrumbGo('backToAdministracionHome')"}],
-      'Clientes': [],
+      'Clientes': [{label:'Almacén', onclick:'closeContactoDetail()'}],
       'Empresas': [{label:'Autónomos', onclick:"contactoBreadcrumbGo('backToAutonomosHome')"}],
     }[label] || [];
     const editId = window.__contactoDetailId;
@@ -893,16 +895,51 @@ function renderBreadcrumbHtml(){
       : `<span style="color:${i===last?'var(--text)':'var(--mutedFaint)'};font-weight:${i===last?'600':'400'};">${esc(s.label)}</span>`}`).join('')}
   </div>`;
 }
+/* ---- Panel de Almacén: una sola página con barra superior ---- */
+// Secciones del módulo Almacén, en el orden de la barra. Cada una sigue siendo
+// una pestaña con su propio permiso (clientes / citas / documentos), así que
+// cada persona ve solo las secciones que ya tenía asignadas — p. ej. un
+// carretillero con solo "citas" entra directo a Franjas horarias. Para añadir
+// otra sección (p. ej. la gestión de almacenes) basta con sumarla aquí.
+const ALMACEN_SECTIONS = [
+  { id: 'clientes', label: 'Clientes' },
+  { id: 'citas', label: 'Franjas horarias' },
+  { id: 'documentos', label: 'Documentos' },
+];
+function isAlmacenTab(id){ return ALMACEN_SECTIONS.some(s => s.id === id); }
+function almacenVisibleSections(){
+  const allowed = visibleTabs().map(t => t.id);
+  return ALMACEN_SECTIONS.filter(s => allowed.includes(s.id));
+}
+// La primera sección que la persona puede ver (Clientes si la tiene).
+function almacenDefaultSection(){
+  const s = almacenVisibleSections()[0];
+  return s ? s.id : null;
+}
+function tplAlmacenBar(){
+  const sections = almacenVisibleSections();
+  return `
+    <div style="display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
+      <div style="padding-bottom:8px;">
+        <select onchange="switchWarehouse(this.value)" title="Almacén" style="font-family:var(--display);font-size:15px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:7px 12px;color:var(--text);cursor:pointer;min-width:190px;">
+          ${WAREHOUSES.map(w => `<option value="${w.id}" ${w.id===currentWarehouseId?'selected':''}>${esc(w.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;gap:2px;flex-wrap:wrap;">
+        ${sections.map(s => {
+          const on = s.id === currentTab;
+          return `<button onclick="setTab('${s.id}')" style="background:none;border:none;border-bottom:3px solid ${on?'var(--primary)':'transparent'};margin-bottom:-1px;padding:11px 16px;font-size:14px;font-weight:${on?700:500};color:${on?'var(--primary)':'var(--muted)'};cursor:pointer;white-space:nowrap;">${esc(s.label)}</button>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
 function renderTab(){
   const el = document.getElementById('tab-content');
   if (window.__kioskMode) { el.innerHTML = tplKiosk(); return; }
   let bodyHtml = '';
   if (window.__showingContactoDetail) bodyHtml = tplContactoDetailPage();
   else if (currentTab === 'inicio') bodyHtml = tplInicio();
-  else if (currentTab === 'resumen') bodyHtml = tplResumen();
-  else if (currentTab === 'mercancia') bodyHtml = tplMercancia();
   else if (currentTab === 'clientes') bodyHtml = tplClientes();
-  else if (currentTab === 'movimientos') bodyHtml = tplMovimientos();
   else if (currentTab === 'citas') bodyHtml = tplCitas();
   else if (currentTab === 'documentos') bodyHtml = tplDocumentos();
   else if (currentTab === 'autonomos') bodyHtml = tplAutonomos();
@@ -910,8 +947,11 @@ function renderTab(){
   else if (currentTab === 'admin') bodyHtml = tplAdmin();
   else if (currentTab === 'fichajes') bodyHtml = tplFichajes();
   else if (currentTab === 'administracion') bodyHtml = tplAdministracion();
-  const breadcrumb = (currentTab === 'inicio' && !window.__showingContactoDetail) ? '' : renderBreadcrumbHtml();
-  el.innerHTML = breadcrumb + bodyHtml;
+  // En Clientes / Franjas / Documentos la barra del Almacén ya dice dónde estás,
+  // así que no hace falta el camino de arriba (sí en la ficha de un contacto).
+  const almacenBar = (isAlmacenTab(currentTab) && !window.__showingContactoDetail) ? tplAlmacenBar() : '';
+  const breadcrumb = ((currentTab === 'inicio' && !window.__showingContactoDetail) || almacenBar) ? '' : renderBreadcrumbHtml();
+  el.innerHTML = breadcrumb + almacenBar + bodyHtml;
 }
 function tplAdministracion(){
   if (window.__administracionView === 'contactos') return tplContactosPage();
@@ -2839,67 +2879,7 @@ async function deleteContacto(id){
   closeModal(); closeContactoDetail();
 }
 
-function tplResumen(){
-  const activos = pallets[currentWarehouseId].filter(p=>p.status==='en almacén');
-  const porCliente = {};
-  activos.forEach(p => porCliente[p.clientId] = (porCliente[p.clientId]||0) + Number(p.quantity));
-  const rows = Object.entries(porCliente).map(([cid,qty])=>({name:clientName(cid), qty})).sort((a,b)=>b.qty-a.qty);
-  const movs = [...movements[currentWarehouseId]].sort((a,b)=>b.date.localeCompare(a.date));
-  return `
-    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:22px;">
-      ${kpi('Palets en almacén', activos.length)}
-      ${kpi('Clientes activos', rows.length)}
-      ${kpi('Movimientos (total)', movements[currentWarehouseId].length)}
-    </div>
-    <div class="card" style="margin-bottom:22px;">
-      <div style="font-family:var(--display);text-transform:uppercase;font-size:13.5px;margin-bottom:12px;">Mercancía por cliente</div>
-      <table><thead><tr>${thSort('Cliente','text')}${thSort('Palets en almacén','number')}</tr></thead><tbody>
-        ${rows.map(r=>`<tr><td>${esc(r.name)}</td><td>${r.qty}</td></tr>`).join('') || `<tr><td colspan="2" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin mercancía todavía</td></tr>`}
-      </tbody></table>
-    </div>
-    <div class="card">
-      <div style="font-family:var(--display);text-transform:uppercase;font-size:13.5px;margin-bottom:12px;">Últimos movimientos</div>
-      <table><thead><tr>${thSort('Tipo','text')}${thSort('Palet','text')}${thSort('Cliente','text')}${thSort('Fecha','date')}</tr></thead><tbody>
-        ${movs.slice(0,5).map(m=>{
-          const p = palletById(m.palletId);
-          return `<tr>
-            <td style="color:${m.type==='entrada'?'var(--success)':'var(--danger)'};text-transform:capitalize;">${m.type==='entrada'?'↑':'↓'} ${esc(m.type)}</td>
-            <td>${esc(p ? (p.reference||p.description) : '—')}</td>
-            <td>${esc(clientName(m.clientId))}</td>
-            <td style="color:var(--muted);" data-sort-value="${esc(m.date||'')}">${fmtDate(m.date)}</td>
-          </tr>`;
-        }).join('') || `<tr><td colspan="4" style="color:var(--mutedFaint);text-align:center;padding:20px;">Sin movimientos todavía</td></tr>`}
-      </tbody></table>
-    </div>`;
-}
 
-function tplMercancia(){
-  const wh = currentWh();
-  const q = (window.__invSearch||'').toLowerCase();
-  const list = pallets[currentWarehouseId].filter(p => (
-    (p.reference||'')+(p.description||'')+(p.location||'')+clientName(p.clientId)
-  ).toLowerCase().includes(q));
-  return `
-    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
-      <input placeholder="Buscar por cliente, referencia, mercancía o ubicación…" value="${esc(window.__invSearch||'')}" onkeyup="window.__invSearch=this.value; renderTab();" style="flex:1 1 240px;" />
-      <button class="btn btn-primary" onclick="openPalletModal()">+ Nueva entrada de palet</button>
-    </div>
-    <div class="card" style="padding:0;overflow:hidden;">
-      <table><thead><tr>${thSort('Referencia','text')}${thSort('Cliente','text')}${thSort('Mercancía','text')}${thSort('Cantidad','number')}${thSort('Ubicación','text')}${thSort('Entrada','date')}${thSort('Estado','text')}<th></th></tr></thead><tbody>
-        ${list.map(p=>`
-          <tr>
-            <td style="font-family:var(--mono);color:var(--muted);font-size:12px;">${esc(p.reference||'—')}</td>
-            <td>${esc(clientName(p.clientId))}</td>
-            <td>${esc(p.description)}</td>
-            <td data-sort-value="${p.quantity}">${p.quantity} ${esc(p.unit||'')}</td>
-            <td style="color:var(--muted);">${esc(p.location||'—')}</td>
-            <td style="color:var(--muted);" data-sort-value="${esc(p.dateIn||'')}">${fmtDate(p.dateIn)}</td>
-            <td data-sort-value="${p.status==='en almacén'?'En almacén':'Salido'}">${p.status==='en almacén' ? '<span class="badge" style="background:#3F8F5F;">En almacén</span>' : '<span class="badge" style="background:#9AA2AB;">Salido</span>'}</td>
-            <td>${p.status==='en almacén' ? `<button onclick="openSalidaModal('${p.id}')" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:11px;padding:4px 8px;">Dar salida</button>` : ''}</td>
-          </tr>`).join('') || `<tr><td colspan="8" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin mercancía registrada</td></tr>`}
-      </tbody></table>
-    </div>`;
-}
 
 // Panel de Clientes de un almacén: tarjetas solo con logo y nombre comercial,
 // buscador y paginación que Contactos, pero solo con los clientes de almacén.
@@ -4290,25 +4270,6 @@ function openFromDocumentos(kind, id, date){
   if (kind === 'appt') openAppointmentModal(null, id);
   else openUnscheduledModal(id);
 }
-function tplMovimientos(){
-  const movs = [...movements[currentWarehouseId]].sort((a,b)=>b.date.localeCompare(a.date));
-  return `
-    <div class="card" style="padding:0;overflow:hidden;">
-      <table><thead><tr>${thSort('Tipo','text')}${thSort('Palet','text')}${thSort('Cliente','text')}${thSort('Cantidad','number')}${thSort('Fecha','date')}${thSort('Referencia','text')}</tr></thead><tbody>
-        ${movs.map(m=>{
-          const p = palletById(m.palletId);
-          return `<tr>
-            <td style="color:${m.type==='entrada'?'var(--success)':'var(--danger)'};text-transform:capitalize;">${m.type==='entrada'?'↑':'↓'} ${esc(m.type)}</td>
-            <td>${esc(p ? (p.reference||p.description) : '—')}</td>
-            <td>${esc(clientName(m.clientId))}</td>
-            <td data-sort-value="${m.quantity}">${m.quantity}</td>
-            <td style="color:var(--muted);" data-sort-value="${esc(m.date||'')}">${fmtDate(m.date)}</td>
-            <td style="color:var(--muted);font-size:12.5px;">${esc(m.ref||'')}</td>
-          </tr>`;
-        }).join('') || `<tr><td colspan="6" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin movimientos</td></tr>`}
-      </tbody></table>
-    </div>`;
-}
 
 function kpi(label, value, sub, compact, onclick){
   return `<div class="card" style="flex:1 1 ${compact?'140px':'180px'};min-width:${compact?'125px':'160px'};${compact?'padding:12px 14px;':''}${onclick?'cursor:pointer;':''}" ${onclick?`onclick="${onclick}"`:''}>
@@ -4322,87 +4283,7 @@ function kpi(label, value, sub, compact, onclick){
 /* ============================= MODALES ============================= */
 function closeModal(){ document.getElementById('modal-slot').innerHTML = ''; }
 
-function openPalletModal(){
-  const wh = currentWh();
-  const list = clients.filter(c=>c.warehouseIds.includes(currentWarehouseId) && !c.archived);
-  const opts = list.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
-          <h3 class="modal-title">Nueva entrada de palet</h3><button class="close-x" onclick="closeModal()">✕</button>
-        </div>
-        ${list.length ? '' : `<div style="color:var(--danger);font-size:12.5px;margin-bottom:12px;">Antes de dar entrada a mercancía, da de alta al cliente en la pestaña Clientes.</div>`}
-        <div class="field"><label>Cliente</label><select id="pf-client">${opts}</select></div>
-        <div class="field"><label>Mercancía</label><input id="pf-desc" placeholder="Ej. Cajas de piezas de recambio" /></div>
-        <div style="display:flex;gap:10px;">
-          <div class="field" style="flex:1;"><label>Referencia del palet</label><input id="pf-ref" placeholder="Ej. PAL-0005" /></div>
-          <div class="field" style="flex:1;"><label>Cantidad</label><input id="pf-qty" type="number" value="1" /></div>
-        </div>
-        <div class="field"><label>Ubicación (${esc(wh.subtitle)})</label><input id="pf-loc" placeholder="${esc(wh.location_hint)}" /></div>
-        <div style="display:flex;gap:10px;">
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitPallet()" ${list.length?'':'disabled'}>Registrar entrada</button>
-        </div>
-      </div>
-    </div>`;
-}
-async function submitPallet(){
-  const desc = document.getElementById('pf-desc').value.trim();
-  const clientId = document.getElementById('pf-client').value;
-  const qty = Number(document.getElementById('pf-qty').value||0);
-  if(!desc || !clientId || qty<=0){ alert('Rellena cliente, mercancía y una cantidad válida.'); return; }
-  const { data: row, error } = await supabaseClient.from('pallets').insert({
-    warehouse_id: currentWarehouseId, client_id: clientId,
-    reference: document.getElementById('pf-ref').value.trim(),
-    description: desc, quantity: qty, unit: 'palets',
-    location: document.getElementById('pf-loc').value.trim(),
-    status: 'en almacén', date_in: today(),
-  }).select().single();
-  if (error || !row) { alert('No se pudo guardar.'); return; }
-  await supabaseClient.from('movements').insert({
-    warehouse_id: currentWarehouseId, pallet_id: row.id, client_id: clientId, type: 'entrada', quantity: qty, date: today(), ref: 'Alta de palet',
-  });
-  await Promise.all([loadPallets(), loadMovements()]);
-  closeModal(); renderTab();
-}
 
-function openSalidaModal(palletId){
-  const p = palletById(palletId);
-  if(!p) return;
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
-          <h3 class="modal-title">Dar salida</h3><button class="close-x" onclick="closeModal()">✕</button>
-        </div>
-        <div style="font-size:13px;color:var(--muted);margin-bottom:14px;">
-          ${esc(clientName(p.clientId))} · ${esc(p.description)}<br>
-          Disponible: <strong style="color:var(--text);">${p.quantity} ${esc(p.unit)}</strong> en ${esc(p.location||'sin ubicación')}
-        </div>
-        <div class="field"><label>Cantidad que sale</label><input id="sf-qty" type="number" value="${p.quantity}" max="${p.quantity}" /></div>
-        <div class="field"><label>Referencia / motivo</label><input id="sf-ref" placeholder="Ej. Albarán 4521, recogida transportista" /></div>
-        <div style="display:flex;gap:10px;">
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitSalida('${palletId}')">Confirmar salida</button>
-        </div>
-      </div>
-    </div>`;
-}
-async function submitSalida(palletId){
-  const p = palletById(palletId);
-  const qty = Number(document.getElementById('sf-qty').value||0);
-  if(qty<=0 || qty>p.quantity){ alert('Cantidad no válida.'); return; }
-  const newQty = p.quantity - qty;
-  const newStatus = newQty<=0 ? 'salido' : p.status;
-  await supabaseClient.from('pallets').update({ quantity: newQty, status: newStatus }).eq('id', palletId);
-  await supabaseClient.from('movements').insert({
-    warehouse_id: currentWarehouseId, pallet_id: palletId, client_id: p.clientId, type: 'salida', quantity: qty, date: today(),
-    ref: document.getElementById('sf-ref').value.trim()||'—',
-  });
-  await Promise.all([loadPallets(), loadMovements()]);
-  closeModal(); renderTab();
-}
 
 /* ============================= AUTÓNOMOS: LISTA ============================= */
 function photoThumb(photo){
@@ -7789,6 +7670,7 @@ function driverLabel(d){ const co = companies.find(c=>c.id===d.companyId); retur
 const PERM_ROLES = {
   admin: { label: 'Administrador', hint: 'Ve y puede hacerlo todo, incluida esta pantalla.' },
   organizador: { label: 'Organizador de almacén', tabs: ['clientes','citas','documentos'], schedule: true, hint: 'Gestiona el día a día del almacén: clientes, franjas y documentos, y puede cambiar el horario.' },
+  carretillero: { label: 'Carretillero (solo franjas)', tabs: ['citas'], hint: 'Solo ve las franjas horarias del almacén: consultar y reservar.' },
   trafico: { label: 'Tráfico', tabs: ['trafico','autonomos','fichajes'], hint: 'Tráfico (DECA), autónomos y fichajes.' },
   administracion: { label: 'Administración', tabs: ['administracion'], hint: 'Contactos, direcciones y flota.' },
   fichaje: { label: 'Solo fichaje (conductor)', tabs: [], hint: 'Solo ve la pantalla para fichar su jornada; hay que vincularle un conductor.' },
@@ -7799,7 +7681,7 @@ function permDetectRole(s){
   if (s.isAdmin) return 'admin';
   const tabs = [...s.allowedTabs].sort().join(',');
   if (!tabs && (s.driverId || s.wantsFichaje)) return 'fichaje';
-  for (const k of ['organizador','trafico','administracion']) {
+  for (const k of ['organizador','carretillero','trafico','administracion']) {
     const r = PERM_ROLES[k];
     if ([...r.tabs].sort().join(',') === tabs && !!r.schedule === !!s.canEditSchedule) return k;
   }
