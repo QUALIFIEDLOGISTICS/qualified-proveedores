@@ -2517,7 +2517,10 @@ function contactoTipoTexto(c){
   if (pr.length) parts.push(`Proveedor (${pr.join(', ')})`);
   return parts.join(' · ') || 'Sin clasificar';
 }
-function tplContactoViewCard(editing){
+// readOnly: la ficha se ha abierto desde el panel de Clientes de un almacén —
+// no se muestra ninguna acción sobre el contacto (archivar / eliminar) ni la
+// lista de almacenes, que ahí se ve y se toca en su propia sección.
+function tplContactoViewCard(editing, readOnly){
   const direccion = cargadorDireccionCompleta(editing);
   const warehouseNames = (editing.warehouseIds||[]).map(id=>(WAREHOUSES.find(w=>w.id===id)||{}).name).filter(Boolean);
   return `
@@ -2535,9 +2538,9 @@ function tplContactoViewCard(editing){
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;margin-bottom:20px;">
       ${contactoFieldBlock('Tipo', esc(contactoTipoTexto(editing)))}
       ${contactoFieldBlock('Dirección', direccion ? esc(direccion) : '—')}
-      ${editing.esClienteAlmacen ? contactoFieldBlock('Almacenes', warehouseNames.length ? esc(warehouseNames.join(', ')) : '—') : ''}
+      ${editing.esClienteAlmacen && !readOnly ? contactoFieldBlock('Almacenes', warehouseNames.length ? esc(warehouseNames.join(', ')) : '—') : ''}
     </div>
-    ${tplContactoArchiveActions(editing)}`;
+    ${readOnly ? '' : tplContactoArchiveActions(editing)}`;
 }
 function tplContactoEditForm(c, editing, editId){
   return `
@@ -2612,38 +2615,45 @@ function tplContactoEditForm(c, editing, editId){
       ${editing && editing.archived ? `<button type="button" onclick="confirmDeleteContacto('${editing.id}')" style="width:100%;text-align:center;background:none;border:1px dashed var(--border);border-radius:6px;padding:8px;color:var(--danger);font-size:12.5px;margin-top:10px;cursor:pointer;">🗑 Eliminar definitivamente</button>` : ''}`;
 }
 // Sección "Almacén" de un cliente de almacén (se ve al abrirlo desde el panel
-// de Clientes): en qué almacenes trabaja. Aquí irán también sus tarifas.
+// de Clientes): en qué almacenes trabaja. Es lo único que se toca desde ahí —
+// cada casilla se guarda al momento, sin botón. Aquí irán también sus tarifas.
 function tplContactoAlmacenCard(c){
   const ids = c.warehouseIds || [];
   return `
     <div class="card" style="margin-top:20px;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:6px;">Almacén</div>
-      <div style="font-size:12px;color:var(--mutedFaint);margin-bottom:10px;">En qué almacenes trabaja este cliente. Solo aparece en las reservas y la mercancía de los que marques.${ids.length ? '' : ' <b style="color:var(--danger);">Todavía no tiene ninguno asignado.</b>'}</div>
+      <div style="font-size:12px;color:var(--mutedFaint);margin-bottom:10px;">En qué almacenes trabaja este cliente: marca o desmarca y se guarda al momento. Solo aparece en las reservas y la mercancía de los que marques.${ids.length ? '' : ' <b style="color:var(--danger);">Todavía no tiene ninguno asignado.</b>'}</div>
       ${WAREHOUSES.map(w => `
-        <label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13.5px;">
-          <input type="checkbox" class="ct-wh-edit" value="${w.id}" ${ids.includes(w.id)?'checked':''} style="width:auto;" />
+        <label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13.5px;cursor:pointer;">
+          <input type="checkbox" class="ct-wh-edit" value="${w.id}" ${ids.includes(w.id)?'checked':''} onchange="saveContactoWarehouses('${c.id}', this)" style="width:auto;" />
           <span style="width:8px;height:8px;border-radius:99px;background:${w.color};display:inline-block;"></span>
           ${esc(w.name)}
         </label>`).join('')}
       <div id="ct-wh-error" style="color:var(--danger);font-size:12.5px;margin:8px 0 0;"></div>
-      <button id="ct-wh-save" class="btn btn-primary" style="margin-top:10px;" onclick="saveContactoWarehouses('${c.id}')">Guardar almacenes</button>
     </div>`;
 }
-async function saveContactoWarehouses(id){
+// Guarda los almacenes de un cliente al marcar/desmarcar una casilla. Solo se
+// añaden o se quitan los que han cambiado (nunca se borran todos para volver a
+// crearlos), y si falla la casilla vuelve a como estaba.
+async function saveContactoWarehouses(id, changedEl){
   const c = contactos.find(x=>x.id===id);
   if (!c) return;
   const errEl = document.getElementById('ct-wh-error');
   errEl.textContent = '';
+  const before = (c.warehouseIds || []).slice();
   const ids = [...document.querySelectorAll('.ct-wh-edit:checked')].map(el=>el.value);
-  const before = (c.warehouseIds || []).slice().sort().join(',');
-  if (ids.slice().sort().join(',') === before) { errEl.textContent = 'No has cambiado ningún almacén.'; return; }
-  const btn = document.getElementById('ct-wh-save');
-  btn.disabled = true;
+  const added = ids.filter(w => !before.includes(w));
+  const removed = before.filter(w => !ids.includes(w));
+  if (!added.length && !removed.length) return;
+  const boxes = [...document.querySelectorAll('.ct-wh-edit')];
+  boxes.forEach(b => { b.disabled = true; });
   try {
-    const { error: delError } = await supabaseClient.from('contacto_warehouses').delete().eq('contacto_id', id);
-    if (delError) throw delError;
-    if (ids.length) {
-      const { error: insError } = await supabaseClient.from('contacto_warehouses').insert(ids.map(wid => ({ contacto_id: id, warehouse_id: wid })));
+    if (removed.length) {
+      const { error: delError } = await supabaseClient.from('contacto_warehouses').delete().eq('contacto_id', id).in('warehouse_id', removed);
+      if (delError) throw delError;
+    }
+    if (added.length) {
+      const { error: insError } = await supabaseClient.from('contacto_warehouses').insert(added.map(wid => ({ contacto_id: id, warehouse_id: wid })));
       if (insError) throw insError;
     }
     c.warehouseIds = ids;
@@ -2652,17 +2662,21 @@ async function saveContactoWarehouses(id){
     await loadClients();
     renderTab();
   } catch (error) {
+    if (changedEl) changedEl.checked = !changedEl.checked;
     errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'error desconocido.');
-    btn.disabled = false;
+    boxes.forEach(b => { b.disabled = false; });
   }
 }
 function tplContactoDetailPage(){
   const editId = window.__contactoDetailId;
   const editing = editId ? contactos.find(c=>c.id===editId) : null;
-  const editMode = window.__contactoDetailEditMode || !editing;
+  const nav = window.__contactoDetailNavContext;
+  // Abierta desde el panel de Clientes de un almacén: la ficha solo se ve (no se
+  // edita, ni se archiva ni se elimina); lo único que se toca ahí son los almacenes.
+  const fromClientes = !!(editing && nav && nav.label === 'Clientes');
+  const editMode = (window.__contactoDetailEditMode && !fromClientes) || !editing;
   const c = editing || window.__contactoDetailPreset || {};
   const historial = window.__contactoHistorial;
-  const nav = window.__contactoDetailNavContext;
   const navIdx = (nav && editId) ? nav.ids.indexOf(editId) : -1;
   return `
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
@@ -2677,7 +2691,7 @@ function tplContactoDetailPage(){
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        ${editing ? `
+        ${editing && !fromClientes ? `
           <div style="position:relative;">
             <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__contactoActionMenuOpen=!window.__contactoActionMenuOpen; renderTab();">Acción ▾</button>
             ${window.__contactoActionMenuOpen ? `
@@ -2691,7 +2705,7 @@ function tplContactoDetailPage(){
             <span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${navIdx+1}/${nav.ids.length}</span>
             <button onclick="contactoNavGoto(1)" title="Contacto siguiente" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13px;">→</button>
           </div>` : ''}
-        ${!editMode ? `<button class="btn btn-ghost" onclick="enterContactoEditMode()">Editar</button>` : ''}
+        ${!editMode && !fromClientes ? `<button class="btn btn-ghost" onclick="enterContactoEditMode()">Editar</button>` : ''}
         <button class="btn btn-ghost" onclick="newContactoFromContext()">+ Nuevo</button>
         ${editMode ? `<button class="btn btn-primary" onclick="submitContactoForm('${editId||''}')">${editing?'Guardar':'Añadir'}</button>` : ''}
       </div>
@@ -2699,9 +2713,9 @@ function tplContactoDetailPage(){
     <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
     <div style="flex:2;min-width:360px;">
     <div class="card" ${editMode ? 'oninput="window.__contactoFormDirty=true;" onchange="window.__contactoFormDirty=true;"' : ''}>
-      ${editMode ? tplContactoEditForm(c, editing, editId) : tplContactoViewCard(editing)}
+      ${editMode ? tplContactoEditForm(c, editing, editId) : tplContactoViewCard(editing, fromClientes)}
     </div>
-    ${!editMode && editing && editing.esClienteAlmacen && nav && nav.label === 'Clientes' ? tplContactoAlmacenCard(editing) : ''}
+    ${fromClientes && editing.esClienteAlmacen ? tplContactoAlmacenCard(editing) : ''}
     </div>
     <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Historial de cambios</div>
