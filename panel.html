@@ -207,6 +207,27 @@ const WAREHOUSES = [
   { id: 'pirelli-manresa', name: 'Pirelli Manresa',        subtitle: 'Naves y zonas',        location_hint: 'Ej. Nave 2 · Zona B',          location: 'Manresa',                 color: '#8A4A35' },
 ];
 
+// La lista de arriba es solo la de respaldo: al arrancar se sustituye por la de
+// la tabla "warehouses" (donde se dan de alta desde Almacén → Configuración).
+// WAREHOUSES lleva solo los almacenes activos (selectores, asignación de
+// clientes...); allWarehouses incluye también los archivados, para Configuración.
+let allWarehouses = WAREHOUSES.map((w, i) => ({ ...w, archived: false, sortOrder: i + 1 }));
+async function loadWarehouses(){
+  const { data, error } = await supabaseClient.from('warehouses').select('*');
+  if (error || !data || !data.length) return; // se queda con la lista de respaldo
+  const seedOrder = ['balsareny', 'sant-fruitos', 'pirelli-manresa'];
+  const rows = data.map(w => ({
+    id: w.id, name: w.name, subtitle: w.subtitle || '', location_hint: w.location_hint || '', location: w.location || '',
+    color: w.color || '#5C6670', archived: !!w.archived,
+    sortOrder: Number(w.sort_order) || (seedOrder.indexOf(w.id) + 1) || 900,
+  }));
+  rows.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'es'));
+  allWarehouses = rows;
+  WAREHOUSES.length = 0;
+  WAREHOUSES.push(...rows.filter(w => !w.archived));
+  if (WAREHOUSES.length && !WAREHOUSES.some(w => w.id === currentWarehouseId)) currentWarehouseId = WAREHOUSES[0].id;
+}
+
 const nextId = (p) => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `${p}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const EU_COUNTRIES = ['España','Alemania','Andorra','Austria','Bélgica','Bielorrusia','Bosnia y Herzegovina','Bulgaria','Chipre','Ciudad del Vaticano','Croacia','Dinamarca','Eslovaquia','Eslovenia','Estonia','Finlandia','Francia','Grecia','Hungría','Irlanda','Islandia','Italia','Kosovo','Letonia','Liechtenstein','Lituania','Luxemburgo','Macedonia del Norte','Malta','Moldavia','Mónaco','Montenegro','Noruega','Países Bajos','Polonia','Portugal','Reino Unido','República Checa','Rumanía','Rusia','San Marino','Serbia','Suecia','Suiza','Ucrania'];
@@ -644,8 +665,8 @@ function goHome(){
 }
 async function setTab(id){
   const allowed = visibleTabs().map(t=>t.id);
-  if (id !== 'admin' && !allowed.includes(id)) return;
-  if (id === 'admin' && !PROFILE.isAdmin) return;
+  if (id !== 'admin' && id !== 'almacenconfig' && !allowed.includes(id)) return;
+  if ((id === 'admin' || id === 'almacenconfig') && !PROFILE.isAdmin) return;
   if (window.__showingContactoDetail && !contactoConfirmLeaveEdit()) return;
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
@@ -906,7 +927,11 @@ const ALMACEN_SECTIONS = [
   { id: 'citas', label: 'Franjas horarias' },
   { id: 'documentos', label: 'Documentos' },
 ];
-function isAlmacenTab(id){ return ALMACEN_SECTIONS.some(s => s.id === id); }
+// Configuración del Almacén: botón siempre al final de la barra, solo para
+// administradores. Ahora sirve para dar de alta y archivar almacenes; aquí
+// irán los ajustes que vayan surgiendo.
+const ALMACEN_CONFIG_TAB = 'almacenconfig';
+function isAlmacenTab(id){ return id === ALMACEN_CONFIG_TAB || ALMACEN_SECTIONS.some(s => s.id === id); }
 function almacenVisibleSections(){
   const allowed = visibleTabs().map(t => t.id);
   return ALMACEN_SECTIONS.filter(s => allowed.includes(s.id));
@@ -918,20 +943,146 @@ function almacenDefaultSection(){
 }
 function tplAlmacenBar(){
   const sections = almacenVisibleSections();
+  const inConfig = currentTab === ALMACEN_CONFIG_TAB;
+  const tabBtn = (id, label, extra) => {
+    const on = id === currentTab;
+    return `<button onclick="setTab('${id}')" style="background:none;border:none;border-bottom:3px solid ${on?'var(--primary)':'transparent'};margin-bottom:-1px;padding:11px 16px;font-size:14px;font-weight:${on?700:500};color:${on?'var(--primary)':'var(--muted)'};cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:7px;">${extra||''}${esc(label)}</button>`;
+  };
   return `
     <div style="display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
+      ${inConfig ? '' : `
       <div style="padding-bottom:8px;">
         <select onchange="switchWarehouse(this.value)" title="Almacén" style="font-family:var(--display);font-size:15px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:7px 12px;color:var(--text);cursor:pointer;min-width:190px;">
           ${WAREHOUSES.map(w => `<option value="${w.id}" ${w.id===currentWarehouseId?'selected':''}>${esc(w.name)}</option>`).join('')}
         </select>
-      </div>
+      </div>`}
       <div style="display:flex;gap:2px;flex-wrap:wrap;">
-        ${sections.map(s => {
-          const on = s.id === currentTab;
-          return `<button onclick="setTab('${s.id}')" style="background:none;border:none;border-bottom:3px solid ${on?'var(--primary)':'transparent'};margin-bottom:-1px;padding:11px 16px;font-size:14px;font-weight:${on?700:500};color:${on?'var(--primary)':'var(--muted)'};cursor:pointer;white-space:nowrap;">${esc(s.label)}</button>`;
-        }).join('')}
+        ${sections.map(s => tabBtn(s.id, s.label)).join('')}
+      </div>
+      ${PROFILE.isAdmin ? `<div style="margin-left:auto;">${tabBtn(ALMACEN_CONFIG_TAB, 'Configuración', homeIcon(HOME_ICON_PATHS.settings, 16, 'currentColor', 2))}</div>` : ''}
+    </div>`;
+}
+
+/* ---- Configuración del Almacén: alta y baja de almacenes ---- */
+const WAREHOUSE_COLORS = ['#2E6F95', '#C98A2E', '#8A4A35', '#3F8F5F', '#7C5CBF', '#C1443D', '#2C9A93', '#D9A72C', '#5C6670', '#1B3A6B'];
+function tplAlmacenConfig(){
+  const active = allWarehouses.filter(w => !w.archived);
+  const archived = allWarehouses.filter(w => w.archived);
+  const card = (w) => `
+    <div class="card" style="cursor:pointer;display:flex;align-items:center;gap:14px;padding:16px 18px;border-left:4px solid ${w.color};${w.archived?'opacity:0.65;':''}" onclick="openWarehouseModal('${w.id}')">
+      <div style="width:42px;height:42px;border-radius:50%;background:${w.color}1F;display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.home, 20, w.color)}</div>
+      <div style="min-width:0;flex:1;">
+        <div style="font-family:var(--display);font-size:15px;font-weight:700;">${esc(w.name)}${w.archived?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;font-weight:400;">· archivado</span>':''}</div>
+        <div style="font-size:12.5px;color:var(--muted);">${w.location ? esc(w.location) : 'Sin ubicación'}</div>
       </div>
     </div>`;
+  return `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div style="width:48px;height:48px;border-radius:12px;background:rgba(92,102,112,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.settings, 24, '#5C6670')}</div>
+        <div>
+          <div style="font-family:var(--display);font-size:22px;">Configuración</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">Almacenes: dales de alta, cámbiales el nombre o archívalos.</div>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="openWarehouseModal()">+ Nuevo almacén</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">${active.map(card).join('')}</div>
+    ${archived.length ? `
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin:26px 0 12px;">Archivados</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">${archived.map(card).join('')}</div>` : ''}`;
+}
+function pickWarehouseColor(color){
+  document.getElementById('wh-color').value = color;
+  document.querySelectorAll('.wh-swatch').forEach(b => { b.style.outline = b.dataset.color === color ? '3px solid var(--text)' : 'none'; b.style.outlineOffset = '2px'; });
+}
+function openWarehouseModal(editId){
+  const w = editId ? allWarehouses.find(x => x.id === editId) : null;
+  const color = w ? w.color : (WAREHOUSE_COLORS.find(c => !allWarehouses.some(x => x.color === c)) || WAREHOUSE_COLORS[0]);
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+          <h3 class="modal-title">${w ? 'Editar almacén' : 'Nuevo almacén'}</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div class="field"><label>Nombre</label><input id="wh-name" maxlength="80" placeholder="Ej. Sant Joan de Vilatorrada" value="${esc(w ? w.name : '')}" /></div>
+        <div class="field"><label>Ubicación (localidad)</label><input id="wh-location" maxlength="80" placeholder="Ej. Manresa" value="${esc(w ? w.location : '')}" /></div>
+        <div class="field">
+          <label>Color</label>
+          <input type="hidden" id="wh-color" value="${color}" />
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            ${WAREHOUSE_COLORS.map(c => `<button type="button" class="wh-swatch" data-color="${c}" onclick="pickWarehouseColor('${c}')" title="${c}" style="width:28px;height:28px;border-radius:50%;background:${c};border:none;cursor:pointer;padding:0;${c===color?'outline:3px solid var(--text);outline-offset:2px;':''}"></button>`).join('')}
+          </div>
+        </div>
+        ${w ? '' : `<div style="font-size:12px;color:var(--mutedFaint);margin-bottom:12px;">Se crea con horario de lunes a viernes de 8:00 a 18:00. Lo puedes cambiar después en Franjas horarias → Horario del almacén.</div>`}
+        <div id="wh-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
+        ${w ? `<button type="button" onclick="toggleWarehouseArchived('${w.id}')" style="width:100%;text-align:center;background:none;border:1px dashed var(--border);border-radius:6px;padding:8px;color:${w.archived?'var(--success)':'var(--danger)'};font-size:12.5px;margin-bottom:10px;cursor:pointer;">${w.archived?'Restaurar almacén':'Archivar almacén'}</button>` : ''}
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button id="wh-save" class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitWarehouse('${w ? w.id : ''}')">${w ? 'Guardar' : 'Crear almacén'}</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const el = document.getElementById('wh-name'); if (el) el.focus(); }, 0);
+}
+// Identificador del almacén a partir del nombre ("Sant Joan" → "sant-joan"),
+// que no se repite con ninguno de los existentes.
+function warehouseSlug(name){
+  const base = name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'almacen';
+  let id = base, n = 2;
+  while (allWarehouses.some(w => w.id === id)) id = `${base}-${n++}`;
+  return id;
+}
+// Vuelve a cargar los almacenes y todo lo que cuelga de cada uno.
+async function reloadWarehouseData(){
+  await loadWarehouses();
+  await Promise.all([loadSchedules(), loadAppointments(), loadUnscheduled(), loadPallets(), loadMovements(), loadWarehouseTasks()]);
+  renderHeader(); renderTab();
+}
+async function submitWarehouse(editId){
+  const errEl = document.getElementById('wh-error');
+  errEl.textContent = '';
+  const name = document.getElementById('wh-name').value.trim();
+  const location = document.getElementById('wh-location').value.trim();
+  const color = document.getElementById('wh-color').value;
+  if (!name) { errEl.textContent = 'Indica el nombre del almacén.'; return; }
+  if (allWarehouses.some(w => w.id !== editId && w.name.trim().toLowerCase() === name.toLowerCase())) { errEl.textContent = 'Ya hay un almacén con ese nombre.'; return; }
+  const btn = document.getElementById('wh-save');
+  btn.disabled = true;
+  try {
+    if (editId) {
+      const { data, error } = await supabaseClient.from('warehouses').update({ name, location: location || null, color }).eq('id', editId).select();
+      if (error || !data || !data.length) throw (error || new Error('sin permiso o error desconocido.'));
+    } else {
+      const id = warehouseSlug(name);
+      const sortOrder = allWarehouses.reduce((m, w) => Math.max(m, w.sortOrder || 0), 0) + 1;
+      const { error } = await supabaseClient.from('warehouses').insert({ id, name, location: location || null, color, sort_order: sortOrder });
+      if (error) throw error;
+      // Horario de partida: lunes a viernes de 8 a 18, fin de semana cerrado.
+      const days = ['lun', 'mar', 'mie', 'jue', 'vie', 'sab', 'dom'];
+      const { error: schedError } = await supabaseClient.from('warehouse_schedules').insert(days.map(d => ({ warehouse_id: id, weekday: d, open: !['sab', 'dom'].includes(d), ranges: [{ start: '08:00', end: '18:00' }] })));
+      if (schedError) throw schedError;
+    }
+    await reloadWarehouseData();
+    closeModal();
+  } catch (err) {
+    errEl.textContent = 'No se pudo guardar: ' + (err && err.message ? err.message : 'error desconocido.');
+    btn.disabled = false;
+  }
+}
+async function toggleWarehouseArchived(id){
+  const w = allWarehouses.find(x => x.id === id);
+  if (!w) return;
+  const errEl = document.getElementById('wh-error');
+  if (!w.archived && allWarehouses.filter(x => !x.archived).length <= 1) { errEl.textContent = 'Tiene que quedar al menos un almacén activo.'; return; }
+  try {
+    const { data, error } = await supabaseClient.from('warehouses').update({ archived: !w.archived }).eq('id', id).select();
+    if (error || !data || !data.length) throw (error || new Error('sin permiso o error desconocido.'));
+    await reloadWarehouseData();
+    closeModal();
+  } catch (err) {
+    errEl.textContent = 'No se pudo guardar: ' + (err && err.message ? err.message : 'error desconocido.');
+  }
 }
 function renderTab(){
   const el = document.getElementById('tab-content');
@@ -939,6 +1090,7 @@ function renderTab(){
   let bodyHtml = '';
   if (window.__showingContactoDetail) bodyHtml = tplContactoDetailPage();
   else if (currentTab === 'inicio') bodyHtml = tplInicio();
+  else if (currentTab === 'almacenconfig') bodyHtml = tplAlmacenConfig();
   else if (currentTab === 'clientes') bodyHtml = tplClientes();
   else if (currentTab === 'citas') bodyHtml = tplCitas();
   else if (currentTab === 'documentos') bodyHtml = tplDocumentos();
@@ -8059,6 +8211,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
     return;
   }
 
+  await loadWarehouses();
   await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
