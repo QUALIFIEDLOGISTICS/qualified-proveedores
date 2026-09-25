@@ -41,6 +41,7 @@
   table.tf-table tbody tr.tf-tipo-ftl td:first-child{box-shadow:inset 3px 0 0 #2E6F95;}
   table.tf-table tbody tr.tf-tipo-ltl td:first-child{box-shadow:inset 3px 0 0 #C98A2E;}
   table.tf-table tbody tr.tf-tipo-granel td:first-child{box-shadow:inset 3px 0 0 #3F8F5F;}
+  table.tf-table tbody tr.tf-tipo-grua td:first-child{box-shadow:inset 3px 0 0 #7C5CBF;}
   table.tf-table td.tf-precio{text-align:right;font-weight:700;font-size:14.5px;white-space:nowrap;font-variant-numeric:tabular-nums;}
   table.tf-table td.tf-precio small{font-weight:500;font-size:11.5px;color:var(--muted);}
   table.tf-table.tf-hist td{color:var(--muted);}
@@ -51,6 +52,7 @@
   .tf-chip.ftl{background:rgba(46,111,149,.13);color:#245C7C;}
   .tf-chip.ltl{background:rgba(201,138,46,.17);color:#8A5A12;}
   .tf-chip.granel{background:rgba(63,143,95,.15);color:#2F6F49;}
+  .tf-chip.grua{background:rgba(124,92,191,.15);color:#5B3F98;}
   .tf-chip.gas-si{background:rgba(63,143,95,.14);color:#2F6F49;}
   .tf-chip.gas-no{background:var(--panel2);color:var(--mutedFaint);font-weight:500;}
   .dr-table td{white-space:nowrap;}
@@ -5848,7 +5850,7 @@ function tarifaZonaHint(z){
 // "08500 Vic" (o solo el CP / solo la ciudad si falta el otro dato).
 function tarifaLugarTxt(cp, ciudad){ return [cp, ciudad].filter(Boolean).join(' '); }
 // Tipos de camión: FTL (completo), LTL (por metros) y piso móvil / granel (lo pactado es el precio por tonelada).
-const TARIFA_TIPO_LABELS = { FTL: 'FTL', LTL: 'LTL', GRANEL: 'Piso móvil / granel' };
+const TARIFA_TIPO_LABELS = { FTL: 'FTL', LTL: 'LTL', GRANEL: 'Piso móvil / granel', GRUA: 'Grúa' };
 function tarifaTipoLabel(tipo){ return TARIFA_TIPO_LABELS[tipo] || tipo; }
 function tarifaFmtMetros(m){ return m == null ? '—' : String(m).replace('.', ','); }
 // Precio comparable: el precio en FTL y el €/metro en LTL.
@@ -5988,7 +5990,7 @@ function tarifasListBodyHtml(){
         </tr></thead>
         <tbody>
           ${list.map(t => `
-            <tr class="tf-tipo-${esc(String(t.tipo).toLowerCase())}" style="cursor:pointer;" onclick="openClienteDesdeTarifas('${t.clienteId}')">
+            <tr class="tf-tipo-${esc(String(t.tipo).toLowerCase())}">
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
               <td style="font-weight:600;white-space:nowrap;" title="${esc(tarifaClienteNombre(t.clienteId))}">${esc(truncateText(tarifaClienteNombre(t.clienteId), 24))}</td>
               <td style="white-space:nowrap;" data-sort-value="${esc(t.origenZona)}">${tarifaZonaCeldaHtml(t.origenZona, t.origenCp, t.origenCiudad)}</td>
@@ -6002,7 +6004,7 @@ function tarifasListBodyHtml(){
         </tbody>
       </table>
     </div>
-    <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">${list.length} tarifa${list.length!==1?'s':''}${vig ? ' vigentes (la más reciente de cada cliente, ruta y tipo). Solo visualización: para subir o cambiar una tarifa, abre el cliente en Clientes (o pulsa su fila).' : ' en el historial.'}</div>`;
+    <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">${list.length} tarifa${list.length!==1?'s':''}${vig ? ' vigentes (la más reciente de cada cliente, ruta y tipo). Solo visualización: las tarifas se suben y se cambian desde la ficha de cada cliente, en Clientes.' : ' en el historial.'}</div>`;
 }
 function refreshTarifasListBody(){
   const el = document.getElementById('tarifas-list-body');
@@ -6052,6 +6054,7 @@ function tplTarifasPage(){
         <option value="FTL" ${window.__tarifasTipo==='FTL'?'selected':''}>Solo FTL</option>
         <option value="LTL" ${window.__tarifasTipo==='LTL'?'selected':''}>Solo LTL</option>
         <option value="GRANEL" ${window.__tarifasTipo==='GRANEL'?'selected':''}>Solo piso móvil / granel</option>
+        <option value="GRUA" ${window.__tarifasTipo==='GRUA'?'selected':''}>Solo grúa</option>
       </select>
       <select onchange="window.__tarifasGasoil=this.value; refreshTarifasListBody();" style="width:170px;">
         <option value="" ${!window.__tarifasGasoil?'selected':''}>Con y sin gasoil</option>
@@ -6125,11 +6128,6 @@ function backToComercialClientes(){
   window.__comercialSection = 'clientes';
   window.__comercialView = 'home';
   renderHeader(); renderTab();
-}
-// Desde la lista de Tarifas Transporte (solo visualización) se abre la ficha del cliente.
-function openClienteDesdeTarifas(clienteId){
-  window.__contactoNavContext = { label: 'Comercial', ids: [clienteId] };
-  openContactoModal(clienteId);
 }
 // "1.300,50" o "1300.5" → "1300.50".
 function tarifaNum(s){
@@ -6237,8 +6235,8 @@ function tarifaRutaHtml(){
   const editId = window.__tarifaFormId;
   const others = tarifas.filter(t => t.id !== editId).sort(tarifaCmpReciente);
   const clienteSel = f.cliente.toLowerCase();
-  const stats = (list) => ['FTL', 'LTL', 'GRANEL'].map(tipo => {
-    const unit = { FTL: '', LTL: ' /m', GRANEL: ' /t' }[tipo];
+  const stats = (list) => ['FTL', 'LTL', 'GRANEL', 'GRUA'].map(tipo => {
+    const unit = { FTL: '', LTL: ' /m', GRANEL: ' /t', GRUA: '' }[tipo];
     const vals = list.filter(t => t.tipo === tipo && (tipo !== 'LTL' || t.metros > 0)).map(tarifaUnitario);
     if (!vals.length) return '';
     const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
@@ -6328,7 +6326,7 @@ function tplTarifaFormPage(){
         </div>
         <div style="font-size:12px;color:var(--mutedFaint);margin:-4px 0 14px;">La zona es el país y las 2 primeras cifras del CP. Si escribes solo el país (ES) y luego el CP, la zona se completa sola.</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <div class="field" style="flex:1;min-width:130px;"><label>Camión</label><select id="tf-tipo" onchange="tarifaTipoChange()"><option value="FTL" ${e.tipo==='FTL'||!e.tipo?'selected':''}>FTL (completo)</option><option value="LTL" ${ltl?'selected':''}>LTL (metros)</option><option value="GRANEL" ${e.tipo==='GRANEL'?'selected':''}>Piso móvil / granel</option></select></div>
+          <div class="field" style="flex:1;min-width:130px;"><label>Camión</label><select id="tf-tipo" onchange="tarifaTipoChange()"><option value="FTL" ${e.tipo==='FTL'||!e.tipo?'selected':''}>FTL (completo)</option><option value="LTL" ${ltl?'selected':''}>LTL (metros)</option><option value="GRANEL" ${e.tipo==='GRANEL'?'selected':''}>Piso móvil / granel</option><option value="GRUA" ${e.tipo==='GRUA'?'selected':''}>Grúa</option></select></div>
           <div class="field" id="tf-metros-field" style="flex:1;min-width:130px;${ltl?'':'opacity:0.5;'}"><label>Metros de camión</label><input id="tf-metros" type="text" inputmode="decimal" maxlength="5" placeholder="Ej. 3,5" ${ltl?'':'disabled'} value="${e.metros!=null?esc(String(e.metros).replace('.', ',')):''}" /></div>
           <div class="field" style="flex:1;min-width:150px;"><label id="tf-precio-label">${e.tipo==='GRANEL' ? 'Precio pactado (€/tonelada)' : 'Precio (€)'}</label><input id="tf-precio" oninput="tarifaPrecioChanged()" type="text" inputmode="decimal" maxlength="10" placeholder="Ej. 1300" value="${e.precio!==''&&e.precio!=null?esc(String(e.precio).replace('.', ',')):''}" /></div>
         </div>
