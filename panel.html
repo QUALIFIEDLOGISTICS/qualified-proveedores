@@ -3202,7 +3202,7 @@ function tplContactoDetailPage(){
     ${fromClientes && editing.esClienteAlmacen ? tplContactoAlmacenCard(editing, almacenEdit) : ''}
     ${fromComercial ? tplContactoTarifasCard(editing) : ''}
     </div>
-    <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
+    ${fromComercial && editing ? tplContactoTarifasHistorial(editing) : `<div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Historial de cambios</div>
       ${!editing ? `<div style="color:var(--mutedFaint);font-size:12.5px;">Se empezará a registrar en cuanto guardes el contacto.</div>` :
         historial === null ? `<div style="color:var(--mutedFaint);font-size:12.5px;">Cargando…</div>` :
@@ -3212,7 +3212,7 @@ function tplContactoDetailPage(){
             <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:3px;">${fmtDateHora(h.createdAt)}${h.usuario?' · '+esc(h.usuario):''}</div>
             <div style="font-size:12.5px;color:var(--text);white-space:pre-line;">${esc(h.resumen)}</div>
           </div>`).join('')}
-    </div>
+    </div>`}
     </div>`;
 }
 async function submitContactoForm(editId){
@@ -5800,14 +5800,62 @@ function tarifaUnitarioTxt(t){
 function tarifaCmpReciente(a, b){
   return (b.fecha||'').localeCompare(a.fecha||'') || (b.createdAt||'').localeCompare(a.createdAt||'');
 }
-// La más reciente de cada cliente + ruta + tipo, con la anterior para ver la variación.
-function tarifasVigentes(){
+// Una tarifa es "la misma" cuando coinciden cliente, zonas, códigos postales y tipo de camión:
+// la más reciente es la vigente y las anteriores pasan a históricas.
+function tarifaRutaKey(t){
+  const cp = v => (v || '').replace(/\s/g, '').toUpperCase();
+  return [t.clienteId, t.origenZona, cp(t.origenCp), t.destinoZona, cp(t.destinoCp), t.tipo].join('|');
+}
+function tarifaDiaAnterior(iso){
+  const d = new Date(iso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+// Cada tarifa con su periodo: desde su fecha hasta el día anterior a la siguiente
+// de la misma ruta (la vigente no tiene fin: sigue activa).
+function tarifaPeriodos(list){
   const groups = {};
-  tarifas.slice().sort(tarifaCmpReciente).forEach(t => {
-    const key = [t.clienteId, t.origenZona, t.destinoZona, t.tipo].join('|');
-    (groups[key] = groups[key] || []).push(t);
-  });
-  return Object.values(groups).map(g => ({ ...g[0], anterior: g[1] || null, total: g.length }));
+  list.slice().sort(tarifaCmpReciente).forEach(t => { (groups[tarifaRutaKey(t)] = groups[tarifaRutaKey(t)] || []).push(t); });
+  const out = [];
+  Object.values(groups).forEach(g => g.forEach((t, i) => {
+    const newer = i > 0 ? g[i - 1] : null;
+    let hasta = null;
+    if (newer) { hasta = tarifaDiaAnterior(newer.fecha); if (hasta < t.fecha) hasta = t.fecha; }
+    out.push({ ...t, vigente: !newer, hasta, anterior: g[i + 1] || null });
+  }));
+  return out.sort(tarifaCmpReciente);
+}
+// Panel de la derecha de la ficha del cliente (Comercial): vigentes e históricas con sus fechas.
+function tplContactoTarifasHistorial(c){
+  const periodos = tarifaPeriodos(tarifas.filter(t => t.clienteId === c.id));
+  const vigentes = periodos.filter(t => t.vigente);
+  const historicas = periodos.filter(t => !t.vigente);
+  const titulo = txt => `<div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin:0 0 10px;">${txt}</div>`;
+  const row = (t) => {
+    const lugar = [tarifaLugarTxt(t.origenCp, t.origenCiudad), tarifaLugarTxt(t.destinoCp, t.destinoCiudad)].filter(Boolean).join(' → ');
+    return `
+      <div style="padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="openTarifaForm('${t.id}', null, '${c.id}')">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
+          <span style="font-family:var(--mono);font-weight:700;font-size:13px;">${esc(t.origenZona)} → ${esc(t.destinoZona)}</span>
+          <span style="font-weight:700;font-size:13px;white-space:nowrap;${t.vigente ? '' : 'color:var(--muted);'}">${eur2(t.precio)}${t.tipo === 'GRANEL' ? '/t' : ''}</span>
+        </div>
+        <div style="font-size:11.5px;color:var(--mutedFaint);margin-top:2px;">${esc(tarifaTipoLabel(t.tipo))}${t.metros ? ' · ' + tarifaFmtMetros(t.metros) + ' m' : ''}${t.gasoil ? ' · con gasoil' : ''}${lugar ? ' · ' + esc(lugar) : ''}</div>
+        <div style="font-size:12px;margin-top:3px;${t.vigente ? 'color:var(--success);font-weight:600;' : 'color:var(--muted);'}">${t.vigente ? `Activa desde el ${fmtDateDMY(t.fecha)}` : `Del ${fmtDateDMY(t.fecha)} al ${fmtDateDMY(t.hasta)}`}</div>
+      </div>`;
+  };
+  return `
+    <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:14px;">Historial de tarifas</div>
+      ${titulo(`Vigentes (${vigentes.length})`)}
+      ${vigentes.length ? vigentes.map(row).join('') : `<div style="color:var(--mutedFaint);font-size:12.5px;">Este cliente todavía no tiene tarifas vigentes.</div>`}
+      <div style="height:22px;"></div>
+      ${titulo(`Históricas (${historicas.length})`)}
+      ${historicas.length ? historicas.map(row).join('') : `<div style="color:var(--mutedFaint);font-size:12.5px;">Cuando una tarifa cambie de precio (mismo cliente, zonas y códigos postales), la anterior pasará aquí con sus fechas.</div>`}
+    </div>`;
+}
+// La vigente de cada cliente + ruta (zonas y CP) + tipo.
+function tarifasVigentes(){
+  return tarifaPeriodos(tarifas).filter(t => t.vigente);
 }
 function tarifasFilteredList(){
   const view = window.__tarifasView || 'vigentes';
