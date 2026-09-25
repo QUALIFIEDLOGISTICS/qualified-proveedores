@@ -5951,6 +5951,21 @@ function tarifaPaisesOptionsHtml(field, selected){
     .sort((a, b) => tarifaPaisNombre(a).localeCompare(tarifaPaisNombre(b), 'es'));
   return codes.map(cc => `<option value="${esc(cc)}" ${cc === selected ? 'selected' : ''}>${esc(tarifaPaisNombre(cc))}</option>`).join('');
 }
+// Zonas de un país que tienen alguna tarifa, para el desplegable: "ES17 · Girona"
+// (la provincia en España; en otros países, la ciudad más usada en sus tarifas si la hay).
+function tarifaZonasOptionsHtml(field, cc, selected){
+  const cityField = field === 'origenZona' ? 'origenCiudad' : 'destinoCiudad';
+  const zonas = [...new Set(tarifas.map(t => t[field]).filter(z => z && z.startsWith(cc)))].sort();
+  return zonas.map(z => {
+    let nombre = tarifaZonaHint(z);
+    if (!nombre) {
+      const count = {};
+      tarifas.filter(t => t[field] === z && t[cityField]).forEach(t => { count[t[cityField]] = (count[t[cityField]] || 0) + 1; });
+      nombre = Object.keys(count).sort((a, b) => count[b] - count[a])[0] || '';
+    }
+    return `<option value="${esc(z)}" ${z === selected ? 'selected' : ''}>${esc(z)}${nombre ? ' · ' + esc(nombre) : ''}</option>`;
+  }).join('');
+}
 function tarifasFilteredList(){
   const view = window.__tarifasView || 'vigentes';
   const search = (window.__tarifasSearch || '').toLowerCase();
@@ -6034,21 +6049,28 @@ function tplTarifasPage(){
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
       <div style="display:flex;gap:6px;">${seg('vigentes', 'Vigentes')}${seg('historial', 'Históricas')}</div>
-      <div style="position:relative;flex:1;min-width:200px;max-width:280px;">
-        <input placeholder="Buscar…" value="${esc(window.__tarifasSearch||'')}" oninput="window.__tarifasSearch=this.value; refreshTarifasListBody();" style="padding-left:34px;" />
-        <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+      <div style="flex:1;min-width:200px;max-width:280px;">
+        <input placeholder="Buscar…" value="${esc(window.__tarifasSearch||'')}" oninput="window.__tarifasSearch=this.value; refreshTarifasListBody();" />
       </div>
       <input placeholder="Cliente" data-combo="tf-f-clientes" autocomplete="off" value="${esc(window.__tarifasCliente||'')}" oninput="window.__tarifasCliente=this.value; refreshTarifasListBody();" style="width:190px;" />
-      <select onchange="window.__tarifasPaisO=this.value; refreshTarifasListBody();" style="width:160px;" title="País de origen">
+      <select onchange="window.__tarifasPaisO=this.value; window.__tarifasOrigen=''; renderTab();" style="width:160px;" title="País de origen">
         <option value="">País origen: todos</option>
         ${tarifaPaisesOptionsHtml('origenZona', window.__tarifasPaisO)}
       </select>
-      <input placeholder="Origen (ES08)" data-combo="tf-f-origenes" autocomplete="off" value="${esc(window.__tarifasOrigen||'')}" oninput="this.value=this.value.toUpperCase(); window.__tarifasOrigen=this.value; refreshTarifasListBody();" style="width:130px;" />
-      <select onchange="window.__tarifasPaisD=this.value; refreshTarifasListBody();" style="width:165px;" title="País de destino">
+      ${window.__tarifasPaisO ? `
+      <select onchange="window.__tarifasOrigen=this.value; refreshTarifasListBody();" style="width:190px;" title="Zona de origen">
+        <option value="">Todas las zonas</option>
+        ${tarifaZonasOptionsHtml('origenZona', window.__tarifasPaisO, window.__tarifasOrigen)}
+      </select>` : ''}
+      <select onchange="window.__tarifasPaisD=this.value; window.__tarifasDestino=''; renderTab();" style="width:165px;" title="País de destino">
         <option value="">País destino: todos</option>
         ${tarifaPaisesOptionsHtml('destinoZona', window.__tarifasPaisD)}
       </select>
-      <input placeholder="Destino (FR13)" data-combo="tf-f-destinos" autocomplete="off" value="${esc(window.__tarifasDestino||'')}" oninput="this.value=this.value.toUpperCase(); window.__tarifasDestino=this.value; refreshTarifasListBody();" style="width:130px;" />
+      ${window.__tarifasPaisD ? `
+      <select onchange="window.__tarifasDestino=this.value; refreshTarifasListBody();" style="width:190px;" title="Zona de destino">
+        <option value="">Todas las zonas</option>
+        ${tarifaZonasOptionsHtml('destinoZona', window.__tarifasPaisD, window.__tarifasDestino)}
+      </select>` : ''}
       <select onchange="window.__tarifasTipo=this.value; refreshTarifasListBody();" style="width:120px;">
         <option value="" ${!window.__tarifasTipo?'selected':''}>Todos los camiones</option>
         <option value="FTL" ${window.__tarifasTipo==='FTL'?'selected':''}>Solo FTL</option>
@@ -6062,8 +6084,6 @@ function tplTarifasPage(){
         <option value="no" ${window.__tarifasGasoil==='no'?'selected':''}>Sin indexación</option>
       </select>
       <datalist id="tf-f-clientes">${tarifasClientesDatalistHtml()}</datalist>
-      <datalist id="tf-f-origenes">${tarifasZonasDatalistHtml('origenZona')}</datalist>
-      <datalist id="tf-f-destinos">${tarifasZonasDatalistHtml('destinoZona')}</datalist>
     </div>
     <div id="tarifas-list-body">${tarifasListBodyHtml()}</div>`;
 }
