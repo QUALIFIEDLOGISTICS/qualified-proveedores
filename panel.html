@@ -337,7 +337,8 @@ async function syncAttachments(parentType, parentId){
   await supabaseClient.from('attachments').delete().eq('parent_type', parentType).eq('parent_id', parentId);
   const draft = window.__attachmentsDraft || [];
   if (draft.length) {
-    await supabaseClient.from('attachments').insert(draft.map(a => ({ parent_type: parentType, parent_id: parentId, name: a.name, storage_path: a.storage_path, size: a.size })));
+    const { error } = await supabaseClient.from('attachments').insert(draft.map(a => ({ parent_type: parentType, parent_id: parentId, name: a.name, storage_path: a.storage_path, size: a.size })));
+    if (error) alert('La reserva se ha guardado, pero no se pudieron guardar los documentos adjuntos: ' + error.message);
   }
 }
 
@@ -4421,12 +4422,17 @@ function renderAttachmentList(){
 async function addAttachmentFiles(fileList){
   const files = Array.from(fileList || []);
   for (const file of files) {
-    if (file.type !== 'application/pdf') { alert(`"${file.name}" no es un PDF.`); continue; }
-    if (file.size > MAX_ATTACHMENT_MB*1024*1024) { alert(`"${file.name}" pesa demasiado (máx ${MAX_ATTACHMENT_MB}MB).`); continue; }
+    // Algunos PDF (escaneados, de impresoras) llegan sin tipo: se acepta por la extensión.
+    if (file.type !== 'application/pdf' && !(file.type === '' && /\.pdf$/i.test(file.name))) { alert(`"${file.name}" no es un PDF.`); continue; }
+    if (file.size > MAX_ATTACHMENT_MB*1024*1024) { alert(`"${file.name}" pesa demasiado (${(file.size/1024/1024).toFixed(1).replace('.', ',')} MB; máx ${MAX_ATTACHMENT_MB} MB).`); continue; }
     const draftId = nextId();
-    const path = `attachments/${draftId}-${file.name}`;
-    const { error } = await supabaseClient.storage.from(DOCS_BUCKET).upload(path, file);
-    if (error) { alert(`No se pudo subir "${file.name}".`); continue; }
+    // El almacenamiento rechaza acentos, eñes, espacios y símbolos en el nombre del
+    // archivo ("Albarán nº 12 (1).pdf"): la ruta lleva una versión limpia, y en la
+    // lista se sigue viendo el nombre original.
+    const safeName = file.name.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9._-]+/g, '_');
+    const path = `attachments/${draftId}-${safeName}`;
+    const { error } = await supabaseClient.storage.from(DOCS_BUCKET).upload(path, file, { contentType: 'application/pdf' });
+    if (error) { alert(`No se pudo subir "${file.name}": ${error.message || 'error desconocido.'}`); continue; }
     const url = await signedUrl(path);
     window.__attachmentsDraft.push({ id: draftId, name: file.name, size: file.size, storage_path: path, url });
     renderAttachmentList();
