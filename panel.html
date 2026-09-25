@@ -3138,7 +3138,8 @@ function tplContactoTarifasCard(c){
               <td style="font-weight:700;white-space:nowrap;">${eur2(t.precio)}${t.tipo === 'GRANEL' ? '<span style="font-weight:400;color:var(--muted);">/t</span>' : ''}</td>
               <td style="white-space:nowrap;color:${t.gasoil ? 'var(--text)' : 'var(--mutedFaint)'};">${t.gasoil ? 'Con indexación' : 'Sin indexación'}</td>
               <td style="white-space:nowrap;">
-                <button onclick="event.stopPropagation(); openTarifaForm(null, '${t.id}', '${c.id}');" title="Actualizar precio: crea una tarifa nueva con fecha de hoy; la actual pasa a históricas" style="background:none;border:none;color:var(--muted);font-size:15px;padding:2px 5px;cursor:pointer;">↻</button>
+                <button class="btn btn-ghost" onclick="event.stopPropagation(); openCambiarPrecioModal('${t.id}');" title="Cambiar el precio desde una fecha: la tarifa actual pasa a históricas" style="padding:3px 9px;font-size:12px;">Cambiar precio</button>
+                <button onclick="event.stopPropagation(); openTarifaForm('${t.id}', null, '${c.id}');" title="Corregir: editar la tarifa sin crear histórico (para errores de tecleo)" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;cursor:pointer;vertical-align:middle;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
                 <button onclick="event.stopPropagation(); deleteTarifa('${t.id}');" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);font-size:14px;padding:2px 4px;cursor:pointer;">🗑</button>
               </td>
             </tr>`).join('')}
@@ -6362,6 +6363,74 @@ async function submitTarifaForm(editId, addAnother){
     return;
   }
   tarifaReturn();
+}
+/* ---- Cambiar el precio de una tarifa vigente ----
+   Solo se pide el precio nuevo y desde qué fecha vale: se crea una tarifa nueva
+   idéntica a la actual (mismas zonas, CP, tipo, gasoil…) y la actual pasa sola a
+   históricas, con su periodo. "Corregir" (editar) es para errores de tecleo y no crea histórico. */
+function openCambiarPrecioModal(id){
+  const t = tarifas.find(x => x.id === id);
+  if (!t) return;
+  const lugar = [tarifaLugarTxt(t.origenCp, t.origenCiudad), tarifaLugarTxt(t.destinoCp, t.destinoCiudad)].filter(Boolean).join(' → ');
+  const unidad = t.tipo === 'GRANEL' ? '€/tonelada' : '€';
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <h3 class="modal-title">Cambiar precio</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:16px;">
+          <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:3px;">${esc(tarifaClienteNombre(t.clienteId))}</div>
+          <div style="font-family:var(--mono);font-weight:700;font-size:14px;">${esc(t.origenZona)} → ${esc(t.destinoZona)}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:3px;">${esc(tarifaTipoLabel(t.tipo))}${t.metros ? ' · ' + tarifaFmtMetros(t.metros) + ' m' : ''}${t.gasoil ? ' · con gasoil' : ' · sin gasoil'}${lugar ? ' · ' + esc(lugar) : ''}</div>
+          <div style="font-size:12.5px;margin-top:8px;">Ahora: <b>${esc(tarifaPrecioTxt(t))}</b> <span style="color:var(--mutedFaint);">desde el ${fmtDateDMY(t.fecha)}</span></div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <div class="field" style="flex:1;min-width:150px;"><label>Precio nuevo (${unidad})</label><input id="cp-precio" type="text" inputmode="decimal" maxlength="10" placeholder="Ej. 1350" onkeydown="if(event.key==='Enter') submitCambiarPrecio('${t.id}')" /></div>
+          <div class="field" style="flex:1;min-width:150px;"><label>Vale desde</label><input id="cp-fecha" type="date" value="${today()}" min="${esc(t.fecha)}" /></div>
+        </div>
+        <div class="field"><label>Nota (opcional)</label><input id="cp-nota" maxlength="200" placeholder="Ej. Revisión anual, subida del gasoil…" onkeydown="if(event.key==='Enter') submitCambiarPrecio('${t.id}')" /></div>
+        <div style="font-size:12px;color:var(--mutedFaint);margin-bottom:10px;">La tarifa actual pasará a históricas hasta el día anterior a esa fecha.</div>
+        <div id="cp-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button id="cp-submit" class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitCambiarPrecio('${t.id}')">Cambiar precio</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const el = document.getElementById('cp-precio'); if (el) el.focus(); }, 0);
+}
+async function submitCambiarPrecio(id){
+  const t = tarifas.find(x => x.id === id);
+  const errEl = document.getElementById('cp-error');
+  if (!t || !errEl) return;
+  errEl.textContent = '';
+  const precio = Number(tarifaNum(document.getElementById('cp-precio').value));
+  const fecha = document.getElementById('cp-fecha').value;
+  const nota = document.getElementById('cp-nota').value.trim();
+  if (document.getElementById('cp-precio').value.trim() === '' || !isFinite(precio) || precio < 0) { errEl.textContent = 'Indica el precio nuevo.'; return; }
+  if (!fecha) { errEl.textContent = 'Indica desde qué fecha vale.'; return; }
+  if (fecha < t.fecha) { errEl.textContent = `La fecha no puede ser anterior al inicio de la tarifa actual (${fmtDateDMY(t.fecha)}).`; return; }
+  const nuevoPrecio = Math.round(precio * 100) / 100;
+  if (nuevoPrecio === t.precio) { errEl.textContent = 'El precio nuevo es igual al actual.'; return; }
+  const btn = document.getElementById('cp-submit');
+  btn.disabled = true;
+  const row = {
+    fecha, cliente_id: t.clienteId, origen_zona: t.origenZona, origen_cp: t.origenCp || null, origen_ciudad: t.origenCiudad || null,
+    destino_zona: t.destinoZona, destino_cp: t.destinoCp || null, destino_ciudad: t.destinoCiudad || null, tipo: t.tipo, indexacion_gasoil: t.gasoil,
+    metros: t.metros, precio: nuevoPrecio, observaciones: t.observaciones || null, created_by: currentUserEmail(),
+  };
+  const { data, error } = await supabaseClient.from('tarifas').insert(row).select();
+  if (error || !data || !data.length) {
+    errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'sin permiso o error desconocido.');
+    btn.disabled = false;
+    return;
+  }
+  const despues = { ...t, fecha, precio: nuevoPrecio };
+  await logTarifaHistorial(t.clienteId, `ha cambiado la tarifa ${tarifaEtiqueta(despues)} de ${tarifaPrecioTxt(t)} a ${tarifaPrecioTxt(despues)}, vigente desde el ${fmtDateDMY(fecha)} (la anterior, desde el ${fmtDateDMY(t.fecha)}, pasa a históricas)${nota ? '. Nota: ' + nota : '.'}`);
+  await loadTarifas();
+  closeModal();
+  renderTab();
 }
 async function deleteTarifa(id){
   const t = tarifas.find(x => x.id === id);
