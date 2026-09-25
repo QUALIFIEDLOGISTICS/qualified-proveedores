@@ -228,6 +228,10 @@ async function loadWarehouses(){
   if (WAREHOUSES.length && !WAREHOUSES.some(w => w.id === currentWarehouseId)) currentWarehouseId = WAREHOUSES[0].id;
 }
 
+// Mapa vacío con una lista por almacén — también los archivados, que aún tienen
+// datos —; los cargadores lo rellenan aparte y lo sustituyen de golpe.
+const warehouseMap = (init) => { const m = {}; allWarehouses.forEach(w => { m[w.id] = init(); }); return m; };
+
 const nextId = (p) => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `${p}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const EU_COUNTRIES = ['España','Alemania','Andorra','Austria','Bélgica','Bielorrusia','Bosnia y Herzegovina','Bulgaria','Chipre','Ciudad del Vaticano','Croacia','Dinamarca','Eslovaquia','Eslovenia','Estonia','Finlandia','Francia','Grecia','Hungría','Irlanda','Islandia','Italia','Kosovo','Letonia','Liechtenstein','Lituania','Luxemburgo','Macedonia del Norte','Malta','Moldavia','Mónaco','Montenegro','Noruega','Países Bajos','Polonia','Portugal','Reino Unido','República Checa','Rumanía','Rusia','San Marino','Serbia','Suecia','Suiza','Ucrania'];
@@ -346,20 +350,22 @@ async function loadClients(){
 let pallets = {};
 async function loadPallets(){
   const { data } = await supabaseClient.from('pallets').select('*').order('date_in', { ascending: false });
-  pallets = {}; WAREHOUSES.forEach(w => pallets[w.id] = []);
-  (data||[]).forEach(p => pallets[p.warehouse_id].push({
+  const next = warehouseMap(() => []);
+  (data||[]).forEach(p => (next[p.warehouse_id] = next[p.warehouse_id] || []).push({
     id: p.id, clientId: p.client_id, reference: p.reference, description: p.description,
     quantity: Number(p.quantity), unit: p.unit, location: p.location, status: p.status, dateIn: p.date_in,
   }));
+  pallets = next;
 }
 
 let movements = {};
 async function loadMovements(){
   const { data } = await supabaseClient.from('movements').select('*').order('date', { ascending: false });
-  movements = {}; WAREHOUSES.forEach(w => movements[w.id] = []);
-  (data||[]).forEach(m => movements[m.warehouse_id].push({
+  const next = warehouseMap(() => []);
+  (data||[]).forEach(m => (next[m.warehouse_id] = next[m.warehouse_id] || []).push({
     id: m.id, palletId: m.pallet_id, clientId: m.client_id, type: m.type, quantity: Number(m.quantity), date: m.date, ref: m.ref,
   }));
+  movements = next;
 }
 
 const fmtDate = (d) => new Date(d).toLocaleDateString('es-ES',{day:'2-digit',month:'short'});
@@ -463,14 +469,18 @@ const APPT_STATUS_LABELS = { planificado: 'Planificada', completado: 'Completada
 let appointments = {};
 async function loadAppointments(){
   const { data } = await supabaseClient.from('appointments').select('*');
-  appointments = {}; WAREHOUSES.forEach(w => appointments[w.id] = []);
   const ids = (data||[]).map(a=>a.id);
   const attByParent = await loadAttachmentsFor('appointment', ids);
-  (data||[]).forEach(a => appointments[a.warehouse_id].push({
+  // Se construye aparte y se sustituye de golpe al final: si dos cargas
+  // coinciden (p. ej. doble clic en Guardar) cada una trabaja con su propia
+  // lista, en vez de mezclar las reservas dos veces en la misma.
+  const next = warehouseMap(() => []);
+  (data||[]).forEach(a => (next[a.warehouse_id] = next[a.warehouse_id] || []).push({
     id: a.id, clientId: a.client_id, date: a.date, start: a.start_time, duration: a.duration_min,
     status: a.status, carrier: a.carrier, plate: a.plate, trailerPlate: a.trailer_plate,
     cargoRef: a.cargo_ref, type: a.type, notes: a.notes, attachments: attByParent[a.id] || [],
   }));
+  appointments = next;
 }
 
 const WEEKDAY_KEYS = ['dom','lun','mar','mie','jue','vie','sab']; // getDay(): 0=domingo
@@ -480,8 +490,9 @@ const WEEK_ORDER = ['lun','mar','mie','jue','vie','sab','dom'];
 let schedules = {};
 async function loadSchedules(){
   const { data } = await supabaseClient.from('warehouse_schedules').select('*');
-  schedules = {}; WAREHOUSES.forEach(w => schedules[w.id] = {});
-  (data||[]).forEach(row => { schedules[row.warehouse_id][row.weekday] = { open: row.open, ranges: row.ranges }; });
+  const next = warehouseMap(() => ({}));
+  (data||[]).forEach(row => { (next[row.warehouse_id] = next[row.warehouse_id] || {})[row.weekday] = { open: row.open, ranges: row.ranges }; });
+  schedules = next;
 }
 function weekdayKey(dateStr){ return WEEKDAY_KEYS[new Date(dateStr+'T00:00:00').getDay()]; }
 function daySchedule(warehouseId, dateStr){ return schedules[warehouseId][weekdayKey(dateStr)]; }
@@ -490,10 +501,11 @@ function scheduleLabel(sched){ return sched.ranges.map(r=>`${r.start}–${r.end}
 let warehouseTasks = {};
 async function loadWarehouseTasks(){
   const { data } = await supabaseClient.from('warehouse_tasks').select('*').order('created_at');
-  warehouseTasks = {}; WAREHOUSES.forEach(w => warehouseTasks[w.id] = []);
-  (data||[]).forEach(t => warehouseTasks[t.warehouse_id].push({
+  const next = warehouseMap(() => []);
+  (data||[]).forEach(t => (next[t.warehouse_id] = next[t.warehouse_id] || []).push({
     id: t.id, date: t.date, text: t.text, done: t.done,
   }));
+  warehouseTasks = next;
 }
 async function addWarehouseTask(){
   const input = document.getElementById('wt-input');
@@ -580,13 +592,14 @@ function tplWarehouseTasks(){
 let unscheduled = {};
 async function loadUnscheduled(){
   const { data } = await supabaseClient.from('unscheduled_trucks').select('*');
-  unscheduled = {}; WAREHOUSES.forEach(w => unscheduled[w.id] = []);
   const ids = (data||[]).map(u=>u.id);
   const attByParent = await loadAttachmentsFor('unscheduled', ids);
-  (data||[]).forEach(u => unscheduled[u.warehouse_id].push({
+  const next = warehouseMap(() => []);
+  (data||[]).forEach(u => (next[u.warehouse_id] = next[u.warehouse_id] || []).push({
     id: u.id, clientId: u.client_id, date: u.date, status: u.status, carrier: u.carrier, plate: u.plate,
     trailerPlate: u.trailer_plate, cargoRef: u.cargo_ref, type: u.type, notes: u.notes, attachments: attByParent[u.id] || [],
   }));
+  unscheduled = next;
 }
 
 const LANES = 2; // camiones que se pueden atender a la vez en cada almacén
@@ -3861,6 +3874,14 @@ function refreshUnscheduledClientOptions(){
   if (btn) btn.disabled = !list.length;
 }
 async function submitUnscheduled(editId){
+  if (window.__savingUnsched) return;
+  window.__savingUnsched = true;
+  const btn = document.getElementById("uf-submit-btn");
+  if (btn) btn.disabled = true;
+  try { await submitUnscheduledInner(editId); }
+  finally { window.__savingUnsched = false; if (btn && btn.isConnected) btn.disabled = false; }
+}
+async function submitUnscheduledInner(editId){
   const clientId = document.getElementById('uf-client').value;
   if (!clientId) return;
   const warehouseId = document.getElementById('uf-warehouse').value;
@@ -4281,7 +4302,18 @@ function refreshAppointmentTimeOptions(){
   startSel.disabled = false;
   startSel.innerHTML = slotTimes(sched.ranges).map(m=>`<option value="${minToTime(m)}" ${minToTime(m)===prevVal?'selected':''}>${minToTime(m)}</option>`).join('');
 }
+// Solo una reserva se guarda a la vez: mientras se guarda (con adjuntos y la
+// recarga puede tardar) el botón queda bloqueado, para que un doble clic no la
+// guarde dos veces ni lance dos recargas a la vez.
 async function submitAppointment(editId){
+  if (window.__savingAppt) return;
+  window.__savingAppt = true;
+  const btn = [...document.querySelectorAll(".modal-box button")].find(b => (b.getAttribute("onclick") || "").startsWith("submitAppointment"));
+  if (btn) btn.disabled = true;
+  try { await submitAppointmentInner(editId); }
+  finally { window.__savingAppt = false; if (btn && btn.isConnected) btn.disabled = false; }
+}
+async function submitAppointmentInner(editId){
   const clientId = document.getElementById('af-client').value;
   const date = document.getElementById('af-date').value;
   const start = document.getElementById('af-start').value;
