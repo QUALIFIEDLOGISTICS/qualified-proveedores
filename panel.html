@@ -907,6 +907,9 @@ function computeBreadcrumbSegments(){
       const last = {label: tf ? `Tarifa ${tf.origenZona} → ${tf.destinoZona}` : (window.__tarifaPreset && window.__tarifaFormId === null && window.__tarifaPreset.precio === '' ? 'Actualizar tarifa' : 'Nueva tarifa'), onclick:null};
       return [{label:'Clientes', onclick:'backToComercialClientes()'}, {label: tarifaClienteNombre(window.__tarifaCtxCliente), onclick:'backToTarifas()'}, last];
     }
+    if (window.__comercialView === 'tarifaRapida') {
+      return [{label:'Clientes', onclick:'backToComercialClientes()'}, {label: tarifaClienteNombre(window.__tarifaCtxCliente), onclick:'backToTarifas()'}, {label:'Tarifas rápidas', onclick:null}];
+    }
     return [{label: comercialSection() === 'tarifas' ? 'Tarifas Transporte' : 'Clientes', onclick:null}];
   }
   if (currentTab === ALMACEN_CONFIG_TAB) {
@@ -3156,7 +3159,7 @@ function tplContactoTarifasCard(c){
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 18px 12px;">
         <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Tarifas de transporte vigentes <span style="font-weight:400;color:var(--mutedFaint);">(${vigentes.length})</span></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn btn-ghost" onclick="openTarifaRapidaModal('${c.id}')" title="Escribir varias tarifas seguidas en una tabla">Tarifas rápidas</button>
+          <button class="btn btn-ghost" onclick="openTarifaRapida('${c.id}')" title="Escribir varias tarifas seguidas en una tabla">Tarifas rápidas</button>
           <button class="btn btn-primary" onclick="openTarifaForm(null, null, '${c.id}')">+ Nueva tarifa</button>
         </div>
       </div>
@@ -5710,7 +5713,7 @@ function tplComercialBar(){
 }
 // El formulario de una tarifa lleva el camino de arriba para volver a su lista.
 function comercialIsSubpage(){
-  return currentTab === 'comercial' && window.__comercialView === 'tarifaForm';
+  return currentTab === 'comercial' && ['tarifaForm', 'tarifaRapida'].includes(window.__comercialView);
 }
 function resetComercialClientesState(){
   window.__comClSearch = '';
@@ -5727,6 +5730,7 @@ function setComercialSection(id){
 }
 function tplComercial(){
   if (window.__comercialView === 'tarifaForm') return tplTarifaFormPage();
+  if (window.__comercialView === 'tarifaRapida') return tplTarifaRapidaPage();
   return comercialSection() === 'tarifas' ? tplTarifasPage() : tplComercialClientesPage();
 }
 
@@ -6093,7 +6097,7 @@ function resetTarifasState(){
 
 /* ---- Tarifas: formulario ---- */
 function tarifaConfirmLeaveForm(){
-  if (currentTab === 'comercial' && window.__comercialView === 'tarifaForm' && window.__tarifaFormDirty) {
+  if (currentTab === 'comercial' && ['tarifaForm', 'tarifaRapida'].includes(window.__comercialView) && window.__tarifaFormDirty) {
     return confirm('Tienes cambios sin guardar. ¿Seguro que quieres salir sin guardar?');
   }
   return true;
@@ -6502,66 +6506,88 @@ async function submitCambiarPrecio(id){
   closeModal();
   renderTab();
 }
-/* ---- Tarifas rápidas de un cliente ----
-   Una ventana con una tabla para escribir varias tarifas seguidas (zona de origen,
-   zona de destino, camión, precio e indexación) con la misma fecha, y guardarlas de
-   golpe. Si alguna ya existía como vigente, la anterior pasa sola a históricas. */
+/* ---- Tarifas rápidas de un cliente (pantalla completa) ----
+   Una tabla para escribir varias tarifas seguidas: zona, CP y ciudad de origen y de
+   destino, camión, metros, precio e indexación, todas con la misma fecha, y guardarlas
+   de golpe. Si alguna ya existía como vigente (mismo cliente, zonas, CP y tipo), la
+   anterior pasa sola a históricas. */
+const QR_COLS = 8;
 function tarifaRapidaRowHtml(i, tipo, gasoil){
   const opt = (v, l) => `<option value="${v}" ${v === tipo ? 'selected' : ''}>${l}</option>`;
+  const lado = (s, ph, phCp) => `
+      <td style="padding:5px 4px;min-width:96px;">
+        <input id="qr-${i}-${s}" maxlength="4" data-combo="qr-${s === 'o' ? 'origenes' : 'destinos'}" autocomplete="off" placeholder="${ph}" style="font-family:var(--mono);text-transform:uppercase;" oninput="tarifaRapidaZonaInput(${i},'${s}')" />
+        <div id="qr-${i}-${s}h" class="tf-lugar" style="min-height:14px;margin-top:2px;"></div>
+      </td>
+      <td style="padding:5px 4px;min-width:92px;"><input id="qr-${i}-${s}cp" maxlength="10" placeholder="${phCp}" oninput="tarifaRapidaCpInput(${i},'${s}')" /></td>
+      <td style="padding:5px 4px;min-width:130px;"><input id="qr-${i}-${s}c" maxlength="100" placeholder="Ciudad" oninput="this.dataset.manual=this.value?'1':''" onblur="this.value = formatCiudad(this.value);" /></td>`;
   return `
     <tr class="qr-row" data-i="${i}">
-      <td style="padding:6px 6px 6px 0;">
-        <input id="qr-${i}-o" maxlength="4" data-combo="qr-origenes" autocomplete="off" placeholder="ES08" style="font-family:var(--mono);text-transform:uppercase;" oninput="tarifaRapidaZonaInput(${i},'o')" />
-        <div id="qr-${i}-oh" class="tf-lugar" style="min-height:14px;margin-top:2px;"></div>
-      </td>
-      <td style="padding:6px;">
-        <input id="qr-${i}-d" maxlength="4" data-combo="qr-destinos" autocomplete="off" placeholder="FR13" style="font-family:var(--mono);text-transform:uppercase;" oninput="tarifaRapidaZonaInput(${i},'d')" />
-        <div id="qr-${i}-dh" class="tf-lugar" style="min-height:14px;margin-top:2px;"></div>
-      </td>
-      <td style="padding:6px;"><select id="qr-${i}-t" onchange="tarifaRapidaTipoChange(${i})">${opt('FTL', 'FTL')}${opt('LTL', 'LTL')}${opt('GRANEL', 'Piso móvil / granel')}${opt('GRUA', 'Grúa')}</select></td>
-      <td style="padding:6px;"><input id="qr-${i}-m" inputmode="decimal" maxlength="5" placeholder="m" style="width:64px;" ${tipo === 'LTL' ? '' : 'disabled'} title="Metros de camión (solo LTL)" /></td>
-      <td style="padding:6px;"><input id="qr-${i}-p" inputmode="decimal" maxlength="10" placeholder="Precio €" style="width:110px;text-align:right;" onkeydown="if(event.key==='Enter'){ event.preventDefault(); tarifaRapidaAddRow(true); }" /></td>
-      <td style="padding:6px;text-align:center;"><input id="qr-${i}-g" type="checkbox" class="switch" ${gasoil ? 'checked' : ''} title="Con indexación de gasoil" /></td>
-      <td style="padding:6px 0 6px 6px;"><button type="button" onclick="tarifaRapidaRemoveRow(${i})" title="Quitar fila" style="background:none;border:none;color:var(--mutedFaint);font-size:15px;">✕</button></td>
+      <td style="padding:5px 4px;color:var(--mutedFaint);font-size:12px;text-align:right;width:26px;">${i + 1}</td>
+      ${lado('o', 'ES08', '08500')}
+      ${lado('d', 'FR13', '13001')}
+      <td style="padding:5px 4px;min-width:130px;"><select id="qr-${i}-t" onchange="tarifaRapidaTipoChange(${i})">${opt('FTL', 'FTL')}${opt('LTL', 'LTL')}${opt('GRANEL', 'Piso móvil / granel')}${opt('GRUA', 'Grúa')}</select></td>
+      <td style="padding:5px 4px;"><input id="qr-${i}-m" inputmode="decimal" maxlength="5" placeholder="m" style="width:62px;" ${tipo === 'LTL' ? '' : 'disabled'} title="Metros de camión (solo LTL)" /></td>
+      <td style="padding:5px 4px;"><input id="qr-${i}-p" inputmode="decimal" maxlength="10" placeholder="Precio €" style="width:104px;text-align:right;" onkeydown="if(event.key==='Enter'){ event.preventDefault(); tarifaRapidaAddRow(true); }" /></td>
+      <td style="padding:5px 4px;text-align:center;"><input id="qr-${i}-g" type="checkbox" class="switch" ${gasoil ? 'checked' : ''} title="Con indexación de gasoil" /></td>
+      <td style="padding:5px 0 5px 4px;"><button type="button" onclick="tarifaRapidaRemoveRow(${i})" title="Quitar fila" style="background:none;border:none;color:var(--mutedFaint);font-size:15px;">✕</button></td>
     </tr>`;
 }
-function openTarifaRapidaModal(clienteId){
-  const c = contactos.find(x => x.id === clienteId);
-  if (!c) return;
-  window.__qrCliente = clienteId;
-  window.__qrN = 0;
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box" style="max-width:820px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-          <h3 class="modal-title">Tarifas rápidas</h3><button class="close-x" onclick="closeModal()">✕</button>
+function tplTarifaRapidaPage(){
+  const c = contactos.find(x => x.id === window.__tarifaCtxCliente);
+  const th = (t, extra) => `<th style="padding:6px 4px;${extra || ''}">${t}</th>`;
+  return `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div style="width:48px;height:48px;border-radius:12px;background:rgba(201,138,46,0.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          ${homeIcon(HOME_ICON_PATHS.file, 24, '#C98A2E')}
         </div>
-        <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;">${esc(c.nombre)} · escribe una tarifa por fila; con Intro en el precio se añade otra fila.</div>
-        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">
-          <div class="field" style="margin:0;"><label>Valen desde</label><input id="qr-fecha" type="date" value="${today()}" /></div>
-          <div class="field" style="margin:0;min-width:170px;"><label>Camión de las filas nuevas</label>
-            <select id="qr-tipo-def"><option value="FTL">FTL</option><option value="LTL">LTL</option><option value="GRANEL">Piso móvil / granel</option><option value="GRUA">Grúa</option></select></div>
-          <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);margin-bottom:8px;cursor:pointer;"><input id="qr-gas-def" type="checkbox" class="switch" /> Con indexación de gasoil en las filas nuevas</label>
-        </div>
-        <datalist id="qr-origenes">${tarifasZonasDatalistHtml('origenZona')}</datalist>
-        <datalist id="qr-destinos">${tarifasZonasDatalistHtml('destinoZona')}</datalist>
-        <div style="overflow-x:auto;">
-          <table style="width:100%;">
-            <thead><tr>
-              <th style="padding:6px 6px 6px 0;">Origen</th><th style="padding:6px;">Destino</th><th style="padding:6px;">Camión</th><th style="padding:6px;">Metros</th><th style="padding:6px;text-align:right;">Precio</th><th style="padding:6px;text-align:center;">Indexación</th><th></th>
-            </tr></thead>
-            <tbody id="qr-rows"></tbody>
-          </table>
-        </div>
-        <button type="button" class="btn btn-ghost" style="margin-top:10px;" onclick="tarifaRapidaAddRow(true)">+ Añadir fila</button>
-        <div id="qr-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;white-space:pre-line;"></div>
-        <div style="display:flex;gap:10px;">
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button id="qr-submit" class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitTarifaRapida()">Guardar tarifas</button>
+        <div>
+          <div style="font-family:var(--display);font-size:22px;">Tarifas rápidas</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">${c ? esc(c.nombre) + ' · ' : ''}una tarifa por fila; con Intro en el precio se añade otra fila. Si escribes el país (ES) y el CP, la zona y la ciudad se rellenan solas.</div>
         </div>
       </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-ghost" onclick="backToTarifas()">Cancelar</button>
+        <button class="btn btn-primary qr-submit-btn" onclick="submitTarifaRapida()">Guardar tarifas</button>
+      </div>
+    </div>
+    <div class="card" oninput="window.__tarifaFormDirty=true;" onchange="window.__tarifaFormDirty=true;">
+      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;">
+        <div class="field" style="margin:0;"><label>Valen desde</label><input id="qr-fecha" type="date" value="${today()}" /></div>
+        <div class="field" style="margin:0;min-width:190px;"><label>Camión de las filas nuevas</label>
+          <select id="qr-tipo-def"><option value="FTL">FTL</option><option value="LTL">LTL</option><option value="GRANEL">Piso móvil / granel</option><option value="GRUA">Grúa</option></select></div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);margin-bottom:8px;cursor:pointer;"><input id="qr-gas-def" type="checkbox" class="switch" /> Con indexación de gasoil en las filas nuevas</label>
+      </div>
+      <datalist id="qr-origenes">${tarifasZonasDatalistHtml('origenZona')}</datalist>
+      <datalist id="qr-destinos">${tarifasZonasDatalistHtml('destinoZona')}</datalist>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;min-width:1080px;">
+          <thead><tr>
+            ${th('#', 'text-align:right;')}${th('Zona origen')}${th('CP origen')}${th('Ciudad origen')}${th('Zona destino')}${th('CP destino')}${th('Ciudad destino')}${th('Camión')}${th('Metros')}${th('Precio', 'text-align:right;')}${th('Indexación', 'text-align:center;')}<th></th>
+          </tr></thead>
+          <tbody id="qr-rows"></tbody>
+        </table>
+      </div>
+      <button type="button" class="btn btn-ghost" style="margin-top:12px;" onclick="tarifaRapidaAddRow(true)">+ Añadir fila</button>
+    </div>
+    <div id="qr-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;white-space:pre-line;"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
+      <button class="btn btn-ghost" onclick="backToTarifas()">Cancelar</button>
+      <button class="btn btn-primary qr-submit-btn" onclick="submitTarifaRapida()">Guardar tarifas</button>
     </div>`;
-  for (let k = 0; k < 5; k++) tarifaRapidaAddRow(false);
+}
+function openTarifaRapida(clienteId){
+  window.__tarifaCtxCliente = clienteId;
+  window.__showingContactoDetail = false;
+  window.__comercialView = 'tarifaRapida';
+  window.__tarifaFormId = null;
+  window.__tarifaPreset = null;
+  window.__tarifaFormDirty = false;
+  window.__qrN = 0;
+  renderHeader(); renderTab();
+  for (let k = 0; k < 8; k++) tarifaRapidaAddRow(false);
+  window.scrollTo(0, 0);
   setTimeout(() => { const el = document.getElementById('qr-0-o'); if (el) el.focus(); }, 0);
 }
 function tarifaRapidaAddRow(focus){
@@ -6573,12 +6599,54 @@ function tarifaRapidaAddRow(focus){
 }
 function tarifaRapidaRemoveRow(i){
   const row = document.querySelector(`.qr-row[data-i="${i}"]`);
-  if (row && document.querySelectorAll('.qr-row').length > 1) row.remove();
+  if (row && document.querySelectorAll('.qr-row').length > 1) { row.remove(); window.__tarifaFormDirty = true; }
 }
-function tarifaRapidaZonaInput(i, side){
-  const el = document.getElementById(`qr-${i}-${side}`);
+function tarifaRapidaZonaInput(i, s){
+  const el = document.getElementById(`qr-${i}-${s}`);
   el.value = el.value.toUpperCase().replace(/\s/g, '');
-  document.getElementById(`qr-${i}-${side}h`).textContent = tarifaZonaHint(el.value);
+  el.dataset.auto = '0';
+  document.getElementById(`qr-${i}-${s}h`).textContent = tarifaZonaHint(el.value);
+  tarifaRapidaSchedule(i, s);
+}
+// Escribir el CP completa la zona (ES + 2 primeras cifras; en el origen, si no se ha escrito
+// país, se supone España) y busca la ciudad.
+function tarifaRapidaCpInput(i, s){
+  const zEl = document.getElementById(`qr-${i}-${s}`), cpEl = document.getElementById(`qr-${i}-${s}cp`);
+  const z = zEl.value.trim().toUpperCase(), cp = cpEl.value.replace(/\s/g, '').toUpperCase();
+  const asumirEs = s === 'o' && z === '';
+  if (cp.length >= 2 && (asumirEs || /^[A-Z]{2}$/.test(z) || (zEl.dataset.auto === '1' && /^[A-Z]{2}/.test(z)))) {
+    zEl.value = (asumirEs ? 'ES' : z.slice(0, 2)) + cp.slice(0, 2);
+    zEl.dataset.auto = '1';
+    document.getElementById(`qr-${i}-${s}h`).textContent = tarifaZonaHint(zEl.value);
+  }
+  tarifaRapidaSchedule(i, s);
+}
+const tarifaRapidaTimers = {};
+function tarifaRapidaSchedule(i, s){
+  const k = `${i}${s}`;
+  clearTimeout(tarifaRapidaTimers[k]);
+  tarifaRapidaTimers[k] = setTimeout(() => tarifaRapidaLookup(i, s), 300);
+}
+async function tarifaRapidaLookup(i, s){
+  const zEl = document.getElementById(`qr-${i}-${s}`), cpEl = document.getElementById(`qr-${i}-${s}cp`), ciEl = document.getElementById(`qr-${i}-${s}c`);
+  if (!zEl || !cpEl || !ciEl) return;
+  const keyNow = () => {
+    const cc = zEl.value.trim().slice(0, 2).toLowerCase();
+    let cp = cpEl.value.replace(/\s/g, '').toUpperCase();
+    if (cc === 'gb') cp = cpEl.value.trim().toUpperCase().split(/\s+/)[0];
+    return /^[a-z]{2}$/.test(cc) && cp.length >= 4 ? `${cc}/${cp}` : null;
+  };
+  const key = keyNow();
+  if (!key) { if (ciEl.dataset.manual !== '1') ciEl.value = ''; return; }
+  if (!(key in tarifaCiudadCache)) {
+    try {
+      const res = await fetch(`https://api.zippopotam.us/${key}`);
+      const data = res.ok ? await res.json() : null;
+      tarifaCiudadCache[key] = data && data.places && data.places[0] ? formatCiudad((data.places[0]['place name'] || '').replace(/\s+\d{1,2}$/, '')) : '';
+    } catch (e) { return; }
+  }
+  if (keyNow() !== key || ciEl.dataset.manual === '1') return;
+  ciEl.value = tarifaCiudadCache[key];
 }
 function tarifaRapidaTipoChange(i){
   const ltl = document.getElementById(`qr-${i}-t`).value === 'LTL';
@@ -6589,10 +6657,10 @@ function tarifaRapidaTipoChange(i){
 async function submitTarifaRapida(){
   const errEl = document.getElementById('qr-error');
   errEl.textContent = '';
-  const cliente = contactos.find(x => x.id === window.__qrCliente);
+  const cliente = contactos.find(x => x.id === window.__tarifaCtxCliente);
   const fecha = document.getElementById('qr-fecha').value;
   if (!cliente) return;
-  if (!fecha) { errEl.textContent = 'Indica desde qué fecha valen.'; return; }
+  if (!fecha) { showFormError(errEl, 'Indica desde qué fecha valen.'); return; }
   const filas = [];
   const errores = [];
   const vistas = {};
@@ -6601,7 +6669,8 @@ async function submitTarifaRapida(){
     const i = tr.dataset.i;
     const v = id => (document.getElementById(`qr-${i}-${id}`) || {}).value || '';
     const o = v('o').trim().toUpperCase(), d = v('d').trim().toUpperCase(), pTxt = v('p').trim(), tipo = v('t');
-    if (!o && !d && !pTxt) return; // fila vacía
+    const ocp = v('ocp').trim(), dcp = v('dcp').trim();
+    if (!o && !d && !pTxt && !ocp && !dcp) return; // fila vacía
     const nombre = `Fila ${n + 1}`;
     if (!TARIFA_ZONA_RE.test(o)) return errores.push(`${nombre}: la zona de origen debe ser país y 2 caracteres (ES08).`);
     if (!TARIFA_ZONA_RE.test(d)) return errores.push(`${nombre}: la zona de destino debe ser país y 2 caracteres (FR13).`);
@@ -6612,27 +6681,29 @@ async function submitTarifaRapida(){
       metros = Number(tarifaNum(v('m')));
       if (v('m').trim() === '' || !isFinite(metros) || metros <= 0 || metros > 13.6) return errores.push(`${nombre}: en LTL indica los metros (0,1 a 13,6).`);
     }
-    const key = `${o}|${d}|${tipo}`;
+    const nueva = { clienteId: cliente.id, fecha, origenZona: o, origenCp: ocp, origenCiudad: formatCiudad(v('oc').trim()), destinoZona: d, destinoCp: dcp, destinoCiudad: formatCiudad(v('dc').trim()),
+      tipo, metros, precio: Math.round(precio * 100) / 100, gasoil: !!document.getElementById(`qr-${i}-g`).checked, observaciones: '' };
+    const key = tarifaRutaKey(nueva);
     if (vistas[key]) return errores.push(`${nombre}: repite la ruta de la fila ${vistas[key]}.`);
     vistas[key] = n + 1;
-    const nueva = { clienteId: cliente.id, fecha, origenZona: o, origenCp: '', origenCiudad: '', destinoZona: d, destinoCp: '', destinoCiudad: '', tipo, metros, precio: Math.round(precio * 100) / 100, gasoil: !!document.getElementById(`qr-${i}-g`).checked, observaciones: '' };
-    const prev = vigentes.find(t => tarifaRutaKey(t) === tarifaRutaKey(nueva));
+    const prev = vigentes.find(t => tarifaRutaKey(t) === key);
     if (prev && fecha < prev.fecha) return errores.push(`${nombre}: la fecha no puede ser anterior al inicio de la tarifa actual (${fmtDateDMY(prev.fecha)}).`);
     filas.push({ nueva, prev });
   });
-  if (errores.length) { errEl.textContent = errores.join('\n'); return; }
-  if (!filas.length) { errEl.textContent = 'Escribe al menos una tarifa.'; return; }
-  const btn = document.getElementById('qr-submit');
-  btn.disabled = true;
+  if (errores.length) { showFormError(errEl, errores.join('\n')); return; }
+  if (!filas.length) { showFormError(errEl, 'Escribe al menos una tarifa.'); return; }
+  const btns = [...document.querySelectorAll('.qr-submit-btn')];
+  btns.forEach(b => b.disabled = true);
   const email = currentUserEmail();
   const rows = filas.map(({ nueva: t }) => ({
-    fecha: t.fecha, cliente_id: t.clienteId, origen_zona: t.origenZona, origen_cp: null, origen_ciudad: null, destino_zona: t.destinoZona, destino_cp: null, destino_ciudad: null,
+    fecha: t.fecha, cliente_id: t.clienteId, origen_zona: t.origenZona, origen_cp: t.origenCp || null, origen_ciudad: t.origenCiudad || null,
+    destino_zona: t.destinoZona, destino_cp: t.destinoCp || null, destino_ciudad: t.destinoCiudad || null,
     tipo: t.tipo, indexacion_gasoil: t.gasoil, metros: t.metros, precio: t.precio, observaciones: null, created_by: email,
   }));
   const { data, error } = await supabaseClient.from('tarifas').insert(rows).select();
   if (error || !data || !data.length) {
-    errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'sin permiso o error desconocido.');
-    btn.disabled = false;
+    showFormError(errEl, 'No se pudo guardar: ' + (error && error.message ? error.message : 'sin permiso o error desconocido.'));
+    btns.forEach(b => b.disabled = false);
     return;
   }
   for (const { nueva, prev } of filas) {
@@ -6641,8 +6712,7 @@ async function submitTarifaRapida(){
       : `ha añadido la tarifa ${tarifaEtiqueta(nueva)} a ${tarifaPrecioTxt(nueva)}, vigente desde el ${fmtDateDMY(fecha)}.`);
   }
   await loadTarifas();
-  closeModal();
-  renderTab();
+  tarifaReturn();
 }
 async function deleteTarifa(id){
   const t = tarifas.find(x => x.id === id);
