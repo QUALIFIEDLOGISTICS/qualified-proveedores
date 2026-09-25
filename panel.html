@@ -5585,7 +5585,7 @@ async function loadTarifas(){
   const { data } = await supabaseClient.from('tarifas').select('*').order('fecha', { ascending: false });
   tarifas = (data||[]).map(t => ({
     id: t.id, createdAt: t.created_at, fecha: t.fecha, clienteId: t.cliente_id,
-    origenZona: t.origen_zona, origenCp: t.origen_cp || '', destinoZona: t.destino_zona, destinoCp: t.destino_cp || '',
+    origenZona: t.origen_zona, origenCp: t.origen_cp || '', origenCiudad: t.origen_ciudad || '', destinoZona: t.destino_zona, destinoCp: t.destino_cp || '', destinoCiudad: t.destino_ciudad || '',
     tipo: t.tipo, metros: t.metros == null ? null : Number(t.metros), precio: Number(t.precio), observaciones: t.observaciones || '',
   }));
 }
@@ -5598,6 +5598,8 @@ function tarifaClienteNombre(id){
 function tarifaZonaHint(z){
   return /^ES\d{2}$/.test(z||'') ? (CP_PROVINCIA[z.slice(2)] || '') : '';
 }
+// "08500 Vic" (o solo el CP / solo la ciudad si falta el otro dato).
+function tarifaLugarTxt(cp, ciudad){ return [cp, ciudad].filter(Boolean).join(' '); }
 function tarifaFmtMetros(m){ return m == null ? '—' : String(m).replace('.', ','); }
 // Precio comparable: el precio en FTL y el €/metro en LTL.
 function tarifaUnitario(t){
@@ -5632,7 +5634,7 @@ function tarifasFilteredList(){
     if (fOrigen && !t.origenZona.startsWith(fOrigen)) return false;
     if (fDestino && !t.destinoZona.startsWith(fDestino)) return false;
     if (fTipo && t.tipo !== fTipo) return false;
-    if (search && ![cliente, t.origenZona, t.destinoZona, t.origenCp, t.destinoCp, t.observaciones, t.tipo].some(v => (v||'').toLowerCase().includes(search))) return false;
+    if (search && ![cliente, t.origenZona, t.destinoZona, t.origenCp, t.destinoCp, t.origenCiudad, t.destinoCiudad, t.observaciones, t.tipo].some(v => (v||'').toLowerCase().includes(search))) return false;
     return true;
   });
   list.sort(tarifaCmpReciente);
@@ -5662,8 +5664,8 @@ function tarifasListBodyHtml(){
             <tr style="cursor:pointer;" onclick="openTarifaForm('${t.id}')">
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
               <td style="font-weight:600;white-space:nowrap;" title="${esc(tarifaClienteNombre(t.clienteId))}">${esc(truncateText(tarifaClienteNombre(t.clienteId), 24))}</td>
-              <td style="white-space:nowrap;" title="${esc(t.origenCp ? 'CP ' + t.origenCp : tarifaZonaHint(t.origenZona))}"><span style="font-family:var(--mono);font-weight:600;">${esc(t.origenZona)}</span>${t.origenCp ? ` <span style="color:var(--mutedFaint);font-size:12px;">${esc(t.origenCp)}</span>` : ''}</td>
-              <td style="white-space:nowrap;" title="${esc(t.destinoCp ? 'CP ' + t.destinoCp : tarifaZonaHint(t.destinoZona))}"><span style="font-family:var(--mono);font-weight:600;">${esc(t.destinoZona)}</span>${t.destinoCp ? ` <span style="color:var(--mutedFaint);font-size:12px;">${esc(t.destinoCp)}</span>` : ''}</td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(t.origenZona)}" title="${esc(tarifaLugarTxt(t.origenCp, t.origenCiudad) || tarifaZonaHint(t.origenZona))}"><span style="font-family:var(--mono);font-weight:600;">${esc(t.origenZona)}</span>${tarifaLugarTxt(t.origenCp, t.origenCiudad) ? ` <span style="color:var(--mutedFaint);font-size:12px;">${esc(truncateText(tarifaLugarTxt(t.origenCp, t.origenCiudad), 24))}</span>` : ''}</td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(t.destinoZona)}" title="${esc(tarifaLugarTxt(t.destinoCp, t.destinoCiudad) || tarifaZonaHint(t.destinoZona))}"><span style="font-family:var(--mono);font-weight:600;">${esc(t.destinoZona)}</span>${tarifaLugarTxt(t.destinoCp, t.destinoCiudad) ? ` <span style="color:var(--mutedFaint);font-size:12px;">${esc(truncateText(tarifaLugarTxt(t.destinoCp, t.destinoCiudad), 24))}</span>` : ''}</td>
               <td style="white-space:nowrap;">${esc(t.tipo)}</td>
               <td style="color:var(--muted);">${tarifaFmtMetros(t.metros)}</td>
               <td style="font-weight:700;white-space:nowrap;">${eur2(t.precio)}</td>
@@ -5773,12 +5775,45 @@ function tarifaFormValues(){
   const v = id => (document.getElementById(id) || {}).value || '';
   return {
     fecha: v('tf-fecha'), cliente: v('tf-cliente').trim(), tipo: v('tf-tipo'), metros: tarifaNum(v('tf-metros')),
-    origenZona: v('tf-origen-zona').trim().toUpperCase(), origenCp: v('tf-origen-cp').trim(),
-    destinoZona: v('tf-destino-zona').trim().toUpperCase(), destinoCp: v('tf-destino-cp').trim(),
+    origenZona: v('tf-origen-zona').trim().toUpperCase(), origenCp: v('tf-origen-cp').trim(), origenCiudad: v('tf-origen-ciudad').trim(),
+    destinoZona: v('tf-destino-zona').trim().toUpperCase(), destinoCp: v('tf-destino-cp').trim(), destinoCiudad: v('tf-destino-ciudad').trim(),
     precio: tarifaNum(v('tf-precio')), observaciones: v('tf-obs').trim(),
   };
 }
 // Escribir el país (ES) y el CP completa la zona (ES08) sola.
+// Ciudad a partir del CP (zippopotam.us, gratuito y sin clave), con el país que
+// da la zona (ES, FR, DE…). Solo rellena la ciudad si nadie la ha escrito a mano;
+// si no hay conexión o el CP no existe, se deja para escribirla.
+const tarifaCiudadCache = {};
+const tarifaCiudadTimers = {};
+function tarifaCiudadKey(side){
+  const zEl = document.getElementById(`tf-${side}-zona`), cpEl = document.getElementById(`tf-${side}-cp`);
+  if (!zEl || !cpEl) return null;
+  const cc = zEl.value.trim().slice(0, 2).toLowerCase();
+  let cp = cpEl.value.replace(/\s/g, '').toUpperCase();
+  if (cc === 'gb') cp = cpEl.value.trim().toUpperCase().split(/\s+/)[0]; // Reino Unido: solo la parte inicial
+  return /^[a-z]{2}$/.test(cc) && cp.length >= 4 ? `${cc}/${cp}` : null;
+}
+function tarifaCiudadScheduleLookup(side){
+  clearTimeout(tarifaCiudadTimers[side]);
+  tarifaCiudadTimers[side] = setTimeout(() => tarifaCiudadLookup(side), 300);
+}
+async function tarifaCiudadLookup(side){
+  const ciEl = document.getElementById(`tf-${side}-ciudad`);
+  if (!ciEl) return;
+  const key = tarifaCiudadKey(side);
+  if (!key) { if (ciEl.dataset.manual !== '1') ciEl.value = ''; return; }
+  if (!(key in tarifaCiudadCache)) {
+    try {
+      const res = await fetch(`https://api.zippopotam.us/${key}`);
+      const data = res.ok ? await res.json() : null;
+      tarifaCiudadCache[key] = data && data.places && data.places[0] ? formatCiudad((data.places[0]['place name'] || '').replace(/\s+\d{1,2}$/, '')) : '';
+    } catch (e) { return; }
+  }
+  // La respuesta puede llegar tarde: solo vale si el CP y el país siguen siendo los mismos.
+  if (tarifaCiudadKey(side) !== key || ciEl.dataset.manual === '1') return;
+  ciEl.value = tarifaCiudadCache[key];
+}
 function tarifaCpInput(side){
   const zEl = document.getElementById(`tf-${side}-zona`), cpEl = document.getElementById(`tf-${side}-cp`);
   const z = zEl.value.trim().toUpperCase(), cp = cpEl.value.replace(/\s/g, '').toUpperCase();
@@ -5786,11 +5821,13 @@ function tarifaCpInput(side){
     zEl.value = z.slice(0, 2) + cp.slice(0, 2);
     zEl.dataset.auto = '1';
   }
+  tarifaCiudadScheduleLookup(side);
 }
 function tarifaZonaInput(side){
   const zEl = document.getElementById(`tf-${side}-zona`);
   zEl.value = zEl.value.toUpperCase().replace(/\s/g, '');
   zEl.dataset.auto = '0';
+  tarifaCiudadScheduleLookup(side);
 }
 function tarifaTipoChange(){
   const ltl = document.getElementById('tf-tipo').value === 'LTL';
@@ -5834,7 +5871,7 @@ function tarifaRutaHtml(){
             <span style="font-weight:${same?700:500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nombre)}</span>
             <span style="font-weight:700;white-space:nowrap;">${eur2(t.precio)}</span>
           </div>
-          <div style="font-size:11px;color:var(--mutedFaint);">${fmtDateDMY(t.fecha)} · ${esc(t.tipo)}${t.metros ? ' · ' + tarifaFmtMetros(t.metros) + ' m' : ''}${tarifaUnitarioTxt(t) ? ' · ' + tarifaUnitarioTxt(t) : ''}${t.origenCp || t.destinoCp ? ' · ' + esc([t.origenCp, t.destinoCp].filter(Boolean).join(' → ')) : ''}</div>
+          <div style="font-size:11px;color:var(--mutedFaint);">${fmtDateDMY(t.fecha)} · ${esc(t.tipo)}${t.metros ? ' · ' + tarifaFmtMetros(t.metros) + ' m' : ''}${tarifaUnitarioTxt(t) ? ' · ' + tarifaUnitarioTxt(t) : ''}${t.origenCp || t.destinoCp || t.origenCiudad || t.destinoCiudad ? ' · ' + esc([tarifaLugarTxt(t.origenCp, t.origenCiudad), tarifaLugarTxt(t.destinoCp, t.destinoCiudad)].filter(Boolean).join(' → ')) : ''}</div>
         </div>`;
       }).join('')}
       ${list.length > 25 ? `<div style="font-size:11.5px;color:var(--mutedFaint);padding-top:8px;">Hay ${list.length - 25} más antiguas.</div>` : ''}
@@ -5883,7 +5920,8 @@ function tplTarifaFormPage(){
             <datalist id="tf-origenes-datalist">${tarifasZonasDatalistHtml('origenZona')}</datalist>
             <div id="tf-origen-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;">${esc(tarifaZonaHint(e.origenZona))}</div>
           </div>
-          <div class="field" style="flex:1;min-width:160px;"><label>CP origen (opcional)</label><input id="tf-origen-cp" maxlength="10" placeholder="Ej. 08500" oninput="tarifaCpInput('origen')" value="${esc(e.origenCp||'')}" /></div>
+          <div class="field" style="flex:1;min-width:130px;"><label>CP origen (opcional)</label><input id="tf-origen-cp" maxlength="10" placeholder="Ej. 08500" oninput="tarifaCpInput('origen')" value="${esc(e.origenCp||'')}" /></div>
+          <div class="field" style="flex:1.4;min-width:160px;"><label>Ciudad origen</label><input id="tf-origen-ciudad" maxlength="100" placeholder="Se rellena con el CP" oninput="this.dataset.manual=this.value?'1':''" onblur="this.value = formatCiudad(this.value);" value="${esc(e.origenCiudad||'')}" data-manual="${e.origenCiudad?'1':''}" /></div>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
           <div class="field" style="flex:1;min-width:200px;">
@@ -5892,7 +5930,8 @@ function tplTarifaFormPage(){
             <datalist id="tf-destinos-datalist">${tarifasZonasDatalistHtml('destinoZona')}</datalist>
             <div id="tf-destino-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;">${esc(tarifaZonaHint(e.destinoZona))}</div>
           </div>
-          <div class="field" style="flex:1;min-width:160px;"><label>CP destino (opcional)</label><input id="tf-destino-cp" maxlength="10" placeholder="Ej. 13001" oninput="tarifaCpInput('destino')" value="${esc(e.destinoCp||'')}" /></div>
+          <div class="field" style="flex:1;min-width:130px;"><label>CP destino (opcional)</label><input id="tf-destino-cp" maxlength="10" placeholder="Ej. 13001" oninput="tarifaCpInput('destino')" value="${esc(e.destinoCp||'')}" /></div>
+          <div class="field" style="flex:1.4;min-width:160px;"><label>Ciudad destino</label><input id="tf-destino-ciudad" maxlength="100" placeholder="Se rellena con el CP" oninput="this.dataset.manual=this.value?'1':''" onblur="this.value = formatCiudad(this.value);" value="${esc(e.destinoCiudad||'')}" data-manual="${e.destinoCiudad?'1':''}" /></div>
         </div>
         <div style="font-size:12px;color:var(--mutedFaint);margin:-4px 0 14px;">La zona es el país y las 2 primeras cifras del CP. Si escribes solo el país (ES) y luego el CP, la zona se completa sola.</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
@@ -5932,8 +5971,8 @@ async function submitTarifaForm(editId, addAnother){
     if (f.metros === '' || !isFinite(metros) || metros <= 0 || metros > 13.6) return fail('En LTL indica los metros de camión (entre 0,1 y 13,6).');
   }
   const payload = {
-    fecha: f.fecha, cliente_id: cliente.id, origen_zona: f.origenZona, origen_cp: f.origenCp || null,
-    destino_zona: f.destinoZona, destino_cp: f.destinoCp || null, tipo: f.tipo, metros, precio: Math.round(precio * 100) / 100,
+    fecha: f.fecha, cliente_id: cliente.id, origen_zona: f.origenZona, origen_cp: f.origenCp || null, origen_ciudad: f.origenCiudad || null,
+    destino_zona: f.destinoZona, destino_cp: f.destinoCp || null, destino_ciudad: f.destinoCiudad || null, tipo: f.tipo, metros, precio: Math.round(precio * 100) / 100,
     observaciones: f.observaciones || null,
   };
   const btns = [...document.querySelectorAll('.tf-submit-btn')];
