@@ -6165,6 +6165,20 @@ function tarifaZonaInput(side){
   zEl.dataset.auto = '0';
   tarifaCiudadScheduleLookup(side);
 }
+// Al cambiar el precio de una tarifa vigente se avisa de que la actual pasará a históricas,
+// y la fecha (si no se ha tocado) pasa a hoy: desde cuándo vale el precio nuevo.
+function tarifaPrecioChanged(){
+  const box = document.getElementById('tf-version-box');
+  if (!box) return;
+  const t = tarifas.find(x => x.id === window.__tarifaFormId);
+  if (!t) return;
+  const nuevo = Math.round(Number(tarifaNum(document.getElementById('tf-precio').value)) * 100) / 100;
+  const cambiado = document.getElementById('tf-precio').value.trim() !== '' && isFinite(nuevo) && nuevo !== t.precio;
+  box.style.display = cambiado ? 'block' : 'none';
+  const fEl = document.getElementById('tf-fecha');
+  if (cambiado && fEl.value === t.fecha && fEl.dataset.autoHoy !== '1') { fEl.value = today(); fEl.dataset.autoHoy = '1'; }
+  if (!cambiado && fEl.dataset.autoHoy === '1') { fEl.value = t.fecha; fEl.dataset.autoHoy = ''; }
+}
 function tarifaTipoChange(){
   const ltl = document.getElementById('tf-tipo').value === 'LTL';
   const m = document.getElementById('tf-metros');
@@ -6232,6 +6246,8 @@ function tplTarifaFormPage(){
   const clienteNombre = e.clienteId ? tarifaClienteNombre(e.clienteId) : (e.clienteNombre || '');
   const ltl = e.tipo === 'LTL';
   const submitLabel = editing ? 'Guardar' : 'Añadir';
+  // Una tarifa vigente: si se le cambia el precio, la actual pasa a históricas.
+  const vigenteEd = !!editing && tarifaPeriodos(tarifas.filter(t => t.clienteId === editing.clienteId)).some(t => t.id === editing.id && t.vigente);
   return `
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
       <div style="display:flex;align-items:center;gap:14px;">
@@ -6284,8 +6300,13 @@ function tplTarifaFormPage(){
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
           <div class="field" style="flex:1;min-width:130px;"><label>Camión</label><select id="tf-tipo" onchange="tarifaTipoChange()"><option value="FTL" ${e.tipo==='FTL'||!e.tipo?'selected':''}>FTL (completo)</option><option value="LTL" ${ltl?'selected':''}>LTL (metros)</option><option value="GRANEL" ${e.tipo==='GRANEL'?'selected':''}>Piso móvil / granel</option></select></div>
           <div class="field" id="tf-metros-field" style="flex:1;min-width:130px;${ltl?'':'opacity:0.5;'}"><label>Metros de camión</label><input id="tf-metros" type="text" inputmode="decimal" maxlength="5" placeholder="Ej. 3,5" ${ltl?'':'disabled'} value="${e.metros!=null?esc(String(e.metros).replace('.', ',')):''}" /></div>
-          <div class="field" style="flex:1;min-width:150px;"><label id="tf-precio-label">${e.tipo==='GRANEL' ? 'Precio pactado (€/tonelada)' : 'Precio (€)'}</label><input id="tf-precio" type="text" inputmode="decimal" maxlength="10" placeholder="Ej. 1300" value="${e.precio!==''&&e.precio!=null?esc(String(e.precio).replace('.', ',')):''}" /></div>
+          <div class="field" style="flex:1;min-width:150px;"><label id="tf-precio-label">${e.tipo==='GRANEL' ? 'Precio pactado (€/tonelada)' : 'Precio (€)'}</label><input id="tf-precio" oninput="tarifaPrecioChanged()" type="text" inputmode="decimal" maxlength="10" placeholder="Ej. 1300" value="${e.precio!==''&&e.precio!=null?esc(String(e.precio).replace('.', ',')):''}" /></div>
         </div>
+        ${vigenteEd ? `
+        <div id="tf-version-box" style="display:none;background:rgba(201,138,46,0.10);border:1px solid rgba(201,138,46,0.35);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;">
+          <div style="margin-bottom:8px;">Has cambiado el precio de la tarifa vigente (<b>${esc(tarifaPrecioTxt(editing))}</b>, desde el ${fmtDateDMY(editing.fecha)}). Al guardar, <b>esa tarifa pasará a históricas</b> y esta será la vigente desde la fecha de arriba.</div>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:12.5px;"><input type="checkbox" id="tf-solo-corregir" style="width:auto;" /> Es solo un error de tecleo: corregir sin crear histórico</label>
+        </div>` : ''}
         <div class="field">
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13.5px;"><input type="checkbox" class="switch" id="tf-gasoil" ${e.gasoil?'checked':''} /> Con indexación de gasoil</label>
         </div>
@@ -6328,21 +6349,28 @@ async function submitTarifaForm(editId, addAnother){
   // Lo que se anotará en el historial del cliente (quién cambió qué), calculado antes de guardar.
   const after = { clienteId: cliente.id, fecha: f.fecha, origenZona: f.origenZona, origenCp: f.origenCp, origenCiudad: f.origenCiudad, destinoZona: f.destinoZona, destinoCp: f.destinoCp, destinoCiudad: f.destinoCiudad,
     tipo: f.tipo, metros, precio: payload.precio, gasoil: f.gasoil, observaciones: f.observaciones };
+  // Editar una tarifa vigente y cambiarle el precio es un cambio de precio: se guarda como tarifa
+  // nueva y la actual pasa a históricas (salvo que se marque como corrección de un error de tecleo).
+  const editando = editId ? tarifas.find(t => t.id === editId) : null;
+  const soloCorregir = !!(document.getElementById('tf-solo-corregir') || {}).checked;
+  const versionar = !!editando && payload.precio !== editando.precio && !soloCorregir
+    && tarifaPeriodos(tarifas.filter(t => t.clienteId === editando.clienteId)).some(t => t.id === editando.id && t.vigente);
+  if (versionar && f.fecha < editando.fecha) return fail(`Para cambiar el precio, la fecha no puede ser anterior al inicio de la tarifa actual (${fmtDateDMY(editando.fecha)}).`);
   let logTexto = '';
-  if (editId) {
+  if (editId && !versionar) {
     const before = tarifas.find(t => t.id === editId);
     const cambios = before ? tarifaCambiosTxt(before, after) : [];
     if (cambios.length) logTexto = `ha modificado la tarifa ${tarifaEtiqueta(before)}: ${cambios.join('; ')}.`;
   } else {
     const key = tarifaRutaKey(after);
-    const prev = tarifaPeriodos(tarifas.filter(t => t.clienteId === cliente.id)).find(t => t.vigente && tarifaRutaKey(t) === key);
+    const prev = versionar ? editando : tarifaPeriodos(tarifas.filter(t => t.clienteId === cliente.id)).find(t => t.vigente && tarifaRutaKey(t) === key);
     logTexto = prev
       ? `ha cambiado la tarifa ${tarifaEtiqueta(after)} de ${tarifaPrecioTxt(prev)} a ${tarifaPrecioTxt(after)}, vigente desde el ${fmtDateDMY(after.fecha)} (la anterior, desde el ${fmtDateDMY(prev.fecha)}, pasa a históricas).`
       : `ha añadido la tarifa ${tarifaEtiqueta(after)} a ${tarifaPrecioTxt(after)}, vigente desde el ${fmtDateDMY(after.fecha)}.`;
   }
   const btns = [...document.querySelectorAll('.tf-submit-btn')];
   btns.forEach(b => b.disabled = true);
-  const res = editId
+  const res = (editId && !versionar)
     ? await supabaseClient.from('tarifas').update(payload).eq('id', editId).select()
     : await supabaseClient.from('tarifas').insert({ ...payload, created_by: currentUserEmail() }).select();
   if (res.error || !res.data || !res.data.length) {
