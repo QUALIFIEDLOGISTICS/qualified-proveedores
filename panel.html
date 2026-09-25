@@ -662,10 +662,12 @@ function goHome(){
   if (window.__showingContactoDetail && !contactoConfirmLeaveEdit()) return;
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
+  if (!warehouseConfirmLeaveForm()) return;
   if (!flotaConfirmLeaveForm()) return;
   if (!adminConfirmLeave()) return;
   window.__decaFormDirty = false;
   window.__direccionFormDirty = false;
+  window.__whFormDirty = false;
   window.__flotaFormDirty = false;
   window.__adminFormDirty = false;
   window.__contactoFormDirty = false;
@@ -683,14 +685,17 @@ async function setTab(id){
   if (window.__showingContactoDetail && !contactoConfirmLeaveEdit()) return;
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
+  if (!warehouseConfirmLeaveForm()) return;
   if (!flotaConfirmLeaveForm()) return;
   if (!adminConfirmLeave()) return;
   window.__decaFormDirty = false;
   window.__direccionFormDirty = false;
+  window.__whFormDirty = false;
   window.__flotaFormDirty = false;
   window.__adminFormDirty = false;
   window.__contactoFormDirty = false;
   currentTab = id;
+  if (id === ALMACEN_CONFIG_TAB) resetWarehouseConfigState();
   // Pulsar la pestaña del panel siempre lleva a su pantalla principal
   // (lista), aunque ya estuvieras dentro viendo el detalle de algo.
   if (id === 'autonomos') { window.__autonomosView = 'home'; window.__autonomosDriverId = null; window.__driversCompanyFilter = null; window.__companiesFilterOpen = false; }
@@ -860,6 +865,10 @@ function computeBreadcrumbSegments(){
     const editing = editId ? contactos.find(c=>c.id===editId) : null;
     return [...ancestors, {label, onclick:'closeContactoDetail()'}, {label: editing ? editing.nombre : 'Nuevo contacto', onclick:null}];
   }
+  if (currentTab === ALMACEN_CONFIG_TAB) {
+    const wh = window.__whFormId ? allWarehouses.find(w=>w.id===window.__whFormId) : null;
+    return [{label:'Configuración', onclick:'backToWarehouses()'}, {label: wh ? wh.name : 'Nuevo almacén', onclick:null}];
+  }
   if (currentTab === 'trafico') {
     // (La barra del módulo ya indica la sección; el camino solo sale en los formularios.)
     if (traficoSection() === 'direcciones') {
@@ -982,67 +991,299 @@ function tplAlmacenBar(){
     </div>`;
 }
 
-/* ---- Configuración del Almacén: alta y baja de almacenes ---- */
+/* ---- Configuración del Almacén: alta, ficha e historial de almacenes ----
+   Funciona como Contactos y Direcciones: lista con búsqueda y filtros, ficha a
+   pantalla completa (vista → Editar → Guardar), flechas para recorrer la lista
+   y un historial de quién cambió qué y cuándo. */
 const WAREHOUSE_COLORS = ['#2E6F95', '#C98A2E', '#8A4A35', '#3F8F5F', '#7C5CBF', '#C1443D', '#2C9A93', '#D9A72C', '#5C6670', '#1B3A6B'];
-function tplAlmacenConfig(){
-  const active = allWarehouses.filter(w => !w.archived);
-  const archived = allWarehouses.filter(w => w.archived);
-  const card = (w) => `
-    <div class="card" style="cursor:pointer;display:flex;align-items:center;gap:14px;padding:16px 18px;border-left:4px solid ${w.color};${w.archived?'opacity:0.65;':''}" onclick="openWarehouseModal('${w.id}')">
-      <div style="width:42px;height:42px;border-radius:50%;background:${w.color}1F;display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.home, 20, w.color)}</div>
-      <div style="min-width:0;flex:1;">
-        <div style="font-family:var(--display);font-size:15px;font-weight:700;">${esc(w.name)}${w.archived?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;font-weight:400;">· archivado</span>':''}</div>
-        <div style="font-size:12.5px;color:var(--muted);">${w.location ? esc(w.location) : 'Sin ubicación'}</div>
-      </div>
-    </div>`;
+const WAREHOUSES_PAGE_SIZE = 80;
+function almacenIsSubpage(){ return currentTab === ALMACEN_CONFIG_TAB && window.__whView === 'form'; }
+function warehouseConfirmLeaveForm(){
+  if (almacenIsSubpage() && window.__whEditMode && window.__whFormDirty) {
+    return confirm('Tienes cambios sin guardar. ¿Seguro que quieres salir sin guardar?');
+  }
+  return true;
+}
+function resetWarehouseConfigState(){
+  window.__whView = 'list';
+  window.__whFormId = null;
+  window.__whFormDirty = false;
+  window.__whEditMode = false;
+  window.__whActionMenuOpen = false;
+  window.__whListView = 'activos';
+  window.__whSearch = '';
+  window.__whFilterOpen = false;
+  window.__whPage = 0;
+}
+function backToWarehouses(){
+  if (!warehouseConfirmLeaveForm()) return;
+  window.__whFormDirty = false;
+  window.__whView = 'list';
+  window.__whEditMode = false;
+  renderHeader(); renderTab();
+}
+function warehousesFilteredList(){
+  const archivedView = (window.__whListView || 'activos') === 'archivados';
+  const search = (window.__whSearch || '').toLowerCase();
+  const list = allWarehouses.filter(w => !!w.archived === archivedView && (!search
+    || w.name.toLowerCase().includes(search)
+    || (w.location||'').toLowerCase().includes(search)));
+  return { list, archivedView, search };
+}
+function warehouseClientCount(id){
+  return contactos.filter(c => c.esClienteAlmacen && !c.archived && (c.warehouseIds||[]).includes(id)).length;
+}
+function warehouseCardHtml(w, archivedView){
+  const n = warehouseClientCount(w.id);
+  const empty = txt => `<span style="color:var(--mutedFaint);">${txt}</span>`;
   return `
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px;">
-      <div style="display:flex;align-items:center;gap:14px;">
-        <div style="width:48px;height:48px;border-radius:12px;background:rgba(92,102,112,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.settings, 24, '#5C6670')}</div>
-        <div>
-          <div style="font-family:var(--display);font-size:22px;">Configuración</div>
-          <div style="font-size:12.5px;color:var(--mutedFaint);">Almacenes: dales de alta, cámbiales el nombre o archívalos.</div>
+    <div class="card" style="cursor:pointer;display:flex;gap:14px;align-items:flex-start;padding:18px;border-left:4px solid ${w.color};${archivedView?'opacity:0.7;':''}" onclick="openWarehouseForm('${w.id}')">
+      <div style="width:56px;height:56px;border-radius:10px;flex-shrink:0;background:${w.color}1F;display:flex;align-items:center;justify-content:center;">${homeIcon(HOME_ICON_PATHS.home, 26, w.color, 1.5)}</div>
+      <div style="min-width:0;flex:1;">
+        <div style="font-family:var(--display);font-size:15px;font-weight:700;line-height:1.35;margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;">${esc(w.name)}${archivedView?' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;font-weight:400;">· archivado</span>':''}</div>
+        <div style="display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:var(--muted);">
+          <div>${w.location ? esc(w.location) : empty('Sin ubicación')}</div>
+          <div>${n ? `${n} cliente${n!==1?'s':''}` : empty('Sin clientes asignados')}</div>
         </div>
       </div>
-      <button class="btn btn-primary" onclick="openWarehouseModal()">+ Nuevo almacén</button>
+    </div>`;
+}
+function warehousesGoToPage(delta){
+  window.__whPage = Math.max(0, (window.__whPage||0) + delta);
+  refreshWarehousesListBody();
+}
+function tplWarehousesPaginationHtml(){
+  const total = warehousesFilteredList().list.length;
+  const totalPages = Math.max(1, Math.ceil(total / WAREHOUSES_PAGE_SIZE));
+  const page = Math.min(window.__whPage||0, totalPages-1);
+  const rangeStart = total ? page * WAREHOUSES_PAGE_SIZE + 1 : 0;
+  const rangeEnd = Math.min(total, (page+1) * WAREHOUSES_PAGE_SIZE);
+  return `
+    <span>${rangeStart}-${rangeEnd} / ${total}</span>
+    <button class="btn btn-ghost" style="padding:4px 9px;" ${page<=0?'disabled':''} onclick="warehousesGoToPage(-1)">‹</button>
+    <button class="btn btn-ghost" style="padding:4px 9px;" ${page>=totalPages-1?'disabled':''} onclick="warehousesGoToPage(1)">›</button>`;
+}
+function warehousesListBodyHtml(){
+  const { list, archivedView, search } = warehousesFilteredList();
+  if (!list.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search ? 'Ningún almacén coincide con la búsqueda.' : archivedView ? 'No hay almacenes archivados.' : 'Todavía no hay ningún almacén creado.'}</div>`;
+  const totalPages = Math.max(1, Math.ceil(list.length / WAREHOUSES_PAGE_SIZE));
+  if ((window.__whPage||0) > totalPages - 1) window.__whPage = totalPages - 1;
+  const page = window.__whPage || 0;
+  const pageList = list.slice(page * WAREHOUSES_PAGE_SIZE, (page + 1) * WAREHOUSES_PAGE_SIZE);
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">${pageList.map(w=>warehouseCardHtml(w, archivedView)).join('')}</div>`;
+}
+function refreshWarehousesListBody(){
+  const el = document.getElementById('wh-list-body');
+  if (el) el.innerHTML = warehousesListBodyHtml();
+  const pag = document.getElementById('wh-pagination');
+  if (pag) pag.innerHTML = tplWarehousesPaginationHtml();
+}
+function tplAlmacenConfig(){
+  return window.__whView === 'form' ? tplWarehouseFormPage() : tplWarehousesPage();
+}
+function tplWarehousesPage(){
+  const archivedView = (window.__whListView || 'activos') === 'archivados';
+  return `
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:22px;">
+      <div style="width:48px;height:48px;border-radius:12px;background:rgba(92,102,112,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.settings, 24, '#5C6670')}</div>
+      <div>
+        <div style="font-family:var(--display);font-size:22px;">Configuración</div>
+        <div style="font-size:12.5px;color:var(--mutedFaint);">Almacenes: dales de alta, cámbiales el nombre o archívalos.</div>
+      </div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">${active.map(card).join('')}</div>
-    ${archived.length ? `
-      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin:26px 0 12px;">Archivados</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">${archived.map(card).join('')}</div>` : ''}`;
+    <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-self:start;">
+        <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
+          <input placeholder="Buscar por nombre o ubicación…" value="${esc(window.__whSearch||'')}" oninput="window.__whSearch=this.value; window.__whPage=0; refreshWarehousesListBody();" style="padding-left:34px;" />
+          <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+        </div>
+        ${archivedView ? '' : `<button class="btn btn-primary" onclick="openWarehouseForm()">+ Nuevo almacén</button>`}
+      </div>
+      <div style="position:relative;justify-self:center;">
+        <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__whFilterOpen=!window.__whFilterOpen; renderTab();">Filtros${archivedView?' (1)':''} ▾</button>
+        ${window.__whFilterOpen ? `
+          <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:190px;">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 4px;cursor:pointer;white-space:nowrap;">
+              <input type="checkbox" ${archivedView?'checked':''} onchange="window.__whListView=this.checked?'archivados':'activos'; window.__whPage=0; renderTab();" style="width:auto;" />
+              Archivados
+            </label>
+          </div>` : ''}
+      </div>
+      <div id="wh-pagination" style="display:flex;align-items:center;gap:8px;justify-self:end;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplWarehousesPaginationHtml()}</div>
+    </div>
+    <div id="wh-list-body">${warehousesListBodyHtml()}</div>`;
+}
+
+/* ---- Almacenes: historial de cambios (quién cambió qué y cuándo) ---- */
+let warehouseHistorialCache = {};
+async function loadWarehouseHistorial(warehouseId){
+  const { data } = await supabaseClient.from('warehouse_historial').select('*').eq('warehouse_id', warehouseId).order('created_at', { ascending: false });
+  return (data||[]).map(h => ({ id: h.id, createdAt: h.created_at, usuario: h.usuario || '', resumen: h.resumen }));
+}
+async function logWarehouseHistorial(warehouseId, resumen){
+  if (!resumen) return;
+  const usuario = currentUserEmail();
+  const { data } = await supabaseClient.from('warehouse_historial').insert({ warehouse_id: warehouseId, usuario, resumen }).select().single();
+  if (!data) return;
+  warehouseHistorialCache[warehouseId] = [{ id: data.id, createdAt: data.created_at, usuario, resumen }, ...(warehouseHistorialCache[warehouseId]||[])];
+}
+const WAREHOUSE_FIELD_LABELS = { name: 'Nombre', location: 'Ubicación', color: 'Color' };
+function buildWarehouseChangeSummary(before, after){
+  const lines = [];
+  Object.keys(WAREHOUSE_FIELD_LABELS).forEach(key => {
+    const oldVal = (before[key]||'').toString();
+    const newVal = (after[key]||'').toString();
+    if (oldVal !== newVal) lines.push(`${WAREHOUSE_FIELD_LABELS[key]}: "${oldVal||'—'}" → "${newVal||'—'}"`);
+  });
+  return lines;
+}
+function warehouseHistorialBodyHtml(){
+  const editing = window.__whFormId ? allWarehouses.find(w=>w.id===window.__whFormId) : null;
+  const historial = window.__whHistorial;
+  if (!editing) return `<div style="color:var(--mutedFaint);font-size:12.5px;">Se empezará a registrar en cuanto guardes el almacén.</div>`;
+  if (historial === null || historial === undefined) return `<div style="color:var(--mutedFaint);font-size:12.5px;">Cargando…</div>`;
+  if (!historial.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay cambios registrados.</div>`;
+  return historial.map(h => `
+    <div style="padding:10px 0;border-bottom:1px solid var(--border);">
+      <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:3px;">${fmtDateHora(h.createdAt)}${h.usuario?' · '+esc(h.usuario):''}</div>
+      <div style="font-size:12.5px;color:var(--text);white-space:pre-line;">${esc(h.resumen)}</div>
+    </div>`).join('');
+}
+function openWarehouseForm(editId, keepNav){
+  if (!keepNav) window.__whNavIds = warehousesFilteredList().list.map(w=>w.id);
+  window.__whView = 'form';
+  window.__whFormId = editId || null;
+  window.__whFormDirty = false;
+  window.__whEditMode = !editId;
+  window.__whActionMenuOpen = false;
+  window.__whHistorial = editId ? (warehouseHistorialCache[editId] || null) : [];
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
+  if (editId) {
+    loadWarehouseHistorial(editId).then(list => {
+      warehouseHistorialCache[editId] = list;
+      if (almacenIsSubpage() && window.__whFormId === editId) {
+        window.__whHistorial = list;
+        const el = document.getElementById('wh-historial-body');
+        if (el) el.innerHTML = warehouseHistorialBodyHtml();
+      }
+    });
+  } else {
+    setTimeout(() => { const el = document.getElementById('wh-name'); if (el) el.focus(); }, 0);
+  }
+}
+function warehouseNavGoto(offset){
+  const ids = window.__whNavIds || [];
+  const idx = ids.indexOf(window.__whFormId);
+  if (idx === -1 || !ids.length) return;
+  if (!warehouseConfirmLeaveForm()) return;
+  openWarehouseForm(ids[(idx + offset + ids.length) % ids.length], true);
+}
+function enterWarehouseEditMode(){
+  window.__whEditMode = true;
+  window.__whFormDirty = false;
+  window.__whActionMenuOpen = false;
+  renderTab();
+}
+function exitWarehouseEditMode(){
+  if (!warehouseConfirmLeaveForm()) return;
+  window.__whFormDirty = false;
+  if (!window.__whFormId) { backToWarehouses(); return; }
+  window.__whEditMode = false;
+  renderTab();
+}
+function newWarehouse(){
+  if (!warehouseConfirmLeaveForm()) return;
+  openWarehouseForm(null, true);
 }
 function pickWarehouseColor(color){
   document.getElementById('wh-color').value = color;
+  window.__whFormDirty = true;
   document.querySelectorAll('.wh-swatch').forEach(b => { b.style.outline = b.dataset.color === color ? '3px solid var(--text)' : 'none'; b.style.outlineOffset = '2px'; });
 }
-function openWarehouseModal(editId){
-  const w = editId ? allWarehouses.find(x => x.id === editId) : null;
-  const color = w ? w.color : (WAREHOUSE_COLORS.find(c => !allWarehouses.some(x => x.color === c)) || WAREHOUSE_COLORS[0]);
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
-          <h3 class="modal-title">${w ? 'Editar almacén' : 'Nuevo almacén'}</h3><button class="close-x" onclick="closeModal()">✕</button>
+function tplWarehouseViewCard(w){
+  const clients = contactos.filter(c => c.esClienteAlmacen && !c.archived && (c.warehouseIds||[]).includes(w.id));
+  return `
+    <div style="font-family:var(--display);font-size:19px;margin-bottom:18px;">${esc(w.name)}${w.archived?' <span style="font-size:11px;color:var(--danger);text-transform:uppercase;">· archivado</span>':''}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;">
+      ${contactoFieldBlock('Ubicación', w.location ? esc(w.location) : '—')}
+      ${contactoFieldBlock('Color', `<span style="display:inline-flex;align-items:center;gap:8px;"><span style="width:18px;height:18px;border-radius:50%;background:${w.color};display:inline-block;"></span>${esc(w.color)}</span>`)}
+      ${contactoFieldBlock('Clientes asignados', clients.length ? `${clients.length} · ${esc(clients.slice(0,5).map(c=>c.nombreComercial||c.nombre).join(', '))}${clients.length>5?'…':''}` : '—')}
+    </div>`;
+}
+function tplWarehouseFormPage(){
+  const editId = window.__whFormId;
+  const editing = editId ? allWarehouses.find(w => w.id === editId) : null;
+  const w = editing || {};
+  const editMode = window.__whEditMode || !editing;
+  const submitLabel = editing ? 'Guardar' : 'Crear almacén';
+  const navIds = window.__whNavIds || [];
+  const navIdx = editId ? navIds.indexOf(editId) : -1;
+  const color = editing ? editing.color : (WAREHOUSE_COLORS.find(c => !allWarehouses.some(x => x.color === c)) || WAREHOUSE_COLORS[0]);
+  const arrowBtn = (offset, title, ch) => `<button onclick="warehouseNavGoto(${offset})" title="${title}" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13px;">${ch}</button>`;
+  return `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div style="width:48px;height:48px;border-radius:12px;background:${color}1F;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          ${homeIcon(HOME_ICON_PATHS.home, 24, color)}
         </div>
-        <div class="field"><label>Nombre</label><input id="wh-name" maxlength="80" placeholder="Ej. Sant Joan de Vilatorrada" value="${esc(w ? w.name : '')}" /></div>
-        <div class="field"><label>Ubicación (localidad)</label><input id="wh-location" maxlength="80" placeholder="Ej. Manresa" value="${esc(w ? w.location : '')}" /></div>
-        <div class="field">
-          <label>Color</label>
-          <input type="hidden" id="wh-color" value="${color}" />
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            ${WAREHOUSE_COLORS.map(c => `<button type="button" class="wh-swatch" data-color="${c}" onclick="pickWarehouseColor('${c}')" title="${c}" style="width:28px;height:28px;border-radius:50%;background:${c};border:none;cursor:pointer;padding:0;${c===color?'outline:3px solid var(--text);outline-offset:2px;':''}"></button>`).join('')}
-          </div>
-        </div>
-        ${w ? '' : `<div style="font-size:12px;color:var(--mutedFaint);margin-bottom:12px;">Se crea con horario de lunes a viernes de 8:00 a 18:00. Lo puedes cambiar después en Franjas horarias → Horario del almacén.</div>`}
-        <div id="wh-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
-        ${w ? `<button type="button" onclick="toggleWarehouseArchived('${w.id}')" style="width:100%;text-align:center;background:none;border:1px dashed var(--border);border-radius:6px;padding:8px;color:${w.archived?'var(--success)':'var(--danger)'};font-size:12.5px;margin-bottom:10px;cursor:pointer;">${w.archived?'Restaurar almacén':'Archivar almacén'}</button>` : ''}
-        <div style="display:flex;gap:10px;">
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button id="wh-save" class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitWarehouse('${w ? w.id : ''}')">${w ? 'Guardar' : 'Crear almacén'}</button>
+        <div>
+          <div style="font-family:var(--display);font-size:22px;">${editing ? esc(editing.name) : 'Nuevo almacén'}</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">Almacenes: dales de alta, cámbiales el nombre o archívalos.</div>
         </div>
       </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        ${editing ? `
+          <div style="position:relative;">
+            <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__whActionMenuOpen=!window.__whActionMenuOpen; renderTab();">Acción ▾</button>
+            ${window.__whActionMenuOpen ? `
+              <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:0;margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:150px;">
+                <button class="btn btn-ghost" style="width:100%;justify-content:flex-start;white-space:nowrap;color:${editing.archived?'var(--success)':'var(--danger)'};" onclick="window.__whActionMenuOpen=false; setWarehouseArchived('${editing.id}', ${!editing.archived})">${editing.archived?'Restaurar':'Archivar'}</button>
+              </div>` : ''}
+          </div>` : ''}
+        ${navIdx>-1 && navIds.length>1 ? `
+          <div style="display:flex;align-items:center;gap:4px;">
+            ${arrowBtn(-1, 'Almacén anterior', '←')}
+            <span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${navIdx+1}/${navIds.length}</span>
+            ${arrowBtn(1, 'Almacén siguiente', '→')}
+          </div>` : ''}
+        ${!editMode ? `<button class="btn btn-ghost" onclick="enterWarehouseEditMode()">Editar</button>` : ''}
+        <button class="btn btn-ghost" onclick="newWarehouse()">+ Nuevo</button>
+        ${editMode ? `<button class="btn btn-primary wh-submit-btn" onclick="submitWarehouse('${editId||''}')">${submitLabel}</button>` : ''}
+      </div>
+    </div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+    <div style="flex:2;min-width:360px;">
+    ${!editMode ? `
+    <div class="card">${tplWarehouseViewCard(w)}</div>
+    <div id="wh-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
+    ` : `
+    <div class="card" oninput="window.__whFormDirty=true;" onchange="window.__whFormDirty=true;">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:220px;"><label>Nombre</label><input id="wh-name" maxlength="80" placeholder="Ej. Sant Joan de Vilatorrada" value="${esc(w.name||'')}" /></div>
+        <div class="field" style="flex:1;min-width:220px;"><label>Ubicación (localidad)</label><input id="wh-location" maxlength="80" placeholder="Ej. Manresa" onblur="this.value = formatCiudad(this.value);" value="${esc(w.location||'')}" /></div>
+      </div>
+      <div class="field" style="margin-bottom:${editing?'0':'14px'};">
+        <label>Color</label>
+        <input type="hidden" id="wh-color" value="${color}" />
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          ${WAREHOUSE_COLORS.map(c => `<button type="button" class="wh-swatch" data-color="${c}" onclick="pickWarehouseColor('${c}')" title="${c}" style="width:28px;height:28px;border-radius:50%;background:${c};border:none;cursor:pointer;padding:0;${c===color?'outline:3px solid var(--text);outline-offset:2px;':''}"></button>`).join('')}
+        </div>
+      </div>
+      ${editing ? '' : `<div style="font-size:12px;color:var(--mutedFaint);">Se crea con horario de lunes a viernes de 8:00 a 18:00. Lo puedes cambiar después en Franjas horarias → Horario del almacén.</div>`}
+    </div>
+    <div id="wh-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
+      <button class="btn btn-ghost" onclick="exitWarehouseEditMode()">Cancelar</button>
+      <button class="btn btn-primary wh-submit-btn" onclick="submitWarehouse('${editId||''}')">${submitLabel}</button>
+    </div>
+    `}
+    </div>
+    <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Historial de cambios</div>
+      <div id="wh-historial-body">${warehouseHistorialBodyHtml()}</div>
+    </div>
     </div>`;
-  setTimeout(() => { const el = document.getElementById('wh-name'); if (el) el.focus(); }, 0);
 }
 // Identificador del almacén a partir del nombre ("Sant Joan" → "sant-joan"),
 // que no se repite con ninguno de los existentes.
@@ -1062,45 +1303,51 @@ async function submitWarehouse(editId){
   const errEl = document.getElementById('wh-error');
   errEl.textContent = '';
   const name = document.getElementById('wh-name').value.trim();
-  const location = document.getElementById('wh-location').value.trim();
+  const location = formatCiudad(document.getElementById('wh-location').value.trim());
   const color = document.getElementById('wh-color').value;
-  if (!name) { errEl.textContent = 'Indica el nombre del almacén.'; return; }
-  if (allWarehouses.some(w => w.id !== editId && w.name.trim().toLowerCase() === name.toLowerCase())) { errEl.textContent = 'Ya hay un almacén con ese nombre.'; return; }
-  const btn = document.getElementById('wh-save');
-  btn.disabled = true;
+  if (!name) { showFormError(errEl, 'Indica el nombre del almacén.'); return; }
+  if (allWarehouses.some(w => w.id !== editId && w.name.trim().toLowerCase() === name.toLowerCase())) { showFormError(errEl, 'Ya hay un almacén con ese nombre.'); return; }
+  const btns = [...document.querySelectorAll('.wh-submit-btn')];
+  btns.forEach(b => b.disabled = true);
   try {
+    let savedId = editId;
+    let changeLines;
     if (editId) {
+      const before = { ...allWarehouses.find(w => w.id === editId) };
       const { data, error } = await supabaseClient.from('warehouses').update({ name, location: location || null, color }).eq('id', editId).select();
       if (error || !data || !data.length) throw (error || new Error('sin permiso o error desconocido.'));
+      changeLines = buildWarehouseChangeSummary(before, { name, location, color });
     } else {
-      const id = warehouseSlug(name);
+      savedId = warehouseSlug(name);
       const sortOrder = allWarehouses.reduce((m, w) => Math.max(m, w.sortOrder || 0), 0) + 1;
-      const { error } = await supabaseClient.from('warehouses').insert({ id, name, location: location || null, color, sort_order: sortOrder });
+      const { error } = await supabaseClient.from('warehouses').insert({ id: savedId, name, location: location || null, color, sort_order: sortOrder });
       if (error) throw error;
       // Horario de partida: lunes a viernes de 8 a 18, fin de semana cerrado.
       const days = ['lun', 'mar', 'mie', 'jue', 'vie', 'sab', 'dom'];
-      const { error: schedError } = await supabaseClient.from('warehouse_schedules').insert(days.map(d => ({ warehouse_id: id, weekday: d, open: !['sab', 'dom'].includes(d), ranges: [{ start: '08:00', end: '18:00' }] })));
+      const { error: schedError } = await supabaseClient.from('warehouse_schedules').insert(days.map(d => ({ warehouse_id: savedId, weekday: d, open: !['sab', 'dom'].includes(d), ranges: [{ start: '08:00', end: '18:00' }] })));
       if (schedError) throw schedError;
+      changeLines = ['Almacén creado.'];
     }
+    if (changeLines.length) await logWarehouseHistorial(savedId, changeLines.join('\n'));
     await reloadWarehouseData();
-    closeModal();
+    window.__whNavIds = warehousesFilteredList().list.map(w => w.id);
+    openWarehouseForm(savedId, true);
   } catch (err) {
-    errEl.textContent = 'No se pudo guardar: ' + (err && err.message ? err.message : 'error desconocido.');
-    btn.disabled = false;
+    showFormError(errEl, 'No se pudo guardar: ' + (err && err.message ? err.message : 'error desconocido.'));
+    btns.forEach(b => b.disabled = false);
   }
 }
-async function toggleWarehouseArchived(id){
-  const w = allWarehouses.find(x => x.id === id);
-  if (!w) return;
+async function setWarehouseArchived(id, archived){
   const errEl = document.getElementById('wh-error');
-  if (!w.archived && allWarehouses.filter(x => !x.archived).length <= 1) { errEl.textContent = 'Tiene que quedar al menos un almacén activo.'; return; }
+  if (archived && allWarehouses.filter(x => !x.archived).length <= 1) { if (errEl) showFormError(errEl, 'Tiene que quedar al menos un almacén activo.'); return; }
   try {
-    const { data, error } = await supabaseClient.from('warehouses').update({ archived: !w.archived }).eq('id', id).select();
+    const { data, error } = await supabaseClient.from('warehouses').update({ archived }).eq('id', id).select();
     if (error || !data || !data.length) throw (error || new Error('sin permiso o error desconocido.'));
+    await logWarehouseHistorial(id, archived ? 'Archivado.' : 'Restaurado.');
     await reloadWarehouseData();
-    closeModal();
+    openWarehouseForm(id, true);
   } catch (err) {
-    errEl.textContent = 'No se pudo guardar: ' + (err && err.message ? err.message : 'error desconocido.');
+    if (errEl) showFormError(errEl, 'No se pudo guardar: ' + (err && err.message ? err.message : 'error desconocido.'));
   }
 }
 function renderTab(){
@@ -1125,7 +1372,7 @@ function renderTab(){
   const almacenBar = (isAlmacenTab(currentTab) && !window.__showingContactoDetail) ? tplAlmacenBar() : '';
   const traficoBar = (currentTab === 'trafico' && !window.__showingContactoDetail) ? tplTraficoBar() : '';
   const moduleBar = almacenBar || traficoBar;
-  const hideBreadcrumb = (currentTab === 'inicio' && !window.__showingContactoDetail) || almacenBar || (traficoBar && !traficoIsSubpage());
+  const hideBreadcrumb = (currentTab === 'inicio' && !window.__showingContactoDetail) || (almacenBar && !almacenIsSubpage()) || (traficoBar && !traficoIsSubpage());
   const breadcrumb = hideBreadcrumb ? '' : renderBreadcrumbHtml();
   el.innerHTML = moduleBar + breadcrumb + bodyHtml;
 }
