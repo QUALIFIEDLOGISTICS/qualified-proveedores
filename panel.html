@@ -33,6 +33,26 @@
   td{padding:11px 12px;font-size:13.5px;border-bottom:1px solid var(--border);}
   tr:last-child td{border-bottom:none;}
   .dr-row:hover td{background:var(--panel2);}
+  /* Tablas de tarifas: filas alternas, resalte al pasar, franja de color por tipo de camión y chips. */
+  table.tf-table th{background:var(--panel2);padding:9px 12px;}
+  table.tf-table td{padding:10px 12px;vertical-align:middle;}
+  table.tf-table tbody tr:nth-child(even) td{background:#F6F8FB;}
+  table.tf-table tbody tr:hover td{background:#E7EEF8;}
+  table.tf-table tbody tr.tf-tipo-ftl td:first-child{box-shadow:inset 3px 0 0 #2E6F95;}
+  table.tf-table tbody tr.tf-tipo-ltl td:first-child{box-shadow:inset 3px 0 0 #C98A2E;}
+  table.tf-table tbody tr.tf-tipo-granel td:first-child{box-shadow:inset 3px 0 0 #3F8F5F;}
+  table.tf-table td.tf-precio{text-align:right;font-weight:700;font-size:14.5px;white-space:nowrap;font-variant-numeric:tabular-nums;}
+  table.tf-table td.tf-precio small{font-weight:500;font-size:11.5px;color:var(--muted);}
+  table.tf-table.tf-hist td{color:var(--muted);}
+  table.tf-table.tf-hist td.tf-precio{font-weight:600;}
+  .tf-zona{font-family:var(--mono);font-weight:700;font-size:13px;line-height:1.3;}
+  .tf-lugar{font-size:11.5px;color:var(--mutedFaint);line-height:1.3;}
+  .tf-chip{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11.5px;font-weight:600;white-space:nowrap;}
+  .tf-chip.ftl{background:rgba(46,111,149,.13);color:#245C7C;}
+  .tf-chip.ltl{background:rgba(201,138,46,.17);color:#8A5A12;}
+  .tf-chip.granel{background:rgba(63,143,95,.15);color:#2F6F49;}
+  .tf-chip.gas-si{background:rgba(63,143,95,.14);color:#2F6F49;}
+  .tf-chip.gas-no{background:var(--panel2);color:var(--mutedFaint);font-weight:500;}
   .dr-table td{white-space:nowrap;}
   input,select,textarea{width:100%;box-sizing:border-box;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:9px 11px;color:var(--text);font-family:var(--body);font-size:14px;outline:none;}
   input[type="checkbox"]{all:revert;cursor:pointer;width:16px;height:16px;}
@@ -3112,13 +3132,23 @@ async function saveContactoWarehouses(id){
 // Tarifas de un cliente, dentro de su ficha (Comercial → Clientes): aquí es donde
 // se suben, se actualizan (↻ crea una nueva con fecha de hoy) y se eliminan. Arriba
 // las vigentes; debajo las históricas (las que ya cambiaron de precio), con su periodo.
+// Zona en negrita y, debajo, el CP y la ciudad en pequeño (o la provincia si es una zona de España sin CP).
 function tarifaZonaCeldaHtml(z, cp, ciudad){
-  const lugar = tarifaLugarTxt(cp, ciudad);
-  return `<span style="font-family:var(--mono);font-weight:600;">${esc(z)}</span>${lugar ? ` <span style="color:var(--mutedFaint);font-size:12px;">${esc(truncateText(lugar, 22))}</span>` : ''}`;
+  const lugar = tarifaLugarTxt(cp, ciudad) || tarifaZonaHint(z);
+  return `<div class="tf-zona">${esc(z)}</div>${lugar ? `<div class="tf-lugar" title="${esc(lugar)}">${esc(truncateText(lugar, 24))}</div>` : ''}`;
+}
+function tarifaTipoChipHtml(t){
+  const extra = t.tipo === 'LTL' && t.metros ? ` · ${tarifaFmtMetros(t.metros)} m` : '';
+  return `<span class="tf-chip ${esc(String(t.tipo).toLowerCase())}">${esc(tarifaTipoLabel(t.tipo))}${extra}</span>`;
+}
+function tarifaGasoilChipHtml(t){
+  return `<span class="tf-chip ${t.gasoil ? 'gas-si' : 'gas-no'}">${t.gasoil ? 'Con gasoil' : 'Sin gasoil'}</span>`;
+}
+function tarifaPrecioCeldaHtml(t){
+  return `${eur2(t.precio)}${t.tipo === 'GRANEL' ? '<small>/t</small>' : ''}`;
 }
 function tplContactoTarifasCard(c){
   const vigentes = tarifaPeriodos(tarifas.filter(t => t.clienteId === c.id)).filter(t => t.vigente);
-  const tipoCelda = t => `${esc(tarifaTipoLabel(t.tipo))}${t.tipo === 'LTL' && t.metros ? ` <span style="color:var(--mutedFaint);font-size:12px;">${tarifaFmtMetros(t.metros)} m</span>` : ''}`;
   return `
     <div class="card" style="margin-top:20px;padding:0;overflow-x:auto;">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 18px 12px;">
@@ -3126,17 +3156,17 @@ function tplContactoTarifasCard(c){
         <button class="btn btn-primary" onclick="openTarifaForm(null, null, '${c.id}')">+ Nueva tarifa</button>
       </div>
       ${vigentes.length ? `
-      <table>
-        <thead><tr>${thSort('Desde','date')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Tipo','text')}${thSort('Precio','number')}${thSort('Gasoil','text')}<th>Acciones</th></tr></thead>
+      <table class="tf-table">
+        <thead><tr>${thSort('Desde','date')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Tipo','text')}${thSort('Precio','number', 'style="text-align:right;"')}${thSort('Gasoil','text')}<th>Acciones</th></tr></thead>
         <tbody>
           ${vigentes.map(t => `
-            <tr style="cursor:pointer;" onclick="openTarifaForm('${t.id}', null, '${c.id}')">
+            <tr class="tf-tipo-${esc(String(t.tipo).toLowerCase())}" style="cursor:pointer;" onclick="openTarifaForm('${t.id}', null, '${c.id}')">
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
               <td style="white-space:nowrap;" data-sort-value="${esc(t.origenZona)}">${tarifaZonaCeldaHtml(t.origenZona, t.origenCp, t.origenCiudad)}</td>
               <td style="white-space:nowrap;" data-sort-value="${esc(t.destinoZona)}">${tarifaZonaCeldaHtml(t.destinoZona, t.destinoCp, t.destinoCiudad)}</td>
-              <td style="white-space:nowrap;">${tipoCelda(t)}</td>
-              <td style="font-weight:700;white-space:nowrap;">${eur2(t.precio)}${t.tipo === 'GRANEL' ? '<span style="font-weight:400;color:var(--muted);">/t</span>' : ''}</td>
-              <td style="white-space:nowrap;color:${t.gasoil ? 'var(--text)' : 'var(--mutedFaint)'};">${t.gasoil ? 'Con indexación' : 'Sin indexación'}</td>
+              <td data-sort-value="${esc(tarifaTipoLabel(t.tipo))}">${tarifaTipoChipHtml(t)}</td>
+              <td class="tf-precio">${tarifaPrecioCeldaHtml(t)}</td>
+              <td data-sort-value="${t.gasoil ? 'Con' : 'Sin'}">${tarifaGasoilChipHtml(t)}</td>
               <td style="white-space:nowrap;">
                 <button class="btn btn-ghost" onclick="event.stopPropagation(); openCambiarPrecioModal('${t.id}');" title="Cambiar el precio desde una fecha: la tarifa actual pasa a históricas" style="padding:3px 9px;font-size:12px;">Cambiar precio</button>
                 <button onclick="event.stopPropagation(); openTarifaForm('${t.id}', null, '${c.id}');" title="Corregir: editar la tarifa sin crear histórico (para errores de tecleo)" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;cursor:pointer;vertical-align:middle;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
@@ -3153,18 +3183,18 @@ function tplContactoTarifasHistoricasCard(c){
     <div class="card" style="margin-top:20px;padding:0;overflow-x:auto;">
       <div style="padding:16px 18px 12px;font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Tarifas de transporte históricas <span style="font-weight:400;color:var(--mutedFaint);">(${historicas.length})</span></div>
       ${historicas.length ? `
-      <table>
-        <thead><tr>${thSort('Vigente del','date')}${thSort('Hasta','date')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Tipo','text')}${thSort('Precio','number')}${thSort('Gasoil','text')}</tr></thead>
+      <table class="tf-table tf-hist">
+        <thead><tr>${thSort('Vigente del','date')}${thSort('Hasta','date')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Tipo','text')}${thSort('Precio','number', 'style="text-align:right;"')}${thSort('Gasoil','text')}</tr></thead>
         <tbody>
           ${historicas.map(t => `
-            <tr style="cursor:pointer;" onclick="openTarifaForm('${t.id}', null, '${c.id}')">
-              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
-              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.hasta)}">${fmtDateDMY(t.hasta)}</td>
+            <tr class="tf-tipo-${esc(String(t.tipo).toLowerCase())}" style="cursor:pointer;" onclick="openTarifaForm('${t.id}', null, '${c.id}')">
+              <td style="white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(t.hasta)}">${fmtDateDMY(t.hasta)}</td>
               <td style="white-space:nowrap;" data-sort-value="${esc(t.origenZona)}">${tarifaZonaCeldaHtml(t.origenZona, t.origenCp, t.origenCiudad)}</td>
               <td style="white-space:nowrap;" data-sort-value="${esc(t.destinoZona)}">${tarifaZonaCeldaHtml(t.destinoZona, t.destinoCp, t.destinoCiudad)}</td>
-              <td style="white-space:nowrap;">${esc(tarifaTipoLabel(t.tipo))}</td>
-              <td style="white-space:nowrap;color:var(--muted);">${eur2(t.precio)}${t.tipo === 'GRANEL' ? '/t' : ''}</td>
-              <td style="white-space:nowrap;color:var(--mutedFaint);">${t.gasoil ? 'Con indexación' : 'Sin indexación'}</td>
+              <td data-sort-value="${esc(tarifaTipoLabel(t.tipo))}">${tarifaTipoChipHtml(t)}</td>
+              <td class="tf-precio">${tarifaPrecioCeldaHtml(t)}</td>
+              <td data-sort-value="${t.gasoil ? 'Con' : 'Sin'}">${tarifaGasoilChipHtml(t)}</td>
             </tr>`).join('')}
         </tbody>
       </table>` : `<div style="color:var(--mutedFaint);font-size:12.5px;padding:0 18px 18px;">Cuando una tarifa cambie de precio (mismo cliente, zonas, códigos postales y tipo de camión), la anterior pasará aquí sola con las fechas en que estuvo vigente.</div>`}
@@ -5952,21 +5982,21 @@ function tarifasListBodyHtml(){
   const vig = view === 'vigentes';
   return `
     <div class="card" style="padding:0;overflow-x:auto;">
-      <table>
+      <table class="tf-table">
         <thead><tr>
-          ${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Tipo','text')}${thSort('Precio','number')}${thSort('€/metro','number')}${thSort('Gasoil','text')}${thSort('Observaciones','text')}
+          ${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Tipo','text')}${thSort('Precio','number', 'style="text-align:right;"')}${thSort('€/metro','number', 'style="text-align:right;"')}${thSort('Gasoil','text')}${thSort('Observaciones','text')}
         </tr></thead>
         <tbody>
           ${list.map(t => `
-            <tr style="cursor:pointer;" onclick="openClienteDesdeTarifas('${t.clienteId}')">
+            <tr class="tf-tipo-${esc(String(t.tipo).toLowerCase())}" style="cursor:pointer;" onclick="openClienteDesdeTarifas('${t.clienteId}')">
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
               <td style="font-weight:600;white-space:nowrap;" title="${esc(tarifaClienteNombre(t.clienteId))}">${esc(truncateText(tarifaClienteNombre(t.clienteId), 24))}</td>
-              <td style="white-space:nowrap;" data-sort-value="${esc(t.origenZona)}" title="${esc(tarifaLugarTxt(t.origenCp, t.origenCiudad) || tarifaZonaHint(t.origenZona))}"><span style="font-family:var(--mono);font-weight:600;">${esc(t.origenZona)}</span>${tarifaLugarTxt(t.origenCp, t.origenCiudad) ? ` <span style="color:var(--mutedFaint);font-size:12px;">${esc(truncateText(tarifaLugarTxt(t.origenCp, t.origenCiudad), 24))}</span>` : ''}</td>
-              <td style="white-space:nowrap;" data-sort-value="${esc(t.destinoZona)}" title="${esc(tarifaLugarTxt(t.destinoCp, t.destinoCiudad) || tarifaZonaHint(t.destinoZona))}"><span style="font-family:var(--mono);font-weight:600;">${esc(t.destinoZona)}</span>${tarifaLugarTxt(t.destinoCp, t.destinoCiudad) ? ` <span style="color:var(--mutedFaint);font-size:12px;">${esc(truncateText(tarifaLugarTxt(t.destinoCp, t.destinoCiudad), 24))}</span>` : ''}</td>
-              <td style="white-space:nowrap;">${esc(tarifaTipoLabel(t.tipo))}</td>
-              <td style="font-weight:700;white-space:nowrap;">${eur2(t.precio)}${t.tipo === 'GRANEL' ? '<span style="font-weight:400;color:var(--muted);">/t</span>' : ''}</td>
-              <td style="color:var(--muted);white-space:nowrap;">${t.tipo === 'LTL' && t.metros > 0 ? eur2(t.precio / t.metros) : '—'}</td>
-              <td style="white-space:nowrap;color:${t.gasoil ? 'var(--text)' : 'var(--mutedFaint)'};">${t.gasoil ? 'Con indexación' : 'Sin indexación'}</td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(t.origenZona)}">${tarifaZonaCeldaHtml(t.origenZona, t.origenCp, t.origenCiudad)}</td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(t.destinoZona)}">${tarifaZonaCeldaHtml(t.destinoZona, t.destinoCp, t.destinoCiudad)}</td>
+              <td data-sort-value="${esc(tarifaTipoLabel(t.tipo))}">${tarifaTipoChipHtml(t)}</td>
+              <td class="tf-precio">${tarifaPrecioCeldaHtml(t)}</td>
+              <td style="color:var(--muted);white-space:nowrap;text-align:right;">${t.tipo === 'LTL' && t.metros > 0 ? eur2(t.precio / t.metros) : '—'}</td>
+              <td data-sort-value="${t.gasoil ? 'Con' : 'Sin'}">${tarifaGasoilChipHtml(t)}</td>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.observaciones)}" title="${esc(t.observaciones)}">${esc(truncateText(t.observaciones, 26)) || '—'}</td>
             </tr>`).join('')}
         </tbody>
