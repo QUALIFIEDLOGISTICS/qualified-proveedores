@@ -5866,12 +5866,23 @@ function tplContactoTarifasHistorial(c){
 function tarifasVigentes(){
   return tarifaPeriodos(tarifas).filter(t => t.vigente);
 }
+// País de una zona: sus 2 primeras letras (ES08 → ES), con el nombre en español.
+function tarifaPaisNombre(cc){
+  try { return new Intl.DisplayNames(['es'], { type: 'region' }).of(cc) || cc; } catch (e) { return cc; }
+}
+// Solo los países que tienen alguna tarifa guardada (de origen o de destino según el campo).
+function tarifaPaisesOptionsHtml(field, selected){
+  const codes = [...new Set(tarifas.map(t => (t[field] || '').slice(0, 2)).filter(Boolean))]
+    .sort((a, b) => tarifaPaisNombre(a).localeCompare(tarifaPaisNombre(b), 'es'));
+  return codes.map(cc => `<option value="${esc(cc)}" ${cc === selected ? 'selected' : ''}>${esc(tarifaPaisNombre(cc))}</option>`).join('');
+}
 function tarifasFilteredList(){
   const view = window.__tarifasView || 'vigentes';
   const search = (window.__tarifasSearch || '').toLowerCase();
   const fCliente = (window.__tarifasCliente || '').trim().toLowerCase();
   const fOrigen = (window.__tarifasOrigen || '').trim().toUpperCase();
   const fDestino = (window.__tarifasDestino || '').trim().toUpperCase();
+  const fPaisO = window.__tarifasPaisO || '', fPaisD = window.__tarifasPaisD || '';
   const fTipo = window.__tarifasTipo || '';
   const fGasoil = window.__tarifasGasoil || '';
   let list = view === 'vigentes' ? tarifasVigentes() : tarifas.slice();
@@ -5880,13 +5891,15 @@ function tarifasFilteredList(){
     if (fCliente && !cliente.toLowerCase().includes(fCliente)) return false;
     if (fOrigen && !t.origenZona.startsWith(fOrigen)) return false;
     if (fDestino && !t.destinoZona.startsWith(fDestino)) return false;
+    if (fPaisO && !t.origenZona.startsWith(fPaisO)) return false;
+    if (fPaisD && !t.destinoZona.startsWith(fPaisD)) return false;
     if (fTipo && t.tipo !== fTipo) return false;
     if (fGasoil && (fGasoil === 'si') !== t.gasoil) return false;
     if (search && ![cliente, t.origenZona, t.destinoZona, t.origenCp, t.destinoCp, t.origenCiudad, t.destinoCiudad, t.observaciones, t.tipo, tarifaTipoLabel(t.tipo)].some(v => (v||'').toLowerCase().includes(search))) return false;
     return true;
   });
   list.sort(tarifaCmpReciente);
-  return { list, view, filtered: !!(search || fCliente || fOrigen || fDestino || fTipo || fGasoil) };
+  return { list, view, filtered: !!(search || fCliente || fOrigen || fDestino || fPaisO || fPaisD || fTipo || fGasoil) };
 }
 function tarifasListBodyHtml(){
   const { list, view, filtered } = tarifasFilteredList();
@@ -5951,7 +5964,15 @@ function tplTarifasPage(){
         <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
       </div>
       <input placeholder="Cliente" data-combo="tf-f-clientes" autocomplete="off" value="${esc(window.__tarifasCliente||'')}" oninput="window.__tarifasCliente=this.value; refreshTarifasListBody();" style="width:190px;" />
+      <select onchange="window.__tarifasPaisO=this.value; refreshTarifasListBody();" style="width:160px;" title="País de origen">
+        <option value="">País origen: todos</option>
+        ${tarifaPaisesOptionsHtml('origenZona', window.__tarifasPaisO)}
+      </select>
       <input placeholder="Origen (ES08)" data-combo="tf-f-origenes" autocomplete="off" value="${esc(window.__tarifasOrigen||'')}" oninput="this.value=this.value.toUpperCase(); window.__tarifasOrigen=this.value; refreshTarifasListBody();" style="width:130px;" />
+      <select onchange="window.__tarifasPaisD=this.value; refreshTarifasListBody();" style="width:165px;" title="País de destino">
+        <option value="">País destino: todos</option>
+        ${tarifaPaisesOptionsHtml('destinoZona', window.__tarifasPaisD)}
+      </select>
       <input placeholder="Destino (FR13)" data-combo="tf-f-destinos" autocomplete="off" value="${esc(window.__tarifasDestino||'')}" oninput="this.value=this.value.toUpperCase(); window.__tarifasDestino=this.value; refreshTarifasListBody();" style="width:130px;" />
       <select onchange="window.__tarifasTipo=this.value; refreshTarifasListBody();" style="width:120px;">
         <option value="" ${!window.__tarifasTipo?'selected':''}>Todos los camiones</option>
@@ -5976,6 +5997,8 @@ function resetTarifasState(){
   window.__tarifasCliente = '';
   window.__tarifasOrigen = '';
   window.__tarifasDestino = '';
+  window.__tarifasPaisO = '';
+  window.__tarifasPaisD = '';
   window.__tarifasTipo = '';
   window.__tarifasGasoil = '';
 }
