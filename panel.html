@@ -3110,35 +3110,63 @@ async function saveContactoWarehouses(id){
   }
 }
 // Tarifas de un cliente, dentro de su ficha (Comercial → Clientes): aquí es donde
-// se suben, se actualizan (↻ crea una nueva con fecha de hoy) y se eliminan.
+// se suben, se actualizan (↻ crea una nueva con fecha de hoy) y se eliminan. Arriba
+// las vigentes; debajo las históricas (las que ya cambiaron de precio), con su periodo.
+function tarifaZonaCeldaHtml(z, cp, ciudad){
+  const lugar = tarifaLugarTxt(cp, ciudad);
+  return `<span style="font-family:var(--mono);font-weight:600;">${esc(z)}</span>${lugar ? ` <span style="color:var(--mutedFaint);font-size:12px;">${esc(truncateText(lugar, 22))}</span>` : ''}`;
+}
 function tplContactoTarifasCard(c){
-  const list = tarifas.filter(t => t.clienteId === c.id).sort(tarifaCmpReciente);
-  const zona = (z, cp, ciudad) => `<span style="font-family:var(--mono);font-weight:600;">${esc(z)}</span>${tarifaLugarTxt(cp, ciudad) ? ` <span style="color:var(--mutedFaint);font-size:12px;">${esc(truncateText(tarifaLugarTxt(cp, ciudad), 22))}</span>` : ''}`;
+  const vigentes = tarifaPeriodos(tarifas.filter(t => t.clienteId === c.id)).filter(t => t.vigente);
+  const tipoCelda = t => `${esc(tarifaTipoLabel(t.tipo))}${t.tipo === 'LTL' && t.metros ? ` <span style="color:var(--mutedFaint);font-size:12px;">${tarifaFmtMetros(t.metros)} m</span>` : ''}`;
   return `
     <div class="card" style="margin-top:20px;padding:0;overflow-x:auto;">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 18px 12px;">
-        <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Tarifas Transporte <span style="font-weight:400;color:var(--mutedFaint);">(${list.length})</span></div>
+        <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Tarifas de transporte vigentes <span style="font-weight:400;color:var(--mutedFaint);">(${vigentes.length})</span></div>
         <button class="btn btn-primary" onclick="openTarifaForm(null, null, '${c.id}')">+ Nueva tarifa</button>
       </div>
-      ${list.length ? `
+      ${vigentes.length ? `
       <table>
-        <thead><tr>${thSort('Fecha','date')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Tipo','text')}${thSort('Precio','number')}${thSort('Gasoil','text')}<th>Acciones</th></tr></thead>
+        <thead><tr>${thSort('Desde','date')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Tipo','text')}${thSort('Precio','number')}${thSort('Gasoil','text')}<th>Acciones</th></tr></thead>
         <tbody>
-          ${list.map(t => `
+          ${vigentes.map(t => `
             <tr style="cursor:pointer;" onclick="openTarifaForm('${t.id}', null, '${c.id}')">
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
-              <td style="white-space:nowrap;" data-sort-value="${esc(t.origenZona)}">${zona(t.origenZona, t.origenCp, t.origenCiudad)}</td>
-              <td style="white-space:nowrap;" data-sort-value="${esc(t.destinoZona)}">${zona(t.destinoZona, t.destinoCp, t.destinoCiudad)}</td>
-              <td style="white-space:nowrap;">${esc(tarifaTipoLabel(t.tipo))}${t.tipo === 'LTL' && t.metros ? ` <span style="color:var(--mutedFaint);font-size:12px;">${tarifaFmtMetros(t.metros)} m</span>` : ''}</td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(t.origenZona)}">${tarifaZonaCeldaHtml(t.origenZona, t.origenCp, t.origenCiudad)}</td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(t.destinoZona)}">${tarifaZonaCeldaHtml(t.destinoZona, t.destinoCp, t.destinoCiudad)}</td>
+              <td style="white-space:nowrap;">${tipoCelda(t)}</td>
               <td style="font-weight:700;white-space:nowrap;">${eur2(t.precio)}${t.tipo === 'GRANEL' ? '<span style="font-weight:400;color:var(--muted);">/t</span>' : ''}</td>
               <td style="white-space:nowrap;color:${t.gasoil ? 'var(--text)' : 'var(--mutedFaint)'};">${t.gasoil ? 'Con indexación' : 'Sin indexación'}</td>
               <td style="white-space:nowrap;">
-                <button onclick="event.stopPropagation(); openTarifaForm(null, '${t.id}', '${c.id}');" title="Actualizar precio: crea una tarifa nueva con fecha de hoy a partir de esta" style="background:none;border:none;color:var(--muted);font-size:15px;padding:2px 5px;cursor:pointer;">↻</button>
+                <button onclick="event.stopPropagation(); openTarifaForm(null, '${t.id}', '${c.id}');" title="Actualizar precio: crea una tarifa nueva con fecha de hoy; la actual pasa a históricas" style="background:none;border:none;color:var(--muted);font-size:15px;padding:2px 5px;cursor:pointer;">↻</button>
                 <button onclick="event.stopPropagation(); deleteTarifa('${t.id}');" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);font-size:14px;padding:2px 4px;cursor:pointer;">🗑</button>
               </td>
             </tr>`).join('')}
         </tbody>
-      </table>` : `<div style="color:var(--mutedFaint);font-size:12.5px;padding:0 18px 18px;">Este cliente todavía no tiene tarifas. Sube la primera con «+ Nueva tarifa».</div>`}
+      </table>` : `<div style="color:var(--mutedFaint);font-size:12.5px;padding:0 18px 18px;">Este cliente todavía no tiene tarifas vigentes. Sube la primera con «+ Nueva tarifa».</div>`}
+    </div>`;
+}
+function tplContactoTarifasHistoricasCard(c){
+  const historicas = tarifaPeriodos(tarifas.filter(t => t.clienteId === c.id)).filter(t => !t.vigente);
+  return `
+    <div class="card" style="margin-top:20px;padding:0;overflow-x:auto;">
+      <div style="padding:16px 18px 12px;font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Tarifas de transporte históricas <span style="font-weight:400;color:var(--mutedFaint);">(${historicas.length})</span></div>
+      ${historicas.length ? `
+      <table>
+        <thead><tr>${thSort('Vigente del','date')}${thSort('Hasta','date')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Tipo','text')}${thSort('Precio','number')}${thSort('Gasoil','text')}</tr></thead>
+        <tbody>
+          ${historicas.map(t => `
+            <tr style="cursor:pointer;" onclick="openTarifaForm('${t.id}', null, '${c.id}')">
+              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
+              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.hasta)}">${fmtDateDMY(t.hasta)}</td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(t.origenZona)}">${tarifaZonaCeldaHtml(t.origenZona, t.origenCp, t.origenCiudad)}</td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(t.destinoZona)}">${tarifaZonaCeldaHtml(t.destinoZona, t.destinoCp, t.destinoCiudad)}</td>
+              <td style="white-space:nowrap;">${esc(tarifaTipoLabel(t.tipo))}</td>
+              <td style="white-space:nowrap;color:var(--muted);">${eur2(t.precio)}${t.tipo === 'GRANEL' ? '/t' : ''}</td>
+              <td style="white-space:nowrap;color:var(--mutedFaint);">${t.gasoil ? 'Con indexación' : 'Sin indexación'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>` : `<div style="color:var(--mutedFaint);font-size:12.5px;padding:0 18px 18px;">Cuando una tarifa cambie de precio (mismo cliente, zonas, códigos postales y tipo de camión), la anterior pasará aquí sola con las fechas en que estuvo vigente.</div>`}
     </div>`;
 }
 function tplContactoDetailPage(){
@@ -3202,7 +3230,7 @@ function tplContactoDetailPage(){
       ${editMode ? tplContactoEditForm(c, editing, editId) : tplContactoViewCard(editing, fromModule)}
     </div>
     ${fromClientes && editing.esClienteAlmacen ? tplContactoAlmacenCard(editing, almacenEdit) : ''}
-    ${fromComercial ? tplContactoTarifasCard(editing) : ''}
+    ${fromComercial ? tplContactoTarifasCard(editing) + tplContactoTarifasHistoricasCard(editing) : ''}
     </div>
     ${inComercial ? tplContactoTarifasHistorial(editing) : `<div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Historial de cambios</div>
@@ -5827,39 +5855,53 @@ function tarifaPeriodos(list){
   }));
   return out.sort(tarifaCmpReciente);
 }
-// Panel de la derecha de la ficha del cliente (Comercial): vigentes e históricas con sus fechas.
+/* ---- Historial de cambios de tarifas (ficha del cliente en Comercial) ----
+   Cada alta, cambio o baja de una tarifa queda anotado en el historial del cliente
+   como "Tarifa · ha cambiado …" (con quién lo hizo y cuándo). En Comercial solo se
+   enseñan esas anotaciones, no los cambios de la ficha del contacto. */
+const TARIFA_LOG_PREFIX = 'Tarifa · ';
+function tarifaEtiqueta(t){
+  return `${t.origenZona} → ${t.destinoZona} (${tarifaTipoLabel(t.tipo)})`;
+}
+function tarifaPrecioTxt(t){ return eur2(t.precio) + (t.tipo === 'GRANEL' ? '/t' : ''); }
+function tarifaCambiosTxt(before, after){
+  const lines = [];
+  const add = (label, a, b) => { if (String(a ?? '') !== String(b ?? '')) lines.push(`${label} de ${a === '' || a == null ? '—' : a} a ${b === '' || b == null ? '—' : b}`); };
+  add('precio', tarifaPrecioTxt(before), tarifaPrecioTxt(after));
+  add('fecha', fmtDateDMY(before.fecha), fmtDateDMY(after.fecha));
+  add('tipo de camión', tarifaTipoLabel(before.tipo), tarifaTipoLabel(after.tipo));
+  add('metros', tarifaFmtMetros(before.metros), tarifaFmtMetros(after.metros));
+  add('zona de origen', before.origenZona, after.origenZona);
+  add('zona de destino', before.destinoZona, after.destinoZona);
+  add('CP de origen', before.origenCp, after.origenCp);
+  add('CP de destino', before.destinoCp, after.destinoCp);
+  add('indexación de gasoil', before.gasoil ? 'sí' : 'no', after.gasoil ? 'sí' : 'no');
+  add('observaciones', before.observaciones, after.observaciones);
+  return lines;
+}
+async function logTarifaHistorial(clienteId, texto){
+  if (texto) await logContactoHistorial(clienteId, TARIFA_LOG_PREFIX + texto);
+}
+// Panel de la derecha de la ficha del cliente (Comercial): solo los cambios de tarifas.
 function tplContactoTarifasHistorial(c){
-  if (!c) {
-    return `
-    <div class="card" style="flex:1;min-width:280px;">
-      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:14px;">Historial de tarifas</div>
-      <div style="color:var(--mutedFaint);font-size:12.5px;">Aquí verás las tarifas del cliente en cuanto lo guardes.</div>
-    </div>`;
+  const titulo = `<div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Historial de cambios</div>`;
+  const msg = txt => `<div style="color:var(--mutedFaint);font-size:12.5px;">${txt}</div>`;
+  const historial = window.__contactoHistorial;
+  let body;
+  if (!c) body = msg('Se empezará a registrar en cuanto guardes el cliente.');
+  else if (historial === null || historial === undefined) body = msg('Cargando…');
+  else {
+    const list = historial.filter(h => (h.resumen || '').startsWith(TARIFA_LOG_PREFIX));
+    body = !list.length ? msg('Todavía no hay cambios de tarifas registrados.') : list.map(h => `
+      <div style="padding:10px 0;border-bottom:1px solid var(--border);">
+        <div style="font-size:11px;color:var(--mutedFaint);margin-bottom:3px;">${fmtDateHora(h.createdAt)}</div>
+        <div style="font-size:12.5px;color:var(--text);">${h.usuario ? `<b>${esc(h.usuario)}</b> ` : ''}${esc(h.resumen.slice(TARIFA_LOG_PREFIX.length))}</div>
+      </div>`).join('');
   }
-  const periodos = tarifaPeriodos(tarifas.filter(t => t.clienteId === c.id));
-  const vigentes = periodos.filter(t => t.vigente);
-  const historicas = periodos.filter(t => !t.vigente);
-  const titulo = txt => `<div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin:0 0 10px;">${txt}</div>`;
-  const row = (t) => {
-    const lugar = [tarifaLugarTxt(t.origenCp, t.origenCiudad), tarifaLugarTxt(t.destinoCp, t.destinoCiudad)].filter(Boolean).join(' → ');
-    return `
-      <div style="padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="openTarifaForm('${t.id}', null, '${c.id}')">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
-          <span style="font-family:var(--mono);font-weight:700;font-size:13px;">${esc(t.origenZona)} → ${esc(t.destinoZona)}</span>
-          <span style="font-weight:700;font-size:13px;white-space:nowrap;${t.vigente ? '' : 'color:var(--muted);'}">${eur2(t.precio)}${t.tipo === 'GRANEL' ? '/t' : ''}</span>
-        </div>
-        <div style="font-size:11.5px;color:var(--mutedFaint);margin-top:2px;">${esc(tarifaTipoLabel(t.tipo))}${t.metros ? ' · ' + tarifaFmtMetros(t.metros) + ' m' : ''}${t.gasoil ? ' · con gasoil' : ''}${lugar ? ' · ' + esc(lugar) : ''}</div>
-        <div style="font-size:12px;margin-top:3px;${t.vigente ? 'color:var(--success);font-weight:600;' : 'color:var(--muted);'}">${t.vigente ? `Activa desde el ${fmtDateDMY(t.fecha)}` : `Del ${fmtDateDMY(t.fecha)} al ${fmtDateDMY(t.hasta)}`}</div>
-      </div>`;
-  };
   return `
     <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
-      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:14px;">Historial de tarifas</div>
-      ${titulo(`Vigentes (${vigentes.length})`)}
-      ${vigentes.length ? vigentes.map(row).join('') : `<div style="color:var(--mutedFaint);font-size:12.5px;">Este cliente todavía no tiene tarifas vigentes.</div>`}
-      <div style="height:22px;"></div>
-      ${titulo(`Históricas (${historicas.length})`)}
-      ${historicas.length ? historicas.map(row).join('') : `<div style="color:var(--mutedFaint);font-size:12.5px;">Cuando una tarifa cambie de precio (mismo cliente, zonas y códigos postales), la anterior pasará aquí con sus fechas.</div>`}
+      ${titulo}
+      ${body}
     </div>`;
 }
 // La vigente de cada cliente + ruta (zonas y CP) + tipo.
@@ -6282,6 +6324,21 @@ async function submitTarifaForm(editId, addAnother){
     destino_zona: f.destinoZona, destino_cp: f.destinoCp || null, destino_ciudad: f.destinoCiudad || null, tipo: f.tipo, indexacion_gasoil: f.gasoil, metros, precio: Math.round(precio * 100) / 100,
     observaciones: f.observaciones || null,
   };
+  // Lo que se anotará en el historial del cliente (quién cambió qué), calculado antes de guardar.
+  const after = { clienteId: cliente.id, fecha: f.fecha, origenZona: f.origenZona, origenCp: f.origenCp, origenCiudad: f.origenCiudad, destinoZona: f.destinoZona, destinoCp: f.destinoCp, destinoCiudad: f.destinoCiudad,
+    tipo: f.tipo, metros, precio: payload.precio, gasoil: f.gasoil, observaciones: f.observaciones };
+  let logTexto = '';
+  if (editId) {
+    const before = tarifas.find(t => t.id === editId);
+    const cambios = before ? tarifaCambiosTxt(before, after) : [];
+    if (cambios.length) logTexto = `ha modificado la tarifa ${tarifaEtiqueta(before)}: ${cambios.join('; ')}.`;
+  } else {
+    const key = tarifaRutaKey(after);
+    const prev = tarifaPeriodos(tarifas.filter(t => t.clienteId === cliente.id)).find(t => t.vigente && tarifaRutaKey(t) === key);
+    logTexto = prev
+      ? `ha cambiado la tarifa ${tarifaEtiqueta(after)} de ${tarifaPrecioTxt(prev)} a ${tarifaPrecioTxt(after)}, vigente desde el ${fmtDateDMY(after.fecha)} (la anterior, desde el ${fmtDateDMY(prev.fecha)}, pasa a históricas).`
+      : `ha añadido la tarifa ${tarifaEtiqueta(after)} a ${tarifaPrecioTxt(after)}, vigente desde el ${fmtDateDMY(after.fecha)}.`;
+  }
   const btns = [...document.querySelectorAll('.tf-submit-btn')];
   btns.forEach(b => b.disabled = true);
   const res = editId
@@ -6292,6 +6349,7 @@ async function submitTarifaForm(editId, addAnother){
     btns.forEach(b => b.disabled = false);
     return;
   }
+  await logTarifaHistorial(cliente.id, logTexto);
   await loadTarifas();
   window.__tarifaFormDirty = false;
   if (addAnother) {
@@ -6310,6 +6368,7 @@ async function deleteTarifa(id){
   if (!t || !confirm(`¿Eliminar la tarifa ${t.origenZona} → ${t.destinoZona} de ${tarifaClienteNombre(t.clienteId)} (${eur2(t.precio)})? Esta acción no se puede deshacer.`)) return;
   const { error } = await supabaseClient.from('tarifas').delete().eq('id', id);
   if (error) { alert('No se pudo eliminar: ' + error.message); return; }
+  await logTarifaHistorial(t.clienteId, `ha eliminado la tarifa ${tarifaEtiqueta(t)} de ${tarifaPrecioTxt(t)} (vigente desde el ${fmtDateDMY(t.fecha)}).`);
   await loadTarifas();
   // Desde la ficha del cliente se queda en la ficha; desde el formulario se vuelve a ella.
   if (window.__showingContactoDetail) { renderTab(); return; }
