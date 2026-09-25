@@ -5850,38 +5850,49 @@ function tarifaFormRefresh(){
   const box = document.getElementById('tf-ruta-body');
   if (box) box.innerHTML = tarifaRutaHtml();
 }
-// Lo que ya se ha cobrado en la ruta que se está escribiendo (todos los clientes).
+// Lo que ya se ha cobrado por zonas (no por CP, que casi nunca coinciden), a todos
+// los clientes: la ruta exacta (ES08 → FR13), lo que sale de la zona de origen y
+// lo que llega a la de destino.
 function tarifaRutaHtml(){
   const f = tarifaFormValues();
-  if (!TARIFA_ZONA_RE.test(f.origenZona) || !TARIFA_ZONA_RE.test(f.destinoZona)) {
-    return `<div style="color:var(--mutedFaint);font-size:12.5px;">Escribe la zona de origen y la de destino (por ejemplo ES08 y FR13) y aquí verás lo que has cobrado antes en esa ruta.</div>`;
+  const okO = TARIFA_ZONA_RE.test(f.origenZona), okD = TARIFA_ZONA_RE.test(f.destinoZona);
+  if (!okO && !okD) {
+    return `<div style="color:var(--mutedFaint);font-size:12.5px;">Escribe la zona de origen y la de destino (por ejemplo ES08 y FR13) y aquí verás lo que has cobrado antes en esas zonas.</div>`;
   }
   const editId = window.__tarifaFormId;
-  const list = tarifas.filter(t => t.id !== editId && t.origenZona === f.origenZona && t.destinoZona === f.destinoZona).sort(tarifaCmpReciente);
-  if (!list.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay tarifas guardadas de ${esc(f.origenZona)} a ${esc(f.destinoZona)}.</div>`;
-  const stats = (tipo, unitLabel) => {
+  const others = tarifas.filter(t => t.id !== editId).sort(tarifaCmpReciente);
+  const clienteSel = f.cliente.toLowerCase();
+  const stats = (list) => ['FTL', 'LTL', 'GRANEL'].map(tipo => {
+    const unit = { FTL: '', LTL: ' /m', GRANEL: ' /t' }[tipo];
     const vals = list.filter(t => t.tipo === tipo && (tipo !== 'LTL' || t.metros > 0)).map(tarifaUnitario);
     if (!vals.length) return '';
     const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-    return `<div style="font-size:12.5px;margin-bottom:6px;"><b>${esc(tarifaTipoLabel(tipo))}</b> · mín ${eur2(Math.min(...vals))} · media ${eur2(avg)} · máx ${eur2(Math.max(...vals))}${unitLabel} <span style="color:var(--mutedFaint);">(${vals.length})</span></div>`;
-  };
-  const clienteSel = f.cliente.toLowerCase();
-  return `
-    ${stats('FTL', '')}${stats('LTL', ' /m')}${stats('GRANEL', ' /t')}
-    <div style="margin-top:8px;">
-      ${list.slice(0, 25).map(t => {
-        const nombre = tarifaClienteNombre(t.clienteId);
-        const same = clienteSel && nombre.toLowerCase() === clienteSel;
-        return `<div style="padding:8px 0;border-bottom:1px solid var(--border);${same?'background:rgba(46,111,149,0.06);':''}">
-          <div style="display:flex;justify-content:space-between;gap:8px;font-size:12.5px;">
-            <span style="font-weight:${same?700:500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nombre)}</span>
-            <span style="font-weight:700;white-space:nowrap;">${eur2(t.precio)}</span>
-          </div>
-          <div style="font-size:11px;color:var(--mutedFaint);">${fmtDateDMY(t.fecha)} · ${esc(tarifaTipoLabel(t.tipo))}${t.tipo === 'GRANEL' ? ' · por tonelada' : ''}${t.metros ? ' · ' + tarifaFmtMetros(t.metros) + ' m' : ''}${tarifaUnitarioTxt(t) ? ' · ' + tarifaUnitarioTxt(t) : ''}${t.gasoil ? ' · con gasoil' : ''}${t.origenCp || t.destinoCp || t.origenCiudad || t.destinoCiudad ? ' · ' + esc([tarifaLugarTxt(t.origenCp, t.origenCiudad), tarifaLugarTxt(t.destinoCp, t.destinoCiudad)].filter(Boolean).join(' → ')) : ''}</div>
-        </div>`;
-      }).join('')}
-      ${list.length > 25 ? `<div style="font-size:11.5px;color:var(--mutedFaint);padding-top:8px;">Hay ${list.length - 25} más antiguas.</div>` : ''}
+    return `<div style="font-size:12.5px;margin-bottom:6px;"><b>${esc(tarifaTipoLabel(tipo))}</b> · mín ${eur2(Math.min(...vals))} · media ${eur2(avg)} · máx ${eur2(Math.max(...vals))}${unit} <span style="color:var(--mutedFaint);">(${vals.length})</span></div>`;
+  }).join('');
+  const row = (t, showRoute) => {
+    const nombre = tarifaClienteNombre(t.clienteId);
+    const same = clienteSel && nombre.toLowerCase() === clienteSel;
+    const lugar = [tarifaLugarTxt(t.origenCp, t.origenCiudad), tarifaLugarTxt(t.destinoCp, t.destinoCiudad)].filter(Boolean).join(' → ');
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--border);${same?'background:rgba(46,111,149,0.06);':''}">
+      <div style="display:flex;justify-content:space-between;gap:8px;font-size:12.5px;">
+        <span style="font-weight:${same?700:500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nombre)}</span>
+        <span style="font-weight:700;white-space:nowrap;">${eur2(t.precio)}${t.tipo === 'GRANEL' ? '/t' : ''}</span>
+      </div>
+      <div style="font-size:11px;color:var(--mutedFaint);">${showRoute ? `<b style="font-family:var(--mono);color:var(--muted);">${esc(t.origenZona)} → ${esc(t.destinoZona)}</b> · ` : ''}${fmtDateDMY(t.fecha)} · ${esc(tarifaTipoLabel(t.tipo))}${t.metros ? ' · ' + tarifaFmtMetros(t.metros) + ' m' : ''}${tarifaUnitarioTxt(t) ? ' · ' + tarifaUnitarioTxt(t) : ''}${t.gasoil ? ' · con gasoil' : ''}${lugar ? ' · ' + esc(lugar) : ''}</div>
     </div>`;
+  };
+  const section = (title, list, max, showRoute, withStats) => `
+    <div style="margin-bottom:18px;">
+      <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px;">${title} <span style="font-weight:400;color:var(--mutedFaint);">(${list.length})</span></div>
+      ${list.length ? `${withStats ? stats(list) : ''}${list.slice(0, max).map(t => row(t, showRoute)).join('')}${list.length > max ? `<div style="font-size:11.5px;color:var(--mutedFaint);padding-top:8px;">Hay ${list.length - max} más antiguas.</div>` : ''}` : `<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay tarifas.</div>`}
+    </div>`;
+  const exact = okO && okD ? others.filter(t => t.origenZona === f.origenZona && t.destinoZona === f.destinoZona) : [];
+  const desde = okO ? others.filter(t => t.origenZona === f.origenZona && !(okD && t.destinoZona === f.destinoZona)) : [];
+  const hasta = okD ? others.filter(t => t.destinoZona === f.destinoZona && !(okO && t.origenZona === f.origenZona)) : [];
+  return `
+    ${okO && okD ? section(`${esc(f.origenZona)} → ${esc(f.destinoZona)}`, exact, 25, false, true) : ''}
+    ${okO ? section(`Salidas desde ${esc(f.origenZona)}${okD ? ' a otros destinos' : ''}`, desde, 10, true, false) : ''}
+    ${okD ? section(`Llegadas a ${esc(f.destinoZona)}${okO ? ' desde otros orígenes' : ''}`, hasta, 10, true, false) : ''}`;
 }
 function tplTarifaFormPage(){
   const editId = window.__tarifaFormId;
@@ -5957,7 +5968,7 @@ function tplTarifaFormPage(){
       </div>
     </div>
     <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
-      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Antes en esta ruta</div>
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Histórico por zona</div>
       <div id="tf-ruta-body">${tarifaRutaHtml()}</div>
     </div>
     </div>`;
