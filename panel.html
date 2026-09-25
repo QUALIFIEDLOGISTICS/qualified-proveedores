@@ -663,11 +663,13 @@ function goHome(){
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
   if (!warehouseConfirmLeaveForm()) return;
+  if (!tarifaConfirmLeaveForm()) return;
   if (!flotaConfirmLeaveForm()) return;
   if (!adminConfirmLeave()) return;
   window.__decaFormDirty = false;
   window.__direccionFormDirty = false;
   window.__whFormDirty = false;
+  window.__tarifaFormDirty = false;
   window.__flotaFormDirty = false;
   window.__adminFormDirty = false;
   window.__contactoFormDirty = false;
@@ -686,11 +688,13 @@ async function setTab(id){
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
   if (!warehouseConfirmLeaveForm()) return;
+  if (!tarifaConfirmLeaveForm()) return;
   if (!flotaConfirmLeaveForm()) return;
   if (!adminConfirmLeave()) return;
   window.__decaFormDirty = false;
   window.__direccionFormDirty = false;
   window.__whFormDirty = false;
+  window.__tarifaFormDirty = false;
   window.__flotaFormDirty = false;
   window.__adminFormDirty = false;
   window.__contactoFormDirty = false;
@@ -877,6 +881,13 @@ function computeBreadcrumbSegments(){
         return [{label:'Direcciones', onclick:'backToDirecciones()'}, {label: dr ? dr.nombre : 'Nueva dirección', onclick:null}];
       }
       return [{label:'Direcciones', onclick:null}];
+    }
+    if (traficoSection() === 'tarifas') {
+      if (window.__traficoView === 'tarifaForm') {
+        const tf = window.__tarifaFormId ? tarifas.find(t=>t.id===window.__tarifaFormId) : null;
+        return [{label:'Tarifas', onclick:'backToTarifas()'}, {label: tf ? `${tf.origenZona} → ${tf.destinoZona}` : (window.__tarifaPreset ? 'Actualizar tarifa' : 'Nueva tarifa'), onclick:null}];
+      }
+      return [{label:'Tarifas', onclick:null}];
     }
     if (traficoSection() === 'deca') {
       if (window.__traficoView === 'decaForm') {
@@ -5501,6 +5512,7 @@ function tplAutonomosDashboardBody(){
 // siempre; solo cambia el marco que las agrupa.
 const TRAFICO_SECTIONS = [
   { id: 'transportistas', label: 'Transportistas' },
+  { id: 'tarifas', label: 'Tarifas' },
   { id: 'deca', label: 'DeCA' },
   { id: 'direcciones', label: 'Direcciones' },
 ];
@@ -5518,13 +5530,16 @@ function tplTraficoBar(){
 // arriba para poder volver a su lista; las listas ya se ubican con la barra.
 function traficoIsSubpage(){
   return (traficoSection() === 'deca' && window.__traficoView === 'decaForm')
+    || (traficoSection() === 'tarifas' && window.__traficoView === 'tarifaForm')
     || (traficoSection() === 'direcciones' && window.__administracionView === 'direccionForm');
 }
 function setTraficoSection(id){
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
+  if (!tarifaConfirmLeaveForm()) return;
   window.__decaFormDirty = false;
   window.__direccionFormDirty = false;
+  window.__tarifaFormDirty = false;
   window.__traficoSection = id;
   window.__traficoView = id === 'deca' ? 'deca' : 'home';
   window.__decaMenuOpen = null;
@@ -5536,12 +5551,14 @@ function setTraficoSection(id){
     window.__direccionesPage = 0;
   }
   if (id === 'transportistas') resetTransportistasState();
+  if (id === 'tarifas') resetTarifasState();
   renderHeader(); renderTab();
 }
 function tplTrafico(){
   const sec = traficoSection();
   if (sec === 'deca') return window.__traficoView === 'decaForm' ? tplDecaFormPage() : tplDecaPage();
   if (sec === 'direcciones') return window.__administracionView === 'direccionForm' ? tplDireccionFormPage() : tplDireccionesPage();
+  if (sec === 'tarifas') return window.__traficoView === 'tarifaForm' ? tplTarifaFormPage() : tplTarifasPage();
   return tplTransportistasPage();
 }
 function openDecaModule(){
@@ -5555,6 +5572,465 @@ function backToTraficoHome(){
   window.__decaFormDirty = false;
   window.__traficoView = window.__traficoSection === 'deca' ? 'deca' : 'home';
   renderHeader(); renderTab();
+}
+
+/* ============================= TARIFAS =============================
+   Histórico de precios que se pasan a cada cliente por ruta. La ruta se
+   identifica por zonas (país + 2 primeras cifras del CP: ES08, FR13) y,
+   opcionalmente, el CP completo. Cada fila es una tarifa con su fecha; la
+   vigente de una ruta es la más reciente ("Vigentes"), y "Historial" enseña
+   todas. Al crear una, la ficha enseña lo que se ha cobrado antes en esa ruta. */
+let tarifas = [];
+async function loadTarifas(){
+  const { data } = await supabaseClient.from('tarifas').select('*').order('fecha', { ascending: false });
+  tarifas = (data||[]).map(t => ({
+    id: t.id, createdAt: t.created_at, fecha: t.fecha, clienteId: t.cliente_id,
+    origenZona: t.origen_zona, origenCp: t.origen_cp || '', destinoZona: t.destino_zona, destinoCp: t.destino_cp || '',
+    tipo: t.tipo, metros: t.metros == null ? null : Number(t.metros), precio: Number(t.precio), observaciones: t.observaciones || '',
+  }));
+}
+const TARIFA_ZONA_RE = /^[A-Z]{2}[0-9A-Z]{2}$/;
+function tarifaClienteNombre(id){
+  const c = contactos.find(x => x.id === id);
+  return c ? c.nombre : '—';
+}
+// ES08 → "Barcelona" (solo hay tabla de provincias para España).
+function tarifaZonaHint(z){
+  return /^ES\d{2}$/.test(z||'') ? (CP_PROVINCIA[z.slice(2)] || '') : '';
+}
+function tarifaFmtMetros(m){ return m == null ? '—' : String(m).replace('.', ','); }
+// Precio comparable: el precio en FTL y el €/metro en LTL.
+function tarifaUnitario(t){
+  return t.tipo === 'LTL' && t.metros > 0 ? t.precio / t.metros : t.precio;
+}
+function tarifaUnitarioTxt(t){
+  return t.tipo === 'LTL' && t.metros > 0 ? eur2(t.precio / t.metros) + '/m' : '';
+}
+function tarifaCmpReciente(a, b){
+  return (b.fecha||'').localeCompare(a.fecha||'') || (b.createdAt||'').localeCompare(a.createdAt||'');
+}
+// La más reciente de cada cliente + ruta + tipo, con la anterior para ver la variación.
+function tarifasVigentes(){
+  const groups = {};
+  tarifas.slice().sort(tarifaCmpReciente).forEach(t => {
+    const key = [t.clienteId, t.origenZona, t.destinoZona, t.tipo].join('|');
+    (groups[key] = groups[key] || []).push(t);
+  });
+  return Object.values(groups).map(g => ({ ...g[0], anterior: g[1] || null, total: g.length }));
+}
+function tarifasFilteredList(){
+  const view = window.__tarifasView || 'vigentes';
+  const search = (window.__tarifasSearch || '').toLowerCase();
+  const fCliente = (window.__tarifasCliente || '').trim().toLowerCase();
+  const fOrigen = (window.__tarifasOrigen || '').trim().toUpperCase();
+  const fDestino = (window.__tarifasDestino || '').trim().toUpperCase();
+  const fTipo = window.__tarifasTipo || '';
+  let list = view === 'vigentes' ? tarifasVigentes() : tarifas.slice();
+  list = list.filter(t => {
+    const cliente = tarifaClienteNombre(t.clienteId);
+    if (fCliente && !cliente.toLowerCase().includes(fCliente)) return false;
+    if (fOrigen && !t.origenZona.startsWith(fOrigen)) return false;
+    if (fDestino && !t.destinoZona.startsWith(fDestino)) return false;
+    if (fTipo && t.tipo !== fTipo) return false;
+    if (search && ![cliente, t.origenZona, t.destinoZona, t.origenCp, t.destinoCp, t.observaciones, t.tipo].some(v => (v||'').toLowerCase().includes(search))) return false;
+    return true;
+  });
+  list.sort(tarifaCmpReciente);
+  return { list, view, filtered: !!(search || fCliente || fOrigen || fDestino || fTipo) };
+}
+function tarifaVariacionHtml(t){
+  if (!t.anterior) return '<span style="color:var(--mutedFaint);">—</span>';
+  const diff = tarifaUnitario(t) - tarifaUnitario(t.anterior);
+  if (Math.abs(diff) < 0.005) return '<span style="color:var(--mutedFaint);">=</span>';
+  const txt = (diff > 0 ? '▲ +' : '▼ −') + eur2(Math.abs(diff)).replace(/\s/g, ' ') + (t.tipo === 'LTL' ? '/m' : '');
+  return `<span style="color:${diff > 0 ? 'var(--success)' : 'var(--danger)'};white-space:nowrap;">${txt}</span>`;
+}
+function tarifasListBodyHtml(){
+  const { list, view, filtered } = tarifasFilteredList();
+  if (!list.length) {
+    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${filtered ? 'Ninguna tarifa coincide con los filtros.' : 'Todavía no hay ninguna tarifa guardada.'}</div>`;
+  }
+  const vig = view === 'vigentes';
+  return `
+    <div class="card" style="padding:0;overflow-x:auto;">
+      <table>
+        <thead><tr>
+          ${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Tipo','text')}${thSort('Metros','number')}${thSort('Precio','number')}${thSort('€/metro','number')}${vig ? thSort('Variación','text') : ''}${thSort('Observaciones','text')}<th>Acciones</th>
+        </tr></thead>
+        <tbody>
+          ${list.map(t => `
+            <tr style="cursor:pointer;" onclick="openTarifaForm('${t.id}')">
+              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
+              <td style="font-weight:600;white-space:nowrap;" title="${esc(tarifaClienteNombre(t.clienteId))}">${esc(truncateText(tarifaClienteNombre(t.clienteId), 24))}</td>
+              <td style="white-space:nowrap;" title="${esc(t.origenCp ? 'CP ' + t.origenCp : tarifaZonaHint(t.origenZona))}"><span style="font-family:var(--mono);font-weight:600;">${esc(t.origenZona)}</span>${t.origenCp ? ` <span style="color:var(--mutedFaint);font-size:12px;">${esc(t.origenCp)}</span>` : ''}</td>
+              <td style="white-space:nowrap;" title="${esc(t.destinoCp ? 'CP ' + t.destinoCp : tarifaZonaHint(t.destinoZona))}"><span style="font-family:var(--mono);font-weight:600;">${esc(t.destinoZona)}</span>${t.destinoCp ? ` <span style="color:var(--mutedFaint);font-size:12px;">${esc(t.destinoCp)}</span>` : ''}</td>
+              <td style="white-space:nowrap;">${esc(t.tipo)}</td>
+              <td style="color:var(--muted);">${tarifaFmtMetros(t.metros)}</td>
+              <td style="font-weight:700;white-space:nowrap;">${eur2(t.precio)}</td>
+              <td style="color:var(--muted);white-space:nowrap;">${t.tipo === 'LTL' && t.metros > 0 ? eur2(t.precio / t.metros) : '—'}</td>
+              ${vig ? `<td>${tarifaVariacionHtml(t)}</td>` : ''}
+              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.observaciones)}" title="${esc(t.observaciones)}">${esc(truncateText(t.observaciones, 26)) || '—'}</td>
+              <td style="white-space:nowrap;">
+                <button onclick="event.stopPropagation(); openTarifaForm(null, '${t.id}');" title="Actualizar precio: crea una tarifa nueva con fecha de hoy a partir de esta" style="background:none;border:none;color:var(--muted);font-size:15px;padding:2px 5px;cursor:pointer;">↻</button>
+                <button onclick="event.stopPropagation(); openTarifaForm('${t.id}');" title="Editar" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;cursor:pointer;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+                <button onclick="event.stopPropagation(); deleteTarifa('${t.id}');" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);font-size:14px;padding:2px 4px;cursor:pointer;">🗑</button>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">${list.length} tarifa${list.length!==1?'s':''}${vig ? ' vigentes (la más reciente de cada cliente, ruta y tipo). Usa ↻ para actualizar el precio con la fecha de hoy.' : ' en el historial.'}</div>`;
+}
+function refreshTarifasListBody(){
+  const el = document.getElementById('tarifas-list-body');
+  if (el) el.innerHTML = tarifasListBodyHtml();
+}
+function tarifasZonasDatalistHtml(field){
+  const zonas = [...new Set(tarifas.map(t => t[field]).filter(Boolean))].sort();
+  return zonas.map(z => `<option value="${esc(z)}" label="${esc(tarifaZonaHint(z))}">`).join('');
+}
+function tarifasClientesDatalistHtml(){
+  return contactos.filter(c => !c.archived && c.esClienteTransporte).map(c => `<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('');
+}
+function tplTarifasPage(){
+  const view = window.__tarifasView || 'vigentes';
+  const seg = (id, label) => `<button class="btn ${view===id?'btn-primary':'btn-ghost'}" onclick="window.__tarifasView='${id}'; renderTab();">${label}</button>`;
+  return `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div style="width:48px;height:48px;border-radius:12px;background:rgba(201,138,46,0.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          ${homeIcon(HOME_ICON_PATHS.file, 24, '#C98A2E')}
+        </div>
+        <div>
+          <div style="font-family:var(--display);font-size:22px;">Tarifas</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">Precios que pasas a cada cliente por zona de origen y destino (país + 2 primeras cifras del CP: ES08, FR13…), FTL o LTL.</div>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="openTarifaForm()">+ Nueva tarifa</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+      <div style="display:flex;gap:6px;">${seg('vigentes', 'Vigentes')}${seg('historial', 'Historial')}</div>
+      <div style="position:relative;flex:1;min-width:200px;max-width:280px;">
+        <input placeholder="Buscar…" value="${esc(window.__tarifasSearch||'')}" oninput="window.__tarifasSearch=this.value; refreshTarifasListBody();" style="padding-left:34px;" />
+        <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+      </div>
+      <input placeholder="Cliente" data-combo="tf-f-clientes" autocomplete="off" value="${esc(window.__tarifasCliente||'')}" oninput="window.__tarifasCliente=this.value; refreshTarifasListBody();" style="width:190px;" />
+      <input placeholder="Origen (ES08)" data-combo="tf-f-origenes" autocomplete="off" value="${esc(window.__tarifasOrigen||'')}" oninput="this.value=this.value.toUpperCase(); window.__tarifasOrigen=this.value; refreshTarifasListBody();" style="width:130px;" />
+      <input placeholder="Destino (FR13)" data-combo="tf-f-destinos" autocomplete="off" value="${esc(window.__tarifasDestino||'')}" oninput="this.value=this.value.toUpperCase(); window.__tarifasDestino=this.value; refreshTarifasListBody();" style="width:130px;" />
+      <select onchange="window.__tarifasTipo=this.value; refreshTarifasListBody();" style="width:120px;">
+        <option value="" ${!window.__tarifasTipo?'selected':''}>FTL y LTL</option>
+        <option value="FTL" ${window.__tarifasTipo==='FTL'?'selected':''}>Solo FTL</option>
+        <option value="LTL" ${window.__tarifasTipo==='LTL'?'selected':''}>Solo LTL</option>
+      </select>
+      <datalist id="tf-f-clientes">${tarifasClientesDatalistHtml()}</datalist>
+      <datalist id="tf-f-origenes">${tarifasZonasDatalistHtml('origenZona')}</datalist>
+      <datalist id="tf-f-destinos">${tarifasZonasDatalistHtml('destinoZona')}</datalist>
+    </div>
+    <div id="tarifas-list-body">${tarifasListBodyHtml()}</div>`;
+}
+function resetTarifasState(){
+  window.__tarifasView = 'vigentes';
+  window.__tarifasSearch = '';
+  window.__tarifasCliente = '';
+  window.__tarifasOrigen = '';
+  window.__tarifasDestino = '';
+  window.__tarifasTipo = '';
+}
+
+/* ---- Tarifas: formulario ---- */
+function tarifaConfirmLeaveForm(){
+  if (traficoSection() === 'tarifas' && window.__traficoView === 'tarifaForm' && window.__tarifaFormDirty) {
+    return confirm('Tienes cambios sin guardar. ¿Seguro que quieres salir sin guardar?');
+  }
+  return true;
+}
+// editId: editar esa tarifa. cloneId: tarifa nueva con los datos de otra y la fecha de hoy
+// (así se actualiza el precio de una ruta sin volver a escribirla).
+function openTarifaForm(editId, cloneId){
+  window.__traficoSection = 'tarifas';
+  window.__traficoView = 'tarifaForm';
+  window.__tarifaFormId = editId || null;
+  const src = cloneId ? tarifas.find(t => t.id === cloneId) : null;
+  window.__tarifaPreset = src ? { ...src, fecha: today(), precio: '', id: null } : null;
+  window.__tarifaFormDirty = false;
+  renderHeader(); renderTab();
+  tarifaFormRefresh();
+  window.scrollTo(0, 0);
+  setTimeout(() => { const el = document.getElementById(src ? 'tf-precio' : (editId ? null : 'tf-cliente')); if (el) el.focus(); }, 0);
+}
+function backToTarifas(){
+  if (!tarifaConfirmLeaveForm()) return;
+  window.__tarifaFormDirty = false;
+  window.__traficoView = 'home';
+  renderHeader(); renderTab();
+}
+// "1.300,50" o "1300.5" → "1300.50".
+function tarifaNum(s){
+  s = String(s).trim();
+  return (s.includes(',') ? s.replace(/\./g, '').replace(',', '.') : s);
+}
+function tarifaFormValues(){
+  const v = id => (document.getElementById(id) || {}).value || '';
+  return {
+    fecha: v('tf-fecha'), cliente: v('tf-cliente').trim(), tipo: v('tf-tipo'), metros: tarifaNum(v('tf-metros')),
+    origenZona: v('tf-origen-zona').trim().toUpperCase(), origenCp: v('tf-origen-cp').trim(),
+    destinoZona: v('tf-destino-zona').trim().toUpperCase(), destinoCp: v('tf-destino-cp').trim(),
+    precio: tarifaNum(v('tf-precio')), observaciones: v('tf-obs').trim(),
+  };
+}
+// Escribir el país (ES) y el CP completa la zona (ES08) sola.
+function tarifaCpInput(side){
+  const zEl = document.getElementById(`tf-${side}-zona`), cpEl = document.getElementById(`tf-${side}-cp`);
+  const z = zEl.value.trim().toUpperCase(), cp = cpEl.value.replace(/\s/g, '').toUpperCase();
+  if (cp.length >= 2 && (/^[A-Z]{2}$/.test(z) || (zEl.dataset.auto === '1' && /^[A-Z]{2}/.test(z)))) {
+    zEl.value = z.slice(0, 2) + cp.slice(0, 2);
+    zEl.dataset.auto = '1';
+  }
+}
+function tarifaZonaInput(side){
+  const zEl = document.getElementById(`tf-${side}-zona`);
+  zEl.value = zEl.value.toUpperCase().replace(/\s/g, '');
+  zEl.dataset.auto = '0';
+}
+function tarifaTipoChange(){
+  const ltl = document.getElementById('tf-tipo').value === 'LTL';
+  const m = document.getElementById('tf-metros');
+  m.disabled = !ltl;
+  if (!ltl) m.value = '';
+  document.getElementById('tf-metros-field').style.opacity = ltl ? '1' : '0.5';
+}
+function tarifaFormRefresh(){
+  ['origen', 'destino'].forEach(side => {
+    const el = document.getElementById(`tf-${side}-hint`);
+    if (el) el.textContent = tarifaZonaHint((document.getElementById(`tf-${side}-zona`).value || '').trim().toUpperCase());
+  });
+  const box = document.getElementById('tf-ruta-body');
+  if (box) box.innerHTML = tarifaRutaHtml();
+}
+// Lo que ya se ha cobrado en la ruta que se está escribiendo (todos los clientes).
+function tarifaRutaHtml(){
+  const f = tarifaFormValues();
+  if (!TARIFA_ZONA_RE.test(f.origenZona) || !TARIFA_ZONA_RE.test(f.destinoZona)) {
+    return `<div style="color:var(--mutedFaint);font-size:12.5px;">Escribe la zona de origen y la de destino (por ejemplo ES08 y FR13) y aquí verás lo que has cobrado antes en esa ruta.</div>`;
+  }
+  const editId = window.__tarifaFormId;
+  const list = tarifas.filter(t => t.id !== editId && t.origenZona === f.origenZona && t.destinoZona === f.destinoZona).sort(tarifaCmpReciente);
+  if (!list.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay tarifas guardadas de ${esc(f.origenZona)} a ${esc(f.destinoZona)}.</div>`;
+  const stats = (tipo, unitLabel) => {
+    const vals = list.filter(t => t.tipo === tipo && (tipo === 'FTL' || t.metros > 0)).map(tarifaUnitario);
+    if (!vals.length) return '';
+    const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+    return `<div style="font-size:12.5px;margin-bottom:6px;"><b>${tipo}</b> · mín ${eur2(Math.min(...vals))} · media ${eur2(avg)} · máx ${eur2(Math.max(...vals))}${unitLabel} <span style="color:var(--mutedFaint);">(${vals.length})</span></div>`;
+  };
+  const clienteSel = f.cliente.toLowerCase();
+  return `
+    ${stats('FTL', '')}${stats('LTL', ' /m')}
+    <div style="margin-top:8px;">
+      ${list.slice(0, 25).map(t => {
+        const nombre = tarifaClienteNombre(t.clienteId);
+        const same = clienteSel && nombre.toLowerCase() === clienteSel;
+        return `<div style="padding:8px 0;border-bottom:1px solid var(--border);${same?'background:rgba(46,111,149,0.06);':''}">
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:12.5px;">
+            <span style="font-weight:${same?700:500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nombre)}</span>
+            <span style="font-weight:700;white-space:nowrap;">${eur2(t.precio)}</span>
+          </div>
+          <div style="font-size:11px;color:var(--mutedFaint);">${fmtDateDMY(t.fecha)} · ${esc(t.tipo)}${t.metros ? ' · ' + tarifaFmtMetros(t.metros) + ' m' : ''}${tarifaUnitarioTxt(t) ? ' · ' + tarifaUnitarioTxt(t) : ''}${t.origenCp || t.destinoCp ? ' · ' + esc([t.origenCp, t.destinoCp].filter(Boolean).join(' → ')) : ''}</div>
+        </div>`;
+      }).join('')}
+      ${list.length > 25 ? `<div style="font-size:11.5px;color:var(--mutedFaint);padding-top:8px;">Hay ${list.length - 25} más antiguas.</div>` : ''}
+    </div>`;
+}
+function tplTarifaFormPage(){
+  const editId = window.__tarifaFormId;
+  const editing = editId ? tarifas.find(t => t.id === editId) : null;
+  const e = editing || window.__tarifaPreset || { fecha: today(), tipo: 'FTL' };
+  const clienteNombre = e.clienteId ? tarifaClienteNombre(e.clienteId) : (e.clienteNombre || '');
+  const ltl = e.tipo === 'LTL';
+  const submitLabel = editing ? 'Guardar' : 'Añadir';
+  return `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div style="width:48px;height:48px;border-radius:12px;background:rgba(201,138,46,0.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          ${homeIcon(HOME_ICON_PATHS.file, 24, '#C98A2E')}
+        </div>
+        <div>
+          <div style="font-family:var(--display);font-size:22px;">${editing ? `Tarifa ${esc(editing.origenZona)} → ${esc(editing.destinoZona)}` : (window.__tarifaPreset ? 'Actualizar tarifa' : 'Nueva tarifa')}</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">${window.__tarifaPreset && !editing ? 'Se guarda como una tarifa nueva con fecha de hoy; la anterior se conserva en el historial.' : 'Precio pasado a un cliente para una ruta.'}</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        ${editing ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="deleteTarifa('${editing.id}')">Eliminar</button>` : ''}
+        ${editing ? '' : `<button class="btn btn-ghost tf-submit-btn" onclick="submitTarifaForm('', true)">Añadir y nueva</button>`}
+        <button class="btn btn-primary tf-submit-btn" onclick="submitTarifaForm('${editId||''}')">${submitLabel}</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+    <div style="flex:2;min-width:360px;">
+      <div class="card" oninput="window.__tarifaFormDirty=true; tarifaFormRefresh();" onchange="window.__tarifaFormDirty=true; tarifaFormRefresh();">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <div class="field" style="flex:1;min-width:150px;max-width:190px;"><label>Fecha</label><input id="tf-fecha" type="date" value="${esc(e.fecha||today())}" /></div>
+          <div class="field" style="flex:2;min-width:240px;">
+            <label>Cliente</label>
+            <input id="tf-cliente" maxlength="150" data-combo="tf-clientes-datalist" autocomplete="off" placeholder="Elige entre tus clientes de transporte" value="${esc(clienteNombre)}" />
+            <datalist id="tf-clientes-datalist">${tarifasClientesDatalistHtml()}</datalist>
+            <button type="button" onclick="openQuickClienteTarifaModal()" style="background:none;border:none;padding:5px 0 0;font-size:12.5px;color:var(--primary);cursor:pointer;">+ Crear cliente que no esté en la lista</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <div class="field" style="flex:1;min-width:200px;">
+            <label>Zona de origen</label>
+            <input id="tf-origen-zona" maxlength="4" data-combo="tf-origenes-datalist" autocomplete="off" placeholder="Ej. ES08" style="font-family:var(--mono);" oninput="tarifaZonaInput('origen')" value="${esc(e.origenZona||'')}" />
+            <datalist id="tf-origenes-datalist">${tarifasZonasDatalistHtml('origenZona')}</datalist>
+            <div id="tf-origen-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;">${esc(tarifaZonaHint(e.origenZona))}</div>
+          </div>
+          <div class="field" style="flex:1;min-width:160px;"><label>CP origen (opcional)</label><input id="tf-origen-cp" maxlength="10" placeholder="Ej. 08500" oninput="tarifaCpInput('origen')" value="${esc(e.origenCp||'')}" /></div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <div class="field" style="flex:1;min-width:200px;">
+            <label>Zona de destino</label>
+            <input id="tf-destino-zona" maxlength="4" data-combo="tf-destinos-datalist" autocomplete="off" placeholder="Ej. FR13" style="font-family:var(--mono);" oninput="tarifaZonaInput('destino')" value="${esc(e.destinoZona||'')}" />
+            <datalist id="tf-destinos-datalist">${tarifasZonasDatalistHtml('destinoZona')}</datalist>
+            <div id="tf-destino-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;">${esc(tarifaZonaHint(e.destinoZona))}</div>
+          </div>
+          <div class="field" style="flex:1;min-width:160px;"><label>CP destino (opcional)</label><input id="tf-destino-cp" maxlength="10" placeholder="Ej. 13001" oninput="tarifaCpInput('destino')" value="${esc(e.destinoCp||'')}" /></div>
+        </div>
+        <div style="font-size:12px;color:var(--mutedFaint);margin:-4px 0 14px;">La zona es el país y las 2 primeras cifras del CP. Si escribes solo el país (ES) y luego el CP, la zona se completa sola.</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <div class="field" style="flex:1;min-width:130px;"><label>Camión</label><select id="tf-tipo" onchange="tarifaTipoChange()"><option value="FTL" ${!ltl?'selected':''}>FTL (completo)</option><option value="LTL" ${ltl?'selected':''}>LTL (metros)</option></select></div>
+          <div class="field" id="tf-metros-field" style="flex:1;min-width:130px;${ltl?'':'opacity:0.5;'}"><label>Metros de camión</label><input id="tf-metros" type="text" inputmode="decimal" maxlength="5" placeholder="Ej. 3,5" ${ltl?'':'disabled'} value="${e.metros!=null?esc(String(e.metros).replace('.', ',')):''}" /></div>
+          <div class="field" style="flex:1;min-width:150px;"><label>Precio (€)</label><input id="tf-precio" type="text" inputmode="decimal" maxlength="10" placeholder="Ej. 1300" value="${e.precio!==''&&e.precio!=null?esc(String(e.precio).replace('.', ',')):''}" /></div>
+        </div>
+        <div class="field" style="margin-bottom:0;"><label>Observaciones (opcional)</label><textarea id="tf-obs" maxlength="500" placeholder="Condiciones, tipo de mercancía, validez…" style="min-height:70px;">${esc(e.observaciones||'')}</textarea></div>
+      </div>
+      <div id="tf-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
+        <button class="btn btn-ghost" onclick="backToTarifas()">Cancelar</button>
+        <button class="btn btn-primary tf-submit-btn" onclick="submitTarifaForm('${editId||''}')">${submitLabel}</button>
+      </div>
+    </div>
+    <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Antes en esta ruta</div>
+      <div id="tf-ruta-body">${tarifaRutaHtml()}</div>
+    </div>
+    </div>`;
+}
+async function submitTarifaForm(editId, addAnother){
+  const errEl = document.getElementById('tf-error');
+  errEl.textContent = '';
+  const f = tarifaFormValues();
+  const fail = msg => showFormError(errEl, msg);
+  if (!f.fecha) return fail('Indica la fecha.');
+  const cliente = contactos.find(c => !c.archived && c.esClienteTransporte && c.nombre === f.cliente);
+  if (!cliente) return fail('Elige un cliente de la lista (o créalo con «Crear cliente que no esté en la lista»).');
+  if (!TARIFA_ZONA_RE.test(f.origenZona)) return fail('La zona de origen tiene que ser un país y 2 caracteres, por ejemplo ES08.');
+  if (!TARIFA_ZONA_RE.test(f.destinoZona)) return fail('La zona de destino tiene que ser un país y 2 caracteres, por ejemplo FR13.');
+  const precio = Number(f.precio);
+  if (f.precio === '' || !isFinite(precio) || precio < 0) return fail('Indica el precio en euros.');
+  let metros = null;
+  if (f.tipo === 'LTL') {
+    metros = Number(f.metros);
+    if (f.metros === '' || !isFinite(metros) || metros <= 0 || metros > 13.6) return fail('En LTL indica los metros de camión (entre 0,1 y 13,6).');
+  }
+  const payload = {
+    fecha: f.fecha, cliente_id: cliente.id, origen_zona: f.origenZona, origen_cp: f.origenCp || null,
+    destino_zona: f.destinoZona, destino_cp: f.destinoCp || null, tipo: f.tipo, metros, precio: Math.round(precio * 100) / 100,
+    observaciones: f.observaciones || null,
+  };
+  const btns = [...document.querySelectorAll('.tf-submit-btn')];
+  btns.forEach(b => b.disabled = true);
+  const res = editId
+    ? await supabaseClient.from('tarifas').update(payload).eq('id', editId).select()
+    : await supabaseClient.from('tarifas').insert({ ...payload, created_by: currentUserEmail() }).select();
+  if (res.error || !res.data || !res.data.length) {
+    fail('No se pudo guardar: ' + (res.error && res.error.message ? res.error.message : 'sin permiso o error desconocido.'));
+    btns.forEach(b => b.disabled = false);
+    return;
+  }
+  await loadTarifas();
+  window.__tarifaFormDirty = false;
+  if (addAnother) {
+    // Otra tarifa del mismo cliente y fecha, para cargar varias seguidas.
+    openTarifaForm();
+    window.__tarifaPreset = { fecha: f.fecha, tipo: f.tipo, clienteNombre: cliente.nombre };
+    renderTab();
+    tarifaFormRefresh();
+    setTimeout(() => { const el = document.getElementById('tf-origen-zona'); if (el) el.focus(); }, 0);
+    return;
+  }
+  window.__traficoView = 'home';
+  renderHeader(); renderTab();
+}
+async function deleteTarifa(id){
+  const t = tarifas.find(x => x.id === id);
+  if (!t || !confirm(`¿Eliminar la tarifa ${t.origenZona} → ${t.destinoZona} de ${tarifaClienteNombre(t.clienteId)} (${eur2(t.precio)})? Esta acción no se puede deshacer.`)) return;
+  const { error } = await supabaseClient.from('tarifas').delete().eq('id', id);
+  if (error) { alert('No se pudo eliminar: ' + error.message); return; }
+  await loadTarifas();
+  window.__tarifaFormDirty = false;
+  window.__traficoView = 'home';
+  renderHeader(); renderTab();
+}
+// Alta rápida de un cliente sin salir de la tarifa: se guarda en Contactos como
+// cliente de transporte (si ya existe con ese nombre o NIF, se usa el que hay).
+function openQuickClienteTarifaModal(){
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <h3 class="modal-title">Nuevo cliente</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Se guarda en Contactos como cliente de transporte. Los demás datos los puedes completar después en su ficha.</div>
+        <div class="field"><label>Razón social</label><input id="qt-nombre" maxlength="150" style="text-transform:uppercase;" oninput="uppercaseInput(this)" value="${esc((document.getElementById('tf-cliente')||{}).value||'')}" /></div>
+        <div class="field"><label>NIF (opcional)</label><input id="qt-nif" maxlength="20" style="text-transform:uppercase;" oninput="uppercaseInput(this)" /></div>
+        <div id="qt-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button id="qt-submit" class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitQuickClienteTarifa()">Crear y usar</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const el = document.getElementById('qt-nombre'); if (el) el.focus(); }, 0);
+}
+async function submitQuickClienteTarifa(){
+  const errEl = document.getElementById('qt-error');
+  errEl.textContent = '';
+  const nombre = document.getElementById('qt-nombre').value.trim().toUpperCase();
+  const nif = document.getElementById('qt-nif').value.trim().toUpperCase();
+  if (!nombre) { errEl.textContent = 'Indica la razón social.'; return; }
+  const use = (c) => {
+    document.getElementById('tf-cliente').value = c.nombre;
+    const dl = document.getElementById('tf-clientes-datalist');
+    if (dl) dl.innerHTML = tarifasClientesDatalistHtml();
+    window.__tarifaFormDirty = true;
+    closeModal();
+    tarifaFormRefresh();
+  };
+  const dup = contactos.find(c => !c.archived && ((nif && c.nif && c.nif.toUpperCase() === nif) || c.nombre.toUpperCase() === nombre));
+  const btn = document.getElementById('qt-submit');
+  btn.disabled = true;
+  try {
+    if (dup) {
+      if (!dup.esClienteTransporte) {
+        const { data, error } = await supabaseClient.from('contactos').update({ es_cliente_transporte: true }).eq('id', dup.id).select();
+        if (error || !data || !data.length) throw (error || new Error('ya existe un contacto con ese nombre o NIF, pero no tienes permiso para marcarlo como cliente de transporte. Pídelo a Administración.'));
+        dup.esClienteTransporte = true;
+        await logContactoHistorial(dup.id, 'Marcado como Cliente de transporte (desde Tarifas).');
+      }
+      use(dup);
+      return;
+    }
+    const { data, error } = await supabaseClient.from('contactos').insert({ nombre, nif: nif || null, es_cliente_transporte: true }).select().single();
+    if (error || !data) throw (error || new Error('sin permiso o error desconocido.'));
+    const c = { id: data.id, nombre, nombreComercial: '', nif, archived: false, esClienteAlmacen: false, esClienteTransporte: true, esTransportista: false, esAutonomos: false, warehouseIds: [],
+      calle1: '', calle2: '', codigoPostal: '', ciudad: '', provincia: '', pais: '', logoStoragePath: null };
+    contactos.push(c);
+    contactos.sort((a, b) => a.nombre.localeCompare(b.nombre));
+    await logContactoHistorial(c.id, 'Contacto creado (alta rápida desde Tarifas) como Cliente de transporte.');
+    use(c);
+  } catch (err) {
+    errEl.textContent = 'No se pudo crear: ' + (err && err.message ? err.message : 'error desconocido.');
+    btn.disabled = false;
+  }
 }
 
 /* ---- Transportistas: todos los contactos marcados como transportista ---- */
@@ -8625,7 +9101,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   }
 
   await loadWarehouses();
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota()]);
+  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
