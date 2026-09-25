@@ -5586,7 +5586,7 @@ async function loadTarifas(){
   tarifas = (data||[]).map(t => ({
     id: t.id, createdAt: t.created_at, fecha: t.fecha, clienteId: t.cliente_id,
     origenZona: t.origen_zona, origenCp: t.origen_cp || '', origenCiudad: t.origen_ciudad || '', destinoZona: t.destino_zona, destinoCp: t.destino_cp || '', destinoCiudad: t.destino_ciudad || '',
-    tipo: t.tipo, metros: t.metros == null ? null : Number(t.metros), precio: Number(t.precio), observaciones: t.observaciones || '',
+    tipo: t.tipo, gasoil: !!t.indexacion_gasoil, metros: t.metros == null ? null : Number(t.metros), precio: Number(t.precio), observaciones: t.observaciones || '',
   }));
 }
 const TARIFA_ZONA_RE = /^[A-Z]{2}[0-9A-Z]{2}$/;
@@ -5627,6 +5627,7 @@ function tarifasFilteredList(){
   const fOrigen = (window.__tarifasOrigen || '').trim().toUpperCase();
   const fDestino = (window.__tarifasDestino || '').trim().toUpperCase();
   const fTipo = window.__tarifasTipo || '';
+  const fGasoil = window.__tarifasGasoil || '';
   let list = view === 'vigentes' ? tarifasVigentes() : tarifas.slice();
   list = list.filter(t => {
     const cliente = tarifaClienteNombre(t.clienteId);
@@ -5634,11 +5635,12 @@ function tarifasFilteredList(){
     if (fOrigen && !t.origenZona.startsWith(fOrigen)) return false;
     if (fDestino && !t.destinoZona.startsWith(fDestino)) return false;
     if (fTipo && t.tipo !== fTipo) return false;
+    if (fGasoil && (fGasoil === 'si') !== t.gasoil) return false;
     if (search && ![cliente, t.origenZona, t.destinoZona, t.origenCp, t.destinoCp, t.origenCiudad, t.destinoCiudad, t.observaciones, t.tipo].some(v => (v||'').toLowerCase().includes(search))) return false;
     return true;
   });
   list.sort(tarifaCmpReciente);
-  return { list, view, filtered: !!(search || fCliente || fOrigen || fDestino || fTipo) };
+  return { list, view, filtered: !!(search || fCliente || fOrigen || fDestino || fTipo || fGasoil) };
 }
 function tarifaVariacionHtml(t){
   if (!t.anterior) return '<span style="color:var(--mutedFaint);">—</span>';
@@ -5657,7 +5659,7 @@ function tarifasListBodyHtml(){
     <div class="card" style="padding:0;overflow-x:auto;">
       <table>
         <thead><tr>
-          ${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Tipo','text')}${thSort('Metros','number')}${thSort('Precio','number')}${thSort('€/metro','number')}${vig ? thSort('Variación','text') : ''}${thSort('Observaciones','text')}<th>Acciones</th>
+          ${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Tipo','text')}${thSort('Metros','number')}${thSort('Precio','number')}${thSort('€/metro','number')}${thSort('Gasoil','text')}${vig ? thSort('Variación','text') : ''}${thSort('Observaciones','text')}<th>Acciones</th>
         </tr></thead>
         <tbody>
           ${list.map(t => `
@@ -5670,6 +5672,7 @@ function tarifasListBodyHtml(){
               <td style="color:var(--muted);">${tarifaFmtMetros(t.metros)}</td>
               <td style="font-weight:700;white-space:nowrap;">${eur2(t.precio)}</td>
               <td style="color:var(--muted);white-space:nowrap;">${t.tipo === 'LTL' && t.metros > 0 ? eur2(t.precio / t.metros) : '—'}</td>
+              <td style="white-space:nowrap;color:${t.gasoil ? 'var(--text)' : 'var(--mutedFaint)'};">${t.gasoil ? 'Con indexación' : 'Sin indexación'}</td>
               ${vig ? `<td>${tarifaVariacionHtml(t)}</td>` : ''}
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.observaciones)}" title="${esc(t.observaciones)}">${esc(truncateText(t.observaciones, 26)) || '—'}</td>
               <td style="white-space:nowrap;">
@@ -5724,6 +5727,11 @@ function tplTarifasPage(){
         <option value="FTL" ${window.__tarifasTipo==='FTL'?'selected':''}>Solo FTL</option>
         <option value="LTL" ${window.__tarifasTipo==='LTL'?'selected':''}>Solo LTL</option>
       </select>
+      <select onchange="window.__tarifasGasoil=this.value; refreshTarifasListBody();" style="width:170px;">
+        <option value="" ${!window.__tarifasGasoil?'selected':''}>Con y sin gasoil</option>
+        <option value="si" ${window.__tarifasGasoil==='si'?'selected':''}>Con indexación</option>
+        <option value="no" ${window.__tarifasGasoil==='no'?'selected':''}>Sin indexación</option>
+      </select>
       <datalist id="tf-f-clientes">${tarifasClientesDatalistHtml()}</datalist>
       <datalist id="tf-f-origenes">${tarifasZonasDatalistHtml('origenZona')}</datalist>
       <datalist id="tf-f-destinos">${tarifasZonasDatalistHtml('destinoZona')}</datalist>
@@ -5737,6 +5745,7 @@ function resetTarifasState(){
   window.__tarifasOrigen = '';
   window.__tarifasDestino = '';
   window.__tarifasTipo = '';
+  window.__tarifasGasoil = '';
 }
 
 /* ---- Tarifas: formulario ---- */
@@ -5778,6 +5787,7 @@ function tarifaFormValues(){
     origenZona: v('tf-origen-zona').trim().toUpperCase(), origenCp: v('tf-origen-cp').trim(), origenCiudad: v('tf-origen-ciudad').trim(),
     destinoZona: v('tf-destino-zona').trim().toUpperCase(), destinoCp: v('tf-destino-cp').trim(), destinoCiudad: v('tf-destino-ciudad').trim(),
     precio: tarifaNum(v('tf-precio')), observaciones: v('tf-obs').trim(),
+    gasoil: !!(document.getElementById('tf-gasoil') || {}).checked,
   };
 }
 // Escribir el país (ES) y el CP completa la zona (ES08) sola.
@@ -5871,7 +5881,7 @@ function tarifaRutaHtml(){
             <span style="font-weight:${same?700:500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nombre)}</span>
             <span style="font-weight:700;white-space:nowrap;">${eur2(t.precio)}</span>
           </div>
-          <div style="font-size:11px;color:var(--mutedFaint);">${fmtDateDMY(t.fecha)} · ${esc(t.tipo)}${t.metros ? ' · ' + tarifaFmtMetros(t.metros) + ' m' : ''}${tarifaUnitarioTxt(t) ? ' · ' + tarifaUnitarioTxt(t) : ''}${t.origenCp || t.destinoCp || t.origenCiudad || t.destinoCiudad ? ' · ' + esc([tarifaLugarTxt(t.origenCp, t.origenCiudad), tarifaLugarTxt(t.destinoCp, t.destinoCiudad)].filter(Boolean).join(' → ')) : ''}</div>
+          <div style="font-size:11px;color:var(--mutedFaint);">${fmtDateDMY(t.fecha)} · ${esc(t.tipo)}${t.metros ? ' · ' + tarifaFmtMetros(t.metros) + ' m' : ''}${tarifaUnitarioTxt(t) ? ' · ' + tarifaUnitarioTxt(t) : ''}${t.gasoil ? ' · con gasoil' : ''}${t.origenCp || t.destinoCp || t.origenCiudad || t.destinoCiudad ? ' · ' + esc([tarifaLugarTxt(t.origenCp, t.origenCiudad), tarifaLugarTxt(t.destinoCp, t.destinoCiudad)].filter(Boolean).join(' → ')) : ''}</div>
         </div>`;
       }).join('')}
       ${list.length > 25 ? `<div style="font-size:11.5px;color:var(--mutedFaint);padding-top:8px;">Hay ${list.length - 25} más antiguas.</div>` : ''}
@@ -5939,6 +5949,9 @@ function tplTarifaFormPage(){
           <div class="field" id="tf-metros-field" style="flex:1;min-width:130px;${ltl?'':'opacity:0.5;'}"><label>Metros de camión</label><input id="tf-metros" type="text" inputmode="decimal" maxlength="5" placeholder="Ej. 3,5" ${ltl?'':'disabled'} value="${e.metros!=null?esc(String(e.metros).replace('.', ',')):''}" /></div>
           <div class="field" style="flex:1;min-width:150px;"><label>Precio (€)</label><input id="tf-precio" type="text" inputmode="decimal" maxlength="10" placeholder="Ej. 1300" value="${e.precio!==''&&e.precio!=null?esc(String(e.precio).replace('.', ',')):''}" /></div>
         </div>
+        <div class="field">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13.5px;"><input type="checkbox" class="switch" id="tf-gasoil" ${e.gasoil?'checked':''} /> Con indexación de gasoil</label>
+        </div>
         <div class="field" style="margin-bottom:0;"><label>Observaciones (opcional)</label><textarea id="tf-obs" maxlength="500" placeholder="Condiciones, tipo de mercancía, validez…" style="min-height:70px;">${esc(e.observaciones||'')}</textarea></div>
       </div>
       <div id="tf-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
@@ -5972,7 +5985,7 @@ async function submitTarifaForm(editId, addAnother){
   }
   const payload = {
     fecha: f.fecha, cliente_id: cliente.id, origen_zona: f.origenZona, origen_cp: f.origenCp || null, origen_ciudad: f.origenCiudad || null,
-    destino_zona: f.destinoZona, destino_cp: f.destinoCp || null, destino_ciudad: f.destinoCiudad || null, tipo: f.tipo, metros, precio: Math.round(precio * 100) / 100,
+    destino_zona: f.destinoZona, destino_cp: f.destinoCp || null, destino_ciudad: f.destinoCiudad || null, tipo: f.tipo, indexacion_gasoil: f.gasoil, metros, precio: Math.round(precio * 100) / 100,
     observaciones: f.observaciones || null,
   };
   const btns = [...document.querySelectorAll('.tf-submit-btn')];
@@ -5990,7 +6003,7 @@ async function submitTarifaForm(editId, addAnother){
   if (addAnother) {
     // Otra tarifa del mismo cliente y fecha, para cargar varias seguidas.
     openTarifaForm();
-    window.__tarifaPreset = { fecha: f.fecha, tipo: f.tipo, clienteNombre: cliente.nombre };
+    window.__tarifaPreset = { fecha: f.fecha, tipo: f.tipo, gasoil: f.gasoil, clienteNombre: cliente.nombre };
     renderTab();
     tarifaFormRefresh();
     setTimeout(() => { const el = document.getElementById('tf-origen-zona'); if (el) el.focus(); }, 0);
