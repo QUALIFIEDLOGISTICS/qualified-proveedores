@@ -5710,10 +5710,7 @@ function comercialIsSubpage(){
   return currentTab === 'comercial' && window.__comercialView === 'tarifaForm';
 }
 function resetComercialClientesState(){
-  window.__comClView = 'activos';
-  window.__comClTipos = [];
   window.__comClSearch = '';
-  window.__comClFilterOpen = false;
   window.__comClPage = 0;
 }
 function setComercialSection(id){
@@ -5733,14 +5730,10 @@ function tplComercial(){
 /* ---- Comercial → Clientes: los contactos marcados como cliente (de almacén o de transporte) ---- */
 const COM_CL_PAGE_SIZE = 80;
 function comercialClientesFilteredList(){
-  const archivedView = (window.__comClView || 'activos') === 'archivados';
-  const tipos = window.__comClTipos || [];
   const search = (window.__comClSearch || '').toLowerCase();
-  let list = contactos.filter(c => (c.esClienteAlmacen || c.esClienteTransporte) && !!c.archived === archivedView);
-  // Se pueden marcar los dos tipos: salen los que cumplan alguno.
-  if (tipos.length) list = list.filter(c => tipos.some(t => t === 'almacen' ? c.esClienteAlmacen : c.esClienteTransporte));
+  let list = contactos.filter(c => (c.esClienteAlmacen || c.esClienteTransporte) && !c.archived);
   list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || (c.nombreComercial||'').toLowerCase().includes(search) || (c.nif||'').toLowerCase().includes(search));
-  return { list, archivedView, search, tipos };
+  return { list, archivedView: false, search, tipos: [] };
 }
 function comercialClientesGoToPage(delta){
   window.__comClPage = Math.max(0, (window.__comClPage||0) + delta);
@@ -5776,26 +5769,7 @@ function comercialClientesListBodyHtml(){
   return contactosGridHtml(list.slice(page * COM_CL_PAGE_SIZE, (page + 1) * COM_CL_PAGE_SIZE), archivedView,
     c => ({ footerHtml: `<div style="font-size:11.5px;color:var(--mutedFaint);margin-top:4px;">Cliente · ${esc(tipoTxt(c))}</div>` }));
 }
-function tplComercialClientesFilterDropdown(){
-  const view = window.__comClView || 'activos';
-  const tipos = window.__comClTipos || [];
-  const opt = (label, checked, onchange) => `
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 4px;cursor:pointer;white-space:nowrap;">
-        <input type="checkbox" ${checked?'checked':''} onchange="${onchange}" style="width:auto;" />
-        ${label}
-      </label>`;
-  const setTipo = t => `window.__comClTipos = this.checked ? [...(window.__comClTipos||[]).filter(x=>x!=='${t}'), '${t}'] : (window.__comClTipos||[]).filter(x=>x!=='${t}'); window.__comClPage=0; renderTab();`;
-  return `
-    <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:190px;">
-      ${opt('Archivados', view==='archivados', "window.__comClView=this.checked?'archivados':'activos'; window.__comClPage=0; renderTab();")}
-      <div style="height:1px;background:var(--border);margin:6px 0;"></div>
-      ${opt('Cliente de almacén', tipos.includes('almacen'), setTipo('almacen'))}
-      ${opt('Cliente de transporte', tipos.includes('transporte'), setTipo('transporte'))}
-    </div>`;
-}
 function tplComercialClientesPage(){
-  const archivedView = (window.__comClView || 'activos') === 'archivados';
-  const filterCount = (archivedView ? 1 : 0) + (window.__comClTipos || []).length;
   return `
     <div style="display:flex;align-items:center;gap:14px;margin-bottom:22px;">
       <div style="width:48px;height:48px;border-radius:12px;background:rgba(201,138,46,0.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
@@ -5806,17 +5780,13 @@ function tplComercialClientesPage(){
         <div style="font-size:12.5px;color:var(--mutedFaint);">Los contactos marcados como cliente, de almacén o de transporte.</div>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-self:start;">
         <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
           <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__comClSearch||'')}" oninput="window.__comClSearch=this.value; window.__comClPage=0; refreshComercialClientesListBody();" style="padding-left:34px;" />
           <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
         </div>
-        ${archivedView ? '' : `<button class="btn btn-primary" onclick='openContactoModal(null, {esClienteTransporte:true})'>+ Nuevo cliente</button>`}
-      </div>
-      <div style="position:relative;justify-self:center;">
-        <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__comClFilterOpen=!window.__comClFilterOpen; renderTab();">Filtros${filterCount?` (${filterCount})`:''} ▾</button>
-        ${window.__comClFilterOpen ? tplComercialClientesFilterDropdown() : ''}
+        <button class="btn btn-primary" onclick='openContactoModal(null, {esClienteTransporte:true})'>+ Nuevo cliente</button>
       </div>
       <div id="com-cl-pagination" style="display:flex;align-items:center;gap:8px;justify-self:end;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplComercialClientesPaginationHtml()}</div>
     </div>
@@ -6615,7 +6585,7 @@ function tplTransportistasPage(){
         </div>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
       <div style="position:relative;max-width:320px;justify-self:start;width:100%;">
         <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__transpSearch||'')}" oninput="window.__transpSearch=this.value; window.__transpPage=0; refreshTransportistasListBody();" style="padding-left:34px;" />
         <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
@@ -6641,7 +6611,7 @@ function tplDecaPage(){
         </div>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
       <div style="position:relative;min-width:220px;max-width:340px;justify-self:start;width:100%;">
         <input placeholder="Buscar por código, cargador, transportista, origen, destino o matrícula…" value="${esc(window.__decaSearch||'')}" oninput="window.__decaSearch=this.value; refreshDecaListBody();" style="padding-left:34px;" />
         <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
@@ -7682,7 +7652,7 @@ function tplCompaniesList(){
         <div style="font-size:12.5px;color:var(--mutedFaint);">Contactos marcados como Autónomos y sus conductores.</div>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-self:start;">
         <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
           <input id="companies-search-input" placeholder="Buscar por nombre o NIF…" value="${esc(window.__companiesSearch||'')}" oninput="window.__companiesSearch=this.value; refreshCompaniesListBody();" style="padding-left:34px;" />
@@ -9375,7 +9345,7 @@ function tplAdminList(){
       </div>
     </div>
     <div style="font-size:12px;color:var(--mutedFaint);margin:0 0 18px 62px;line-height:1.5;">Para dar de alta a alguien nuevo, créalo en Supabase → Authentication → Users; aparecerá aquí en cuanto exista.</div>
-    <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
       <div style="position:relative;max-width:320px;">
         <input placeholder="Buscar por correo…" value="${esc(window.__adminSearch||'')}" oninput="window.__adminSearch=this.value; refreshAdminListBody();" style="padding-left:34px;" />
         <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
