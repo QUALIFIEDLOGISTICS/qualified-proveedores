@@ -634,6 +634,7 @@ const TABS = [
   {id:'trafico', label:'Tráfico', group:'Transporte'},
   {id:'autonomos', label:'Autónomos', group:'Transporte'},
   {id:'fichajes', label:'Fichajes', group:'Transporte'},
+  {id:'comercial', label:'Comercial', group:'Comercial'},
   {id:'administracion', label:'Contactos', group:'Administración'},
 ];
 const ADMIN_TAB = {id:'admin', label:'Gestión de Permisos', group:'Configuración'};
@@ -715,6 +716,7 @@ async function setTab(id){
     window.__contactosPage = 0;
   }
   if (id === 'trafico') { window.__traficoView = 'home'; window.__traficoSection = 'transportistas'; resetTransportistasState(); }
+  if (id === 'comercial') { window.__comercialSection = 'clientes'; window.__comercialView = 'home'; window.__showingContactoDetail = false; resetComercialClientesState(); resetTarifasState(); }
   if (id === 'clientes') { window.__clientesFilterOpen = false; }
   if (id === 'admin') {
     window.__adminView = 'list'; window.__adminEditMode = false; window.__adminSearch = '';
@@ -753,6 +755,11 @@ function renderHeader(){
     document.getElementById('wh-sub').textContent = 'Jornadas fichadas por cada conductor, con opción de corregirlas · Qualified Logistics';
     return;
   }
+  if (currentTab === 'comercial') {
+    titleRow.innerHTML = `<div style="${PLAIN_TITLE_STYLE}">Comercial</div>`;
+    document.getElementById('wh-sub').textContent = '';
+    return;
+  }
   if (currentTab === 'administracion') {
     titleRow.innerHTML = `<div style="${PLAIN_TITLE_STYLE}">Administración</div>`;
     document.getElementById('wh-sub').textContent = '';
@@ -789,6 +796,7 @@ const HOME_MODULES = {
   citas: { color: '#3F8F5F', icon: 'calendar', description: 'Reserva y control de franjas horarias de carga y descarga.' },
   documentos: { color: '#7C5CBF', icon: 'file', description: 'Documentación asociada a cada almacén.' },
   trafico: { color: '#C1443D', icon: 'truck', description: 'Transportistas, DeCA y agenda de direcciones.' },
+  comercial: { color: '#C98A2E', icon: 'users', description: 'Clientes y tarifas que pasas a cada uno.' },
   autonomos: { color: '#D9A72C', icon: 'user', description: 'Empresas, conductores, tarifas y liquidación.' },
   fichajes: { color: '#2C9A93', icon: 'clock', description: 'Jornadas fichadas por cada conductor.' },
   admin: { color: '#1B3A6B', icon: 'shield', description: 'Usuarios y permisos de acceso al panel.' },
@@ -798,6 +806,7 @@ const HOME_MODULES = {
 const HOME_GROUPS = {
   'Almacén': { icon: 'home' },
   'Transporte': { icon: 'truck' },
+  'Comercial': { icon: 'users' },
   'Configuración': { icon: 'settings' },
   'Administración': { icon: 'settings' },
 };
@@ -870,6 +879,16 @@ function computeBreadcrumbSegments(){
     const editing = editId ? contactos.find(c=>c.id===editId) : null;
     return [...ancestors, {label, onclick:'closeContactoDetail()'}, {label: editing ? editing.nombre : 'Nuevo contacto', onclick:null}];
   }
+  if (currentTab === 'comercial') {
+    if (comercialSection() === 'tarifas') {
+      if (window.__comercialView === 'tarifaForm') {
+        const tf = window.__tarifaFormId ? tarifas.find(t=>t.id===window.__tarifaFormId) : null;
+        return [{label:'Tarifas', onclick:'backToTarifas()'}, {label: tf ? `${tf.origenZona} → ${tf.destinoZona}` : (window.__tarifaPreset ? 'Actualizar tarifa' : 'Nueva tarifa'), onclick:null}];
+      }
+      return [{label:'Tarifas', onclick:null}];
+    }
+    return [{label:'Clientes', onclick:null}];
+  }
   if (currentTab === ALMACEN_CONFIG_TAB) {
     const wh = window.__whFormId ? allWarehouses.find(w=>w.id===window.__whFormId) : null;
     return [{label:'Configuración', onclick:'backToWarehouses()'}, {label: wh ? wh.name : 'Nuevo almacén', onclick:null}];
@@ -882,13 +901,6 @@ function computeBreadcrumbSegments(){
         return [{label:'Direcciones', onclick:'backToDirecciones()'}, {label: dr ? dr.nombre : 'Nueva dirección', onclick:null}];
       }
       return [{label:'Direcciones', onclick:null}];
-    }
-    if (traficoSection() === 'tarifas') {
-      if (window.__traficoView === 'tarifaForm') {
-        const tf = window.__tarifaFormId ? tarifas.find(t=>t.id===window.__tarifaFormId) : null;
-        return [{label:'Tarifas', onclick:'backToTarifas()'}, {label: tf ? `${tf.origenZona} → ${tf.destinoZona}` : (window.__tarifaPreset ? 'Actualizar tarifa' : 'Nueva tarifa'), onclick:null}];
-      }
-      return [{label:'Tarifas', onclick:null}];
     }
     if (traficoSection() === 'deca') {
       if (window.__traficoView === 'decaForm') {
@@ -1374,6 +1386,7 @@ function renderTab(){
   else if (currentTab === 'documentos') bodyHtml = tplDocumentos();
   else if (currentTab === 'autonomos') bodyHtml = tplAutonomos();
   else if (currentTab === 'trafico') bodyHtml = tplTrafico();
+  else if (currentTab === 'comercial') bodyHtml = tplComercial();
   else if (currentTab === 'admin') bodyHtml = tplAdmin();
   else if (currentTab === 'fichajes') bodyHtml = tplFichajes();
   else if (currentTab === 'administracion') bodyHtml = tplAdministracion();
@@ -1383,8 +1396,9 @@ function renderTab(){
   // solo los formularios llevan además el camino de arriba para volver a su lista.
   const almacenBar = (isAlmacenTab(currentTab) && !window.__showingContactoDetail) ? tplAlmacenBar() : '';
   const traficoBar = (currentTab === 'trafico' && !window.__showingContactoDetail) ? tplTraficoBar() : '';
-  const moduleBar = almacenBar || traficoBar;
-  const hideBreadcrumb = (currentTab === 'inicio' && !window.__showingContactoDetail) || (almacenBar && !almacenIsSubpage()) || (traficoBar && !traficoIsSubpage());
+  const comercialBar = (currentTab === 'comercial' && !window.__showingContactoDetail) ? tplComercialBar() : '';
+  const moduleBar = almacenBar || traficoBar || comercialBar;
+  const hideBreadcrumb = (currentTab === 'inicio' && !window.__showingContactoDetail) || (almacenBar && !almacenIsSubpage()) || (traficoBar && !traficoIsSubpage()) || (comercialBar && !comercialIsSubpage());
   const breadcrumb = hideBreadcrumb ? '' : renderBreadcrumbHtml();
   el.innerHTML = moduleBar + breadcrumb + bodyHtml;
 }
@@ -2446,6 +2460,7 @@ async function refreshContactoLogoThumbnails(){
   if (currentTab === 'autonomos' && window.__autonomosView === 'empresas') refreshCompaniesListBody();
   if (currentTab === 'clientes') refreshClientesListBody();
   if (currentTab === 'trafico' && traficoSection() === 'transportistas') refreshTransportistasListBody();
+  if (currentTab === 'comercial' && comercialSection() === 'clientes') refreshComercialClientesListBody();
 }
 function contactoLogoThumbHtml(c){
   const url = contactoLogoUrlCache[c.id];
@@ -2901,6 +2916,7 @@ function exitContactoEditMode(){
 function contactoPresetForNavLabel(label){
   if (label === 'Clientes') return { esClienteAlmacen: true, warehouseIds: [currentWarehouseId] };
   if (label === 'Empresas') return { esAutonomos: true, esTransportista: true };
+  if (label === 'Comercial') return { esClienteTransporte: true };
   return null;
 }
 function newContactoFromContext(){
@@ -5518,7 +5534,6 @@ function tplAutonomosDashboardBody(){
 // siempre; solo cambia el marco que las agrupa.
 const TRAFICO_SECTIONS = [
   { id: 'transportistas', label: 'Transportistas' },
-  { id: 'tarifas', label: 'Tarifas' },
   { id: 'deca', label: 'DeCA' },
   { id: 'direcciones', label: 'Direcciones' },
 ];
@@ -5536,16 +5551,13 @@ function tplTraficoBar(){
 // arriba para poder volver a su lista; las listas ya se ubican con la barra.
 function traficoIsSubpage(){
   return (traficoSection() === 'deca' && window.__traficoView === 'decaForm')
-    || (traficoSection() === 'tarifas' && window.__traficoView === 'tarifaForm')
     || (traficoSection() === 'direcciones' && window.__administracionView === 'direccionForm');
 }
 function setTraficoSection(id){
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
-  if (!tarifaConfirmLeaveForm()) return;
   window.__decaFormDirty = false;
   window.__direccionFormDirty = false;
-  window.__tarifaFormDirty = false;
   window.__traficoSection = id;
   window.__traficoView = id === 'deca' ? 'deca' : 'home';
   window.__decaMenuOpen = null;
@@ -5557,14 +5569,12 @@ function setTraficoSection(id){
     window.__direccionesPage = 0;
   }
   if (id === 'transportistas') resetTransportistasState();
-  if (id === 'tarifas') resetTarifasState();
   renderHeader(); renderTab();
 }
 function tplTrafico(){
   const sec = traficoSection();
   if (sec === 'deca') return window.__traficoView === 'decaForm' ? tplDecaFormPage() : tplDecaPage();
   if (sec === 'direcciones') return window.__administracionView === 'direccionForm' ? tplDireccionFormPage() : tplDireccionesPage();
-  if (sec === 'tarifas') return window.__traficoView === 'tarifaForm' ? tplTarifaFormPage() : tplTarifasPage();
   return tplTransportistasPage();
 }
 function openDecaModule(){
@@ -5578,6 +5588,142 @@ function backToTraficoHome(){
   window.__decaFormDirty = false;
   window.__traficoView = window.__traficoSection === 'deca' ? 'deca' : 'home';
   renderHeader(); renderTab();
+}
+
+/* ============================= MÓDULO COMERCIAL =============================
+   Módulo principal con barra superior, como Almacén y Tráfico:
+   Clientes (los contactos marcados como cliente) · Tarifas (histórico de
+   precios por cliente y zona). Su permiso es la pestaña "comercial". */
+const COMERCIAL_SECTIONS = [
+  { id: 'clientes', label: 'Clientes' },
+  { id: 'tarifas', label: 'Tarifas' },
+];
+function comercialSection(){ return window.__comercialSection || 'clientes'; }
+function tplComercialBar(){
+  const sec = comercialSection();
+  return `
+    <div style="display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
+      <div style="display:flex;gap:2px;flex-wrap:wrap;">
+        ${COMERCIAL_SECTIONS.map(s => moduleTabBtnHtml(`setComercialSection('${s.id}')`, s.label, s.id === sec)).join('')}
+      </div>
+    </div>`;
+}
+// El formulario de una tarifa lleva el camino de arriba para volver a su lista.
+function comercialIsSubpage(){
+  return currentTab === 'comercial' && comercialSection() === 'tarifas' && window.__comercialView === 'tarifaForm';
+}
+function resetComercialClientesState(){
+  window.__comClView = 'activos';
+  window.__comClTipos = [];
+  window.__comClSearch = '';
+  window.__comClFilterOpen = false;
+  window.__comClPage = 0;
+}
+function setComercialSection(id){
+  if (!tarifaConfirmLeaveForm()) return;
+  window.__tarifaFormDirty = false;
+  window.__comercialSection = id;
+  window.__comercialView = 'home';
+  if (id === 'clientes') resetComercialClientesState();
+  if (id === 'tarifas') resetTarifasState();
+  renderHeader(); renderTab();
+}
+function tplComercial(){
+  if (comercialSection() === 'tarifas') return window.__comercialView === 'tarifaForm' ? tplTarifaFormPage() : tplTarifasPage();
+  return tplComercialClientesPage();
+}
+
+/* ---- Comercial → Clientes: los contactos marcados como cliente (de almacén o de transporte) ---- */
+const COM_CL_PAGE_SIZE = 80;
+function comercialClientesFilteredList(){
+  const archivedView = (window.__comClView || 'activos') === 'archivados';
+  const tipos = window.__comClTipos || [];
+  const search = (window.__comClSearch || '').toLowerCase();
+  let list = contactos.filter(c => (c.esClienteAlmacen || c.esClienteTransporte) && !!c.archived === archivedView);
+  // Se pueden marcar los dos tipos: salen los que cumplan alguno.
+  if (tipos.length) list = list.filter(c => tipos.some(t => t === 'almacen' ? c.esClienteAlmacen : c.esClienteTransporte));
+  list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || (c.nombreComercial||'').toLowerCase().includes(search) || (c.nif||'').toLowerCase().includes(search));
+  return { list, archivedView, search, tipos };
+}
+function comercialClientesGoToPage(delta){
+  window.__comClPage = Math.max(0, (window.__comClPage||0) + delta);
+  refreshComercialClientesListBody();
+}
+function tplComercialClientesPaginationHtml(){
+  const total = comercialClientesFilteredList().list.length;
+  const totalPages = Math.max(1, Math.ceil(total / COM_CL_PAGE_SIZE));
+  const page = Math.min(window.__comClPage||0, totalPages-1);
+  const rangeStart = total ? page * COM_CL_PAGE_SIZE + 1 : 0;
+  const rangeEnd = Math.min(total, (page+1) * COM_CL_PAGE_SIZE);
+  return `
+    <span>${rangeStart}-${rangeEnd} / ${total}</span>
+    <button class="btn btn-ghost" style="padding:4px 9px;" ${page<=0?'disabled':''} onclick="comercialClientesGoToPage(-1)">‹</button>
+    <button class="btn btn-ghost" style="padding:4px 9px;" ${page>=totalPages-1?'disabled':''} onclick="comercialClientesGoToPage(1)">›</button>`;
+}
+function refreshComercialClientesListBody(){
+  const el = document.getElementById('com-cl-list-body');
+  if (el) el.innerHTML = comercialClientesListBodyHtml();
+  const pag = document.getElementById('com-cl-pagination');
+  if (pag) pag.innerHTML = tplComercialClientesPaginationHtml();
+}
+function comercialClientesListBodyHtml(){
+  const { list, archivedView, search, tipos } = comercialClientesFilteredList();
+  window.__contactoNavContext = { label: 'Comercial', ids: list.map(c=>c.id) };
+  if (!list.length) {
+    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search || tipos.length ? 'Ningún cliente coincide con el filtro.' : archivedView ? 'No hay clientes archivados.' : 'Todavía no hay ningún cliente. Crea uno con «+ Nuevo cliente».'}</div>`;
+  }
+  const totalPages = Math.max(1, Math.ceil(list.length / COM_CL_PAGE_SIZE));
+  if ((window.__comClPage||0) > totalPages - 1) window.__comClPage = totalPages - 1;
+  const page = window.__comClPage || 0;
+  const tipoTxt = c => [c.esClienteAlmacen && 'Almacén', c.esClienteTransporte && 'Transporte'].filter(Boolean).join(' · ');
+  return contactosGridHtml(list.slice(page * COM_CL_PAGE_SIZE, (page + 1) * COM_CL_PAGE_SIZE), archivedView,
+    c => ({ footerHtml: `<div style="font-size:11.5px;color:var(--mutedFaint);margin-top:4px;">Cliente · ${esc(tipoTxt(c))}</div>` }));
+}
+function tplComercialClientesFilterDropdown(){
+  const view = window.__comClView || 'activos';
+  const tipos = window.__comClTipos || [];
+  const opt = (label, checked, onchange) => `
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 4px;cursor:pointer;white-space:nowrap;">
+        <input type="checkbox" ${checked?'checked':''} onchange="${onchange}" style="width:auto;" />
+        ${label}
+      </label>`;
+  const setTipo = t => `window.__comClTipos = this.checked ? [...(window.__comClTipos||[]).filter(x=>x!=='${t}'), '${t}'] : (window.__comClTipos||[]).filter(x=>x!=='${t}'); window.__comClPage=0; renderTab();`;
+  return `
+    <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:190px;">
+      ${opt('Archivados', view==='archivados', "window.__comClView=this.checked?'archivados':'activos'; window.__comClPage=0; renderTab();")}
+      <div style="height:1px;background:var(--border);margin:6px 0;"></div>
+      ${opt('Cliente de almacén', tipos.includes('almacen'), setTipo('almacen'))}
+      ${opt('Cliente de transporte', tipos.includes('transporte'), setTipo('transporte'))}
+    </div>`;
+}
+function tplComercialClientesPage(){
+  const archivedView = (window.__comClView || 'activos') === 'archivados';
+  const filterCount = (archivedView ? 1 : 0) + (window.__comClTipos || []).length;
+  return `
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:22px;">
+      <div style="width:48px;height:48px;border-radius:12px;background:rgba(201,138,46,0.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        ${homeIcon(HOME_ICON_PATHS.users, 24, '#C98A2E')}
+      </div>
+      <div>
+        <div style="font-family:var(--display);font-size:22px;">Clientes</div>
+        <div style="font-size:12.5px;color:var(--mutedFaint);">Los contactos marcados como cliente, de almacén o de transporte.</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-self:start;">
+        <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
+          <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__comClSearch||'')}" oninput="window.__comClSearch=this.value; window.__comClPage=0; refreshComercialClientesListBody();" style="padding-left:34px;" />
+          <span style="position:absolute;left:11px;top:9px;color:var(--mutedFaint);font-size:13px;">🔍</span>
+        </div>
+        ${archivedView ? '' : `<button class="btn btn-primary" onclick='openContactoModal(null, {esClienteTransporte:true})'>+ Nuevo cliente</button>`}
+      </div>
+      <div style="position:relative;justify-self:center;">
+        <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__comClFilterOpen=!window.__comClFilterOpen; renderTab();">Filtros${filterCount?` (${filterCount})`:''} ▾</button>
+        ${window.__comClFilterOpen ? tplComercialClientesFilterDropdown() : ''}
+      </div>
+      <div id="com-cl-pagination" style="display:flex;align-items:center;gap:8px;justify-self:end;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplComercialClientesPaginationHtml()}</div>
+    </div>
+    <div id="com-cl-list-body">${comercialClientesListBodyHtml()}</div>`;
 }
 
 /* ============================= TARIFAS =============================
@@ -5695,7 +5841,7 @@ function tarifasZonasDatalistHtml(field){
   return zonas.map(z => `<option value="${esc(z)}" label="${esc(tarifaZonaHint(z))}">`).join('');
 }
 function tarifasClientesDatalistHtml(){
-  return contactos.filter(c => !c.archived && c.esClienteTransporte).map(c => `<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('');
+  return contactos.filter(c => !c.archived && (c.esClienteTransporte || c.esClienteAlmacen)).map(c => `<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('');
 }
 function tplTarifasPage(){
   const view = window.__tarifasView || 'vigentes';
@@ -5751,7 +5897,7 @@ function resetTarifasState(){
 
 /* ---- Tarifas: formulario ---- */
 function tarifaConfirmLeaveForm(){
-  if (traficoSection() === 'tarifas' && window.__traficoView === 'tarifaForm' && window.__tarifaFormDirty) {
+  if (currentTab === 'comercial' && comercialSection() === 'tarifas' && window.__comercialView === 'tarifaForm' && window.__tarifaFormDirty) {
     return confirm('Tienes cambios sin guardar. ¿Seguro que quieres salir sin guardar?');
   }
   return true;
@@ -5759,8 +5905,8 @@ function tarifaConfirmLeaveForm(){
 // editId: editar esa tarifa. cloneId: tarifa nueva con los datos de otra y la fecha de hoy
 // (así se actualiza el precio de una ruta sin volver a escribirla).
 function openTarifaForm(editId, cloneId){
-  window.__traficoSection = 'tarifas';
-  window.__traficoView = 'tarifaForm';
+  window.__comercialSection = 'tarifas';
+  window.__comercialView = 'tarifaForm';
   window.__tarifaFormId = editId || null;
   const src = cloneId ? tarifas.find(t => t.id === cloneId) : null;
   window.__tarifaPreset = src ? { ...src, fecha: today(), precio: '', id: null } : null;
@@ -5773,7 +5919,7 @@ function openTarifaForm(editId, cloneId){
 function backToTarifas(){
   if (!tarifaConfirmLeaveForm()) return;
   window.__tarifaFormDirty = false;
-  window.__traficoView = 'home';
+  window.__comercialView = 'home';
   renderHeader(); renderTab();
 }
 // "1.300,50" o "1300.5" → "1300.50".
@@ -5931,7 +6077,7 @@ function tplTarifaFormPage(){
           <div class="field" style="flex:1;min-width:150px;max-width:190px;"><label>Fecha</label><input id="tf-fecha" type="date" value="${esc(e.fecha||today())}" /></div>
           <div class="field" style="flex:2;min-width:240px;">
             <label>Cliente</label>
-            <input id="tf-cliente" maxlength="150" data-combo="tf-clientes-datalist" autocomplete="off" placeholder="Elige entre tus clientes de transporte" value="${esc(clienteNombre)}" />
+            <input id="tf-cliente" maxlength="150" data-combo="tf-clientes-datalist" autocomplete="off" placeholder="Elige entre tus clientes" value="${esc(clienteNombre)}" />
             <datalist id="tf-clientes-datalist">${tarifasClientesDatalistHtml()}</datalist>
             <button type="button" onclick="openQuickClienteTarifaModal()" style="background:none;border:none;padding:5px 0 0;font-size:12.5px;color:var(--primary);cursor:pointer;">+ Crear cliente que no esté en la lista</button>
           </div>
@@ -5985,7 +6131,7 @@ async function submitTarifaForm(editId, addAnother){
   const f = tarifaFormValues();
   const fail = msg => showFormError(errEl, msg);
   if (!f.fecha) return fail('Indica la fecha.');
-  const cliente = contactos.find(c => !c.archived && c.esClienteTransporte && c.nombre === f.cliente);
+  const cliente = contactos.find(c => !c.archived && (c.esClienteTransporte || c.esClienteAlmacen) && c.nombre === f.cliente);
   if (!cliente) return fail('Elige un cliente de la lista (o créalo con «Crear cliente que no esté en la lista»).');
   if (!TARIFA_ZONA_RE.test(f.origenZona)) return fail('La zona de origen tiene que ser un país y 2 caracteres, por ejemplo ES08.');
   if (!TARIFA_ZONA_RE.test(f.destinoZona)) return fail('La zona de destino tiene que ser un país y 2 caracteres, por ejemplo FR13.');
@@ -6022,7 +6168,7 @@ async function submitTarifaForm(editId, addAnother){
     setTimeout(() => { const el = document.getElementById('tf-origen-zona'); if (el) el.focus(); }, 0);
     return;
   }
-  window.__traficoView = 'home';
+  window.__comercialView = 'home';
   renderHeader(); renderTab();
 }
 async function deleteTarifa(id){
@@ -6032,7 +6178,7 @@ async function deleteTarifa(id){
   if (error) { alert('No se pudo eliminar: ' + error.message); return; }
   await loadTarifas();
   window.__tarifaFormDirty = false;
-  window.__traficoView = 'home';
+  window.__comercialView = 'home';
   renderHeader(); renderTab();
 }
 // Alta rápida de un cliente sin salir de la tarifa: se guarda en Contactos como
@@ -8778,6 +8924,7 @@ const PERM_ROLES = {
   organizador: { label: 'Organizador de almacén', tabs: ['clientes','citas','documentos'], schedule: true, hint: 'Gestiona el día a día del almacén: clientes, franjas y documentos, y puede cambiar el horario.' },
   carretillero: { label: 'Carretillero (solo franjas)', tabs: ['citas'], hint: 'Solo ve las franjas horarias del almacén: consultar y reservar.' },
   trafico: { label: 'Tráfico', tabs: ['trafico','autonomos','fichajes'], hint: 'Tráfico (transportistas, DeCA y direcciones), autónomos y fichajes.' },
+  comercial: { label: 'Comercial', tabs: ['comercial'], hint: 'Clientes y tarifas.' },
   administracion: { label: 'Administración', tabs: ['administracion'], hint: 'Contactos y flota.' },
   fichaje: { label: 'Solo fichaje (conductor)', tabs: [], hint: 'Solo ve la pantalla para fichar su jornada; hay que vincularle un conductor.' },
   custom: { label: 'Personalizado', hint: 'Elige a mano qué módulos ve.' },
@@ -8787,7 +8934,7 @@ function permDetectRole(s){
   if (s.isAdmin) return 'admin';
   const tabs = [...s.allowedTabs].sort().join(',');
   if (!tabs && (s.driverId || s.wantsFichaje)) return 'fichaje';
-  for (const k of ['organizador','carretillero','trafico','administracion']) {
+  for (const k of ['organizador','carretillero','trafico','comercial','administracion']) {
     const r = PERM_ROLES[k];
     if ([...r.tabs].sort().join(',') === tabs && !!r.schedule === !!s.canEditSchedule) return k;
   }
