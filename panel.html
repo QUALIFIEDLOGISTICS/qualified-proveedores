@@ -3147,7 +3147,7 @@ function tarifaTipoChipHtml(t){
   return `<span class="tf-chip ${esc(String(t.tipo).toLowerCase())}">${esc(tarifaTipoLabel(t.tipo))}${extra}</span>`;
 }
 function tarifaGasoilChipHtml(t){
-  return `<span class="tf-chip ${t.gasoil ? 'gas-si' : 'gas-no'}">${t.gasoil ? 'Con indexación' : 'Sin indexación'}</span>`;
+  return `<span class="tf-chip ${t.gasoil ? 'gas-si' : 'gas-no'}">${t.gasoil ? 'Con indexación' : 'Sin indexación'}</span>${t.gasoil && t.gasoilRef ? `<div class="tf-lugar" style="margin-top:2px;" title="Fecha en que se coge el valor de referencia del gasoil">Ref. ${fmtDateDMY(t.gasoilRef)}</div>` : ''}`;
 }
 function tarifaPrecioCeldaHtml(t){
   return `${eur2(t.precio)}${t.tipo === 'GRANEL' ? '<small>/t</small>' : ''}`;
@@ -5812,7 +5812,7 @@ async function loadTarifas(){
   tarifas = (data||[]).map(t => ({
     id: t.id, createdAt: t.created_at, fecha: t.fecha, clienteId: t.cliente_id,
     origenZona: t.origen_zona, origenCp: t.origen_cp || '', origenCiudad: t.origen_ciudad || '', destinoZona: t.destino_zona, destinoCp: t.destino_cp || '', destinoCiudad: t.destino_ciudad || '',
-    tipo: t.tipo, gasoil: !!t.indexacion_gasoil, metros: t.metros == null ? null : Number(t.metros), precio: Number(t.precio), observaciones: t.observaciones || '',
+    tipo: t.tipo, gasoil: !!t.indexacion_gasoil, gasoilRef: t.gasoil_fecha_ref || '', metros: t.metros == null ? null : Number(t.metros), precio: Number(t.precio), observaciones: t.observaciones || '',
   }));
 }
 const TARIFA_ZONA_RE = /^[A-Z]{2}[0-9A-Z]{2}$/;
@@ -5905,6 +5905,7 @@ function tarifaCambiosTxt(before, after){
   add('CP de origen', before.origenCp, after.origenCp);
   add('CP de destino', before.destinoCp, after.destinoCp);
   add('indexación de gasoil', before.gasoil ? 'sí' : 'no', after.gasoil ? 'sí' : 'no');
+  add('fecha de referencia del gasoil', before.gasoilRef ? fmtDateDMY(before.gasoilRef) : '', after.gasoilRef ? fmtDateDMY(after.gasoilRef) : '');
   add('observaciones', before.observaciones, after.observaciones);
   return lines;
 }
@@ -6159,6 +6160,7 @@ function tarifaFormValues(){
     destinoZona: v('tf-destino-zona').trim().toUpperCase(), destinoCp: v('tf-destino-cp').trim(), destinoCiudad: v('tf-destino-ciudad').trim(),
     precio: tarifaNum(v('tf-precio')), observaciones: v('tf-obs').trim(),
     gasoil: !!(document.getElementById('tf-gasoil') || {}).checked,
+    gasoilRef: (document.getElementById('tf-gasoil') || {}).checked ? ((document.getElementById('tf-gasoil-ref') || {}).value || '') : '',
   };
 }
 // Escribir el país (ES) y el CP completa la zona (ES08) sola.
@@ -6224,6 +6226,12 @@ function tarifaPrecioChanged(){
   if (cambiado && fEl.value === t.fecha && fEl.dataset.autoHoy !== '1') { fEl.value = today(); fEl.dataset.autoHoy = '1'; }
   if (!cambiado && fEl.dataset.autoHoy === '1') { fEl.value = t.fecha; fEl.dataset.autoHoy = ''; }
 }
+// La fecha de referencia del gasoil solo se enseña (y se guarda) si la tarifa lleva indexación.
+function tarifaGasoilChange(){
+  const on = document.getElementById('tf-gasoil').checked;
+  document.getElementById('tf-gasoil-ref-field').style.display = on ? '' : 'none';
+  if (!on) document.getElementById('tf-gasoil-ref').value = '';
+}
 function tarifaTipoChange(){
   const ltl = document.getElementById('tf-tipo').value === 'LTL';
   const m = document.getElementById('tf-metros');
@@ -6268,7 +6276,7 @@ function tarifaRutaHtml(){
         <span style="font-weight:${same?700:500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nombre)}</span>
         <span style="font-weight:700;white-space:nowrap;">${eur2(t.precio)}${t.tipo === 'GRANEL' ? '/t' : ''}</span>
       </div>
-      <div style="font-size:11px;color:var(--mutedFaint);">${showRoute ? `<b style="font-family:var(--mono);color:var(--muted);">${esc(t.origenZona)} → ${esc(t.destinoZona)}</b> · ` : ''}${fmtDateDMY(t.fecha)} · ${esc(tarifaTipoLabel(t.tipo))}${t.metros ? ' · ' + tarifaFmtMetros(t.metros) + ' m' : ''}${tarifaUnitarioTxt(t) ? ' · ' + tarifaUnitarioTxt(t) : ''}${t.gasoil ? ' · con indexación de gasoil' : ''}${lugar ? ' · ' + esc(lugar) : ''}</div>
+      <div style="font-size:11px;color:var(--mutedFaint);">${showRoute ? `<b style="font-family:var(--mono);color:var(--muted);">${esc(t.origenZona)} → ${esc(t.destinoZona)}</b> · ` : ''}${fmtDateDMY(t.fecha)} · ${esc(tarifaTipoLabel(t.tipo))}${t.metros ? ' · ' + tarifaFmtMetros(t.metros) + ' m' : ''}${tarifaUnitarioTxt(t) ? ' · ' + tarifaUnitarioTxt(t) : ''}${t.gasoil ? ' · con indexación de gasoil' + (t.gasoilRef ? ' (ref. ' + fmtDateDMY(t.gasoilRef) + ')' : '') : ''}${lugar ? ' · ' + esc(lugar) : ''}</div>
     </div>`;
   };
   const section = (title, list, max, showRoute, withStats) => `
@@ -6353,7 +6361,12 @@ function tplTarifaFormPage(){
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:12.5px;"><input type="checkbox" id="tf-solo-corregir" style="width:auto;" /> Es solo un error de tecleo: corregir sin crear histórico</label>
         </div>` : ''}
         <div class="field">
-          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13.5px;"><input type="checkbox" class="switch" id="tf-gasoil" ${e.gasoil?'checked':''} /> Con indexación de gasoil</label>
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13.5px;"><input type="checkbox" class="switch" id="tf-gasoil" ${e.gasoil?'checked':''} onchange="tarifaGasoilChange()" /> Con indexación de gasoil</label>
+        </div>
+        <div class="field" id="tf-gasoil-ref-field" style="max-width:280px;${e.gasoil?'':'display:none;'}">
+          <label>Fecha de referencia del gasoil (opcional)</label>
+          <input id="tf-gasoil-ref" type="date" value="${esc(e.gasoilRef||'')}" />
+          <div style="font-size:12px;color:var(--mutedFaint);margin-top:3px;">Día en que se coge el valor de referencia para calcular la indexación.</div>
         </div>
         <div class="field" style="margin-bottom:0;"><label>Observaciones (opcional)</label><textarea id="tf-obs" maxlength="500" placeholder="Condiciones, tipo de mercancía, validez…" style="min-height:70px;">${esc(e.observaciones||'')}</textarea></div>
       </div>
@@ -6388,12 +6401,12 @@ async function submitTarifaForm(editId, addAnother){
   }
   const payload = {
     fecha: f.fecha, cliente_id: cliente.id, origen_zona: f.origenZona, origen_cp: f.origenCp || null, origen_ciudad: f.origenCiudad || null,
-    destino_zona: f.destinoZona, destino_cp: f.destinoCp || null, destino_ciudad: f.destinoCiudad || null, tipo: f.tipo, indexacion_gasoil: f.gasoil, metros, precio: Math.round(precio * 100) / 100,
+    destino_zona: f.destinoZona, destino_cp: f.destinoCp || null, destino_ciudad: f.destinoCiudad || null, tipo: f.tipo, indexacion_gasoil: f.gasoil, gasoil_fecha_ref: f.gasoil ? (f.gasoilRef || null) : null, metros, precio: Math.round(precio * 100) / 100,
     observaciones: f.observaciones || null,
   };
   // Lo que se anotará en el historial del cliente (quién cambió qué), calculado antes de guardar.
   const after = { clienteId: cliente.id, fecha: f.fecha, origenZona: f.origenZona, origenCp: f.origenCp, origenCiudad: f.origenCiudad, destinoZona: f.destinoZona, destinoCp: f.destinoCp, destinoCiudad: f.destinoCiudad,
-    tipo: f.tipo, metros, precio: payload.precio, gasoil: f.gasoil, observaciones: f.observaciones };
+    tipo: f.tipo, metros, precio: payload.precio, gasoil: f.gasoil, gasoilRef: f.gasoilRef, observaciones: f.observaciones };
   // Editar una tarifa vigente y cambiarle el precio es un cambio de precio: se guarda como tarifa
   // nueva y la actual pasa a históricas (salvo que se marque como corrección de un error de tecleo).
   const editando = editId ? tarifas.find(t => t.id === editId) : null;
@@ -6429,7 +6442,7 @@ async function submitTarifaForm(editId, addAnother){
   if (addAnother) {
     // Otra tarifa del mismo cliente y fecha, para cargar varias seguidas.
     openTarifaForm(null, null, cliente.id);
-    window.__tarifaPreset = { fecha: f.fecha, tipo: f.tipo, gasoil: f.gasoil, clienteId: cliente.id };
+    window.__tarifaPreset = { fecha: f.fecha, tipo: f.tipo, gasoil: f.gasoil, gasoilRef: f.gasoilRef, clienteId: cliente.id };
     renderTab();
     tarifaFormRefresh();
     setTimeout(() => { const el = document.getElementById('tf-origen-zona'); if (el) el.focus(); }, 0);
@@ -6462,6 +6475,7 @@ function openCambiarPrecioModal(id){
           <div class="field" style="flex:1;min-width:150px;"><label>Precio nuevo (${unidad})</label><input id="cp-precio" type="text" inputmode="decimal" maxlength="10" placeholder="Ej. 1350" onkeydown="if(event.key==='Enter') submitCambiarPrecio('${t.id}')" /></div>
           <div class="field" style="flex:1;min-width:150px;"><label>Vale desde</label><input id="cp-fecha" type="date" value="${today()}" min="${esc(t.fecha)}" /></div>
         </div>
+        ${t.gasoil ? `<div class="field" style="max-width:280px;"><label>Fecha de referencia del gasoil (opcional)</label><input id="cp-gasoil-ref" type="date" value="${esc(t.gasoilRef || '')}" /></div>` : ''}
         <div class="field"><label>Nota (opcional)</label><input id="cp-nota" maxlength="200" placeholder="Ej. Revisión anual, subida del gasoil…" onkeydown="if(event.key==='Enter') submitCambiarPrecio('${t.id}')" /></div>
         <div style="font-size:12px;color:var(--mutedFaint);margin-bottom:10px;">La tarifa actual pasará a históricas hasta el día anterior a esa fecha.</div>
         <div id="cp-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
@@ -6481,6 +6495,7 @@ async function submitCambiarPrecio(id){
   const precio = Number(tarifaNum(document.getElementById('cp-precio').value));
   const fecha = document.getElementById('cp-fecha').value;
   const nota = document.getElementById('cp-nota').value.trim();
+  const gasoilRef = t.gasoil ? ((document.getElementById('cp-gasoil-ref') || {}).value || '') : '';
   if (document.getElementById('cp-precio').value.trim() === '' || !isFinite(precio) || precio < 0) { errEl.textContent = 'Indica el precio nuevo.'; return; }
   if (!fecha) { errEl.textContent = 'Indica desde qué fecha vale.'; return; }
   if (fecha < t.fecha) { errEl.textContent = `La fecha no puede ser anterior al inicio de la tarifa actual (${fmtDateDMY(t.fecha)}).`; return; }
@@ -6490,7 +6505,7 @@ async function submitCambiarPrecio(id){
   btn.disabled = true;
   const row = {
     fecha, cliente_id: t.clienteId, origen_zona: t.origenZona, origen_cp: t.origenCp || null, origen_ciudad: t.origenCiudad || null,
-    destino_zona: t.destinoZona, destino_cp: t.destinoCp || null, destino_ciudad: t.destinoCiudad || null, tipo: t.tipo, indexacion_gasoil: t.gasoil,
+    destino_zona: t.destinoZona, destino_cp: t.destinoCp || null, destino_ciudad: t.destinoCiudad || null, tipo: t.tipo, indexacion_gasoil: t.gasoil, gasoil_fecha_ref: gasoilRef || null,
     metros: t.metros, precio: nuevoPrecio, observaciones: t.observaciones || null, created_by: currentUserEmail(),
   };
   const { data, error } = await supabaseClient.from('tarifas').insert(row).select();
@@ -6499,7 +6514,7 @@ async function submitCambiarPrecio(id){
     btn.disabled = false;
     return;
   }
-  const despues = { ...t, fecha, precio: nuevoPrecio };
+  const despues = { ...t, fecha, precio: nuevoPrecio, gasoilRef };
   await logTarifaHistorial(t.clienteId, `ha cambiado la tarifa ${tarifaEtiqueta(despues)} de ${tarifaPrecioTxt(t)} a ${tarifaPrecioTxt(despues)}, vigente desde el ${fmtDateDMY(fecha)} (la anterior, desde el ${fmtDateDMY(t.fecha)}, pasa a históricas)${nota ? '. Nota: ' + nota : '.'}`);
   await loadTarifas();
   closeModal();
@@ -6511,7 +6526,7 @@ async function submitCambiarPrecio(id){
    de golpe. Si alguna ya existía como vigente (mismo cliente, zonas, CP y tipo), la
    anterior pasa sola a históricas. */
 const QR_COLS = 8;
-function tarifaRapidaRowHtml(i, tipo, gasoil){
+function tarifaRapidaRowHtml(i, tipo, gasoil, gasoilRef){
   const opt = (v, l) => `<option value="${v}" ${v === tipo ? 'selected' : ''}>${l}</option>`;
   const lado = (s, ph, phCp) => `
       <td style="padding:5px 4px;min-width:96px;">
@@ -6528,7 +6543,8 @@ function tarifaRapidaRowHtml(i, tipo, gasoil){
       <td style="padding:5px 4px;min-width:130px;"><select id="qr-${i}-t" onchange="tarifaRapidaTipoChange(${i})">${opt('FTL', 'FTL')}${opt('LTL', 'LTL')}${opt('GRANEL', 'Piso móvil / granel')}${opt('GRUA', 'Grúa')}</select></td>
       <td style="padding:5px 4px;"><input id="qr-${i}-m" inputmode="decimal" maxlength="5" placeholder="m" style="width:62px;" ${tipo === 'LTL' ? '' : 'disabled'} title="Metros de camión (solo LTL)" /></td>
       <td style="padding:5px 4px;"><input id="qr-${i}-p" inputmode="decimal" maxlength="10" placeholder="Precio €" style="width:104px;text-align:right;" onkeydown="if(event.key==='Enter'){ event.preventDefault(); tarifaRapidaAddRow(true); }" /></td>
-      <td style="padding:5px 4px;text-align:center;"><input id="qr-${i}-g" type="checkbox" class="switch" ${gasoil ? 'checked' : ''} title="Con indexación de gasoil" /></td>
+      <td style="padding:5px 4px;text-align:center;"><input id="qr-${i}-g" type="checkbox" class="switch" ${gasoil ? 'checked' : ''} onchange="tarifaRapidaGasoilChange(${i})" title="Con indexación de gasoil" /></td>
+      <td style="padding:5px 4px;"><input id="qr-${i}-gr" type="date" value="${esc(gasoilRef || '')}" ${gasoil ? '' : 'disabled'} title="Fecha de referencia del gasoil (solo con indexación)" /></td>
       <td style="padding:5px 0 5px 4px;"><button type="button" onclick="tarifaRapidaRemoveRow(${i})" title="Quitar fila" style="background:none;border:none;color:var(--mutedFaint);font-size:15px;">✕</button></td>
     </tr>`;
 }
@@ -6557,13 +6573,14 @@ function tplTarifaRapidaPage(){
         <div class="field" style="margin:0;min-width:190px;"><label>Camión de las filas nuevas</label>
           <select id="qr-tipo-def"><option value="FTL">FTL</option><option value="LTL">LTL</option><option value="GRANEL">Piso móvil / granel</option><option value="GRUA">Grúa</option></select></div>
         <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);margin-bottom:8px;cursor:pointer;"><input id="qr-gas-def" type="checkbox" class="switch" /> Con indexación de gasoil en las filas nuevas</label>
+        <div class="field" style="margin:0;"><label>Ref. gasoil de las filas nuevas</label><input id="qr-gasref-def" type="date" /></div>
       </div>
       <datalist id="qr-origenes">${tarifasZonasDatalistHtml('origenZona')}</datalist>
       <datalist id="qr-destinos">${tarifasZonasDatalistHtml('destinoZona')}</datalist>
       <div style="overflow-x:auto;">
-        <table style="width:100%;min-width:1080px;">
+        <table style="width:100%;min-width:1240px;">
           <thead><tr>
-            ${th('#', 'text-align:right;')}${th('Zona origen')}${th('CP origen')}${th('Ciudad origen')}${th('Zona destino')}${th('CP destino')}${th('Ciudad destino')}${th('Camión')}${th('Metros')}${th('Precio', 'text-align:right;')}${th('Indexación', 'text-align:center;')}<th></th>
+            ${th('#', 'text-align:right;')}${th('Zona origen')}${th('CP origen')}${th('Ciudad origen')}${th('Zona destino')}${th('CP destino')}${th('Ciudad destino')}${th('Camión')}${th('Metros')}${th('Precio', 'text-align:right;')}${th('Indexación', 'text-align:center;')}${th('Ref. gasoil')}<th></th>
           </tr></thead>
           <tbody id="qr-rows"></tbody>
         </table>
@@ -6593,7 +6610,7 @@ function tarifaRapidaAddRow(focus){
   const i = window.__qrN++;
   const tipo = document.getElementById('qr-tipo-def').value;
   const gas = document.getElementById('qr-gas-def').checked;
-  document.getElementById('qr-rows').insertAdjacentHTML('beforeend', tarifaRapidaRowHtml(i, tipo, gas));
+  document.getElementById('qr-rows').insertAdjacentHTML('beforeend', tarifaRapidaRowHtml(i, tipo, gas, document.getElementById('qr-gasref-def').value));
   if (focus) document.getElementById(`qr-${i}-o`).focus();
 }
 function tarifaRapidaRemoveRow(i){
@@ -6647,6 +6664,12 @@ async function tarifaRapidaLookup(i, s){
   if (keyNow() !== key || ciEl.dataset.manual === '1') return;
   ciEl.value = tarifaCiudadCache[key];
 }
+function tarifaRapidaGasoilChange(i){
+  const on = document.getElementById(`qr-${i}-g`).checked;
+  const el = document.getElementById(`qr-${i}-gr`);
+  el.disabled = !on;
+  if (!on) el.value = '';
+}
 function tarifaRapidaTipoChange(i){
   const ltl = document.getElementById(`qr-${i}-t`).value === 'LTL';
   const m = document.getElementById(`qr-${i}-m`);
@@ -6681,7 +6704,7 @@ async function submitTarifaRapida(){
       if (v('m').trim() === '' || !isFinite(metros) || metros <= 0 || metros > 13.6) return errores.push(`${nombre}: en LTL indica los metros (0,1 a 13,6).`);
     }
     const nueva = { clienteId: cliente.id, fecha, origenZona: o, origenCp: ocp, origenCiudad: formatCiudad(v('oc').trim()), destinoZona: d, destinoCp: dcp, destinoCiudad: formatCiudad(v('dc').trim()),
-      tipo, metros, precio: Math.round(precio * 100) / 100, gasoil: !!document.getElementById(`qr-${i}-g`).checked, observaciones: '' };
+      tipo, metros, precio: Math.round(precio * 100) / 100, gasoil: !!document.getElementById(`qr-${i}-g`).checked, gasoilRef: document.getElementById(`qr-${i}-g`).checked ? v('gr') : '', observaciones: '' };
     const key = tarifaRutaKey(nueva);
     if (vistas[key]) return errores.push(`${nombre}: repite la ruta de la fila ${vistas[key]}.`);
     vistas[key] = n + 1;
@@ -6697,7 +6720,7 @@ async function submitTarifaRapida(){
   const rows = filas.map(({ nueva: t }) => ({
     fecha: t.fecha, cliente_id: t.clienteId, origen_zona: t.origenZona, origen_cp: t.origenCp || null, origen_ciudad: t.origenCiudad || null,
     destino_zona: t.destinoZona, destino_cp: t.destinoCp || null, destino_ciudad: t.destinoCiudad || null,
-    tipo: t.tipo, indexacion_gasoil: t.gasoil, metros: t.metros, precio: t.precio, observaciones: null, created_by: email,
+    tipo: t.tipo, indexacion_gasoil: t.gasoil, gasoil_fecha_ref: t.gasoilRef || null, metros: t.metros, precio: t.precio, observaciones: null, created_by: email,
   }));
   const { data, error } = await supabaseClient.from('tarifas').insert(rows).select();
   if (error || !data || !data.length) {
