@@ -816,6 +816,7 @@ const HOME_ICON_PATHS = {
   trailer: '<rect x="2" y="5" width="20" height="11" rx="1"></rect><circle cx="7" cy="19" r="2"></circle><circle cx="17" cy="19" r="2"></circle>',
   check: '<polyline points="20 6 9 17 4 12"></polyline>',
   info: '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>',
+  checkCircle: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>',
   chevron: '<polyline points="9 18 15 12 9 6"></polyline>',
   grid: '<rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect>',
   list: '<line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line>',
@@ -3850,6 +3851,26 @@ function activeApptForColumn(dayAppts, startMin, colOf, col){
   return dayAppts.find(a => colOf[a.id]===col && (() => { const s=timeToMin(a.start), e=s+a.duration; return startMin>=s && startMin<e; })());
 }
 
+// Selector de estado de una reserva: dos opciones juntas, la elegida se ilumina
+// (ámbar = planificada, verde = completada). El valor va en un campo oculto con el id indicado.
+function apptStatusToggleHtml(hiddenId, current){
+  const cur = current === 'completado' ? 'completado' : 'planificado';
+  return `
+    <div id="${hiddenId}-seg" style="display:inline-flex;gap:2px;padding:3px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;">
+      ${apptStatusOptionHtml(hiddenId, 'planificado', cur)}${apptStatusOptionHtml(hiddenId, 'completado', cur)}
+    </div>
+    <input type="hidden" id="${hiddenId}" value="${cur}" />`;
+}
+function apptStatusOptionHtml(hiddenId, value, cur){
+  const on = value === cur;
+  const color = APPT_STATUS_COLORS[value];
+  const icon = value === 'completado' ? HOME_ICON_PATHS.checkCircle : HOME_ICON_PATHS.clock;
+  return `<button type="button" data-value="${value}" aria-pressed="${on}" onclick="setApptStatus('${hiddenId}','${value}')" style="display:inline-flex;align-items:center;gap:7px;padding:7px 16px;border:none;border-radius:8px;font-size:13.5px;cursor:pointer;background:${on ? color + '22' : 'transparent'};color:${on ? color : 'var(--muted)'};font-weight:${on ? 600 : 500};">${homeIcon(icon, 16, 'currentColor', 2)}${esc(APPT_STATUS_LABELS[value])}</button>`;
+}
+function setApptStatus(hiddenId, value){
+  document.getElementById(hiddenId).value = value;
+  document.getElementById(hiddenId + '-seg').innerHTML = apptStatusOptionHtml(hiddenId, 'planificado', value) + apptStatusOptionHtml(hiddenId, 'completado', value);
+}
 function apptNotesLineHtml(notes){
   if (!notes) return '';
   return `<div title="${esc(notes)}" style="font-size:11.5px;color:var(--muted);margin-top:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;"><span style="color:var(--mutedFaint);font-weight:600;">Obs.:</span> ${esc(notes)}</div>`;
@@ -4443,9 +4464,7 @@ function openUnscheduledModal(editId){
         ${editing ? `
         <div class="field">
           <label>Estado</label>
-          <button type="button" onclick="document.getElementById('uf-status').value = document.getElementById('uf-status').value==='completado'?'planificado':'completado'; this.textContent = document.getElementById('uf-status').value==='completado' ? '✓ Completado (clic para desmarcar)' : '○ Planificado (clic para marcar completado)'; this.style.color = document.getElementById('uf-status').value==='completado' ? '${APPT_STATUS_COLORS.completado}' : '${APPT_STATUS_COLORS.planificado}';"
-            style="width:100%;text-align:left;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:9px 11px;font-size:13px;color:${editing.status==='completado'?APPT_STATUS_COLORS.completado:APPT_STATUS_COLORS.planificado};">${editing.status==='completado' ? '✓ Completado (clic para desmarcar)' : '○ Planificado (clic para marcar completado)'}</button>
-          <input type="hidden" id="uf-status" value="${editing.status||'planificado'}" />
+          ${apptStatusToggleHtml('uf-status', editing.status)}
         </div>` : ''}
         <div class="field"><label>Transportista (opcional, si lo sabes)</label><input id="uf-carrier" placeholder="Ej. Transportes Bages" value="${esc(editing?editing.carrier:'')}" /></div>
         <div style="display:flex;gap:10px;">
@@ -4853,9 +4872,7 @@ function openAppointmentModal(prefillStart, editId, prefill){
         ${editing ? `
         <div class="field">
           <label>Estado</label>
-          <button type="button" onclick="document.getElementById('af-status').value = document.getElementById('af-status').value==='completado'?'planificado':'completado'; this.textContent = document.getElementById('af-status').value==='completado' ? '✓ Completado (clic para desmarcar)' : '○ Planificado (clic para marcar completado)'; this.style.color = document.getElementById('af-status').value==='completado' ? '${APPT_STATUS_COLORS.completado}' : '${APPT_STATUS_COLORS.planificado}';"
-            style="width:100%;text-align:left;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:9px 11px;font-size:13px;color:${editing.status==='completado'?APPT_STATUS_COLORS.completado:APPT_STATUS_COLORS.planificado};">${editing.status==='completado' ? '✓ Completado (clic para desmarcar)' : '○ Planificado (clic para marcar completado)'}</button>
-          <input type="hidden" id="af-status" value="${editing.status||'planificado'}" />
+          ${apptStatusToggleHtml('af-status', editing.status)}
         </div>` : ''}
         <div class="field"><label>Transportista (opcional, si lo sabes)</label><input id="af-carrier" placeholder="Ej. Transportes Bages" value="${esc(src.carrier||'')}" /></div>
         <div style="display:flex;gap:10px;">
