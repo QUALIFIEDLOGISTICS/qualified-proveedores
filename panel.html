@@ -361,7 +361,7 @@ async function loadAttachmentsFor(parentType, ids){
 }
 async function syncAttachments(parentType, parentId){
   await supabaseClient.from('attachments').delete().eq('parent_type', parentType).eq('parent_id', parentId);
-  const draft = window.__attachmentsDraft || [];
+  const draft = (window.__attachmentsDraft || []).filter(a => !a.uploading);
   if (draft.length) {
     const { error } = await supabaseClient.from('attachments').insert(draft.map(a => ({ parent_type: parentType, parent_id: parentId, name: a.name, storage_path: a.storage_path, size: a.size })));
     if (error) alert('La reserva se ha guardado, pero no se pudieron guardar los documentos adjuntos: ' + error.message);
@@ -821,6 +821,8 @@ const HOME_ICON_PATHS = {
   trash: '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>',
   copy: '<rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>',
   arrowLeft: '<line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line>',
+  x: '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>',
   chevron: '<polyline points="9 18 15 12 9 6"></polyline>',
   grid: '<rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect>',
   list: '<line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line>',
@@ -4824,32 +4826,42 @@ const MAX_ATTACHMENT_MB = 5;
 function attachmentsFieldHtml(){
   return `
     <div class="field">
-      <label>Documentos adjuntos (albarán, PDF del viaje…)</label>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:6px;">
+        <span style="font-size:12px;color:var(--muted);">Documentos adjuntos</span>
+        <span style="font-size:11.5px;color:var(--mutedFaint);text-align:right;">Albarán, PDF del viaje · máx. ${MAX_ATTACHMENT_MB} MB</span>
+      </div>
       <div id="att-dropzone"
-        ondragover="event.preventDefault(); event.stopPropagation(); this.style.borderColor='var(--primary)'; this.style.background='var(--panel2)';"
-        ondragleave="event.preventDefault(); event.stopPropagation(); this.style.borderColor='var(--border)'; this.style.background='transparent';"
-        ondrop="event.preventDefault(); event.stopPropagation(); this.style.borderColor='var(--border)'; this.style.background='transparent'; addAttachmentFiles(event.dataTransfer.files);"
+        ondragover="event.preventDefault(); event.stopPropagation(); this.style.borderColor='var(--primary)'; this.style.background='rgba(27,58,107,0.06)';"
+        ondragleave="event.preventDefault(); event.stopPropagation(); this.style.borderColor='#C4CCD6'; this.style.background='var(--panel2)';"
+        ondrop="event.preventDefault(); event.stopPropagation(); this.style.borderColor='#C4CCD6'; this.style.background='var(--panel2)'; addAttachmentFiles(event.dataTransfer.files);"
         onclick="document.getElementById('att-file-input').click();"
-        style="border:1px dashed var(--border);border-radius:8px;padding:16px 12px;text-align:center;cursor:pointer;transition:border-color .15s ease, background .15s ease;">
-        <div style="font-size:12.5px;color:var(--muted);">📎 Arrastra aquí tus PDF, o haz clic para elegir archivo</div>
+        style="border:1.5px dashed #C4CCD6;border-radius:12px;padding:16px 12px;text-align:center;cursor:pointer;background:var(--panel2);transition:border-color .15s ease, background .15s ease;">
+        <div style="display:flex;justify-content:center;margin-bottom:4px;">${homeIcon(HOME_ICON_PATHS.upload, 26, 'var(--muted)', 1.6)}</div>
+        <div style="font-size:13.5px;color:var(--text);">Arrastra tus PDF aquí o <span style="color:var(--primary);text-decoration:underline;">elige un archivo</span></div>
         <input type="file" id="att-file-input" accept="application/pdf" multiple onclick="event.stopPropagation();" onchange="addAttachmentFiles(this.files)" style="display:none;" />
       </div>
-      <div id="att-list" style="margin-top:8px;"></div>
+      <div id="att-list"></div>
     </div>`;
 }
+function attachmentSizeTxt(bytes){
+  if (!bytes && bytes !== 0) return '';
+  return bytes >= 1024 * 1024 ? (bytes / 1024 / 1024).toFixed(1).replace('.', ',') + ' MB' : Math.max(1, Math.round(bytes / 1024)) + ' KB';
+}
+// Cada documento es una fila: icono de PDF, nombre y peso, enlace para verlo y ✕ para quitarlo.
 function renderAttachmentList(){
   const list = window.__attachmentsDraft || [];
   const el = document.getElementById('att-list');
   if (!el) return;
-  el.innerHTML = list.length === 0
-    ? `<div style="font-size:11.5px;color:var(--mutedFaint);">Sin documentos adjuntos.</div>`
-    : list.map(a => `
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;margin-bottom:6px;font-size:12px;">
-        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📎 ${esc(a.name)}</span>
-        <span style="display:flex;gap:8px;flex-shrink:0;align-items:center;">
-          <a href="${a.url||'#'}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none;font-size:11px;">Ver</a>
-          <button type="button" onclick="removeAttachmentDraft('${a.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>
-        </span>
+  el.innerHTML = list.map(a => `
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);margin-top:8px;font-size:13px;">
+        <span style="width:30px;height:30px;border-radius:6px;background:rgba(193,68,61,0.10);color:var(--danger);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.file, 17, 'currentColor', 1.8)}</span>
+        <div style="flex:1;min-width:0;">
+          <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(a.name)}">${esc(a.name)}</div>
+          <div style="font-size:11.5px;color:var(--muted);">${a.uploading ? 'Subiendo…' : esc(attachmentSizeTxt(a.size))}</div>
+        </div>
+        ${a.uploading ? '' : `
+        <a href="${a.url||'#'}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none;font-size:12.5px;">Ver</a>
+        <button type="button" title="Quitar" onclick="removeAttachmentDraft('${a.id}')" style="background:none;border:none;color:var(--mutedFaint);padding:2px;display:flex;">${homeIcon(HOME_ICON_PATHS.x, 16, 'currentColor', 2)}</button>`}
       </div>`).join('');
 }
 async function addAttachmentFiles(fileList){
@@ -4864,10 +4876,19 @@ async function addAttachmentFiles(fileList){
     // lista se sigue viendo el nombre original.
     const safeName = file.name.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9._-]+/g, '_');
     const path = `attachments/${draftId}-${safeName}`;
+    // La fila aparece enseguida con "Subiendo…" y se completa cuando termina la subida.
+    const entry = { id: draftId, name: file.name, size: file.size, uploading: true };
+    window.__attachmentsDraft.push(entry);
+    renderAttachmentList();
     const { error } = await supabaseClient.storage.from(DOCS_BUCKET).upload(path, file, { contentType: 'application/pdf' });
-    if (error) { alert(`No se pudo subir "${file.name}": ${error.message || 'error desconocido.'}`); continue; }
+    if (error) {
+      window.__attachmentsDraft = window.__attachmentsDraft.filter(x => x.id !== draftId);
+      renderAttachmentList();
+      alert(`No se pudo subir "${file.name}": ${error.message || 'error desconocido.'}`);
+      continue;
+    }
     const url = await signedUrl(path);
-    window.__attachmentsDraft.push({ id: draftId, name: file.name, size: file.size, storage_path: path, url });
+    Object.assign(entry, { storage_path: path, url, uploading: false });
     renderAttachmentList();
   }
   const input = document.getElementById('att-file-input');
@@ -4924,7 +4945,13 @@ function openAppointmentModal(prefillStart, editId, prefill){
         <div class="field"><label>Cliente</label><select id="af-client">${opts}</select></div>
         <div style="display:flex;gap:10px;">
           <div class="field" style="flex:1;"><label>Día</label><input id="af-date" type="date" value="${editing?editing.date:window.__citasDate}" onchange="refreshAppointmentTimeOptions()" /></div>
-          <div class="field" style="flex:1;"><label>Hora de inicio</label><select id="af-start">${timeOpts}</select></div>
+          <div class="field" style="flex:1;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">
+              <span style="font-size:12px;color:var(--muted);">Hora de inicio</span>
+              ${editing ? `<label style="display:inline-flex;align-items:center;gap:6px;margin:0;font-size:12px;color:var(--muted);cursor:pointer;" title="Quita la hora: la reserva pasa a los avisos sin hora fija del día"><input type="checkbox" class="switch" onchange="toggleSinHoraFija('${editing.id}', this)" /> Sin hora fija</label>` : ''}
+            </div>
+            <select id="af-start">${timeOpts}</select>
+          </div>
         </div>
         <div class="field"><label>Duración</label>
             <select id="af-duration">
@@ -4956,7 +4983,6 @@ function openAppointmentModal(prefillStart, editId, prefill){
         ${attachmentsFieldHtml()}
         <input type="hidden" id="af-from-unscheduled" value="${prefill&&prefill.fromUnscheduledId ? prefill.fromUnscheduledId : ''}" />
         <div id="af-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
-        ${editing ? `<button type="button" onclick="unassignTime('${editing.id}')" style="width:100%;text-align:center;background:none;border:1px dashed var(--border);border-radius:6px;padding:8px;color:var(--muted);font-size:12.5px;margin-bottom:10px;cursor:pointer;">↓ Quitar la hora (volver a "sin hora fija")</button>` : ''}
         <div style="display:flex;gap:10px;">
           ${editing ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="deleteAppointment('${editing.id}')">Eliminar</button>` : ''}
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
@@ -4965,6 +4991,17 @@ function openAppointmentModal(prefillStart, editId, prefill){
       </div>
     </div>`;
   renderAttachmentList();
+}
+// Interruptor "Sin hora fija" de la reserva: pide confirmar y la pasa a los avisos sin hora del día.
+async function toggleSinHoraFija(id, checkbox){
+  if (!checkbox.checked) return;
+  if (!confirm('¿Quitar la hora y pasar esta reserva a "sin hora fija"?\n\nSe guarda como aviso sin hora con los datos que ya tenía guardados; los cambios sin guardar de este formulario no se incluyen.')) {
+    checkbox.checked = false;
+    return;
+  }
+  const sel = document.getElementById('af-start');
+  if (sel) sel.disabled = true;
+  await unassignTime(id);
 }
 async function unassignTime(id){
   const appt = appointments[currentWarehouseId].find(a=>a.id===id);
