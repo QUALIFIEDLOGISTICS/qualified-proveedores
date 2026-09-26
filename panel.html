@@ -1580,6 +1580,7 @@ function renderTab(){
   const hideBreadcrumb = (currentTab === 'inicio' && !window.__showingContactoDetail) || (almacenBar && !almacenIsSubpage()) || (traficoBar && !traficoIsSubpage()) || (comercialBar && !comercialIsSubpage());
   const breadcrumb = hideBreadcrumb ? '' : renderBreadcrumbHtml();
   el.innerHTML = moduleBar + breadcrumb + bodyHtml;
+  if (currentTab === 'documentos') setTimeout(hydratePdfThumbs, 0);
 }
 function tplAdministracion(){
   if (window.__administracionView === 'contactos') return tplContactosPage();
@@ -4847,22 +4848,186 @@ function attachmentSizeTxt(bytes){
   if (!bytes && bytes !== 0) return '';
   return bytes >= 1024 * 1024 ? (bytes / 1024 / 1024).toFixed(1).replace('.', ',') + ' MB' : Math.max(1, Math.round(bytes / 1024)) + ' KB';
 }
+/* ---- Vista previa de PDF ----
+   Miniatura de la primera página en cada documento y una ventana de vista previa
+   (páginas, zoom, descargar) para no tener que abrirlos en otra pestaña. Usa PDF.js,
+   que se carga de internet solo la primera vez que hace falta. */
+const PDFJS_VERSION = '3.11.174';
+let pdfjsPromise = null;
+function loadPdfJs(){
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (pdfjsPromise) return pdfjsPromise;
+  pdfjsPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.min.js`;
+    s.onload = () => {
+      // El "worker" viene de otro dominio: se carga a través de un archivo local para que el navegador lo admita.
+      const workerUrl = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.worker.min.js`;
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([`importScripts("${workerUrl}");`], { type: 'text/javascript' }));
+      resolve(window.pdfjsLib);
+    };
+    s.onerror = () => { pdfjsPromise = null; reject(new Error('No se pudo cargar el visor de PDF.')); };
+    document.head.appendChild(s);
+  });
+  return pdfjsPromise;
+}
+async function pdfOpenDoc(url){
+  const lib = await loadPdfJs();
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('No se pudo descargar el PDF.');
+  return lib.getDocument({ data: await res.arrayBuffer() }).promise;
+}
+const pdfThumbCache = {};
+async function pdfThumbDataUrl(a){
+  const key = a.storage_path || a.id;
+  if (key in pdfThumbCache) return pdfThumbCache[key];
+  const doc = await pdfOpenDoc(a.url);
+  try {
+    const page = await doc.getPage(1);
+    const base = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: (46 * 2) / base.width });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width); canvas.height = Math.round(viewport.height);
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    return (pdfThumbCache[key] = canvas.toDataURL('image/jpeg', 0.82));
+  } finally { doc.destroy(); }
+}
+// Adjunto por id: el del formulario abierto o uno de la pestaña Documentos.
+window.__attRegistry = {};
+function attachmentById(id){
+  return (window.__attachmentsDraft || []).find(x => x.id === id) || window.__attRegistry[id] || null;
+}
+async function renderPdfThumbTile(tile){
+  const a = attachmentById(tile.dataset.att);
+  if (!a || !a.url) return;
+  try {
+    const src = await pdfThumbDataUrl(a);
+    if (document.body.contains(tile)) tile.innerHTML = `<img src="${src}" alt="" style="width:100%;height:100%;object-fit:cover;object-position:top;display:block;" />`;
+  } catch (e) { /* se queda el icono de PDF */ }
+}
+// Sustituye el icono de PDF por la miniatura de la primera página (si se puede). En listas largas solo
+// se dibujan las que se ven en pantalla.
+function hydratePdfThumbs(){
+  const tiles = [...document.querySelectorAll('.pdf-thumb[data-att]:not([data-done])')];
+  if (!tiles.length) return;
+  if (!('IntersectionObserver' in window)) { tiles.forEach(t => { t.dataset.done = '1'; renderPdfThumbTile(t); }); return; }
+  const obs = new IntersectionObserver(entries => entries.forEach(en => {
+    if (!en.isIntersecting) return;
+    obs.unobserve(en.target);
+    en.target.dataset.done = '1';
+    renderPdfThumbTile(en.target);
+  }));
+  tiles.forEach(t => obs.observe(t));
+}
+function pdfPreviewHtml(){
+  const p = window.__pdfPrev;
+  const btn = (title, action, label) => `<button type="button" title="${title}" onclick="${action}" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:13px;cursor:pointer;color:var(--text);min-width:32px;">${label}</button>`;
+  return `
+    <div style="width:min(920px,100%);height:min(92vh,900px);background:var(--panel);border-radius:12px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.35);">
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border);flex-wrap:wrap;">
+        <div style="flex:1;min-width:140px;font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(p.name)}">${esc(p.name)}</div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          ${btn('Página anterior', 'pdfPreviewGo(-1)', '‹')}
+          <span style="font-size:13px;color:var(--muted);min-width:54px;text-align:center;">${p.page} / ${p.total}</span>
+          ${btn('Página siguiente', 'pdfPreviewGo(1)', '›')}
+          <span style="width:8px;"></span>
+          ${btn('Reducir', 'pdfPreviewZoom(-0.25)', '−')}
+          <span style="font-size:12.5px;color:var(--muted);min-width:42px;text-align:center;">${Math.round(p.zoom * 100)} %</span>
+          ${btn('Ampliar', 'pdfPreviewZoom(0.25)', '+')}
+        </div>
+        <a href="${esc(p.url)}" target="_blank" rel="noopener" style="font-size:13px;color:var(--primary);text-decoration:none;">Abrir en pestaña</a>
+        <button type="button" title="Cerrar (Esc)" onclick="closePdfPreview()" style="background:none;border:none;font-size:18px;color:var(--muted);cursor:pointer;">✕</button>
+      </div>
+      <div id="pdf-prev-scroll" style="flex:1;overflow:auto;background:#E9EDF2;padding:16px;text-align:center;">
+        <canvas id="pdf-prev-canvas" style="box-shadow:0 2px 12px rgba(0,0,0,.18);background:#fff;max-width:none;"></canvas>
+        <div id="pdf-prev-msg" style="color:var(--muted);font-size:13px;padding:20px;">Cargando…</div>
+      </div>
+    </div>`;
+}
+async function openPdfPreview(attId){
+  const a = attachmentById(attId);
+  if (!a || !a.url) return;
+  const ov = document.createElement('div');
+  ov.id = 'pdf-preview-overlay';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(6,8,10,.72);display:flex;align-items:center;justify-content:center;padding:16px;';
+  ov.onclick = e => { if (e.target === ov) closePdfPreview(); };
+  document.body.appendChild(ov);
+  window.__pdfPrev = { url: a.url, name: a.name, doc: null, page: 1, total: 1, zoom: 1 };
+  ov.innerHTML = pdfPreviewHtml();
+  document.addEventListener('keydown', pdfPreviewKey);
+  try {
+    const doc = await pdfOpenDoc(a.url);
+    if (!document.getElementById('pdf-preview-overlay')) { doc.destroy(); return; }
+    Object.assign(window.__pdfPrev, { doc, total: doc.numPages });
+    await pdfPreviewRender();
+  } catch (e) {
+    // Sin visor (sin conexión o PDF que no se puede leer): se abre el PDF en una pestaña.
+    closePdfPreview();
+    window.open(a.url, '_blank', 'noopener');
+  }
+}
+async function pdfPreviewRender(){
+  const p = window.__pdfPrev, ov = document.getElementById('pdf-preview-overlay');
+  if (!p || !p.doc || !ov) return;
+  const token = (p.token = (p.token || 0) + 1);
+  const page = await p.doc.getPage(p.page);
+  if (p.token !== token || !document.getElementById('pdf-preview-overlay')) return;
+  const scroll = document.getElementById('pdf-prev-scroll');
+  const base = page.getViewport({ scale: 1 });
+  const fit = Math.max(200, scroll.clientWidth - 32) / base.width;
+  const cssScale = fit * p.zoom, ratio = window.devicePixelRatio || 1;
+  const viewport = page.getViewport({ scale: cssScale * ratio });
+  const canvas = document.getElementById('pdf-prev-canvas');
+  canvas.width = Math.round(viewport.width); canvas.height = Math.round(viewport.height);
+  canvas.style.width = Math.round(viewport.width / ratio) + 'px';
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  const msg = document.getElementById('pdf-prev-msg'); if (msg) msg.remove();
+  // Solo se repinta la barra (números de página y zoom), no el lienzo.
+  const bar = ov.firstElementChild.firstElementChild;
+  const tmp = document.createElement('div'); tmp.innerHTML = pdfPreviewHtml();
+  bar.innerHTML = tmp.firstElementChild.firstElementChild.innerHTML;
+}
+function pdfPreviewGo(delta){
+  const p = window.__pdfPrev; if (!p || !p.doc) return;
+  const n = Math.min(p.total, Math.max(1, p.page + delta));
+  if (n === p.page) return;
+  p.page = n; pdfPreviewRender();
+  document.getElementById('pdf-prev-scroll').scrollTop = 0;
+}
+function pdfPreviewZoom(delta){
+  const p = window.__pdfPrev; if (!p || !p.doc) return;
+  p.zoom = Math.min(3, Math.max(0.5, Math.round((p.zoom + delta) * 100) / 100));
+  pdfPreviewRender();
+}
+function pdfPreviewKey(e){
+  if (e.key === 'Escape') { closePdfPreview(); e.stopPropagation(); }
+  else if (e.key === 'ArrowRight') pdfPreviewGo(1);
+  else if (e.key === 'ArrowLeft') pdfPreviewGo(-1);
+}
+function closePdfPreview(){
+  document.removeEventListener('keydown', pdfPreviewKey);
+  const ov = document.getElementById('pdf-preview-overlay');
+  if (ov) ov.remove();
+  if (window.__pdfPrev && window.__pdfPrev.doc) window.__pdfPrev.doc.destroy();
+  window.__pdfPrev = null;
+}
 // Cada documento es una fila: icono de PDF, nombre y peso, enlace para verlo y ✕ para quitarlo.
 function renderAttachmentList(){
   const list = window.__attachmentsDraft || [];
   const el = document.getElementById('att-list');
   if (!el) return;
   el.innerHTML = list.map(a => `
-      <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);margin-top:8px;font-size:13px;">
-        <span style="width:30px;height:30px;border-radius:6px;background:rgba(193,68,61,0.10);color:var(--danger);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.file, 17, 'currentColor', 1.8)}</span>
+      <div style="display:flex;align-items:center;gap:12px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);margin-top:8px;font-size:13px;">
+        <div class="pdf-thumb" ${a.uploading ? '' : `data-att="${a.id}" onclick="openPdfPreview('${a.id}')" title="Ver vista previa"`} style="width:46px;height:60px;border-radius:5px;border:1px solid var(--border);background:rgba(193,68,61,0.08);color:var(--danger);display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden;${a.uploading ? '' : 'cursor:zoom-in;'}">${homeIcon(HOME_ICON_PATHS.file, 20, 'currentColor', 1.8)}</div>
         <div style="flex:1;min-width:0;">
           <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(a.name)}">${esc(a.name)}</div>
           <div style="font-size:11.5px;color:var(--muted);">${a.uploading ? 'Subiendo…' : esc(attachmentSizeTxt(a.size))}</div>
         </div>
         ${a.uploading ? '' : `
-        <a href="${a.url||'#'}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none;font-size:12.5px;">Ver</a>
+        <button type="button" onclick="openPdfPreview('${a.id}')" style="background:none;border:none;color:var(--primary);font-size:12.5px;cursor:pointer;padding:2px 4px;">Ver</button>
         <button type="button" title="Quitar" onclick="removeAttachmentDraft('${a.id}')" style="background:none;border:none;color:var(--mutedFaint);padding:2px;display:flex;">${homeIcon(HOME_ICON_PATHS.x, 16, 'currentColor', 2)}</button>`}
       </div>`).join('');
+  hydratePdfThumbs();
 }
 async function addAttachmentFiles(fileList){
   const files = Array.from(fileList || []);
@@ -5166,7 +5331,7 @@ function tplDocumentos(){
             <td>${esc(clientName(r.clientId))}</td>
             <td style="text-transform:capitalize;color:var(--muted);">${esc(r.type)}</td>
             <td><span style="text-transform:capitalize;color:${APPT_STATUS_COLORS[r.status]};font-weight:600;font-size:12px;">${esc(r.status)}</span></td>
-            <td data-sort-value="${r.attachments.length}">${r.attachments.length ? `<span style="color:var(--primary);">📎 ${r.attachments.length}</span>` : `<span style="color:var(--mutedFaint);">— sin adjuntar</span>`}</td>
+            <td data-sort-value="${r.attachments.length}">${r.attachments.length ? `<div style="display:flex;align-items:center;gap:6px;">${r.attachments.slice(0, 3).map(a => { window.__attRegistry[a.id] = a; return `<div class="pdf-thumb" data-att="${a.id}" onclick="event.stopPropagation(); openPdfPreview('${a.id}')" title="${esc(a.name)}" style="width:28px;height:36px;border-radius:4px;border:1px solid var(--border);background:rgba(193,68,61,0.08);color:var(--danger);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:zoom-in;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.file, 14, 'currentColor', 1.8)}</div>`; }).join('')}${r.attachments.length > 3 ? `<span style="font-size:12px;color:var(--muted);">+${r.attachments.length - 3}</span>` : ''}</div>` : `<span style="color:var(--mutedFaint);">— sin adjuntar</span>`}</td>
           </tr>`).join('') || `<tr><td colspan="6" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin resultados en este rango de fechas</td></tr>`}
       </tbody></table>
     </div>`;
