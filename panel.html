@@ -46,6 +46,8 @@
   table.tf-table td.tf-precio{text-align:right;font-weight:700;font-size:14.5px;white-space:nowrap;font-variant-numeric:tabular-nums;}
   table.tf-table td.tf-precio small{font-weight:500;font-size:11.5px;color:var(--muted);}
   table.tf-table.tf-hist td{color:var(--muted);}
+  table.qr-table td{vertical-align:top;}
+  table.qr-table th{padding:6px 4px;}
   table.tf-table.tf-hist td.tf-precio{font-weight:600;}
   .tf-zona{font-family:var(--mono);font-weight:700;font-size:13px;line-height:1.3;}
   .tf-lugar{font-size:11.5px;color:var(--mutedFaint);line-height:1.3;}
@@ -6820,7 +6822,8 @@ function tplTarifaRapidaPage(){
       <datalist id="qr-origenes">${tarifasZonasDatalistHtml('origenZona')}</datalist>
       <datalist id="qr-destinos">${tarifasZonasDatalistHtml('destinoZona')}</datalist>
       <div style="overflow-x:auto;">
-        <table style="width:100%;min-width:1240px;">
+        <table class="qr-table" style="width:100%;min-width:1304px;table-layout:fixed;">
+          <colgroup><col style="width:30px"><col style="width:90px"><col style="width:100px"><col style="width:150px"><col style="width:90px"><col style="width:100px"><col style="width:150px"><col style="width:140px"><col style="width:74px"><col style="width:112px"><col style="width:84px"><col style="width:150px"><col style="width:34px"></colgroup>
           <thead><tr>
             ${th('#', 'text-align:right;')}${th('Zona origen')}${th('CP origen')}${th('Ciudad origen')}${th('Zona destino')}${th('CP destino')}${th('Ciudad destino')}${th('Camión')}${th('Metros')}${th('Precio', 'text-align:right;')}${th('Indexación', 'text-align:center;')}${th('Ref. gasoil')}<th></th>
           </tr></thead>
@@ -6877,13 +6880,20 @@ function tarifaRapidaCpInput(i, s){
     zEl.dataset.auto = '1';
     document.getElementById(`qr-${i}-${s}h`).textContent = tarifaZonaHint(zEl.value);
   }
-  tarifaRapidaSchedule(i, s);
+  tarifaRapidaLookup(i, s);
 }
 const tarifaRapidaTimers = {};
 function tarifaRapidaSchedule(i, s){
   const k = `${i}${s}`;
   clearTimeout(tarifaRapidaTimers[k]);
   tarifaRapidaTimers[k] = setTimeout(() => tarifaRapidaLookup(i, s), 300);
+}
+// Un CP está completo cuando ya tiene los caracteres que usa su país (así no se piden códigos a medias).
+function tarifaCpCompleto(cc, cp){
+  const largo4 = ['be', 'nl', 'at', 'ch', 'dk', 'no', 'lu', 'hu', 'si', 'bg', 'ad'];
+  if (cc === 'gb') return cp.length >= 2;
+  if (cc === 'pt') return cp.length >= 4;
+  return cp.length >= (largo4.includes(cc) ? 4 : 5);
 }
 async function tarifaRapidaLookup(i, s){
   const zEl = document.getElementById(`qr-${i}-${s}`), cpEl = document.getElementById(`qr-${i}-${s}cp`), ciEl = document.getElementById(`qr-${i}-${s}c`);
@@ -6892,17 +6902,25 @@ async function tarifaRapidaLookup(i, s){
     const cc = zEl.value.trim().slice(0, 2).toLowerCase();
     let cp = cpEl.value.replace(/\s/g, '').toUpperCase();
     if (cc === 'gb') cp = cpEl.value.trim().toUpperCase().split(/\s+/)[0];
-    return /^[a-z]{2}$/.test(cc) && cp.length >= 4 ? `${cc}/${cp}` : null;
+    return /^[a-z]{2}$/.test(cc) && tarifaCpCompleto(cc, cp) ? `${cc}/${cp}` : null;
   };
   const key = keyNow();
-  if (!key) { if (ciEl.dataset.manual !== '1') ciEl.value = ''; return; }
+  if (!key) {
+    if (ciEl.dataset.manual !== '1') ciEl.value = '';
+    // Sin país en la zona no se puede saber de qué país es el CP: se avisa en el propio campo.
+    ciEl.placeholder = cpEl.value.trim().length >= 4 && !/^[A-Za-z]{2}/.test(zEl.value.trim()) ? 'Escribe el país (FR) en la zona' : 'Ciudad';
+    return;
+  }
+  ciEl.placeholder = 'Ciudad';
   if (!(key in tarifaCiudadCache)) {
+    if (ciEl.dataset.manual !== '1') ciEl.placeholder = 'Buscando…';
     try {
       const res = await fetch(`https://api.zippopotam.us/${key}`);
       const data = res.ok ? await res.json() : null;
       tarifaCiudadCache[key] = data && data.places && data.places[0] ? formatCiudad((data.places[0]['place name'] || '').replace(/\s+\d{1,2}$/, '')) : '';
-    } catch (e) { return; }
+    } catch (e) { ciEl.placeholder = 'Ciudad'; return; }
   }
+  ciEl.placeholder = 'Ciudad';
   if (keyNow() !== key || ciEl.dataset.manual === '1') return;
   ciEl.value = tarifaCiudadCache[key];
 }
