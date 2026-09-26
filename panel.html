@@ -240,6 +240,7 @@ async function loadWarehouses(){
   const seedOrder = ['balsareny', 'sant-fruitos', 'pirelli-manresa'];
   const rows = data.map(w => ({
     id: w.id, name: w.name, subtitle: w.subtitle || '', location_hint: w.location_hint || '', location: w.location || '',
+    calle1: w.calle1 || '', calle2: w.calle2 || '', codigoPostal: w.codigo_postal || '', ciudad: w.ciudad || '', provincia: w.provincia || '', pais: w.pais || '',
     color: w.color || '#5C6670', archived: !!w.archived,
     sortOrder: Number(w.sort_order) || (seedOrder.indexOf(w.id) + 1) || 900,
   }));
@@ -1175,7 +1176,7 @@ async function logWarehouseHistorial(warehouseId, resumen){
   if (!data) return;
   warehouseHistorialCache[warehouseId] = [{ id: data.id, createdAt: data.created_at, usuario, resumen }, ...(warehouseHistorialCache[warehouseId]||[])];
 }
-const WAREHOUSE_FIELD_LABELS = { name: 'Nombre', location: 'Ubicación', color: 'Color' };
+const WAREHOUSE_FIELD_LABELS = { name: 'Nombre', location: 'Ubicación', color: 'Color', calle1: 'Calle 1', calle2: 'Calle 2', codigoPostal: 'Código postal', ciudad: 'Ciudad', provincia: 'Provincia', pais: 'País' };
 function buildWarehouseChangeSummary(before, after){
   const lines = [];
   Object.keys(WAREHOUSE_FIELD_LABELS).forEach(key => {
@@ -1261,6 +1262,21 @@ function tplWarehouseViewCard(w){
       ${contactoFieldBlock('Clientes asignados', clients.length ? `${clients.length} · ${esc(clients.slice(0,5).map(c=>c.nombreComercial||c.nombre).join(', '))}${clients.length>5?'…':''}` : '—')}
     </div>`;
 }
+// Dirección del almacén en líneas: calle 1, calle 2, CP + ciudad, provincia + país.
+// Es la que saldrá en los albaranes de salida.
+function whDireccionViewCardHtml(w){
+  const lineas = [w.calle1, w.calle2, [w.codigoPostal, w.ciudad].filter(Boolean).join(' '), [w.provincia, w.pais].filter(Boolean).join(', ')].filter(l => l && String(l).trim());
+  return `
+    <div class="card" style="margin-top:20px;">
+      <div style="display:flex;gap:12px;align-items:flex-start;">
+        <div style="flex-shrink:0;margin-top:1px;">${homeIcon(HOME_ICON_PATHS.pin, 22, 'var(--primary)', 1.7)}</div>
+        <div style="min-width:0;">
+          <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:600;margin-bottom:2px;">Dirección del almacén</div>
+          <div style="font-size:14px;color:var(--text);line-height:1.4;">${lineas.length ? lineas.map(esc).join('<br>') : '<span style="color:var(--mutedFaint);">Sin dirección. Pulsa Editar para añadirla.</span>'}</div>
+        </div>
+      </div>
+    </div>`;
+}
 function tplWarehouseFormPage(){
   const editId = window.__whFormId;
   const editing = editId ? allWarehouses.find(w => w.id === editId) : null;
@@ -1306,6 +1322,7 @@ function tplWarehouseFormPage(){
     <div style="flex:2;min-width:360px;">
     ${!editMode ? `
     <div class="card">${tplWarehouseViewCard(w)}</div>
+    ${whDireccionViewCardHtml(w)}
     ${whSchedViewCardHtml(w.id)}
     <div id="wh-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
     ` : `
@@ -1320,6 +1337,22 @@ function tplWarehouseFormPage(){
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           ${WAREHOUSE_COLORS.map(c => `<button type="button" class="wh-swatch" data-color="${c}" onclick="pickWarehouseColor('${c}')" title="${c}" style="width:28px;height:28px;border-radius:50%;background:${c};border:none;cursor:pointer;padding:0;${c===color?'outline:3px solid var(--text);outline-offset:2px;':''}"></button>`).join('')}
         </div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:20px;" oninput="window.__whFormDirty=true;" onchange="window.__whFormDirty=true;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:4px;">Dirección del almacén</div>
+      <div style="font-size:12px;color:var(--mutedFaint);margin-bottom:12px;">Es la que se usará en los albaranes de salida.</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:220px;"><label>Calle 1</label><input id="wh-calle1" maxlength="150" value="${esc(w.calle1||'')}" /></div>
+        <div class="field" style="flex:1;min-width:220px;"><label>Calle 2</label><input id="wh-calle2" maxlength="150" value="${esc(w.calle2||'')}" /></div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:140px;"><label>Código postal</label><input id="wh-cp" maxlength="10" oninput="autofillCiudadProvinciaFromCp('wh')" value="${esc(w.codigoPostal||'')}" /></div>
+        <div class="field" style="flex:2;min-width:220px;"><label>Ciudad</label><input id="wh-ciudad" maxlength="100" onblur="this.value = formatCiudad(this.value);" value="${esc(w.ciudad||'')}" /></div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:220px;margin-bottom:0;"><label>Provincia</label><input id="wh-provincia" maxlength="100" value="${esc(w.provincia||'')}" /></div>
+        <div class="field" style="flex:1;min-width:220px;margin-bottom:0;"><label>País</label><select id="wh-pais" onchange="autofillCiudadProvinciaFromCp('wh')">${paisOptionsHtml(w.pais)}</select></div>
       </div>
     </div>
     <div class="card" style="margin-top:20px;">
@@ -1440,6 +1473,11 @@ async function submitWarehouse(editId){
   const name = document.getElementById('wh-name').value.trim();
   const location = formatCiudad(document.getElementById('wh-location').value.trim());
   const color = document.getElementById('wh-color').value;
+  const dv = id => document.getElementById(id).value.trim();
+  const dir = { calle1: dv('wh-calle1'), calle2: dv('wh-calle2'), codigoPostal: dv('wh-cp'), ciudad: formatCiudad(dv('wh-ciudad')), provincia: dv('wh-provincia'), pais: dv('wh-pais') };
+  // El país por defecto (España) no cuenta como dirección: sin más datos no se guarda.
+  if (!dir.calle1 && !dir.calle2 && !dir.codigoPostal && !dir.ciudad && !dir.provincia) dir.pais = '';
+  const dirDb = { calle1: dir.calle1 || null, calle2: dir.calle2 || null, codigo_postal: dir.codigoPostal || null, ciudad: dir.ciudad || null, provincia: dir.provincia || null, pais: dir.pais || null };
   if (!name) { showFormError(errEl, 'Indica el nombre del almacén.'); return; }
   if (allWarehouses.some(w => w.id !== editId && w.name.trim().toLowerCase() === name.toLowerCase())) { showFormError(errEl, 'Ya hay un almacén con ese nombre.'); return; }
   const schedError0 = whSchedValidate();
@@ -1451,9 +1489,9 @@ async function submitWarehouse(editId){
     let changeLines;
     if (editId) {
       const before = { ...allWarehouses.find(w => w.id === editId) };
-      const { data, error } = await supabaseClient.from('warehouses').update({ name, location: location || null, color }).eq('id', editId).select();
+      const { data, error } = await supabaseClient.from('warehouses').update({ name, location: location || null, color, ...dirDb }).eq('id', editId).select();
       if (error || !data || !data.length) throw (error || new Error('sin permiso o error desconocido.'));
-      changeLines = buildWarehouseChangeSummary(before, { name, location, color });
+      changeLines = buildWarehouseChangeSummary(before, { name, location, color, ...dir });
       // Horario semanal: se guarda entero y se anotan los días que cambian.
       const antes = schedules[editId] || {};
       const { error: schedError } = await supabaseClient.from('warehouse_schedules').upsert(
@@ -1468,7 +1506,7 @@ async function submitWarehouse(editId){
     } else {
       savedId = warehouseSlug(name);
       const sortOrder = allWarehouses.reduce((m, w) => Math.max(m, w.sortOrder || 0), 0) + 1;
-      const { error } = await supabaseClient.from('warehouses').insert({ id: savedId, name, location: location || null, color, sort_order: sortOrder });
+      const { error } = await supabaseClient.from('warehouses').insert({ id: savedId, name, location: location || null, color, sort_order: sortOrder, ...dirDb });
       if (error) throw error;
       // Horario semanal elegido en la ficha (parte de lunes a viernes de 8 a 18).
       const { error: schedError } = await supabaseClient.from('warehouse_schedules').insert(
