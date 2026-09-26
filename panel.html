@@ -2234,6 +2234,40 @@ function flotaCardHtml(v, archivedView){
       </div>
     </div>`;
 }
+/* ---- Flota: tarjetas o lista (se recuerda la elección) ---- */
+function flotaLayoutActual(){
+  if (window.__flotaLayoutSesion) return window.__flotaLayoutSesion;
+  try { return localStorage.getItem('qp_flota_layout') === 'lista' ? 'lista' : 'tarjetas'; } catch (e) { return 'tarjetas'; }
+}
+function setFlotaLayout(v){
+  try { localStorage.setItem('qp_flota_layout', v); } catch (e) { /* solo dura esta sesión */ }
+  window.__flotaLayoutSesion = v;
+  renderTab();
+}
+function flotaListaHtml(list, archivedView){
+  const venc = (v, k) => {
+    if (k === 'tacografoVence' && v.tipo !== 'tractora') return `<td data-sort-value="" style="color:var(--mutedFaint);">—</td>`;
+    const st = flotaVencStatus(v[k]);
+    return `<td style="color:${st.color};white-space:nowrap;" data-sort-value="${esc(v[k] || '')}">${esc(st.text)}</td>`;
+  };
+  return `
+    <div class="card" style="padding:0;overflow-x:auto;">
+      <table class="tf-table">
+        <thead><tr>${thSort('Matrícula','text')}${thSort('Tipo','text')}${thSort('Marca y modelo','text')}${thSort('Nº flota','number')}${thSort('Propietario','text')}${thSort('ITV','date')}${thSort('Seguro','date')}${thSort('Tacógrafo','date')}</tr></thead>
+        <tbody>
+          ${list.map(v => `
+            <tr style="cursor:pointer;${archivedView ? 'opacity:.7;' : ''}" onclick="openFlotaForm('${v.id}')">
+              <td style="font-family:var(--display);font-weight:700;letter-spacing:.3px;white-space:nowrap;">${esc(v.matricula)}${archivedView ? ' <span style="font-size:10.5px;color:var(--mutedFaint);text-transform:uppercase;font-weight:400;">· archivado</span>' : ''}</td>
+              <td style="white-space:nowrap;">${esc(FLOTA_TIPOS[v.tipo] || v.tipo || '')}</td>
+              <td style="color:var(--muted);" data-sort-value="${esc([v.marca, v.modelo].filter(Boolean).join(' '))}">${esc([v.marca, v.modelo].filter(Boolean).join(' ') || '—')}</td>
+              <td style="color:var(--muted);white-space:nowrap;">${esc(v.numeroFlota || '—')}</td>
+              <td style="color:var(--muted);" data-sort-value="${esc(v.propietario || '')}">${esc(v.propietario || '—')}</td>
+              ${venc(v, 'itvVence')}${venc(v, 'seguroVence')}${venc(v, 'tacografoVence')}
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
 const FLOTA_PAGE_SIZE = 80;
 function flotaGoToPage(delta){
   window.__flotaPage = Math.max(0, (window.__flotaPage||0) + delta);
@@ -2255,6 +2289,7 @@ function flotaListBodyHtml(){
   if ((window.__flotaPage||0) > totalPages - 1) window.__flotaPage = totalPages - 1;
   const page = window.__flotaPage || 0;
   const pageList = list.slice(page * FLOTA_PAGE_SIZE, (page + 1) * FLOTA_PAGE_SIZE);
+  if (flotaLayoutActual() === 'lista') return flotaListaHtml(pageList, archivedView);
   return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">${pageList.map(v=>flotaCardHtml(v, archivedView)).join('')}</div>`;
 }
 function refreshFlotaListBody(){
@@ -2304,7 +2339,7 @@ function tplFlotaPage(){
             ${Object.entries(FLOTA_TIPOS).map(([k, label]) => check(tipos.includes(k), `toggleFlotaTipoFilter('${k}', this.checked)`, label + 's')).join('')}
           </div>` : ''}
       </div>
-      <div id="flota-pagination" style="display:flex;align-items:center;gap:8px;justify-self:end;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplFlotaPaginationHtml()}</div>
+      <div style="display:flex;align-items:center;gap:14px;justify-self:end;">${layoutToggleHtml(flotaLayoutActual(), 'setFlotaLayout')}<div id="flota-pagination" style="display:flex;align-items:center;gap:8px;justify-self:end;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplFlotaPaginationHtml()}</div></div>
     </div>
     <div id="flota-list-body">${flotaListBodyHtml()}</div>`;
 }
@@ -2945,11 +2980,11 @@ function setContactosLayout(v){
   renderTab();
 }
 function contactosLayoutActual(){ return window.__contactosLayoutSesion || contactosLayout(); }
-function contactosLayoutToggleHtml(){
-  const cur = contactosLayoutActual();
-  const btn = (id, icon, title) => `<button type="button" onclick="setContactosLayout('${id}')" title="${title}" aria-pressed="${cur === id}" style="display:flex;align-items:center;justify-content:center;width:32px;height:30px;border:none;border-radius:6px;cursor:pointer;background:${cur === id ? 'var(--primary)' : 'transparent'};">${homeIcon(HOME_ICON_PATHS[icon], 16, cur === id ? '#fff' : 'var(--muted)', 2)}</button>`;
+function layoutToggleHtml(cur, setter){
+  const btn = (id, icon, title) => `<button type="button" onclick="${setter}('${id}')" title="${title}" aria-pressed="${cur === id}" style="display:flex;align-items:center;justify-content:center;width:32px;height:30px;border:none;border-radius:6px;cursor:pointer;background:${cur === id ? 'var(--primary)' : 'transparent'};">${homeIcon(HOME_ICON_PATHS[icon], 16, cur === id ? '#fff' : 'var(--muted)', 2)}</button>`;
   return `<div style="display:inline-flex;gap:2px;padding:2px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;">${btn('tarjetas', 'grid', 'Ver como tarjetas')}${btn('lista', 'list', 'Ver como lista')}</div>`;
 }
+function contactosLayoutToggleHtml(){ return layoutToggleHtml(contactosLayoutActual(), 'setContactosLayout'); }
 function contactosListaHtml(list, archivedView){
   const tipo = c => contactoTipoTexto(c);
   return `
