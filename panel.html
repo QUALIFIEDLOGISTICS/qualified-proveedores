@@ -34,6 +34,7 @@
   tr:last-child td{border-bottom:none;}
   .dr-row:hover td{background:var(--panel2);}
   .contact-card{border-radius:12px;transition:border-color .15s ease, box-shadow .15s ease;}
+  .wt-add:focus-within{border-color:var(--primary) !important;}
   .contact-card:hover{border-color:var(--primary);box-shadow:0 4px 14px rgba(27,58,107,0.10);}
   .contact-card:focus-visible{outline:2px solid var(--primary);outline-offset:2px;}
   /* Tablas de tarifas: filas alternas, resalte al pasar, franja de color por tipo de camión y chips. */
@@ -587,32 +588,72 @@ async function saveWarehouseTaskEdit(id){
   window.__editingTaskId = null;
   renderTab();
 }
+// Trae una tarea pendiente de un día anterior al día que se está viendo.
+async function moveWarehouseTaskToViewedDay(id){
+  const t = warehouseTasks[currentWarehouseId].find(x=>x.id===id);
+  if (!t) return;
+  await supabaseClient.from('warehouse_tasks').update({ date: window.__citasDate }).eq('id', id);
+  t.date = window.__citasDate;
+  renderTab();
+}
+function warehouseTaskRowHtml(t, overdue){
+  if (window.__editingTaskId === t.id) return `
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--border);">
+      <input id="wt-edit-input" value="${esc(t.text)}" onkeydown="if(event.key==='Enter'){event.preventDefault(); saveWarehouseTaskEdit('${t.id}');} if(event.key==='Escape'){cancelEditWarehouseTask();}" style="flex:1;" />
+      <button class="btn btn-primary" onclick="saveWarehouseTaskEdit('${t.id}')">Guardar</button>
+      <button class="btn btn-ghost" onclick="cancelEditWarehouseTask()">Cancelar</button>
+    </div>`;
+  const verde = APPT_STATUS_COLORS.completado;
+  const key = `task:${t.id}`;
+  const open = window.__reservaMenu === key;
+  const item = (icon, label, action, danger) => `
+    <button type="button" onclick="event.stopPropagation(); closeReservaMenu(); ${action}" style="display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border:none;border-radius:6px;background:transparent;font-size:13px;text-align:left;cursor:pointer;color:${danger ? 'var(--danger)' : 'var(--text)'};">${homeIcon(HOME_ICON_PATHS[icon], 16, 'currentColor', 1.8)}${label}</button>`;
+  const sep = '<div style="height:1px;background:var(--border);margin:4px 2px;"></div>';
+  const items = item('edit', 'Editar', `startEditWarehouseTask('${t.id}')`)
+    + (overdue ? '' : item('arrowLeft', 'Pasar a ayer', `moveWarehouseTaskToPrevDay('${t.id}')`) + item('arrow', 'Pasar a mañana', `moveWarehouseTaskToNextDay('${t.id}')`))
+    + sep + item('trash', 'Eliminar', `deleteWarehouseTask('${t.id}')`, true);
+  const fecha = overdue ? new Date(t.date + 'T00:00:00').toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+  const aqui = window.__citasDate === today() ? 'Pasar a hoy' : 'Pasar a este día';
+  return `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--border);position:relative;">
+      <button type="button" title="${t.done ? 'Hecha: pulsa para volver a pendiente' : 'Marcar como hecha'}" aria-pressed="${!!t.done}" onclick="toggleWarehouseTask('${t.id}')"
+        style="width:24px;height:24px;border-radius:50%;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0;${t.done ? `background:${verde}22;border:1px solid ${verde};color:${verde};` : 'background:#fff;border:1px solid var(--border);color:transparent;'}">${homeIcon(HOME_ICON_PATHS.check, 13, 'currentColor', 3)}</button>
+      <div style="flex:1;min-width:0;font-size:13.5px;${t.done ? 'text-decoration:line-through;color:var(--mutedFaint);' : ''}">${esc(t.text)}${overdue ? ` <span style="font-size:11.5px;color:var(--mutedFaint);white-space:nowrap;">· ${esc(fecha)}</span>` : ''}</div>
+      ${overdue ? `<button type="button" onclick="moveWarehouseTaskToViewedDay('${t.id}')" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--primary);font-size:12.5px;padding:5px 10px;white-space:nowrap;cursor:pointer;">${aqui}</button>` : ''}
+      <button type="button" title="Más acciones" aria-haspopup="menu" aria-expanded="${open}" onclick="event.stopPropagation(); toggleReservaMenu('${key}')"
+        style="width:28px;height:28px;border-radius:50%;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0;background:transparent;border:1px solid transparent;color:var(--muted);">${homeIcon(HOME_ICON_PATHS.dots, 16, 'currentColor', 2.4)}</button>
+      ${open ? `
+        <div onclick="event.stopPropagation(); closeReservaMenu();" style="position:fixed;inset:0;z-index:40;"></div>
+        <div role="menu" style="position:absolute;right:0;top:38px;z-index:41;min-width:190px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:5px;box-shadow:0 10px 28px rgba(0,0,0,0.16);">${items}</div>` : ''}
+    </div>`;
+}
 function tplWarehouseTasks(){
-  const list = (warehouseTasks[currentWarehouseId]||[]).filter(t => t.date === window.__citasDate);
+  const all = warehouseTasks[currentWarehouseId] || [];
+  const day = window.__citasDate;
+  // Pendientes (primero) y hechas (al final, apagadas); el orden de creación se mantiene dentro de cada grupo.
+  const list = all.filter(t => t.date === day).sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0));
+  // Recordatorio: lo que quedó sin hacer en días anteriores, solo al mirar hoy o días futuros.
+  const overdue = day >= today() ? all.filter(t => !t.done && t.date < day).sort((a, b) => a.date.localeCompare(b.date)) : [];
+  const pending = list.filter(t => !t.done).length;
+  const contador = list.length === 0 ? '' : pending === 0 ? 'Todo hecho' : pending === 1 ? '1 pendiente' : `${pending} pendientes`;
   return `
     <div class="card" style="margin-top:14px;">
-      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);margin-bottom:10px;">Tareas del almacén — recordatorio</div>
-      <div style="display:flex;gap:8px;margin-bottom:10px;">
-        <input id="wt-input" placeholder="Escribe una tarea y pulsa Añadir…" onkeydown="if(event.key==='Enter'){event.preventDefault(); addWarehouseTask();}" style="flex:1;" />
-        <button class="btn btn-primary" onclick="addWarehouseTask()">+ Añadir</button>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+        <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);">Tareas del almacén</div>
+        ${contador ? `<span style="font-size:11.5px;font-weight:600;padding:2px 9px;border-radius:99px;${pending ? 'background:rgba(27,58,107,0.08);color:var(--primary);' : 'background:rgba(63,143,95,0.12);color:#3F8F5F;'}">${contador}</span>` : ''}
       </div>
-      ${list.length === 0 ? `<div style="color:var(--mutedFaint);font-size:12.5px;">Sin tareas apuntadas para este día.</div>` : list.map(t => {
-        if (window.__editingTaskId === t.id) return `
-        <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border);">
-          <input id="wt-edit-input" value="${esc(t.text)}" onkeydown="if(event.key==='Enter'){event.preventDefault(); saveWarehouseTaskEdit('${t.id}');} if(event.key==='Escape'){cancelEditWarehouseTask();}" style="flex:1;" />
-          <button class="btn btn-primary" onclick="saveWarehouseTaskEdit('${t.id}')">Guardar</button>
-          <button class="btn btn-ghost" onclick="cancelEditWarehouseTask()">Cancelar</button>
-        </div>`;
-        return `
-        <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border);">
-          <input type="checkbox" ${t.done?'checked':''} onchange="toggleWarehouseTask('${t.id}')" />
-          <div style="flex:1;font-size:13px;${t.done?'text-decoration:line-through;color:var(--mutedFaint);':''}">${esc(t.text)}</div>
-          <button title="Editar" onclick="startEditWarehouseTask('${t.id}')" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
-          <button title="Mover al día anterior" onclick="moveWarehouseTaskToPrevDay('${t.id}')" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--muted);font-size:12.5px;padding:5px 10px;">← Ayer</button>
-          <button title="Mover al día siguiente" onclick="moveWarehouseTaskToNextDay('${t.id}')" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--muted);font-size:12.5px;padding:5px 10px;">→ Mañana</button>
-          <button onclick="deleteWarehouseTask('${t.id}')" style="background:none;border:none;color:var(--mutedFaint);">🗑</button>
-        </div>`;
-      }).join('')}
+      <div class="wt-add" style="display:flex;align-items:center;gap:6px;padding:4px 4px 4px 12px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);">
+        <input id="wt-input" placeholder="Añadir una tarea y pulsar Intro…" onkeydown="if(event.key==='Enter'){event.preventDefault(); addWarehouseTask();}" style="flex:1;min-width:0;border:none;background:transparent;box-shadow:none;outline:none;padding:6px 0;" />
+        <button type="button" title="Añadir tarea" onclick="addWarehouseTask()" style="width:32px;height:32px;border-radius:8px;border:none;background:var(--primary);color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0;flex-shrink:0;">${homeIcon('<line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>', 17, 'currentColor', 2.4)}</button>
+      </div>
+      ${overdue.length ? `
+      <div style="margin-top:14px;padding:10px 12px 2px;border:1px solid #E8D9A8;background:#FBF7E8;border-radius:10px;">
+        <div style="font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#9A7B1E;margin-bottom:2px;">Pendientes de días anteriores (${overdue.length})</div>
+        ${overdue.map(t => warehouseTaskRowHtml(t, true)).join('')}
+      </div>` : ''}
+      <div style="margin-top:${list.length || overdue.length ? '8px' : '10px'};">
+        ${list.length === 0 ? `<div style="color:var(--mutedFaint);font-size:12.5px;">Nada apuntado para este día.</div>` : list.map(t => warehouseTaskRowHtml(t, false)).join('')}
+      </div>
     </div>`;
 }
 
