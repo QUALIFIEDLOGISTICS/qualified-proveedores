@@ -39,12 +39,10 @@
   /* Tablas de tarifas: filas alternas, resalte al pasar, franja de color por tipo de camión y chips. */
   table.tf-table th{background:var(--panel2);padding:9px 12px;}
   table.tf-table td{padding:10px 12px;vertical-align:middle;}
+  table.tf-table.tf-list th{background:transparent;}
+  table.tf-table.tf-list td{padding:7px 12px;}
   table.tf-table tbody tr:nth-child(even) td{background:#F6F8FB;}
   table.tf-table tbody tr:hover td{background:#E7EEF8;}
-  table.tf-table tbody tr.tf-tipo-ftl td:first-child{box-shadow:inset 3px 0 0 #2E6F95;}
-  table.tf-table tbody tr.tf-tipo-ltl td:first-child{box-shadow:inset 3px 0 0 #C98A2E;}
-  table.tf-table tbody tr.tf-tipo-granel td:first-child{box-shadow:inset 3px 0 0 #3F8F5F;}
-  table.tf-table tbody tr.tf-tipo-grua td:first-child{box-shadow:inset 3px 0 0 #7C5CBF;}
   table.tf-table td.tf-precio{text-align:right;font-weight:700;font-size:14.5px;white-space:nowrap;font-variant-numeric:tabular-nums;}
   table.tf-table td.tf-precio small{font-weight:500;font-size:11.5px;color:var(--muted);}
   table.tf-table.tf-hist td{color:var(--muted);}
@@ -814,6 +812,8 @@ const HOME_ICON_PATHS = {
   edit: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>',
   search: '<circle cx="11" cy="11" r="7.5"></circle><line x1="21" y1="21" x2="16.2" y2="16.2"></line>',
   trailer: '<rect x="2" y="5" width="20" height="11" rx="1"></rect><circle cx="7" cy="19" r="2"></circle><circle cx="17" cy="19" r="2"></circle>',
+  check: '<polyline points="20 6 9 17 4 12"></polyline>',
+  info: '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>',
   chevron: '<polyline points="9 18 15 12 9 6"></polyline>',
   grid: '<rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect>',
   list: '<line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line>',
@@ -3426,17 +3426,25 @@ async function saveContactoWarehouses(id){
 // Tarifas de un cliente, dentro de su ficha (Comercial → Clientes): aquí es donde
 // se suben, se actualizan (↻ crea una nueva con fecha de hoy) y se eliminan. Arriba
 // las vigentes; debajo las históricas (las que ya cambiaron de precio), con su periodo.
-// Zona en negrita y, debajo, el CP y la ciudad en pequeño (o la provincia si es una zona de España sin CP).
+// Bandera según el país de la zona (ES08 → España); si no está dibujada, no se pone nada (el código ya dice el país).
+function tarifaFlagHtml(z){
+  const cc = String(z || '').slice(0, 2).toUpperCase();
+  const f = Object.values(CONTACTO_FLAGS).find(x => x[0] === cc);
+  return f ? `<svg width="18" height="12.5" viewBox="0 0 22 15" aria-hidden="true" style="flex-shrink:0;border-radius:2px;box-shadow:0 0 0 1px rgba(0,0,0,.14);">${f[1]}</svg>` : '';
+}
+// Zona con su bandera y, debajo, el CP y la ciudad en pequeño (o la provincia / ciudad de referencia si no hay).
 function tarifaZonaCeldaHtml(z, cp, ciudad){
   const lugar = tarifaLugarTxt(cp, ciudad) || tarifaZonaHint(z);
-  return `<div class="tf-zona">${esc(z)}</div>${lugar ? `<div class="tf-lugar" title="${esc(lugar)}">${esc(truncateText(lugar, 24))}</div>` : ''}`;
+  return `<div class="tf-zona" style="display:flex;align-items:center;gap:6px;">${tarifaFlagHtml(z)}${esc(z)}</div>${lugar ? `<div class="tf-lugar" title="${esc(lugar)}">${esc(truncateText(lugar, 24))}</div>` : ''}`;
 }
 function tarifaTipoChipHtml(t){
   const extra = t.tipo === 'LTL' && t.metros ? ` · ${tarifaFmtMetros(t.metros)} m` : '';
   return `<span class="tf-chip ${esc(String(t.tipo).toLowerCase())}">${esc(tarifaTipoLabel(t.tipo))}${extra}</span>`;
 }
 function tarifaGasoilChipHtml(t){
-  return `<span class="tf-chip ${t.gasoil ? 'gas-si' : 'gas-no'}">${t.gasoil ? 'Con indexación' : 'Sin indexación'}</span>${t.gasoil && t.gasoilRef ? `<div class="tf-lugar" style="margin-top:2px;" title="Fecha en que se coge el valor de referencia del gasoil">Ref. ${fmtDateDMY(t.gasoilRef)}</div>` : ''}`;
+  // Solo la indexación llama la atención (etiqueta verde con visto); "sin indexación" es texto gris suave.
+  if (!t.gasoil) return `<span style="font-size:12.5px;color:var(--mutedFaint);">Sin indexación</span>`;
+  return `<span class="tf-chip gas-si" style="display:inline-flex;align-items:center;gap:4px;">${homeIcon(HOME_ICON_PATHS.check, 12, 'currentColor', 3)}Con indexación</span>${t.gasoil && t.gasoilRef ? `<div class="tf-lugar" style="margin-top:2px;" title="Fecha en que se coge el valor de referencia del gasoil">Ref. ${fmtDateDMY(t.gasoilRef)}</div>` : ''}`;
 }
 function tarifaPrecioCeldaHtml(t){
   return `${eur2(t.precio)}${t.tipo === 'GRANEL' ? '<small>/t</small>' : ''}`;
@@ -6204,35 +6212,59 @@ function tarifasFilteredList(){
   list.sort(tarifaCmpReciente);
   return { list, view, filtered: !!(search || fCliente || fOrigen || fDestino || fPaisO || fPaisD || fTipo || fGasoil) };
 }
+const TARIFAS_PAGE_SIZE = 50;
+function tarifasGoToPage(delta){
+  window.__tarifasPage = Math.max(0, (window.__tarifasPage || 0) + delta);
+  refreshTarifasListBody();
+}
 function tarifasListBodyHtml(){
   const { list, view, filtered } = tarifasFilteredList();
   if (!list.length) {
     return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${filtered ? 'Ninguna tarifa coincide con los filtros.' : view === 'vigentes' ? 'Todavía no hay ninguna tarifa guardada.' : 'Todavía no hay tarifas históricas: aparecerán cuando una tarifa cambie de precio.'}</div>`;
   }
   const vig = view === 'vigentes';
+  // Al cambiar de filtros o de vista se vuelve a la primera página.
+  const sig = JSON.stringify([view, window.__tarifasSearch, window.__tarifasCliente, window.__tarifasOrigen, window.__tarifasDestino, window.__tarifasPaisO, window.__tarifasPaisD, window.__tarifasTipo, window.__tarifasGasoil]);
+  if (window.__tarifasSig !== sig) { window.__tarifasSig = sig; window.__tarifasPage = 0; }
+  const totalPages = Math.max(1, Math.ceil(list.length / TARIFAS_PAGE_SIZE));
+  if ((window.__tarifasPage || 0) > totalPages - 1) window.__tarifasPage = totalPages - 1;
+  const page = window.__tarifasPage || 0;
+  const pageList = list.slice(page * TARIFAS_PAGE_SIZE, (page + 1) * TARIFAS_PAGE_SIZE);
+  const right = 'style="text-align:right;"';
   return `
     <div class="card" style="padding:0;overflow-x:auto;">
-      <table class="tf-table">
+      <table class="tf-table tf-list">
         <thead><tr>
-          ${vig ? thSort('Desde','date') : thSort('Vigente del','date') + thSort('Hasta','date')}${thSort('Cliente','text')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Tipo','text')}${thSort('Precio','number', 'style="text-align:right;"')}${thSort('€/metro','number', 'style="text-align:right;"')}${thSort('Indexación gasoil','text')}${thSort('Observaciones','text')}
+          ${vig ? thSort('Desde','date') : thSort('Vigente del','date') + thSort('Hasta','date')}${thSort('Cliente','text')}${thSort('Origen','text')}${thSort('Destino','text')}${thSort('Camión','text')}${thSort('Precio','number', right)}${thSort('Indexación','text')}<th></th>
         </tr></thead>
         <tbody>
-          ${list.map(t => `
-            <tr class="tf-tipo-${esc(String(t.tipo).toLowerCase())}">
+          ${pageList.map(t => {
+            const c = contactos.find(x => x.id === t.clienteId);
+            const nombre = c ? c.nombre : '—';
+            const porMetro = t.tipo === 'LTL' && t.metros > 0 ? `<div class="tf-lugar" style="font-weight:400;">${eur2(t.precio / t.metros)}/m</div>` : '';
+            return `
+            <tr>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>${vig ? '' : `<td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.hasta)}">${fmtDateDMY(t.hasta)}</td>`}
-              <td style="font-weight:600;white-space:nowrap;" title="${esc(tarifaClienteNombre(t.clienteId))}">${esc(truncateText(tarifaClienteNombre(t.clienteId), 24))}</td>
+              <td data-sort-value="${esc(nombre)}" title="${esc(nombre)}"><div style="font-weight:600;white-space:nowrap;">${esc(truncateText(nombre, 26))}</div>${c && c.nif ? `<div class="tf-lugar">${esc(c.nif)}</div>` : ''}</td>
               <td style="white-space:nowrap;" data-sort-value="${esc(t.origenZona)}">${tarifaZonaCeldaHtml(t.origenZona, t.origenCp, t.origenCiudad)}</td>
               <td style="white-space:nowrap;" data-sort-value="${esc(t.destinoZona)}">${tarifaZonaCeldaHtml(t.destinoZona, t.destinoCp, t.destinoCiudad)}</td>
               <td data-sort-value="${esc(tarifaTipoLabel(t.tipo))}">${tarifaTipoChipHtml(t)}</td>
-              <td class="tf-precio">${tarifaPrecioCeldaHtml(t)}</td>
-              <td style="color:var(--muted);white-space:nowrap;text-align:right;">${t.tipo === 'LTL' && t.metros > 0 ? eur2(t.precio / t.metros) : '—'}</td>
+              <td class="tf-precio">${tarifaPrecioCeldaHtml(t)}${porMetro}</td>
               <td data-sort-value="${t.gasoil ? 'Con' : 'Sin'}">${tarifaGasoilChipHtml(t)}</td>
-              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(t.observaciones)}" title="${esc(t.observaciones)}">${esc(truncateText(t.observaciones, 26)) || '—'}</td>
-            </tr>`).join('')}
+              <td style="width:28px;text-align:center;">${t.observaciones ? `<span title="${esc(t.observaciones)}" style="display:inline-flex;cursor:help;">${homeIcon(HOME_ICON_PATHS.info, 16, 'var(--muted)', 1.8)}</span>` : ''}</td>
+            </tr>`;
+          }).join('')}
         </tbody>
       </table>
-    </div>
-    `;
+      ${list.length > TARIFAS_PAGE_SIZE ? `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 14px;border-top:1px solid var(--border);font-size:12.5px;color:var(--muted);">
+        <span>${page * TARIFAS_PAGE_SIZE + 1}–${Math.min(list.length, (page + 1) * TARIFAS_PAGE_SIZE)} de ${list.length}</span>
+        <span style="display:flex;gap:6px;">
+          <button class="btn btn-ghost" style="padding:4px 10px;" ${page <= 0 ? 'disabled' : ''} onclick="tarifasGoToPage(-1)">‹</button>
+          <button class="btn btn-ghost" style="padding:4px 10px;" ${page >= totalPages - 1 ? 'disabled' : ''} onclick="tarifasGoToPage(1)">›</button>
+        </span>
+      </div>` : ''}
+    </div>`;
 }
 function refreshTarifasListBody(){
   const el = document.getElementById('tarifas-list-body');
@@ -6247,50 +6279,40 @@ function tarifasClientesDatalistHtml(){
 }
 function tplTarifasPage(){
   const view = window.__tarifasView || 'vigentes';
-  const seg = (id, label) => `<button class="btn ${view===id?'btn-primary':'btn-ghost'}" onclick="window.__tarifasView='${id}'; renderTab();">${label}</button>`;
+  const seg = (id, label) => `<button type="button" onclick="window.__tarifasView='${id}'; renderTab();" style="border:none;border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer;background:${view===id?'var(--primary)':'transparent'};color:${view===id?'var(--primary-text)':'var(--muted)'};font-weight:${view===id?600:500};">${label}</button>`;
+  const sel = (w, title) => `style="flex:1;min-width:${w}px;max-width:210px;" title="${title}"`;
   return `
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
-      <div style="display:flex;align-items:center;gap:14px;">
-        <div style="width:48px;height:48px;border-radius:12px;background:rgba(201,138,46,0.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-          ${homeIcon(HOME_ICON_PATHS.file, 24, '#C98A2E')}
-        </div>
-        <div>
-          <div style="font-family:var(--display);font-size:22px;">Tarifas Transporte</div>
-        </div>
-      </div>
-    </div>
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
-      <div style="display:flex;gap:6px;">${seg('vigentes', 'Vigentes')}${seg('historial', 'Históricas')}</div>
-      <div style="flex:1;min-width:200px;max-width:280px;">
-        <input placeholder="Buscar…" value="${esc(window.__tarifasSearch||'')}" oninput="window.__tarifasSearch=this.value; refreshTarifasListBody();" />
-      </div>
-      <input placeholder="Cliente" data-combo="tf-f-clientes" autocomplete="off" value="${esc(window.__tarifasCliente||'')}" oninput="window.__tarifasCliente=this.value; refreshTarifasListBody();" style="width:190px;" />
-      <select onchange="window.__tarifasPaisO=this.value; window.__tarifasOrigen=''; renderTab();" style="width:160px;" title="País de origen">
+    <div style="font-family:var(--display);font-size:22px;margin-bottom:14px;">Tarifas Transporte</div>
+    <div class="card" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px;margin-bottom:14px;">
+      <div style="display:inline-flex;gap:2px;padding:2px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;flex-shrink:0;">${seg('vigentes', 'Vigentes')}${seg('historial', 'Históricas')}</div>
+      <input placeholder="Buscar…" value="${esc(window.__tarifasSearch||'')}" oninput="window.__tarifasSearch=this.value; refreshTarifasListBody();" style="flex:1.4;min-width:170px;max-width:280px;" />
+      <input placeholder="Cliente" data-combo="tf-f-clientes" autocomplete="off" value="${esc(window.__tarifasCliente||'')}" oninput="window.__tarifasCliente=this.value; refreshTarifasListBody();" style="flex:1;min-width:140px;max-width:210px;" />
+      <select onchange="window.__tarifasPaisO=this.value; window.__tarifasOrigen=''; renderTab();" ${sel(140, 'País de origen')}>
         <option value="">País origen: todos</option>
         ${tarifaPaisesOptionsHtml('origenZona', window.__tarifasPaisO)}
       </select>
       ${window.__tarifasPaisO ? `
-      <select onchange="window.__tarifasOrigen=this.value; refreshTarifasListBody();" style="width:190px;" title="Zona de origen">
+      <select onchange="window.__tarifasOrigen=this.value; refreshTarifasListBody();" ${sel(150, 'Zona de origen')}>
         <option value="">Todas las zonas</option>
         ${tarifaZonasOptionsHtml('origenZona', window.__tarifasPaisO, window.__tarifasOrigen)}
       </select>` : ''}
-      <select onchange="window.__tarifasPaisD=this.value; window.__tarifasDestino=''; renderTab();" style="width:165px;" title="País de destino">
+      <select onchange="window.__tarifasPaisD=this.value; window.__tarifasDestino=''; renderTab();" ${sel(140, 'País de destino')}>
         <option value="">País destino: todos</option>
         ${tarifaPaisesOptionsHtml('destinoZona', window.__tarifasPaisD)}
       </select>
       ${window.__tarifasPaisD ? `
-      <select onchange="window.__tarifasDestino=this.value; refreshTarifasListBody();" style="width:190px;" title="Zona de destino">
+      <select onchange="window.__tarifasDestino=this.value; refreshTarifasListBody();" ${sel(150, 'Zona de destino')}>
         <option value="">Todas las zonas</option>
         ${tarifaZonasOptionsHtml('destinoZona', window.__tarifasPaisD, window.__tarifasDestino)}
       </select>` : ''}
-      <select onchange="window.__tarifasTipo=this.value; refreshTarifasListBody();" style="width:120px;">
-        <option value="" ${!window.__tarifasTipo?'selected':''}>Todos los camiones</option>
+      <select onchange="window.__tarifasTipo=this.value; refreshTarifasListBody();" ${sel(130, 'Tipo de camión')}>
+        <option value="" ${!window.__tarifasTipo?'selected':''}>Camión: todos</option>
         <option value="FTL" ${window.__tarifasTipo==='FTL'?'selected':''}>Solo FTL</option>
         <option value="LTL" ${window.__tarifasTipo==='LTL'?'selected':''}>Solo LTL</option>
         <option value="GRANEL" ${window.__tarifasTipo==='GRANEL'?'selected':''}>Solo piso móvil / granel</option>
         <option value="GRUA" ${window.__tarifasTipo==='GRUA'?'selected':''}>Solo grúa</option>
       </select>
-      <select onchange="window.__tarifasGasoil=this.value; refreshTarifasListBody();" style="width:170px;">
+      <select onchange="window.__tarifasGasoil=this.value; refreshTarifasListBody();" ${sel(140, 'Indexación de gasoil')}>
         <option value="" ${!window.__tarifasGasoil?'selected':''}>Indexación: todos</option>
         <option value="si" ${window.__tarifasGasoil==='si'?'selected':''}>Con indexación</option>
         <option value="no" ${window.__tarifasGasoil==='no'?'selected':''}>Sin indexación</option>
