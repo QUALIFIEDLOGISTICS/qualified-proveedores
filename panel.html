@@ -1205,6 +1205,7 @@ function openWarehouseForm(editId, keepNav){
   window.__whEditMode = !editId;
   window.__whActionMenuOpen = false;
   window.__whHistorial = editId ? (warehouseHistorialCache[editId] || null) : [];
+  if (!editId) whSchedInit(null);
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
   if (editId) {
@@ -1228,6 +1229,7 @@ function warehouseNavGoto(offset){
   openWarehouseForm(ids[(idx + offset + ids.length) % ids.length], true);
 }
 function enterWarehouseEditMode(){
+  whSchedInit(window.__whFormId);
   window.__whEditMode = true;
   window.__whFormDirty = false;
   window.__whActionMenuOpen = false;
@@ -1304,6 +1306,7 @@ function tplWarehouseFormPage(){
     <div style="flex:2;min-width:360px;">
     ${!editMode ? `
     <div class="card">${tplWarehouseViewCard(w)}</div>
+    ${whSchedViewCardHtml(w.id)}
     <div id="wh-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
     ` : `
     <div class="card" oninput="window.__whFormDirty=true;" onchange="window.__whFormDirty=true;">
@@ -1318,7 +1321,11 @@ function tplWarehouseFormPage(){
           ${WAREHOUSE_COLORS.map(c => `<button type="button" class="wh-swatch" data-color="${c}" onclick="pickWarehouseColor('${c}')" title="${c}" style="width:28px;height:28px;border-radius:50%;background:${c};border:none;cursor:pointer;padding:0;${c===color?'outline:3px solid var(--text);outline-offset:2px;':''}"></button>`).join('')}
         </div>
       </div>
-      ${editing ? '' : `<div style="font-size:12px;color:var(--mutedFaint);">Se crea con horario de lunes a viernes de 8:00 a 18:00. Lo puedes cambiar después en Franjas horarias → Horario del almacén.</div>`}
+    </div>
+    <div class="card" style="margin-top:20px;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:4px;">Horario semanal</div>
+      <div style="font-size:12px;color:var(--mutedFaint);margin-bottom:8px;">Días y horas en que se pueden reservar franjas. ${editing ? '' : 'Se propone de lunes a viernes de 8:00 a 18:00.'}</div>
+      <div id="wh-sched-editor">${whSchedEditorHtml()}</div>
     </div>
     <div id="wh-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
@@ -1332,6 +1339,86 @@ function tplWarehouseFormPage(){
       <div id="wh-historial-body">${warehouseHistorialBodyHtml()}</div>
     </div>
     </div>`;
+}
+/* ---- Horario semanal de un almacén ----
+   Se cambia aquí, en Configuración → ficha del almacén (Editar), y no desde Franjas
+   horarias: allí solo se consulta. Cada cambio queda anotado en el historial. */
+function whSchedDefault(){
+  const d = {};
+  WEEK_ORDER.forEach(k => { d[k] = { open: !['sab', 'dom'].includes(k), ranges: [{ start: '08:00', end: '18:00' }] }; });
+  return d;
+}
+// Borrador que se edita: copia del horario actual del almacén (o el de partida si es nuevo).
+function whSchedInit(id){
+  const cur = id && schedules[id] && Object.keys(schedules[id]).length ? JSON.parse(JSON.stringify(schedules[id])) : whSchedDefault();
+  WEEK_ORDER.forEach(k => {
+    if (!cur[k]) cur[k] = { open: false, ranges: [{ start: '08:00', end: '18:00' }] };
+    if (!cur[k].ranges || !cur[k].ranges.length) cur[k].ranges = [{ start: '08:00', end: '18:00' }];
+  });
+  window.__whSched = cur;
+}
+function whSchedTxt(d){
+  return d && d.open ? d.ranges.map(r => `${r.start}–${r.end}`).join(' y ') : 'Cerrado';
+}
+// Vista de solo lectura del horario, en la ficha.
+function whSchedViewCardHtml(id){
+  const s = schedules[id] || {};
+  return `
+    <div class="card" style="margin-top:20px;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:10px;">Horario semanal</div>
+      ${WEEK_ORDER.map(day => `
+        <div style="display:flex;gap:12px;padding:8px 0;border-top:1px solid var(--border);font-size:13.5px;">
+          <div style="width:110px;flex-shrink:0;font-weight:600;">${WEEKDAY_LABELS[day]}</div>
+          <div style="${s[day] && s[day].open ? '' : 'color:var(--mutedFaint);'}">${esc(s[day] ? whSchedTxt(s[day]) : 'Sin definir')}</div>
+        </div>`).join('')}
+    </div>`;
+}
+function whSchedEditorHtml(){
+  const draft = window.__whSched || whSchedDefault();
+  return WEEK_ORDER.map(day => {
+    const d = draft[day];
+    const rangeRows = d.ranges.map((r, i) => `
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;max-width:300px;">
+        <input type="time" value="${r.start}" onchange="whSchedSet('${day}',${i},'start',this.value)" style="flex:1;" />
+        <span style="color:var(--mutedFaint);">–</span>
+        <input type="time" value="${r.end}" onchange="whSchedSet('${day}',${i},'end',this.value)" style="flex:1;" />
+        ${d.ranges.length > 1 ? `<button type="button" onclick="whSchedRemove('${day}',${i})" title="Quitar tramo" style="background:none;border:none;color:var(--mutedFaint);flex-shrink:0;">🗑</button>` : '<span style="width:22px;flex-shrink:0;"></span>'}
+      </div>`).join('');
+    return `
+      <div style="display:flex;gap:14px;padding:10px 0;border-top:1px solid var(--border);align-items:flex-start;">
+        <label style="width:120px;flex-shrink:0;display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;padding-top:8px;cursor:pointer;">
+          <input type="checkbox" ${d.open ? 'checked' : ''} onchange="whSchedToggle('${day}', this.checked)" style="width:auto;" /> ${WEEKDAY_LABELS[day]}
+        </label>
+        <div style="flex:1;min-width:0;">
+          ${d.open ? `${rangeRows}<button type="button" onclick="whSchedAdd('${day}')" style="background:none;border:none;color:var(--primary);font-size:12px;padding:0;cursor:pointer;">+ Añadir tramo (por ejemplo, para partir a mediodía)</button>`
+            : '<div style="font-size:13px;color:var(--mutedFaint);padding-top:8px;">Cerrado</div>'}
+        </div>
+      </div>`;
+  }).join('');
+}
+function whSchedRefresh(){
+  const el = document.getElementById('wh-sched-editor');
+  if (el) el.innerHTML = whSchedEditorHtml();
+  window.__whFormDirty = true;
+}
+function whSchedToggle(day, on){ window.__whSched[day].open = on; whSchedRefresh(); }
+function whSchedSet(day, i, key, value){ window.__whSched[day].ranges[i][key] = value; window.__whFormDirty = true; }
+function whSchedAdd(day){ window.__whSched[day].ranges.push({ start: '15:00', end: '20:00' }); whSchedRefresh(); }
+function whSchedRemove(day, i){ window.__whSched[day].ranges.splice(i, 1); whSchedRefresh(); }
+// Devuelve el texto del error (o '') y deja los tramos ordenados.
+function whSchedValidate(){
+  const draft = window.__whSched;
+  for (const day of WEEK_ORDER) {
+    if (!draft[day].open) continue;
+    const ranges = [...draft[day].ranges].sort((a, b) => a.start.localeCompare(b.start));
+    for (let i = 0; i < ranges.length; i++) {
+      if (!ranges[i].start || !ranges[i].end) return `En ${WEEKDAY_LABELS[day]}, rellena la hora de apertura y de cierre de cada tramo.`;
+      if (ranges[i].start >= ranges[i].end) return `En ${WEEKDAY_LABELS[day]}, cada tramo debe cerrar después de abrir.`;
+      if (i > 0 && ranges[i].start < ranges[i - 1].end) return `En ${WEEKDAY_LABELS[day]}, hay tramos que se solapan.`;
+    }
+    draft[day].ranges = ranges;
+  }
+  return '';
 }
 // Identificador del almacén a partir del nombre ("Sant Joan" → "sant-joan"),
 // que no se repite con ninguno de los existentes.
@@ -1355,6 +1442,8 @@ async function submitWarehouse(editId){
   const color = document.getElementById('wh-color').value;
   if (!name) { showFormError(errEl, 'Indica el nombre del almacén.'); return; }
   if (allWarehouses.some(w => w.id !== editId && w.name.trim().toLowerCase() === name.toLowerCase())) { showFormError(errEl, 'Ya hay un almacén con ese nombre.'); return; }
+  const schedError0 = whSchedValidate();
+  if (schedError0) { showFormError(errEl, schedError0); return; }
   const btns = [...document.querySelectorAll('.wh-submit-btn')];
   btns.forEach(b => b.disabled = true);
   try {
@@ -1365,14 +1454,26 @@ async function submitWarehouse(editId){
       const { data, error } = await supabaseClient.from('warehouses').update({ name, location: location || null, color }).eq('id', editId).select();
       if (error || !data || !data.length) throw (error || new Error('sin permiso o error desconocido.'));
       changeLines = buildWarehouseChangeSummary(before, { name, location, color });
+      // Horario semanal: se guarda entero y se anotan los días que cambian.
+      const antes = schedules[editId] || {};
+      const { error: schedError } = await supabaseClient.from('warehouse_schedules').upsert(
+        WEEK_ORDER.map(day => ({ warehouse_id: editId, weekday: day, open: window.__whSched[day].open, ranges: window.__whSched[day].ranges })),
+        { onConflict: 'warehouse_id,weekday' }
+      );
+      if (schedError) throw schedError;
+      WEEK_ORDER.forEach(day => {
+        const a = whSchedTxt(antes[day]), d = whSchedTxt(window.__whSched[day]);
+        if (a !== d) changeLines.push(`Horario del ${WEEKDAY_LABELS[day].toLowerCase()}: "${a}" → "${d}"`);
+      });
     } else {
       savedId = warehouseSlug(name);
       const sortOrder = allWarehouses.reduce((m, w) => Math.max(m, w.sortOrder || 0), 0) + 1;
       const { error } = await supabaseClient.from('warehouses').insert({ id: savedId, name, location: location || null, color, sort_order: sortOrder });
       if (error) throw error;
-      // Horario de partida: lunes a viernes de 8 a 18, fin de semana cerrado.
-      const days = ['lun', 'mar', 'mie', 'jue', 'vie', 'sab', 'dom'];
-      const { error: schedError } = await supabaseClient.from('warehouse_schedules').insert(days.map(d => ({ warehouse_id: savedId, weekday: d, open: !['sab', 'dom'].includes(d), ranges: [{ start: '08:00', end: '18:00' }] })));
+      // Horario semanal elegido en la ficha (parte de lunes a viernes de 8 a 18).
+      const { error: schedError } = await supabaseClient.from('warehouse_schedules').insert(
+        WEEK_ORDER.map(day => ({ warehouse_id: savedId, weekday: day, open: window.__whSched[day].open, ranges: window.__whSched[day].ranges }))
+      );
       if (schedError) throw schedError;
       changeLines = ['Almacén creado.'];
     }
@@ -3676,7 +3777,6 @@ function tplCitas(){
           </button>
           <button onclick="changeCitasDate(1)" title="Día siguiente" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:6px 8px;border-radius:6px;font-size:12px;">→</button>
         </div>
-        ${(PROFILE.isAdmin || PROFILE.canEditSchedule) ? `<button class="btn btn-ghost" onclick="openScheduleModal()">🕐 Horario del almacén</button>` : ''}
         <button class="btn btn-ghost" onclick="openQuickCreateModal('conhora')" title="Crear varias reservas de golpe (varios días y camiones) asignándoles hora">Creación rápida</button>
         <button class="btn btn-primary" onclick="openAppointmentModal()" ${sched.open?'':'disabled'}>+ Nueva reserva</button>
         ${window.__calOpen ? `<div onclick="window.__calOpen=false; renderTab();" style="position:fixed;inset:0;z-index:39;"></div>` + calendarPopoverHtml() : ''}
@@ -3702,7 +3802,7 @@ function tplCitas(){
       ${renderTimeline(dayAppts, wh, slots)}
     </div>` : `
     <div class="card" style="text-align:center;color:var(--mutedFaint);padding:32px;">
-      No se pueden reservar franjas este día. Cámbialo en "⚙ Horario del almacén" si es necesario.
+      No se pueden reservar franjas este día. El horario del almacén se cambia en Configuración, dentro de cada almacén.
     </div>`}
     ${tplUnscheduled()}
     ${tplWarehouseTasks()}`;
@@ -4082,77 +4182,6 @@ function calendarPopoverHtml(){
     </div>`;
 }
 
-function openScheduleModal(){
-  if (!PROFILE.isAdmin && !PROFILE.canEditSchedule) return;
-  window.__schedDraft = JSON.parse(JSON.stringify(schedules[currentWarehouseId]));
-  renderScheduleModal();
-}
-function renderScheduleModal(){
-  const draft = window.__schedDraft;
-  const rows = WEEK_ORDER.map(day => {
-    const d = draft[day];
-    const rangeRows = d.ranges.map((r, i) => `
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
-        <input type="time" value="${r.start}" ${d.open?'':'disabled'} onchange="window.__schedDraft['${day}'].ranges[${i}].start=this.value" style="flex:1;" />
-        <span style="color:var(--mutedFaint);">–</span>
-        <input type="time" value="${r.end}" ${d.open?'':'disabled'} onchange="window.__schedDraft['${day}'].ranges[${i}].end=this.value" style="flex:1;" />
-        ${d.ranges.length>1 ? `<button onclick="removeScheduleRange('${day}',${i})" style="background:none;border:none;color:var(--mutedFaint);flex-shrink:0;">🗑</button>` : `<span style="width:22px;flex-shrink:0;"></span>`}
-      </div>`).join('');
-    return `
-      <div style="padding:10px 0;border-top:1px solid var(--border);">
-        <label style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:13px;font-weight:600;">
-          <input type="checkbox" ${d.open?'checked':''} onchange="window.__schedDraft['${day}'].open=this.checked; renderScheduleModal();" style="width:auto;" />
-          ${WEEKDAY_LABELS[day]}
-        </label>
-        ${d.open ? `
-          ${rangeRows}
-          <button onclick="addScheduleRange('${day}')" style="background:none;border:none;color:var(--primary);font-size:12px;padding:0;">+ Añadir tramo (ej. para partir a mediodía)</button>
-        ` : `<div style="font-size:12px;color:var(--mutedFaint);">Cerrado</div>`}
-      </div>`;
-  }).join('');
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box" style="max-width:420px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-          <h3 class="modal-title">Horario semanal — ${esc(currentWh().name)}</h3><button class="close-x" onclick="closeModal()">✕</button>
-        </div>
-        <div id="sch-error" style="color:var(--danger);font-size:12.5px;margin-bottom:4px;"></div>
-        ${rows}
-        <div style="display:flex;gap:10px;margin-top:16px;">
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitSchedule()">Guardar horario</button>
-        </div>
-      </div>
-    </div>`;
-}
-function addScheduleRange(day){
-  window.__schedDraft[day].ranges.push({ start:'15:00', end:'20:00' });
-  renderScheduleModal();
-}
-function removeScheduleRange(day, idx){
-  window.__schedDraft[day].ranges.splice(idx,1);
-  renderScheduleModal();
-}
-async function submitSchedule(){
-  if (!PROFILE.isAdmin && !PROFILE.canEditSchedule) return;
-  const errEl = document.getElementById('sch-error');
-  const draft = window.__schedDraft;
-  for (const day of WEEK_ORDER) {
-    if (!draft[day].open) continue;
-    const ranges = [...draft[day].ranges].sort((a,b)=>a.start.localeCompare(b.start));
-    for (let i=0;i<ranges.length;i++){
-      if (ranges[i].start >= ranges[i].end) { errEl.textContent = `En ${WEEKDAY_LABELS[day]}, cada tramo debe cerrar después de abrir.`; return; }
-      if (i>0 && ranges[i].start < ranges[i-1].end) { errEl.textContent = `En ${WEEKDAY_LABELS[day]}, hay tramos que se solapan.`; return; }
-    }
-    draft[day].ranges = ranges;
-  }
-  await supabaseClient.from('warehouse_schedules').upsert(
-    WEEK_ORDER.map(day => ({ warehouse_id: currentWarehouseId, weekday: day, open: draft[day].open, ranges: draft[day].ranges })),
-    { onConflict: 'warehouse_id,weekday' }
-  );
-  schedules[currentWarehouseId] = draft;
-  closeModal(); renderTab();
-}
 function changeCitasDate(delta){
   const d = new Date(window.__citasDate+'T00:00:00');
   d.setDate(d.getDate()+delta);
