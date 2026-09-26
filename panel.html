@@ -4101,6 +4101,32 @@ function citasDateButtonInner(dateLabel){
     ${CITAS_DATE_SIZERS.map(s => `<span aria-hidden="true" style="grid-area:1/1;visibility:hidden;height:0;overflow:hidden;">📅 ${s}</span>`).join('')}
   </span>`;
 }
+// Primer día abierto después de la fecha dada (hasta dos semanas), con el día y la hora a la que abre.
+function siguienteDiaAbierto(dateStr){
+  const d = new Date(dateStr + 'T00:00:00');
+  for (let i = 0; i < 14; i++) {
+    d.setDate(d.getDate() + 1);
+    const ds = toDateStr(d);
+    const s = daySchedule(currentWarehouseId, ds);
+    if (s && s.open && s.ranges.length) return { date: ds, dia: d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric' }).replace(',', ''), abre: s.ranges[0].start };
+  }
+  return null;
+}
+// Aviso de día cerrado: dice cuándo se vuelve a abrir, salta a ese día y (solo a administradores) lleva al horario.
+function diaCerradoAvisoHtml(dateStr){
+  const largo = new Date(dateStr + 'T00:00:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }).replace(',', '');
+  const sig = siguienteDiaAbierto(dateStr);
+  const enlace = PROFILE.isAdmin ? ` <a href="#" onclick="event.preventDefault(); setTab('almacenconfig');" style="color:var(--primary);text-decoration:none;white-space:nowrap;">Cambiar el horario</a>` : '';
+  return `
+    <div class="card" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:16px 18px;">
+      <div style="width:40px;height:40px;border-radius:50%;background:rgba(92,102,112,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.calendar, 20, '#5C6670', 1.8)}</div>
+      <div style="flex:1;min-width:220px;">
+        <div style="font-family:var(--display);font-weight:700;font-size:14px;">Almacén cerrado el ${esc(largo)}</div>
+        <div style="font-size:12.5px;color:var(--muted);margin-top:2px;">${sig ? `Vuelve a abrir el ${esc(sig.dia)} a las ${esc(sig.abre)}.` : 'No hay ningún día abierto en las próximas dos semanas.'}${enlace}</div>
+      </div>
+      ${sig ? `<button class="btn btn-primary" onclick="jumpToDate('${sig.date}')">Ir al ${esc(sig.dia)} →</button>` : ''}
+    </div>`;
+}
 function tplCitas(){
   const wh = currentWh();
   const dateStr = window.__citasDate;
@@ -4135,9 +4161,9 @@ function tplCitas(){
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        <span style="font-size:12px;color:var(--muted);white-space:nowrap;">
-          ${sched.open ? `🕐 Horario del día: ${scheduleLabel(sched)}` : 'Cerrado este día'}
-        </span>
+        ${sched.open
+          ? `<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);white-space:nowrap;">${homeIcon(HOME_ICON_PATHS.clock, 14, 'currentColor', 1.8)}Horario del día: ${scheduleLabel(sched)}</span>`
+          : `<span style="font-size:11.5px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;padding:4px 11px;border-radius:99px;background:rgba(92,102,112,0.12);color:var(--muted);white-space:nowrap;">Cerrado</span>`}
         <button class="btn btn-ghost" onclick="changeCitasDate(-1)">← Día anterior</button>
         <button class="btn btn-primary" onclick="toggleCalendar()" style="justify-content:center;">${citasDateButtonInner(dateLabel)}</button>
         <button class="btn btn-ghost" onclick="changeCitasDate(1)">Día siguiente →</button>
@@ -4151,10 +4177,7 @@ function tplCitas(){
     ${sched.open ? `
     <div class="card">
       ${renderTimeline(dayAppts, wh, slots)}
-    </div>` : `
-    <div class="card" style="text-align:center;color:var(--mutedFaint);padding:32px;">
-      No se pueden reservar franjas este día. El horario del almacén se cambia en Configuración, dentro de cada almacén.
-    </div>`}
+    </div>` : diaCerradoAvisoHtml(dateStr)}
     ${tplUnscheduled()}
     ${tplWarehouseTasks()}`;
 }
