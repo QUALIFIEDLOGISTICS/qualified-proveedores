@@ -7612,6 +7612,8 @@ async function loadTransportistaRutas(){
   }));
 }
 function resetColaboradoresState(){
+  window.__colabBuscarPaisO = '';
+  window.__colabBuscarPaisD = '';
   window.__colabBuscarOrigen = '';
   window.__colabBuscarDestino = '';
   window.__colabSearch = '';
@@ -7626,7 +7628,18 @@ function colabZonasDatalistHtml(field){
   const zonas = [...new Set(transportistaRutas.map(r => r[field]).filter(Boolean))].sort();
   return zonas.map(z => `<option value="${esc(z)}" label="${esc(tarifaZonaHint(z))}">`).join('');
 }
-// Mayúsculas y sin espacios al escribir una zona (búsqueda o formulario), y refresca lo que dependa de ella.
+// País → zona del buscador (igual que el filtro de Tarifas): solo países con alguna
+// cobertura guardada, y la zona se ve como "ES17 · Girona".
+function colabPaisesOptionsHtml(field, selected){
+  const codes = [...new Set(transportistaRutas.map(r => (r[field] || '').slice(0, 2)).filter(Boolean))]
+    .sort((a, b) => tarifaPaisNombre(a).localeCompare(tarifaPaisNombre(b), 'es'));
+  return codes.map(cc => `<option value="${esc(cc)}" ${cc === selected ? 'selected' : ''}>${esc(tarifaPaisNombre(cc))}</option>`).join('');
+}
+function colabZonasOptionsHtml(field, cc, selected){
+  const zonas = [...new Set(transportistaRutas.map(r => r[field]).filter(z => z && z.startsWith(cc)))].sort();
+  return zonas.map(z => `<option value="${esc(z)}" ${z === selected ? 'selected' : ''}>${esc(z)}${tarifaZonaHint(z) ? ' · ' + esc(tarifaZonaHint(z)) : ''}</option>`).join('');
+}
+// Mayúsculas y sin espacios al escribir una zona (formulario de alta), y refresca lo que dependa de ella.
 function colabZonaInput(id, after){
   const el = document.getElementById(id);
   el.value = el.value.toUpperCase().replace(/\s/g, '');
@@ -7650,15 +7663,11 @@ function colabRutasQueCubren(origen, destino){
     (r.origenZona === origen && r.destinoZona === destino) ||
     (r.ambosSentidos && r.origenZona === destino && r.destinoZona === origen));
 }
-function refreshColabResultados(){
-  const el = document.getElementById('colab-resultados');
-  if (el) el.innerHTML = colabResultadosHtml();
-}
 function colabResultadosHtml(){
-  const origen = (document.getElementById('colab-buscar-origen')?.value || '').trim();
-  const destino = (document.getElementById('colab-buscar-destino')?.value || '').trim();
+  const origen = window.__colabBuscarOrigen || '';
+  const destino = window.__colabBuscarDestino || '';
   if (!TARIFA_ZONA_RE.test(origen) || !TARIFA_ZONA_RE.test(destino)) {
-    return `<div style="color:var(--mutedFaint);font-size:12.5px;">Escribe una zona de origen y otra de destino (país + 2 cifras, ej. ES08) para ver quién la cubre.</div>`;
+    return `<div style="color:var(--mutedFaint);font-size:12.5px;">Elige un país y una zona de origen y de destino para ver quién cubre esa ruta.</div>`;
   }
   const filas = colabRutasQueCubren(origen, destino);
   const conContacto = filas.map(r => ({ r, c: contactos.find(x => x.id === r.contactoId) })).filter(x => x.c);
@@ -7740,20 +7749,26 @@ function tplColaboradoresPage(){
     <div class="card" style="margin-bottom:16px;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Buscar quién cubre una ruta</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <div class="field" style="flex:1;min-width:180px;max-width:220px;">
-          <label>Zona de origen</label>
-          <input id="colab-buscar-origen" maxlength="4" data-combo="colab-buscar-origenes-datalist" autocomplete="off" placeholder="Ej. ES08" style="font-family:var(--mono);" oninput="colabZonaInput('colab-buscar-origen', refreshColabResultados)" />
-          <datalist id="colab-buscar-origenes-datalist">${colabZonasDatalistHtml('origenZona')}</datalist>
-          <div id="colab-buscar-origen-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;"></div>
-        </div>
-        <div class="field" style="flex:1;min-width:180px;max-width:220px;">
-          <label>Zona de destino</label>
-          <input id="colab-buscar-destino" maxlength="4" data-combo="colab-buscar-destinos-datalist" autocomplete="off" placeholder="Ej. FR13" style="font-family:var(--mono);" oninput="colabZonaInput('colab-buscar-destino', refreshColabResultados)" />
-          <datalist id="colab-buscar-destinos-datalist">${colabZonasDatalistHtml('destinoZona')}</datalist>
-          <div id="colab-buscar-destino-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;"></div>
-        </div>
+        <select onchange="window.__colabBuscarPaisO=this.value; window.__colabBuscarOrigen=''; renderTab();" style="flex:1;min-width:150px;max-width:200px;">
+          <option value="">País origen</option>
+          ${colabPaisesOptionsHtml('origenZona', window.__colabBuscarPaisO)}
+        </select>
+        ${window.__colabBuscarPaisO ? `
+        <select onchange="window.__colabBuscarOrigen=this.value; renderTab();" style="flex:1;min-width:170px;max-width:220px;">
+          <option value="">Zona de origen</option>
+          ${colabZonasOptionsHtml('origenZona', window.__colabBuscarPaisO, window.__colabBuscarOrigen)}
+        </select>` : ''}
+        <select onchange="window.__colabBuscarPaisD=this.value; window.__colabBuscarDestino=''; renderTab();" style="flex:1;min-width:150px;max-width:200px;">
+          <option value="">País destino</option>
+          ${colabPaisesOptionsHtml('destinoZona', window.__colabBuscarPaisD)}
+        </select>
+        ${window.__colabBuscarPaisD ? `
+        <select onchange="window.__colabBuscarDestino=this.value; renderTab();" style="flex:1;min-width:170px;max-width:220px;">
+          <option value="">Zona de destino</option>
+          ${colabZonasOptionsHtml('destinoZona', window.__colabBuscarPaisD, window.__colabBuscarDestino)}
+        </select>` : ''}
       </div>
-      <div id="colab-resultados" style="margin-top:6px;">${colabResultadosHtml()}</div>
+      <div id="colab-resultados" style="margin-top:12px;">${colabResultadosHtml()}</div>
     </div>
     <div class="card" style="padding:0;overflow:hidden;">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 18px 12px;">
