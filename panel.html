@@ -2724,6 +2724,7 @@ async function loadContactos(){
     calle1: c.calle1 || '', calle2: c.calle2 || '', codigoPostal: c.codigo_postal || '',
     ciudad: c.ciudad || '', provincia: c.provincia || '', pais: c.pais || '',
     emailTransportista: c.email_transportista || '', telefonoTransportista: c.telefono_transportista || '',
+    nombreTransportista: c.nombre_transportista || '', apellidosTransportista: c.apellidos_transportista || '', cargoTransportista: c.cargo_transportista || '',
     logoStoragePath: c.logo_storage_path || null,
   }));
   refreshContactoLogoThumbnails();
@@ -3536,23 +3537,33 @@ async function saveContactoWarehouses(id){
 // datos (nombre, dirección, NIF…) solo se cambia en Contactos.
 function tplContactoTransportistaContactoCard(c, editMode){
   const title = `<div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:6px;">Contacto de transporte</div>`;
-  const nota = `<div style="font-size:12px;color:var(--mutedFaint);margin-bottom:10px;">Correo y teléfono para avisar a este transportista cuando hay un viaje disponible.</div>`;
+  const nota = `<div style="font-size:12px;color:var(--mutedFaint);margin-bottom:10px;">Persona, correo y teléfono para avisar cuando hay un viaje disponible.</div>`;
   if (!editMode) {
     const dato = (label, valor) => `
       <div style="padding:6px 0;">
         <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--mutedFaint);margin-bottom:2px;">${esc(label)}</div>
         <div style="font-size:13.5px;color:${valor ? 'var(--text)' : 'var(--mutedFaint)'};">${valor ? esc(valor) : 'Sin apuntar'}</div>
       </div>`;
+    const nombreCompleto = [c.nombreTransportista, c.apellidosTransportista].filter(Boolean).join(' ');
     return `
     <div class="card">
       ${title}${nota}
-      ${dato('Correo', c.emailTransportista)}
-      ${dato('Teléfono', c.telefonoTransportista)}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:0 20px;">
+        ${dato('Nombre y apellidos', nombreCompleto)}
+        ${dato('Cargo', c.cargoTransportista)}
+        ${dato('Correo', c.emailTransportista)}
+        ${dato('Teléfono', c.telefonoTransportista)}
+      </div>
     </div>`;
   }
   return `
     <div class="card" oninput="window.__contactoFormDirty=true;" onchange="window.__contactoFormDirty=true;">
       ${title}${nota}
+      <div style="display:flex;gap:10px;">
+        <div class="field" style="flex:1;"><label>Nombre</label><input id="ct-transp-nombre" maxlength="100" value="${esc(c.nombreTransportista||'')}" placeholder="Nombre" /></div>
+        <div class="field" style="flex:1;"><label>Apellidos</label><input id="ct-transp-apellidos" maxlength="150" value="${esc(c.apellidosTransportista||'')}" placeholder="Apellidos" /></div>
+      </div>
+      <div class="field"><label>Cargo</label><input id="ct-transp-cargo" maxlength="100" value="${esc(c.cargoTransportista||'')}" placeholder="Ej. Responsable de tráfico" /></div>
       <div class="field"><label>Correo</label><input id="ct-transp-email" type="email" maxlength="150" value="${esc(c.emailTransportista||'')}" placeholder="ofertas@transportista.com" /></div>
       <div class="field"><label>Teléfono</label><input id="ct-transp-telefono" type="tel" maxlength="30" value="${esc(c.telefonoTransportista||'')}" placeholder="+34 600 00 00 00" /></div>
       <div id="ct-transp-error" style="color:var(--danger);font-size:12.5px;margin:4px 0;"></div>
@@ -3611,23 +3622,36 @@ function verAutonomosDeContacto(companyId){
   currentTab = 'autonomos';
   openCompanyDrivers(companyId);
 }
-// Guarda el correo/teléfono de transporte (botón Guardar de esa tarjeta, dentro de Transportistas).
+// Guarda el contacto de transporte (nombre, apellidos, cargo, correo, teléfono; botón
+// Guardar de esa tarjeta, dentro de Transportistas).
 async function saveContactoTransportistaContacto(id){
   const c = contactos.find(x=>x.id===id);
   if (!c) return;
   const errEl = document.getElementById('ct-transp-error');
   if (errEl) errEl.textContent = '';
+  const nombre = document.getElementById('ct-transp-nombre').value.trim();
+  const apellidos = document.getElementById('ct-transp-apellidos').value.trim();
+  const cargo = document.getElementById('ct-transp-cargo').value.trim();
   const email = document.getElementById('ct-transp-email').value.trim();
   const telefono = document.getElementById('ct-transp-telefono').value.trim();
   const finish = () => { window.__contactoDetailEditMode = false; window.__contactoFormDirty = false; renderTab(); };
-  if (email === (c.emailTransportista||'') && telefono === (c.telefonoTransportista||'')) { finish(); return; }
+  const sinCambios = nombre === (c.nombreTransportista||'') && apellidos === (c.apellidosTransportista||'')
+    && cargo === (c.cargoTransportista||'') && email === (c.emailTransportista||'') && telefono === (c.telefonoTransportista||'');
+  if (sinCambios) { finish(); return; }
   document.querySelectorAll('#tab-content button').forEach(b => { b.disabled = true; });
   try {
-    const { error } = await supabaseClient.from('contactos').update({ email_transportista: email || null, telefono_transportista: telefono || null }).eq('id', id);
+    const { error } = await supabaseClient.from('contactos').update({
+      nombre_transportista: nombre || null, apellidos_transportista: apellidos || null, cargo_transportista: cargo || null,
+      email_transportista: email || null, telefono_transportista: telefono || null,
+    }).eq('id', id);
     if (error) throw error;
     const lines = [];
+    if ((c.nombreTransportista||'') !== nombre) lines.push(`Nombre de contacto: "${c.nombreTransportista||'—'}" → "${nombre||'—'}"`);
+    if ((c.apellidosTransportista||'') !== apellidos) lines.push(`Apellidos de contacto: "${c.apellidosTransportista||'—'}" → "${apellidos||'—'}"`);
+    if ((c.cargoTransportista||'') !== cargo) lines.push(`Cargo: "${c.cargoTransportista||'—'}" → "${cargo||'—'}"`);
     if ((c.emailTransportista||'') !== email) lines.push(`Correo de transporte: "${c.emailTransportista||'—'}" → "${email||'—'}"`);
     if ((c.telefonoTransportista||'') !== telefono) lines.push(`Teléfono de transporte: "${c.telefonoTransportista||'—'}" → "${telefono||'—'}"`);
+    c.nombreTransportista = nombre; c.apellidosTransportista = apellidos; c.cargoTransportista = cargo;
     c.emailTransportista = email; c.telefonoTransportista = telefono;
     if (lines.length) await logContactoHistorial(id, lines.join('\n'));
     finish();
