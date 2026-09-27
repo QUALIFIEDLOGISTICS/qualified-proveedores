@@ -7598,17 +7598,17 @@ function tplTransportistasPage(){
 /* =========================================================
    TRÁFICO → COLABORADORES: qué transportista cubre cada ruta (zona de
    origen → zona de destino), para saber a quién contactar cuando sobra
-   un viaje. Cada fila es de un transportista; puede cubrir la ruta solo
-   en ese sentido o también al revés ("ambos sentidos"). El contacto se
-   hace por correo (se abre el propio gestor de correo, ya redactado);
-   el correo de cada transportista se edita en Tráfico → Transportistas.
+   un viaje. Cada fila es una ruta de un transportista en ese sentido.
+   El contacto se hace por correo (se abre el propio gestor de correo,
+   ya redactado); el correo de cada transportista se edita en
+   Tráfico → Transportistas.
 ========================================================= */
 let transportistaRutas = [];
 async function loadTransportistaRutas(){
   const { data } = await supabaseClient.from('transportista_rutas').select('*').order('created_at', { ascending: false });
   transportistaRutas = (data||[]).map(r => ({
     id: r.id, contactoId: r.contacto_id, origenZona: (r.origen_zona||'').toUpperCase(), destinoZona: (r.destino_zona||'').toUpperCase(),
-    ambosSentidos: !!r.ambos_sentidos, observaciones: r.observaciones || '', createdAt: r.created_at,
+    observaciones: r.observaciones || '', createdAt: r.created_at,
   }));
 }
 function resetColaboradoresState(){
@@ -7657,11 +7657,9 @@ function colabMailtoUrl({ to, bcc, subject, body }){
   params.push('body=' + encodeURIComponent(body));
   return `mailto:${to || ''}?${params.join('&')}`;
 }
-// Filas que cubren esa ruta: en su sentido, o al revés si esa fila tiene "ambos sentidos".
+// Filas que cubren exactamente esa ruta (mismo sentido).
 function colabRutasQueCubren(origen, destino){
-  return transportistaRutas.filter(r =>
-    (r.origenZona === origen && r.destinoZona === destino) ||
-    (r.ambosSentidos && r.origenZona === destino && r.destinoZona === origen));
+  return transportistaRutas.filter(r => r.origenZona === origen && r.destinoZona === destino);
 }
 function colabResultadosHtml(){
   const origen = window.__colabBuscarOrigen || '';
@@ -7687,7 +7685,6 @@ function colabResultadosHtml(){
         <div style="flex:1;min-width:180px;">
           <div style="font-weight:600;font-size:13.5px;cursor:pointer;" onclick="openTransportistaFicha('${c.id}')">${esc((c.nombreComercial||'').trim() || c.nombre)}</div>
           <div style="font-size:12px;color:var(--muted);margin-top:2px;">${c.emailTransportista ? esc(c.emailTransportista) : 'Sin correo apuntado'}${c.telefonoTransportista ? ' · ' + esc(c.telefonoTransportista) : ''}</div>
-          ${r.origenZona === destino ? `<div style="font-size:11px;color:var(--mutedFaint);margin-top:2px;">Cubre ${esc(r.origenZona)} → ${esc(r.destinoZona)}, también en sentido contrario</div>` : ''}
           ${r.observaciones ? `<div style="font-size:11.5px;color:var(--mutedFaint);margin-top:2px;">${esc(r.observaciones)}</div>` : ''}
         </div>
         ${c.emailTransportista
@@ -7712,7 +7709,7 @@ function colabTablaBodyHtml(){
   if (!list.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;padding:16px 0;text-align:center;">${window.__colabSearch ? 'Ningún transportista coincide con la búsqueda.' : 'Todavía no hay ninguna cobertura apuntada.'}</div>`;
   return `
     <table class="tf-table">
-      <thead><tr>${thSort('Transportista','text')}${thSort('Ruta','text')}${thSort('También al revés','text')}${thSort('Observaciones','text')}<th>Acciones</th></tr></thead>
+      <thead><tr>${thSort('Transportista','text')}${thSort('Ruta','text')}${thSort('Observaciones','text')}<th>Acciones</th></tr></thead>
       <tbody>
         ${list.map(r => {
           const c = contactos.find(x => x.id === r.contactoId);
@@ -7721,7 +7718,6 @@ function colabTablaBodyHtml(){
           <tr>
             <td style="font-weight:600;cursor:${c?'pointer':'default'};" data-sort-value="${esc(nombre)}" ${c?`onclick="openTransportistaFicha('${c.id}')"`:''}>${esc(nombre)}</td>
             <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona+r.destinoZona)}">${esc(r.origenZona)} → ${esc(r.destinoZona)}</td>
-            <td data-sort-value="${r.ambosSentidos?1:0}">${r.ambosSentidos ? 'Sí' : '—'}</td>
             <td style="color:var(--muted);" data-sort-value="${esc(r.observaciones)}">${r.observaciones ? esc(truncateText(r.observaciones, 40)) : '—'}</td>
             <td style="white-space:nowrap;">
               <button onclick="openColabRutaModal('${r.id}')" title="Editar" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;cursor:pointer;vertical-align:middle;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
@@ -7811,9 +7807,6 @@ function tplColabRutaModalHtml(editId){
             <div id="colab-destino-zona-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;">${esc(editing ? tarifaZonaHint(editing.destinoZona) : '')}</div>
           </div>
         </div>
-        <div class="field">
-          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13.5px;"><input type="checkbox" class="switch" id="colab-ambos" ${editing && editing.ambosSentidos ? 'checked' : ''} /> También cubre el sentido contrario</label>
-        </div>
         <div class="field" style="margin-bottom:0;"><label>Observaciones (opcional)</label><textarea id="colab-obs" maxlength="300" placeholder="Solo con lona, prefiere frigo…" style="min-height:60px;">${esc(editing ? editing.observaciones : '')}</textarea></div>
         <div id="colab-error" style="color:var(--danger);font-size:12.5px;margin:10px 0 0;"></div>
         <div style="display:flex;gap:10px;margin-top:12px;">
@@ -7835,12 +7828,11 @@ async function submitColabRuta(editId){
   const c = contactos.find(x => !x.archived && x.esTransportista && x.nombre === nombreTransp);
   const origenZona = document.getElementById('colab-origen-zona').value.trim().toUpperCase();
   const destinoZona = document.getElementById('colab-destino-zona').value.trim().toUpperCase();
-  const ambosSentidos = document.getElementById('colab-ambos').checked;
   const observaciones = document.getElementById('colab-obs').value.trim();
   if (!c) { errEl.textContent = 'Elige un transportista de la lista.'; return; }
   if (!TARIFA_ZONA_RE.test(origenZona)) { errEl.textContent = 'La zona de origen tiene que ser un país y 2 caracteres, por ejemplo ES08.'; return; }
   if (!TARIFA_ZONA_RE.test(destinoZona)) { errEl.textContent = 'La zona de destino tiene que ser un país y 2 caracteres, por ejemplo FR13.'; return; }
-  const dbPayload = { contacto_id: c.id, origen_zona: origenZona, destino_zona: destinoZona, ambos_sentidos: ambosSentidos, observaciones: observaciones || null };
+  const dbPayload = { contacto_id: c.id, origen_zona: origenZona, destino_zona: destinoZona, observaciones: observaciones || null };
   try {
     if (editId) {
       const { error } = await supabaseClient.from('transportista_rutas').update(dbPayload).eq('id', editId);
