@@ -1006,6 +1006,7 @@ function computeBreadcrumbSegments(){
       }
       return [{label:'DeCA', onclick:null}];
     }
+    if (traficoSection() === 'colaboradores') return [{label:'Colaboradores', onclick:null}];
     return [{label:'Transportistas', onclick:null}];
   }
   if (currentTab === 'autonomos') {
@@ -6341,6 +6342,7 @@ function tplAutonomosDashboardBody(){
 // siempre; solo cambia el marco que las agrupa.
 const TRAFICO_SECTIONS = [
   { id: 'transportistas', label: 'Transportistas' },
+  { id: 'colaboradores', label: 'Colaboradores' },
   { id: 'deca', label: 'DeCA' },
   { id: 'direcciones', label: 'Direcciones' },
 ];
@@ -6376,12 +6378,14 @@ function setTraficoSection(id){
     window.__direccionesPage = 0;
   }
   if (id === 'transportistas') resetTransportistasState();
+  if (id === 'colaboradores') resetColaboradoresState();
   renderHeader(); renderTab();
 }
 function tplTrafico(){
   const sec = traficoSection();
   if (sec === 'deca') return window.__traficoView === 'decaForm' ? tplDecaFormPage() : tplDecaPage();
   if (sec === 'direcciones') return window.__administracionView === 'direccionForm' ? tplDireccionFormPage() : tplDireccionesPage();
+  if (sec === 'colaboradores') return tplColaboradoresPage();
   return tplTransportistasPage();
 }
 function openDecaModule(){
@@ -7590,6 +7594,263 @@ function tplTransportistasPage(){
       <div style="display:flex;align-items:center;gap:14px;justify-self:end;">${contactosLayoutToggleHtml()}<div id="transp-pagination" style="display:flex;align-items:center;gap:8px;justify-self:end;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplTransportistasPaginationHtml()}</div></div>
     </div>
     <div id="transp-list-body">${transportistasListBodyHtml()}</div>`;
+}
+/* =========================================================
+   TRÁFICO → COLABORADORES: qué transportista cubre cada ruta (zona de
+   origen → zona de destino), para saber a quién contactar cuando sobra
+   un viaje. Cada fila es de un transportista; puede cubrir la ruta solo
+   en ese sentido o también al revés ("ambos sentidos"). El contacto se
+   hace por correo (se abre el propio gestor de correo, ya redactado);
+   el correo de cada transportista se edita en Tráfico → Transportistas.
+========================================================= */
+let transportistaRutas = [];
+async function loadTransportistaRutas(){
+  const { data } = await supabaseClient.from('transportista_rutas').select('*').order('created_at', { ascending: false });
+  transportistaRutas = (data||[]).map(r => ({
+    id: r.id, contactoId: r.contacto_id, origenZona: (r.origen_zona||'').toUpperCase(), destinoZona: (r.destino_zona||'').toUpperCase(),
+    ambosSentidos: !!r.ambos_sentidos, observaciones: r.observaciones || '', createdAt: r.created_at,
+  }));
+}
+function resetColaboradoresState(){
+  window.__colabBuscarOrigen = '';
+  window.__colabBuscarDestino = '';
+  window.__colabSearch = '';
+}
+// Abre la ficha de un transportista igual que desde la lista de Transportistas
+// (general en solo lectura + la tarjeta de correo/teléfono editable).
+function openTransportistaFicha(id){
+  window.__contactoNavContext = { label: 'Transportistas', ids: [id] };
+  openContactoModal(id);
+}
+function colabZonasDatalistHtml(field){
+  const zonas = [...new Set(transportistaRutas.map(r => r[field]).filter(Boolean))].sort();
+  return zonas.map(z => `<option value="${esc(z)}" label="${esc(tarifaZonaHint(z))}">`).join('');
+}
+// Mayúsculas y sin espacios al escribir una zona (búsqueda o formulario), y refresca lo que dependa de ella.
+function colabZonaInput(id, after){
+  const el = document.getElementById(id);
+  el.value = el.value.toUpperCase().replace(/\s/g, '');
+  const hint = document.getElementById(id + '-hint');
+  if (hint) hint.textContent = tarifaZonaHint(el.value);
+  if (after) after();
+}
+function colabOfertaAsunto(o, d){ return `Viaje disponible ${o} → ${d}`; }
+function colabOfertaCuerpo(o, d){ return `Hola,\n\nTenemos un viaje disponible en la ruta ${o} → ${d}. ¿Podéis cubrirlo?\n\nQuedamos a la espera de vuestra respuesta.\n\nUn saludo.`; }
+function colabMailtoUrl({ to, bcc, subject, body }){
+  // Las direcciones no se codifican (van tal cual, con comas si hay varias); solo el asunto y el cuerpo.
+  const params = [];
+  if (bcc) params.push('bcc=' + bcc);
+  params.push('subject=' + encodeURIComponent(subject));
+  params.push('body=' + encodeURIComponent(body));
+  return `mailto:${to || ''}?${params.join('&')}`;
+}
+// Filas que cubren esa ruta: en su sentido, o al revés si esa fila tiene "ambos sentidos".
+function colabRutasQueCubren(origen, destino){
+  return transportistaRutas.filter(r =>
+    (r.origenZona === origen && r.destinoZona === destino) ||
+    (r.ambosSentidos && r.origenZona === destino && r.destinoZona === origen));
+}
+function refreshColabResultados(){
+  const el = document.getElementById('colab-resultados');
+  if (el) el.innerHTML = colabResultadosHtml();
+}
+function colabResultadosHtml(){
+  const origen = (document.getElementById('colab-buscar-origen')?.value || '').trim();
+  const destino = (document.getElementById('colab-buscar-destino')?.value || '').trim();
+  if (!TARIFA_ZONA_RE.test(origen) || !TARIFA_ZONA_RE.test(destino)) {
+    return `<div style="color:var(--mutedFaint);font-size:12.5px;">Escribe una zona de origen y otra de destino (país + 2 cifras, ej. ES08) para ver quién la cubre.</div>`;
+  }
+  const filas = colabRutasQueCubren(origen, destino);
+  const conContacto = filas.map(r => ({ r, c: contactos.find(x => x.id === r.contactoId) })).filter(x => x.c);
+  if (!conContacto.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;">Ningún transportista apuntado cubre ${esc(origen)} → ${esc(destino)}.</div>`;
+  const asunto = colabOfertaAsunto(origen, destino), cuerpo = colabOfertaCuerpo(origen, destino);
+  const conCorreo = conContacto.filter(x => x.c.emailTransportista);
+  const contactarTodos = conCorreo.length > 1
+    ? `<a class="btn btn-primary" href="${esc(colabMailtoUrl({ bcc: conCorreo.map(x=>x.c.emailTransportista).join(','), subject: asunto, body: cuerpo }))}">Contactar a los ${conCorreo.length} por correo</a>`
+    : '';
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+      <div style="font-size:12.5px;color:var(--muted);">${conContacto.length} transportista${conContacto.length===1?'':'s'} cubre${conContacto.length===1?'':'n'} esta ruta</div>
+      ${contactarTodos}
+    </div>
+    ${conContacto.map(({r,c}) => `
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--border);flex-wrap:wrap;">
+        <div style="flex:1;min-width:180px;">
+          <div style="font-weight:600;font-size:13.5px;cursor:pointer;" onclick="openTransportistaFicha('${c.id}')">${esc((c.nombreComercial||'').trim() || c.nombre)}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px;">${c.emailTransportista ? esc(c.emailTransportista) : 'Sin correo apuntado'}${c.telefonoTransportista ? ' · ' + esc(c.telefonoTransportista) : ''}</div>
+          ${r.origenZona === destino ? `<div style="font-size:11px;color:var(--mutedFaint);margin-top:2px;">Cubre ${esc(r.origenZona)} → ${esc(r.destinoZona)}, también en sentido contrario</div>` : ''}
+          ${r.observaciones ? `<div style="font-size:11.5px;color:var(--mutedFaint);margin-top:2px;">${esc(r.observaciones)}</div>` : ''}
+        </div>
+        ${c.emailTransportista
+          ? `<a class="btn btn-ghost" href="${esc(colabMailtoUrl({ to: c.emailTransportista, subject: asunto, body: cuerpo }))}">Contactar por correo</a>`
+          : `<button class="btn btn-ghost" disabled title="Apúntale un correo en Tráfico → Transportistas">Sin correo</button>`}
+      </div>`).join('')}`;
+}
+function colaboradoresFilteredRutas(){
+  const search = (window.__colabSearch || '').toLowerCase();
+  if (!search) return transportistaRutas;
+  return transportistaRutas.filter(r => {
+    const c = contactos.find(x => x.id === r.contactoId);
+    return c && (c.nombre.toLowerCase().includes(search) || (c.nombreComercial||'').toLowerCase().includes(search));
+  });
+}
+function refreshColabTablaBody(){
+  const el = document.getElementById('colab-tabla-body');
+  if (el) el.innerHTML = colabTablaBodyHtml();
+}
+function colabTablaBodyHtml(){
+  const list = colaboradoresFilteredRutas();
+  if (!list.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;padding:16px 0;text-align:center;">${window.__colabSearch ? 'Ningún transportista coincide con la búsqueda.' : 'Todavía no hay ninguna cobertura apuntada.'}</div>`;
+  return `
+    <table class="tf-table">
+      <thead><tr>${thSort('Transportista','text')}${thSort('Ruta','text')}${thSort('También al revés','text')}${thSort('Observaciones','text')}<th>Acciones</th></tr></thead>
+      <tbody>
+        ${list.map(r => {
+          const c = contactos.find(x => x.id === r.contactoId);
+          const nombre = c ? ((c.nombreComercial||'').trim() || c.nombre) : '—';
+          return `
+          <tr>
+            <td style="font-weight:600;cursor:${c?'pointer':'default'};" data-sort-value="${esc(nombre)}" ${c?`onclick="openTransportistaFicha('${c.id}')"`:''}>${esc(nombre)}</td>
+            <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona+r.destinoZona)}">${esc(r.origenZona)} → ${esc(r.destinoZona)}</td>
+            <td data-sort-value="${r.ambosSentidos?1:0}">${r.ambosSentidos ? 'Sí' : '—'}</td>
+            <td style="color:var(--muted);" data-sort-value="${esc(r.observaciones)}">${r.observaciones ? esc(truncateText(r.observaciones, 40)) : '—'}</td>
+            <td style="white-space:nowrap;">
+              <button onclick="openColabRutaModal('${r.id}')" title="Editar" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;cursor:pointer;vertical-align:middle;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+              <button onclick="deleteColabRuta('${r.id}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);font-size:14px;padding:2px 4px;cursor:pointer;">🗑</button>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+function tplColaboradoresPage(){
+  return `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div style="width:48px;height:48px;border-radius:12px;background:rgba(15,139,141,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          ${homeIcon(HOME_ICON_PATHS.pin, 24, '#0F8B8D')}
+        </div>
+        <div>
+          <div style="font-family:var(--display);font-size:22px;">Colaboradores</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">Qué transportistas cubren cada ruta, para saber a quién contactar cuando sobra un viaje.</div>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="openColabRutaModal()">+ Añadir cobertura</button>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Buscar quién cubre una ruta</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:180px;max-width:220px;">
+          <label>Zona de origen</label>
+          <input id="colab-buscar-origen" maxlength="4" data-combo="colab-buscar-origenes-datalist" autocomplete="off" placeholder="Ej. ES08" style="font-family:var(--mono);" oninput="colabZonaInput('colab-buscar-origen', refreshColabResultados)" />
+          <datalist id="colab-buscar-origenes-datalist">${colabZonasDatalistHtml('origenZona')}</datalist>
+          <div id="colab-buscar-origen-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;"></div>
+        </div>
+        <div class="field" style="flex:1;min-width:180px;max-width:220px;">
+          <label>Zona de destino</label>
+          <input id="colab-buscar-destino" maxlength="4" data-combo="colab-buscar-destinos-datalist" autocomplete="off" placeholder="Ej. FR13" style="font-family:var(--mono);" oninput="colabZonaInput('colab-buscar-destino', refreshColabResultados)" />
+          <datalist id="colab-buscar-destinos-datalist">${colabZonasDatalistHtml('destinoZona')}</datalist>
+          <div id="colab-buscar-destino-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;"></div>
+        </div>
+      </div>
+      <div id="colab-resultados" style="margin-top:6px;">${colabResultadosHtml()}</div>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 18px 12px;">
+        <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Todas las coberturas <span style="font-weight:400;color:var(--mutedFaint);">(${transportistaRutas.length})</span></div>
+        <div style="position:relative;max-width:260px;width:100%;">
+          <input placeholder="Buscar por transportista…" value="${esc(window.__colabSearch||'')}" oninput="window.__colabSearch=this.value; refreshColabTablaBody();" style="padding-left:34px;" />
+          <span style="position:absolute;left:11px;top:10px;display:flex;">${homeIcon(HOME_ICON_PATHS.search, 17, 'var(--mutedFaint)', 1.8)}</span>
+        </div>
+      </div>
+      <div id="colab-tabla-body" style="overflow-x:auto;">${colabTablaBodyHtml()}</div>
+    </div>`;
+}
+function tplColabRutaModalHtml(editId){
+  const editing = editId ? transportistaRutas.find(r => r.id === editId) : null;
+  const c = editing ? contactos.find(x => x.id === editing.contactoId) : null;
+  return `
+    <div class="modal-overlay" onclick="closeModal()">
+      <div class="modal-box" onclick="event.stopPropagation();">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <h3 class="modal-title">${editing ? 'Editar cobertura' : 'Nueva cobertura'}</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div class="field">
+          <label>Transportista</label>
+          <input id="colab-transportista" maxlength="150" data-combo="colab-transportistas-datalist" autocomplete="off" placeholder="Elige entre tus transportistas" value="${esc(c ? c.nombre : '')}" />
+          <datalist id="colab-transportistas-datalist">
+            ${contactos.filter(x=>!x.archived && x.esTransportista).map(x=>`<option value="${esc(x.nombre)}" label="${esc([x.nombreComercial, x.nif].filter(Boolean).join(' · '))}">`).join('')}
+          </datalist>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;">
+            <label>Zona de origen</label>
+            <input id="colab-origen-zona" maxlength="4" data-combo="colab-origenes-datalist" autocomplete="off" placeholder="Ej. ES08" style="font-family:var(--mono);" oninput="colabZonaInput('colab-origen-zona')" value="${esc(editing ? editing.origenZona : '')}" />
+            <datalist id="colab-origenes-datalist">${colabZonasDatalistHtml('origenZona')}</datalist>
+            <div id="colab-origen-zona-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;">${esc(editing ? tarifaZonaHint(editing.origenZona) : '')}</div>
+          </div>
+          <div class="field" style="flex:1;">
+            <label>Zona de destino</label>
+            <input id="colab-destino-zona" maxlength="4" data-combo="colab-destinos-datalist" autocomplete="off" placeholder="Ej. FR13" style="font-family:var(--mono);" oninput="colabZonaInput('colab-destino-zona')" value="${esc(editing ? editing.destinoZona : '')}" />
+            <datalist id="colab-destinos-datalist">${colabZonasDatalistHtml('destinoZona')}</datalist>
+            <div id="colab-destino-zona-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;">${esc(editing ? tarifaZonaHint(editing.destinoZona) : '')}</div>
+          </div>
+        </div>
+        <div class="field">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13.5px;"><input type="checkbox" class="switch" id="colab-ambos" ${editing && editing.ambosSentidos ? 'checked' : ''} /> También cubre el sentido contrario</label>
+        </div>
+        <div class="field" style="margin-bottom:0;"><label>Observaciones (opcional)</label><textarea id="colab-obs" maxlength="300" placeholder="Solo con lona, prefiere frigo…" style="min-height:60px;">${esc(editing ? editing.observaciones : '')}</textarea></div>
+        <div id="colab-error" style="color:var(--danger);font-size:12.5px;margin:10px 0 0;"></div>
+        <div style="display:flex;gap:10px;margin-top:12px;">
+          ${editing ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="deleteColabRuta('${editing.id}')">Eliminar</button>` : ''}
+          <div style="flex:1;"></div>
+          <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" onclick="submitColabRuta('${editId||''}')">${editing ? 'Guardar' : 'Añadir'}</button>
+        </div>
+      </div>
+    </div>`;
+}
+function openColabRutaModal(editId){
+  document.getElementById('modal-slot').innerHTML = tplColabRutaModalHtml(editId);
+}
+async function submitColabRuta(editId){
+  const errEl = document.getElementById('colab-error');
+  errEl.textContent = '';
+  const nombreTransp = document.getElementById('colab-transportista').value.trim();
+  const c = contactos.find(x => !x.archived && x.esTransportista && x.nombre === nombreTransp);
+  const origenZona = document.getElementById('colab-origen-zona').value.trim().toUpperCase();
+  const destinoZona = document.getElementById('colab-destino-zona').value.trim().toUpperCase();
+  const ambosSentidos = document.getElementById('colab-ambos').checked;
+  const observaciones = document.getElementById('colab-obs').value.trim();
+  if (!c) { errEl.textContent = 'Elige un transportista de la lista.'; return; }
+  if (!TARIFA_ZONA_RE.test(origenZona)) { errEl.textContent = 'La zona de origen tiene que ser un país y 2 caracteres, por ejemplo ES08.'; return; }
+  if (!TARIFA_ZONA_RE.test(destinoZona)) { errEl.textContent = 'La zona de destino tiene que ser un país y 2 caracteres, por ejemplo FR13.'; return; }
+  const dbPayload = { contacto_id: c.id, origen_zona: origenZona, destino_zona: destinoZona, ambos_sentidos: ambosSentidos, observaciones: observaciones || null };
+  try {
+    if (editId) {
+      const { error } = await supabaseClient.from('transportista_rutas').update(dbPayload).eq('id', editId);
+      if (error) throw error;
+    } else {
+      const { error } = await supabaseClient.from('transportista_rutas').insert(dbPayload);
+      if (error) throw error;
+    }
+    await loadTransportistaRutas();
+    closeModal();
+    renderTab();
+  } catch (error) {
+    errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'error desconocido.');
+  }
+}
+async function deleteColabRuta(id){
+  const r = transportistaRutas.find(x => x.id === id);
+  if (!r) return;
+  const c = contactos.find(x => x.id === r.contactoId);
+  if (!confirm(`¿Eliminar la cobertura ${r.origenZona} → ${r.destinoZona} de ${c ? c.nombre : 'este transportista'}?`)) return;
+  const { error } = await supabaseClient.from('transportista_rutas').delete().eq('id', id);
+  if (error) { alert('No se pudo eliminar: ' + error.message); return; }
+  await loadTransportistaRutas();
+  closeModal();
+  renderTab();
 }
 function tplDecaPage(){
   return `
@@ -10570,7 +10831,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   }
 
   await loadWarehouses();
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas()]);
+  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadTransportistaRutas()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
