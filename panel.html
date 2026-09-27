@@ -698,9 +698,30 @@ let currentTab = 'citas';
 // volver siempre a Inicio. Al cerrar sesión se borra (ver handleLogout en
 // auth.js), así que un login nuevo sí empieza en Inicio como hasta ahora.
 const LAST_TAB_KEY = 'qp_last_tab';
+// Guarda no solo la pestaña, sino la pantalla concreta dentro de ella, para que
+// al refrescar (F5 / Ctrl+F5) el panel te deje exactamente donde estabas. Se
+// llama al cambiar de pestaña y también justo antes de recargar/cerrar la
+// página (beforeunload), que es lo que de verdad captura "dónde estabas" sin
+// tener que acordarse de llamarlo en cada acción de navegación interna.
 function saveLastTab(){
-  try { localStorage.setItem(LAST_TAB_KEY, JSON.stringify({ tab: currentTab, warehouseId: currentWarehouseId })); } catch(e) {}
+  try {
+    localStorage.setItem(LAST_TAB_KEY, JSON.stringify({
+      tab: currentTab, warehouseId: currentWarehouseId,
+      traficoSection: window.__traficoSection || null,
+      comercialSection: ['clientes','tarifas'].includes(window.__comercialSection) ? window.__comercialSection : null,
+      administracionView: ['contactos','flota'].includes(window.__administracionView) ? window.__administracionView : null,
+      autonomosView: window.__autonomosView || null,
+      autonomosDriverId: window.__autonomosDriverId || null,
+      driversCompanyFilter: window.__driversCompanyFilter || null,
+      fichajesView: window.__fichajesView || null,
+      fichajesDriverId: window.__fichajesDriverId || null,
+      showingContactoDetail: !!window.__showingContactoDetail,
+      contactoDetailId: window.__contactoDetailId || null,
+      contactoNavLabel: (window.__contactoDetailNavContext && window.__contactoDetailNavContext.label) || null,
+    }));
+  } catch(e) {}
 }
+window.addEventListener('beforeunload', saveLastTab);
 function readLastTab(){
   try { return JSON.parse(localStorage.getItem(LAST_TAB_KEY)); } catch(e) { return null; }
 }
@@ -11149,11 +11170,32 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   if (last && last.tab && (last.tab === 'inicio' || allowed.includes(last.tab))) {
     currentTab = last.tab;
     if (last.warehouseId && WAREHOUSES.some(w=>w.id===last.warehouseId)) currentWarehouseId = last.warehouseId;
+    // No solo la pestaña: también la pantalla concreta en la que estaba dentro de
+    // ella, para que un F5 / Ctrl+F5 deje el panel exactamente como se dejó.
+    if (TRAFICO_SECTIONS.some(s=>s.id===last.traficoSection)) window.__traficoSection = last.traficoSection;
+    if (last.comercialSection) window.__comercialSection = last.comercialSection;
+    if (last.administracionView) window.__administracionView = last.administracionView;
+    if (['home','empresas','lista','detalle','dashboard'].includes(last.autonomosView)) {
+      window.__autonomosView = last.autonomosView;
+      if (last.autonomosDriverId && drivers.some(d=>d.id===last.autonomosDriverId)) window.__autonomosDriverId = last.autonomosDriverId;
+      if (last.driversCompanyFilter && companies.some(c=>c.id===last.driversCompanyFilter)) window.__driversCompanyFilter = last.driversCompanyFilter;
+    }
+    if (['lista','detalle'].includes(last.fichajesView)) {
+      window.__fichajesView = last.fichajesView;
+      if (last.fichajesDriverId && drivers.some(d=>d.id===last.fichajesDriverId)) window.__fichajesDriverId = last.fichajesDriverId;
+    }
   } else {
     currentTab = allowed.length ? 'inicio' : null;
   }
   document.getElementById('app-root').style.display = '';
-  if (currentTab) { renderHeader(); renderTab(); }
+  if (currentTab) {
+    renderHeader(); renderTab();
+    // Si tenía la ficha de un contacto abierta, se reabre encima de la pantalla ya restaurada.
+    if (last && last.showingContactoDetail && last.contactoDetailId && contactos.some(c=>c.id===last.contactoDetailId)) {
+      window.__contactoNavContext = { label: last.contactoNavLabel || 'Contactos', ids: [last.contactoDetailId] };
+      openContactoModal(last.contactoDetailId);
+    }
+  }
   else { document.getElementById('tab-content').innerHTML = '<div class="card" style="text-align:center;color:var(--mutedFaint);padding:32px;">Tu cuenta todavía no tiene ninguna pestaña activada. Contacta con el administrador.</div>'; }
 })();
 
