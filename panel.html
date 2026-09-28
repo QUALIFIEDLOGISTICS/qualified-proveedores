@@ -744,7 +744,13 @@ async function loadProfile(){
   const { data } = await supabaseClient.auth.getUser();
   CURRENT_USER_ID = data && data.user ? data.user.id : null;
   const { data: row } = await supabaseClient.from('profiles').select('*').eq('id', CURRENT_USER_ID).maybeSingle();
-  PROFILE = row ? { isAdmin: row.is_admin, allowedTabs: row.allowed_tabs || [], driverId: row.driver_id || null, canEditSchedule: row.can_edit_schedule || false } : { isAdmin: false, allowedTabs: [], driverId: null, canEditSchedule: false };
+  PROFILE = row ? { isAdmin: row.is_admin, allowedTabs: row.allowed_tabs || [], driverId: row.driver_id || null, canEditSchedule: row.can_edit_schedule || false, nombre: row.nombre || '', apellidos: row.apellidos || '' } : { isAdmin: false, allowedTabs: [], driverId: null, canEditSchedule: false, nombre: '', apellidos: '' };
+}
+// "Nombre Apellidos" si se han apuntado; si no, el correo (para cuentas sin rellenar todavía).
+function profileDisplayName(p){
+  if (!p) return '';
+  const nombre = [p.nombre, p.apellidos].filter(Boolean).join(' ').trim();
+  return nombre || p.email || '';
 }
 function isDriverOnlyAccount(){ return !!PROFILE.driverId && !PROFILE.isAdmin; }
 function visibleTabs(){
@@ -3162,7 +3168,12 @@ async function loadContactoHistorial(contactoId){
   const { data } = await supabaseClient.from('contacto_historial').select('*').eq('contacto_id', contactoId).order('created_at', { ascending: false });
   return (data||[]).map(h => ({ id: h.id, createdAt: h.created_at, usuario: h.usuario || '', resumen: h.resumen }));
 }
+// Lo que queda apuntado como autor en los historiales de toda la app: el nombre
+// y apellidos de quien ha iniciado sesión (para saber qué persona ha sido,
+// aunque la cuenta use un correo genérico), o el correo si no los ha rellenado.
 function currentUserEmail(){
+  const nombre = PROFILE ? [PROFILE.nombre, PROFILE.apellidos].filter(Boolean).join(' ').trim() : '';
+  if (nombre) return nombre;
   const el = document.getElementById('current-user-email');
   return el ? el.textContent.trim() : '';
 }
@@ -10757,7 +10768,7 @@ function confirmRecalcWeeks(driverId, year){
 let ALL_PROFILES = [];
 async function loadAllProfiles(){
   const { data } = await supabaseClient.from('profiles').select('*').order('email');
-  ALL_PROFILES = (data||[]).map(p => ({ id: p.id, email: p.email, isAdmin: p.is_admin, allowedTabs: p.allowed_tabs || [], driverId: p.driver_id || null, canEditSchedule: p.can_edit_schedule || false }));
+  ALL_PROFILES = (data||[]).map(p => ({ id: p.id, email: p.email, isAdmin: p.is_admin, allowedTabs: p.allowed_tabs || [], driverId: p.driver_id || null, canEditSchedule: p.can_edit_schedule || false, nombre: p.nombre || '', apellidos: p.apellidos || '' }));
 }
 function driverLabel(d){ const co = companies.find(c=>c.id===d.companyId); return `${d.name}${co?' · '+co.name:''}`; }
 
@@ -10775,7 +10786,7 @@ const PERM_ROLES = {
   fichaje: { label: 'Solo fichaje (conductor)', tabs: [], hint: 'Solo ve la pantalla para fichar su jornada; hay que vincularle un conductor.' },
   custom: { label: 'Personalizado', hint: 'Elige a mano qué módulos ve.' },
 };
-function permState(p){ return { isAdmin: !!p.isAdmin, allowedTabs: (p.allowedTabs||[]).slice(), canEditSchedule: !!p.canEditSchedule, driverId: p.driverId || null }; }
+function permState(p){ return { isAdmin: !!p.isAdmin, allowedTabs: (p.allowedTabs||[]).slice(), canEditSchedule: !!p.canEditSchedule, driverId: p.driverId || null, nombre: p.nombre || '', apellidos: p.apellidos || '' }; }
 function permDetectRole(s){
   if (s.isAdmin) return 'admin';
   const tabs = [...s.allowedTabs].sort().join(',');
@@ -10809,7 +10820,8 @@ function permHasTab(s, id){ return s.isAdmin || s.allowedTabs.includes(id); }
 function permLabel(t){ return t.id === 'administracion' ? 'Administración' : t.label; }
 function permDesc(t){ return t.id === 'administracion' ? 'Contactos y flota.' : ((HOME_MODULES[t.id]||{}).description || ''); }
 function permAvatar(p, size){
-  return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:var(--primary);color:var(--primary-text);display:flex;align-items:center;justify-content:center;font-family:var(--display);font-size:${Math.round(size*0.42)}px;font-weight:700;flex-shrink:0;">${esc((p.email||'?').trim().charAt(0).toUpperCase())}</div>`;
+  const letter = (profileDisplayName(p) || '?').trim().charAt(0).toUpperCase();
+  return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:var(--primary);color:var(--primary-text);display:flex;align-items:center;justify-content:center;font-family:var(--display);font-size:${Math.round(size*0.42)}px;font-weight:700;flex-shrink:0;">${esc(letter)}</div>`;
 }
 function adminCurrentUser(){ return window.__adminUserId ? ALL_PROFILES.find(x=>x.id===window.__adminUserId) : null; }
 function adminConfirmLeave(){
@@ -10854,6 +10866,8 @@ function adminHistorialBodyHtml(){
 }
 function adminChangeSummary(before, after){
   const lines = [];
+  if ((before.nombre||'') !== (after.nombre||'')) lines.push(`Nombre: "${before.nombre||'—'}" → "${after.nombre||'—'}"`);
+  if ((before.apellidos||'') !== (after.apellidos||'')) lines.push(`Apellidos: "${before.apellidos||'—'}" → "${after.apellidos||'—'}"`);
   const rb = permRoleLabel(before), ra = permRoleLabel(after);
   if (rb !== ra) lines.push(`Rol: "${rb}" → "${ra}"`);
   const label = id => { const t = TABS.find(x=>x.id===id); return t ? permLabel(t) : id; };
@@ -10874,7 +10888,7 @@ function adminChangeSummary(before, after){
 function adminFilteredList(){
   const q = (window.__adminSearch || '').toLowerCase();
   const f = window.__adminFilters || [];
-  return ALL_PROFILES.filter(p => (!q || p.email.toLowerCase().includes(q))
+  return ALL_PROFILES.filter(p => (!q || p.email.toLowerCase().includes(q) || profileDisplayName(p).toLowerCase().includes(q))
     && (!f.includes('admin') || p.isAdmin)
     && (!f.includes('driver') || p.driverId));
 }
@@ -10882,11 +10896,14 @@ function adminCardHtml(p){
   const s = permState(p);
   const modules = s.isAdmin ? 'Acceso total' : `${s.allowedTabs.length} módulo${s.allowedTabs.length!==1?'s':''}`;
   const dr = p.driverId ? drivers.find(d=>d.id===p.driverId) : null;
+  const nombre = profileDisplayName(p);
+  const hasNombre = nombre && nombre !== p.email;
   return `
     <div class="card" style="cursor:pointer;display:flex;gap:14px;align-items:flex-start;padding:18px;" onclick="openAdminUser('${p.id}')">
       ${permAvatar(p, 46)}
       <div style="min-width:0;flex:1;">
-        <div style="font-family:var(--display);font-size:14.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;">${esc(p.email)}${p.id===CURRENT_USER_ID?' <span style="font-size:11px;color:var(--mutedFaint);font-weight:400;">(tú)</span>':''}</div>
+        <div style="font-family:var(--display);font-size:14.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;">${esc(hasNombre ? nombre : p.email)}${p.id===CURRENT_USER_ID?' <span style="font-size:11px;color:var(--mutedFaint);font-weight:400;">(tú)</span>':''}</div>
+        ${hasNombre ? `<div style="font-size:11.5px;color:var(--mutedFaint);overflow:hidden;text-overflow:ellipsis;margin-top:1px;">${esc(p.email)}</div>` : ''}
         <div style="margin:6px 0 4px;"><span style="font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;background:${s.isAdmin?'rgba(27,58,107,.1)':'var(--panel2)'};border:1px solid ${s.isAdmin?'rgba(27,58,107,.3)':'var(--border)'};border-radius:99px;padding:2px 9px;color:${s.isAdmin?'var(--primary)':'var(--muted)'};">${esc(permRoleLabel(s))}</span></div>
         <div style="font-size:12px;color:var(--muted);">${modules}</div>
         ${dr ? `<div style="font-size:12px;color:var(--mutedFaint);margin-top:2px;">Conductor: ${esc(dr.name)}</div>` : ''}
@@ -10929,7 +10946,7 @@ function tplAdminList(){
     <div style="font-size:12px;color:var(--mutedFaint);margin:0 0 18px 62px;line-height:1.5;">Para dar de alta a alguien nuevo, créalo en Supabase → Authentication → Users; aparecerá aquí en cuanto exista.</div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
       <div style="position:relative;max-width:320px;">
-        <input placeholder="Buscar por correo…" value="${esc(window.__adminSearch||'')}" oninput="window.__adminSearch=this.value; refreshAdminListBody();" style="padding-left:34px;" />
+        <input placeholder="Buscar por nombre o correo…" value="${esc(window.__adminSearch||'')}" oninput="window.__adminSearch=this.value; refreshAdminListBody();" style="padding-left:34px;" />
         <span style="position:absolute;left:11px;top:10px;display:flex;">${homeIcon(HOME_ICON_PATHS.search, 17, 'var(--mutedFaint)', 1.8)}</span>
       </div>
       <div style="position:relative;justify-self:center;">
@@ -11004,7 +11021,9 @@ async function adminSaveUser(){
   if (errEl) errEl.textContent = '';
   if (permDetectRole(d) === 'fichaje' && !d.driverId) { showFormError(errEl, 'Un usuario "solo fichaje" necesita un conductor vinculado.'); return; }
   if (p.id === CURRENT_USER_ID && p.isAdmin && !d.isAdmin && !confirm('Te vas a quitar a ti mismo el permiso de administrador y perderás el acceso a esta pantalla. ¿Seguro?')) return;
-  const update = { is_admin: d.isAdmin, allowed_tabs: d.allowedTabs, can_edit_schedule: d.allowedTabs.includes('citas') ? d.canEditSchedule : false, driver_id: d.driverId };
+  const nombre = document.getElementById('admin-nombre').value.trim();
+  const apellidos = document.getElementById('admin-apellidos').value.trim();
+  const update = { is_admin: d.isAdmin, allowed_tabs: d.allowedTabs, can_edit_schedule: d.allowedTabs.includes('citas') ? d.canEditSchedule : false, driver_id: d.driverId, nombre: nombre || null, apellidos: apellidos || null };
   const btns = [...document.querySelectorAll('.admin-save-btn')];
   btns.forEach(b => b.disabled = true);
   const { data, error } = await supabaseClient.from('profiles').update(update).eq('id', p.id).select();
@@ -11014,11 +11033,11 @@ async function adminSaveUser(){
     return;
   }
   const before = permState(p);
-  const after = { ...d, canEditSchedule: update.can_edit_schedule };
+  const after = { ...d, canEditSchedule: update.can_edit_schedule, nombre, apellidos };
   const lines = adminChangeSummary(before, after);
   if (lines.length) await logAdminHistorial(p.id, lines.join('\n'));
-  Object.assign(p, { isAdmin: d.isAdmin, allowedTabs: d.allowedTabs.slice(), canEditSchedule: update.can_edit_schedule, driverId: d.driverId });
-  if (p.id === CURRENT_USER_ID) Object.assign(PROFILE, { isAdmin: p.isAdmin, allowedTabs: p.allowedTabs.slice(), canEditSchedule: p.canEditSchedule, driverId: p.driverId });
+  Object.assign(p, { isAdmin: d.isAdmin, allowedTabs: d.allowedTabs.slice(), canEditSchedule: update.can_edit_schedule, driverId: d.driverId, nombre, apellidos });
+  if (p.id === CURRENT_USER_ID) Object.assign(PROFILE, { isAdmin: p.isAdmin, allowedTabs: p.allowedTabs.slice(), canEditSchedule: p.canEditSchedule, driverId: p.driverId, nombre, apellidos });
   window.__adminHistorial = adminHistorialCache[p.id] || window.__adminHistorial;
   window.__adminEditMode = false;
   window.__adminFormDirty = false;
@@ -11049,6 +11068,11 @@ function tplAdminEditForm(p){
   const role = permDetectRole(d);
   return `
     <div class="card" style="margin-bottom:12px;">
+      <div style="display:flex;gap:10px;" oninput="window.__adminFormDirty=true;">
+        <div class="field" style="flex:1;"><label>Nombre</label><input id="admin-nombre" maxlength="100" value="${esc(p.nombre||'')}" placeholder="Nombre" /></div>
+        <div class="field" style="flex:1;"><label>Apellidos</label><input id="admin-apellidos" maxlength="150" value="${esc(p.apellidos||'')}" placeholder="Apellidos" /></div>
+      </div>
+      <div style="font-size:12px;color:var(--mutedFaint);margin-top:-6px;margin-bottom:14px;">Para saber qué persona ha hecho cada cambio en el historial, aunque la cuenta use un correo genérico.</div>
       <div class="field">
         <label>Rol</label>
         <select onchange="adminDraftRole(this.value)">
@@ -11100,7 +11124,8 @@ function tplAdminFicha(){
       <div style="display:flex;align-items:center;gap:14px;min-width:0;">
         ${permAvatar(p, 48)}
         <div style="min-width:0;">
-          <div style="font-family:var(--display);font-size:22px;overflow:hidden;text-overflow:ellipsis;">${esc(p.email)}${p.id===CURRENT_USER_ID?' <span style="font-size:12px;color:var(--mutedFaint);font-weight:400;">(tú)</span>':''}</div>
+          <div style="font-family:var(--display);font-size:22px;overflow:hidden;text-overflow:ellipsis;">${esc(profileDisplayName(p) || p.email)}${p.id===CURRENT_USER_ID?' <span style="font-size:12px;color:var(--mutedFaint);font-weight:400;">(tú)</span>':''}</div>
+          ${(p.nombre||p.apellidos) ? `<div style="font-size:12.5px;color:var(--muted);">${esc(p.email)}</div>` : ''}
           <div style="font-size:12.5px;color:var(--mutedFaint);">${esc(permRoleLabel(permState(editMode && window.__adminDraft ? window.__adminDraft : p)))}</div>
         </div>
       </div>
