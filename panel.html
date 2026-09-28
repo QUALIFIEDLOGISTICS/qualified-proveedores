@@ -1761,6 +1761,9 @@ async function openContactosFromHome(){
 function backToDirecciones(){
   if (!direccionConfirmLeaveForm()) return;
   window.__direccionFormDirty = false;
+  // Cancelar la dirección que se estaba creando desde el DeCA vuelve al
+  // DeCA (con lo que ya tenía escrito), no a la lista de Direcciones.
+  if (window.__decaReturnTarget) { decaVolverDesdeDireccion(null); return; }
   window.__administracionView = 'direcciones';
   renderHeader(); renderTab();
 }
@@ -2239,6 +2242,9 @@ async function submitDireccionForm(editId){
   if (changeLines.length) await logDireccionHistorial(savedId, changeLines.join('\n'));
   await loadDirecciones();
   window.__direccionNavIds = direccionesFilteredList().list.map(d=>d.id);
+  // Si se ha venido desde "Crear dirección" en el DeCA, se vuelve allí con
+  // el campo (Origen o Destino) ya relleno, en vez de quedarse en Direcciones.
+  if (!editId && window.__decaReturnTarget) { decaVolverDesdeDireccion(direcciones.find(d=>d.id===savedId)); return; }
   openDireccionForm(savedId, true);
 }
 async function setDireccionArchived(id, archived){
@@ -8904,12 +8910,12 @@ function tplDecaFormFields(e){
           <div class="field" style="flex:1;">
             <label>Origen</label>
             <input id="dc-origen" maxlength="150" data-combo="dc-direcciones-datalist" autocomplete="off" placeholder="Elige una dirección de tu agenda" value="${esc(e.origen||'')}" />
-            <button type="button" onclick="openQuickDireccionModal('dc-origen')" style="background:none;border:none;padding:5px 0 0;font-size:12.5px;color:var(--primary);cursor:pointer;">+ Crear dirección que no esté en la lista</button>
+            <button type="button" onclick="decaIrACrearDireccion('origen')" style="background:none;border:none;padding:5px 0 0;font-size:12.5px;color:var(--primary);cursor:pointer;">+ Crear dirección que no esté en la lista</button>
           </div>
           <div class="field" style="flex:1;">
             <label>Destino</label>
             <input id="dc-destino" maxlength="150" data-combo="dc-direcciones-datalist" autocomplete="off" placeholder="Elige una dirección de tu agenda" value="${esc(e.destino||'')}" />
-            <button type="button" onclick="openQuickDireccionModal('dc-destino')" style="background:none;border:none;padding:5px 0 0;font-size:12.5px;color:var(--primary);cursor:pointer;">+ Crear dirección que no esté en la lista</button>
+            <button type="button" onclick="decaIrACrearDireccion('destino')" style="background:none;border:none;padding:5px 0 0;font-size:12.5px;color:var(--primary);cursor:pointer;">+ Crear dirección que no esté en la lista</button>
           </div>
           <datalist id="dc-direcciones-datalist">
             ${decaDireccionesOptionsHtml()}
@@ -8939,7 +8945,11 @@ function tplDecaFormFields(e){
 function tplDecaFormPage(){
   const editId = window.__decaFormId;
   const editing = editId ? decaDocuments.find(d=>d.id===editId) : null;
-  const e = editing || {};
+  // Si se viene de crear una dirección desde este mismo DeCA (ver
+  // decaIrACrearDireccion/decaVolverDesdeDireccion), se rellena con lo que
+  // había escrito antes de irse, no con el documento guardado (que puede
+  // no reflejar cambios a medio hacer, o ni siquiera existir todavía).
+  const e = window.__decaFormDraft || editing || {};
   const submitLabel = editing ? 'Guardar y regenerar PDF' : 'Generar DeCA';
   return `
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
@@ -9163,85 +9173,46 @@ async function submitQuickTransportista(){
     btn.disabled = false;
   }
 }
-// Alta rápida de una dirección (Origen o Destino) sin salir del DeCA. `target`
-// es el id del campo (dc-origen o dc-destino) que hay que rellenar al crearla.
-function openQuickDireccionModal(target){
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box" style="max-width:560px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-          <h3 class="modal-title">Nueva dirección</h3><button class="close-x" onclick="closeModal()">✕</button>
-        </div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">Se guarda en tu agenda de Direcciones, y se rellena en este DeCA sin salir de aquí.</div>
-        <div class="field"><label>Nombre del lugar</label><input id="qd-nombre" maxlength="150" style="text-transform:uppercase;" oninput="uppercaseInput(this)" placeholder="Ej. Nave Balsareny, Muelle 3 Cliente X" value="${esc((document.getElementById(target)||{}).value||'')}" /></div>
-        <div style="display:flex;gap:10px;">
-          <div class="field" style="flex:1;"><label>Calle 1</label><input id="qd-calle1" maxlength="150" style="text-transform:uppercase;" oninput="uppercaseInput(this)" /></div>
-          <div class="field" style="flex:1;"><label>Calle 2</label><input id="qd-calle2" maxlength="150" /></div>
-        </div>
-        <div style="display:flex;gap:10px;">
-          <div class="field" style="flex:1;"><label>Código postal</label><input id="qd-cp" maxlength="10" oninput="autofillCiudadProvinciaFromCp('qd')" /></div>
-          <div class="field" style="flex:2;"><label>Ciudad</label><input id="qd-ciudad" maxlength="100" onblur="this.value = formatCiudad(this.value);" /></div>
-        </div>
-        <div style="display:flex;gap:10px;">
-          <div class="field" style="flex:1;"><label>Provincia</label><input id="qd-provincia" maxlength="100" /></div>
-          <div class="field" style="flex:1;"><label>País</label><select id="qd-pais">${paisOptionsHtml('España')}</select></div>
-        </div>
-        <div class="field">
-          <label>Enlace de Google Maps (opcional)</label>
-          <input id="qd-maps" type="url" maxlength="500" placeholder="https://maps.app.goo.gl/…" />
-        </div>
-        <div class="field" style="max-width:320px;"><label>Teléfono</label><input id="qd-telefono" type="tel" maxlength="30" placeholder="Ej. +34 938 00 00 00" /></div>
-        ${tplHorariosEditor('')}
-        <div class="field"><label>Observaciones (opcional)</label><textarea id="qd-observaciones" maxlength="500" placeholder="Cómo llegar, indicaciones para el conductor…" style="min-height:70px;"></textarea></div>
-        <div id="qd-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
-        <div style="display:flex;gap:10px;">
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button id="qd-submit" class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitQuickDireccion('${target}')">Crear y usar</button>
-        </div>
-      </div>
-    </div>`;
-  setTimeout(() => { const el = document.getElementById('qd-nombre'); if (el) el.focus(); }, 0);
-}
-async function submitQuickDireccion(target){
-  const errEl = document.getElementById('qd-error');
-  errEl.textContent = '';
-  const v = id => document.getElementById(id).value.trim();
-  const nombre = v('qd-nombre');
-  if (!nombre) { errEl.textContent = 'Indica el nombre del lugar.'; return; }
-  if (window.__hrError) { errEl.textContent = 'Revisa los horarios: ' + window.__hrError; return; }
-  const mapsUrl = v('qd-maps');
-  if (mapsUrl && !safeMapsUrl(mapsUrl)) { errEl.textContent = 'El enlace de Google Maps debe empezar por http:// o https://.'; return; }
-  const fill = (d) => {
-    document.getElementById(target).value = decaDireccionText(d);
-    const dl = document.getElementById('dc-direcciones-datalist');
-    if (dl) dl.innerHTML = decaDireccionesOptionsHtml();
-    window.__decaFormDirty = true;
-    closeModal();
+// Crear dirección desde Origen/Destino del DeCA: en vez de un modal
+// reducido, se va a la página real de "Nueva dirección" (con historial,
+// horarios, todo) y se vuelve aquí solo. Lo que ya hubiera escrito en el
+// DeCA se guarda en window.__decaFormDraft y se restaura al volver (se
+// guarde la dirección o se cancele) — ver decaVolverDesdeDireccion.
+function decaSnapshotFields(){
+  const v = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  return {
+    cargadorNombre: v('dc-cargador-nombre'), cargadorNif: v('dc-cargador-nif'), cargadorDomicilio: v('dc-cargador-domicilio'),
+    transportistaNombre: v('dc-transportista-nombre'), transportistaNif: v('dc-transportista-nif'), transportistaDomicilio: v('dc-transportista-domicilio'),
+    origen: v('dc-origen'), destino: v('dc-destino'),
+    mercanciaNaturaleza: v('dc-mercancia-naturaleza'), mercanciaPeso: v('dc-mercancia-peso'), fechaTransporte: v('dc-fecha'),
+    matriculaTractora: v('dc-matricula-tractora'), matriculaRemolque: v('dc-matricula-remolque'), observaciones: v('dc-observaciones'),
+    creacionFecha: v('dc-creacion-fecha'), creacionHora: v('dc-creacion-hora'),
   };
-  // Si ya existe una dirección con ese nombre no se duplica: se usa.
-  const dup = direcciones.find(d => !d.archived && d.nombre.toUpperCase() === nombre.toUpperCase());
-  const btn = document.getElementById('qd-submit');
-  btn.disabled = true;
-  try {
-    if (dup) { fill(dup); return; }
-    const payload = {
-      nombre, calle1: v('qd-calle1') || null, calle2: v('qd-calle2') || null, codigo_postal: v('qd-cp') || null,
-      ciudad: v('qd-ciudad') || null, provincia: v('qd-provincia') || null, pais: v('qd-pais') || null,
-      telefono: v('qd-telefono') || null, horarios: v('dr-horarios') || null,
-      observaciones: v('qd-observaciones') || null, google_maps_url: mapsUrl || null,
-    };
-    const { data, error } = await supabaseClient.from('direcciones').insert(payload).select().single();
-    if (error || !data) throw (error || new Error('sin permiso o error desconocido.'));
-    const d = { id: data.id, nombre, calle1: payload.calle1||'', calle2: payload.calle2||'', codigoPostal: payload.codigo_postal||'', ciudad: payload.ciudad||'', provincia: payload.provincia||'', pais: payload.pais||'',
-      telefono: payload.telefono||'', horarios: payload.horarios||'', observaciones: payload.observaciones||'', mapsUrl: payload.google_maps_url||'', archived:false };
-    direcciones.push(d);
-    direcciones.sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'));
-    await logDireccionHistorial(d.id, 'Dirección creada (alta rápida desde el DeCA).');
-    fill(d);
-  } catch (err) {
-    errEl.textContent = 'No se pudo crear: ' + (err && err.message ? err.message : 'error desconocido.');
-    btn.disabled = false;
-  }
+}
+// target: 'origen' o 'destino' — qué campo del borrador rellenar al volver.
+function decaIrACrearDireccion(target){
+  window.__decaFormDraft = decaSnapshotFields();
+  window.__decaReturnTarget = target;
+  window.__decaReturnEditId = window.__decaFormId;
+  window.__traficoSection = 'direcciones';
+  openDireccionForm(null, true);
+}
+// direccionCreada: la dirección recién guardada (para rellenar el campo), o
+// null si se ha cancelado sin crear nada.
+function decaVolverDesdeDireccion(direccionCreada){
+  const draft = window.__decaFormDraft || {};
+  const target = window.__decaReturnTarget;
+  const editId = window.__decaReturnEditId;
+  if (direccionCreada && target) draft[target] = decaDireccionText(direccionCreada);
+  window.__decaFormDraft = draft;
+  window.__decaReturnTarget = null;
+  window.__decaReturnEditId = null;
+  window.__traficoSection = 'deca';
+  window.__traficoView = 'decaForm';
+  window.__decaFormId = editId || null;
+  window.__decaFormDirty = true;
+  renderHeader(); renderTab();
+  window.__decaFormDraft = null;
 }
 function openDecaForm(editId){
   window.__traficoSection = 'deca';
