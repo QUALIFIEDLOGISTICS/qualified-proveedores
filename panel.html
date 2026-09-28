@@ -10832,39 +10832,9 @@ async function loadAllProfiles(){
 function driverLabel(d){ const co = companies.find(c=>c.id===d.companyId); return `${d.name}${co?' · '+co.name:''}`; }
 
 /* ---- Gestión de permisos: lista de usuarios y ficha por usuario ----
-   Los permisos siguen siendo los mismos de la tabla "profiles" (administrador,
-   pestañas permitidas, editar horario y conductor vinculado); solo cambia
-   cómo se ven y se editan. Los roles son atajos que rellenan las pestañas. */
-const PERM_ROLES = {
-  admin: { label: 'Administrador', hint: 'Ve y puede hacerlo todo, incluida esta pantalla.' },
-  organizador: { label: 'Organizador de almacén', tabs: ['clientes','citas','documentos'], hint: 'Gestiona el día a día del almacén: clientes, franjas y documentos.' },
-  carretillero: { label: 'Carretillero (solo franjas)', tabs: ['citas'], hint: 'Solo ve las franjas horarias del almacén: consultar y reservar.' },
-  trafico: { label: 'Transporte', tabs: ['trafico','autonomos','fichajes'], hint: 'Transporte (transportistas, DeCA y direcciones), autónomos y fichajes.' },
-  comercial: { label: 'Comercial', tabs: ['comercial'], hint: 'Clientes y tarifas.' },
-  administracion: { label: 'Administración', tabs: ['administracion'], hint: 'Contactos y flota.' },
-  fichaje: { label: 'Solo fichaje (conductor)', tabs: [], hint: 'Solo ve la pantalla para fichar su jornada; hay que vincularle un conductor.' },
-  custom: { label: 'Personalizado', hint: 'Elige a mano qué módulos ve.' },
-};
+   Los permisos son los mismos de la tabla "profiles" (administrador, pestañas
+   permitidas y conductor vinculado); cada apartado se marca a mano. */
 function permState(p){ return { isAdmin: !!p.isAdmin, allowedTabs: permExpandTabs(p.allowedTabs||[]), driverId: p.driverId || null, nombre: p.nombre || '', apellidos: p.apellidos || '' }; }
-function permDetectRole(s){
-  if (s.isAdmin) return 'admin';
-  const tabs = permExpandTabs(s.allowedTabs).sort().join(',');
-  if (!tabs && (s.driverId || s.wantsFichaje)) return 'fichaje';
-  for (const k of ['organizador','carretillero','trafico','comercial','administracion']) {
-    const r = PERM_ROLES[k];
-    if (permExpandTabs(r.tabs).sort().join(',') === tabs) return k;
-  }
-  return 'custom';
-}
-function permRoleLabel(s){
-  const role = permDetectRole(s);
-  return role === 'custom' && !s.allowedTabs.length ? 'Sin permisos' : PERM_ROLES[role].label;
-}
-function permApplyRole(d, role){
-  d.isAdmin = role === 'admin';
-  const r = PERM_ROLES[role];
-  if (r && r.tabs) d.allowedTabs = permExpandTabs(r.tabs);
-}
 function permModuleGroups(){
   const groups = [];
   TABS.forEach(t => {
@@ -10927,8 +10897,7 @@ function adminChangeSummary(before, after){
   const lines = [];
   if ((before.nombre||'') !== (after.nombre||'')) lines.push(`Nombre: "${before.nombre||'—'}" → "${after.nombre||'—'}"`);
   if ((before.apellidos||'') !== (after.apellidos||'')) lines.push(`Apellidos: "${before.apellidos||'—'}" → "${after.apellidos||'—'}"`);
-  const rb = permRoleLabel(before), ra = permRoleLabel(after);
-  if (rb !== ra) lines.push(`Rol: "${rb}" → "${ra}"`);
+  if (!!before.isAdmin !== !!after.isAdmin) lines.push(after.isAdmin ? 'Ahora es administrador (acceso total).' : 'Ha dejado de ser administrador.');
   // Un apartado ("trafico:deca") se nombra "Transporte › DeCA"; al dar o quitar un
   // módulo entero solo se apunta el módulo, no cada uno de sus apartados.
   const label = id => {
@@ -10971,8 +10940,8 @@ function adminCardHtml(p){
       <div style="min-width:0;flex:1;">
         <div style="font-family:var(--display);font-size:14.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;">${esc(hasNombre ? nombre : p.email)}${p.id===CURRENT_USER_ID?' <span style="font-size:11px;color:var(--mutedFaint);font-weight:400;">(tú)</span>':''}</div>
         ${hasNombre ? `<div style="font-size:11.5px;color:var(--mutedFaint);overflow:hidden;text-overflow:ellipsis;margin-top:1px;">${esc(p.email)}</div>` : ''}
-        <div style="margin:6px 0 4px;"><span style="font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;background:${s.isAdmin?'rgba(27,58,107,.1)':'var(--panel2)'};border:1px solid ${s.isAdmin?'rgba(27,58,107,.3)':'var(--border)'};border-radius:99px;padding:2px 9px;color:${s.isAdmin?'var(--primary)':'var(--muted)'};">${esc(permRoleLabel(s))}</span></div>
-        <div style="font-size:12px;color:var(--muted);">${modules}</div>
+        ${s.isAdmin ? `<div style="margin:6px 0 4px;"><span style="font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;background:rgba(27,58,107,.1);border:1px solid rgba(27,58,107,.3);border-radius:99px;padding:2px 9px;color:var(--primary);">Administrador</span></div>` : ''}
+        <div style="font-size:12px;color:var(--muted);margin-top:${s.isAdmin?'0':'6px'};">${modules}</div>
         ${dr ? `<div style="font-size:12px;color:var(--mutedFaint);margin-top:2px;">Conductor: ${esc(dr.name)}</div>` : ''}
       </div>
     </div>`;
@@ -11071,10 +11040,9 @@ function adminExitEdit(){
   window.__adminDraft = null;
   renderTab();
 }
-function adminDraftRole(role){ permApplyRole(window.__adminDraft, role); window.__adminDraft.wantsFichaje = role === 'fichaje'; window.__adminFormDirty = true; renderTab(); }
+function adminDraftAdmin(checked){ window.__adminDraft.isAdmin = checked; window.__adminFormDirty = true; renderTab(); }
 function adminDraftTab(tabId, checked){
   const d = window.__adminDraft;
-  d.wantsFichaje = false;
   // Encender un módulo con apartados los da todos; apagarlo los quita todos.
   d.allowedTabs = checked ? permExpandTabs([...new Set([...d.allowedTabs, tabId])]) : d.allowedTabs.filter(t => t !== tabId && !t.startsWith(tabId + ':'));
   window.__adminFormDirty = true; renderTab();
@@ -11083,7 +11051,6 @@ function adminDraftTab(tabId, checked){
 function adminDraftSection(mod, sec, checked){
   const d = window.__adminDraft;
   const key = mod + ':' + sec;
-  d.wantsFichaje = false;
   d.allowedTabs = checked ? [...new Set([...d.allowedTabs, mod, key])] : d.allowedTabs.filter(t => t !== key);
   if (!d.allowedTabs.some(t => t.startsWith(mod + ':'))) d.allowedTabs = d.allowedTabs.filter(t => t !== mod);
   window.__adminFormDirty = true; renderTab();
@@ -11094,7 +11061,6 @@ async function adminSaveUser(){
   const errEl = document.getElementById('admin-error');
   if (!p || !d) return;
   if (errEl) errEl.textContent = '';
-  if (permDetectRole(d) === 'fichaje' && !d.driverId) { showFormError(errEl, 'Un usuario "solo fichaje" necesita un conductor vinculado.'); return; }
   if (p.id === CURRENT_USER_ID && p.isAdmin && !d.isAdmin && !confirm('Te vas a quitar a ti mismo el permiso de administrador y perderás el acceso a esta pantalla. ¿Seguro?')) return;
   const nombre = document.getElementById('admin-nombre').value.trim();
   const apellidos = document.getElementById('admin-apellidos').value.trim();
@@ -11153,7 +11119,7 @@ function tplAdminViewCard(p){
   const dr = p.driverId ? drivers.find(d=>d.id===p.driverId) : null;
   return `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;margin-bottom:22px;">
-      ${contactoFieldBlock('Rol', `${esc(permRoleLabel(s))}<div style="font-size:11.5px;color:var(--mutedFaint);margin-top:2px;">${esc(PERM_ROLES[permDetectRole(s)].hint)}</div>`)}
+      ${contactoFieldBlock('Administrador', s.isAdmin ? 'Sí, acceso total (incluida esta pantalla)' : 'No')}
       ${contactoFieldBlock('Conductor vinculado', dr ? esc(driverLabel(dr)) : '—')}
     </div>
     ${permModuleGroups().map(g => `
@@ -11164,7 +11130,6 @@ function tplAdminViewCard(p){
 }
 function tplAdminEditForm(p){
   const d = window.__adminDraft;
-  const role = permDetectRole(d);
   return `
     <div class="card" style="margin-bottom:12px;">
       <div style="display:flex;gap:10px;" oninput="window.__adminFormDirty=true;">
@@ -11173,11 +11138,10 @@ function tplAdminEditForm(p){
       </div>
       <div style="font-size:12px;color:var(--mutedFaint);margin-top:-6px;margin-bottom:14px;">Para saber qué persona ha hecho cada cambio en el historial, aunque la cuenta use un correo genérico.</div>
       <div class="field">
-        <label>Rol</label>
-        <select onchange="adminDraftRole(this.value)">
-          ${Object.entries(PERM_ROLES).map(([k, r]) => `<option value="${k}" ${role===k?'selected':''}>${esc(r.label)}</option>`).join('')}
-        </select>
-        <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">${esc(PERM_ROLES[role].hint)}</div>
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13.5px;">
+          <input type="checkbox" class="switch" ${d.isAdmin?'checked':''} onchange="adminDraftAdmin(this.checked)" /> Administrador
+        </label>
+        <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">Acceso total, incluida esta pantalla de permisos. Con esto activado, los módulos de abajo no hace falta marcarlos uno a uno.</div>
       </div>
       <div class="field" style="margin-bottom:0;">
         <label>Conductor vinculado</label>
@@ -11220,7 +11184,7 @@ function tplAdminFicha(){
         <div style="min-width:0;">
           <div style="font-family:var(--display);font-size:22px;overflow:hidden;text-overflow:ellipsis;">${esc(profileDisplayName(p) || p.email)}${p.id===CURRENT_USER_ID?' <span style="font-size:12px;color:var(--mutedFaint);font-weight:400;">(tú)</span>':''}</div>
           ${(p.nombre||p.apellidos) ? `<div style="font-size:12.5px;color:var(--muted);">${esc(p.email)}</div>` : ''}
-          <div style="font-size:12.5px;color:var(--mutedFaint);">${esc(permRoleLabel(permState(editMode && window.__adminDraft ? window.__adminDraft : p)))}</div>
+          ${(editMode && window.__adminDraft ? window.__adminDraft.isAdmin : p.isAdmin) ? `<div style="font-size:12.5px;color:var(--primary);font-weight:600;">Administrador</div>` : ''}
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
