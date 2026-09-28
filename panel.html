@@ -741,7 +741,15 @@ const ADMIN_TAB = {id:'admin', label:'Gestión de Permisos', group:'Configuraci�
 // allowed_tabs como "modulo:apartado" junto al propio módulo (que es lo único
 // que mira la base de datos). Una cuenta con el módulo pero sin ningún
 // apartado apuntado (las de antes de separarlos) lo sigue viendo entero.
-function moduleSectionList(mod){ return mod === 'trafico' ? TRAFICO_SECTIONS : mod === 'comercial' ? COMERCIAL_SECTIONS : null; }
+// Administración también tiene apartados propios (Contactos y Flota son cosas
+// distintas), igual que Tráfico y Comercial: se listan aquí para que
+// Gestión de Permisos los muestre como casillas separadas, no como un único
+// interruptor de todo o nada.
+const ADMINISTRACION_SECTIONS = [
+  { id: 'contactos', label: 'Contactos' },
+  { id: 'flota', label: 'Flota' },
+];
+function moduleSectionList(mod){ return mod === 'trafico' ? TRAFICO_SECTIONS : mod === 'comercial' ? COMERCIAL_SECTIONS : mod === 'administracion' ? ADMINISTRACION_SECTIONS : null; }
 function sectionAllowedFor(s, mod, sec){
   if (s.isAdmin) return true;
   if (!s.allowedTabs.includes(mod)) return false;
@@ -753,7 +761,7 @@ function moduleAllowedSections(mod){ return moduleSectionList(mod).filter(x => s
 // que marcar/desmarcar un apartado parta siempre de una lista completa.
 function permExpandTabs(tabs){
   const out = tabs.slice();
-  ['trafico','comercial'].forEach(mod => {
+  ['trafico','comercial','administracion'].forEach(mod => {
     if (out.includes(mod) && !out.some(t => t.startsWith(mod + ':'))) moduleSectionList(mod).forEach(x => out.push(mod + ':' + x.id));
   });
   return out;
@@ -964,8 +972,9 @@ function tplInicio(){
       // Clientes, Franjas horarias y Documentos: una sola tarjeta "Almacén".
       if (!g.items.some(x => x.id === 'almacen')) g.items.push({ id: 'almacen', label: 'Almacén', group: t.group, action: `setTab('${almacenDefaultSection()}')` });
     } else if (t.id === 'administracion') {
-      g.items.push({ ...t, action: 'openContactosFromHome()' });
-      g.items.push({ id: 'flota', label: 'Flota', group: t.group, action: 'openFlotaFromHome()' });
+      // Contactos y Flota son apartados independientes: solo su tarjeta si se tiene permiso para ese apartado.
+      if (sectionAllowedFor(PROFILE, 'administracion', 'contactos')) g.items.push({ ...t, action: 'openContactosFromHome()' });
+      if (sectionAllowedFor(PROFILE, 'administracion', 'flota')) g.items.push({ id: 'flota', label: 'Flota', group: t.group, action: 'openFlotaFromHome()' });
     } else g.items.push(t);
   });
   return `
@@ -1693,16 +1702,23 @@ function renderTab(){
   setTimeout(hydratePdfThumbs, 0);
 }
 function tplAdministracion(){
-  if (window.__administracionView === 'contactos') return tplContactosPage();
-  if (window.__administracionView === 'flota') return tplFlotaPage();
-  if (window.__administracionView === 'flotaForm') return tplFlotaFormPage();
+  const allowed = moduleAllowedSections('administracion');
+  // Si el apartado guardado ya no está permitido (o solo hay uno permitido),
+  // se cae a uno que sí lo esté, igual que Tráfico y Comercial.
+  let view = window.__administracionView;
+  if ((view === 'contactos' || view === 'flota') && !allowed.some(x => x.id === view)) view = 'home';
+  if ((!view || view === 'home') && allowed.length === 1) view = allowed[0].id;
+  if (view === 'contactos') return tplContactosPage();
+  if (view === 'flota') return tplFlotaPage();
+  if (view === 'flotaForm') return tplFlotaFormPage();
   return `
     <div style="max-width:1080px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;">
-      ${autonomosHomeCard('users', '#5C6670', 'Contactos', 'Agenda de contactos: razón social, NIF y dirección.', 'openContactosModule()')}
-      ${autonomosHomeCard('truck', '#C1443D', 'Flota', 'Tractoras y remolques con sus vencimientos.', 'openFlotaModule()')}
+      ${allowed.some(x=>x.id==='contactos') ? autonomosHomeCard('users', '#5C6670', 'Contactos', 'Agenda de contactos: razón social, NIF y dirección.', 'openContactosModule()') : ''}
+      ${allowed.some(x=>x.id==='flota') ? autonomosHomeCard('truck', '#C1443D', 'Flota', 'Tractoras y remolques con sus vencimientos.', 'openFlotaModule()') : ''}
     </div>`;
 }
 function openContactosModule(){
+  if (!sectionAllowedFor(PROFILE, 'administracion', 'contactos')) return;
   window.__administracionView = 'contactos';
   window.__contactosView = 'activos';
   window.__contactosRoleFilters = [];
@@ -2308,6 +2324,7 @@ function flotaConfirmLeaveForm(){
   return true;
 }
 function openFlotaModule(){
+  if (!sectionAllowedFor(PROFILE, 'administracion', 'flota')) return;
   window.__administracionView = 'flota';
   window.__flotaView = 'activos';
   window.__flotaTipos = [];
@@ -10854,7 +10871,7 @@ function permModuleGroups(){
   return groups;
 }
 function permHasTab(s, id){ return s.isAdmin || s.allowedTabs.includes(id); }
-// El módulo "administracion" da acceso a Contactos, Direcciones y Flota.
+// El módulo "administracion" da acceso a Contactos y Flota (sus apartados, listados abajo).
 function permLabel(t){ return t.id === 'administracion' ? 'Administración' : t.label; }
 function permDesc(t){ return t.id === 'administracion' ? 'Contactos y flota.' : ((HOME_MODULES[t.id]||{}).description || ''); }
 function permAvatar(p, size){
