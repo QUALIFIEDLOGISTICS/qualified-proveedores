@@ -737,6 +737,27 @@ const TABS = [
   {id:'administracion', label:'Contactos', group:'Administración'},
 ];
 const ADMIN_TAB = {id:'admin', label:'Gestión de Permisos', group:'Configuración'};
+// Apartados de Transporte y Comercial que se dan por separado. Se guardan en
+// allowed_tabs como "modulo:apartado" junto al propio módulo (que es lo único
+// que mira la base de datos). Una cuenta con el módulo pero sin ningún
+// apartado apuntado (las de antes de separarlos) lo sigue viendo entero.
+function moduleSectionList(mod){ return mod === 'trafico' ? TRAFICO_SECTIONS : mod === 'comercial' ? COMERCIAL_SECTIONS : null; }
+function sectionAllowedFor(s, mod, sec){
+  if (s.isAdmin) return true;
+  if (!s.allowedTabs.includes(mod)) return false;
+  const own = s.allowedTabs.filter(t => t.startsWith(mod + ':'));
+  return !own.length || own.includes(mod + ':' + sec);
+}
+function moduleAllowedSections(mod){ return moduleSectionList(mod).filter(x => sectionAllowedFor(PROFILE, mod, x.id)); }
+// Deja apuntados uno a uno los apartados de los módulos que los tienen, para
+// que marcar/desmarcar un apartado parta siempre de una lista completa.
+function permExpandTabs(tabs){
+  const out = tabs.slice();
+  ['trafico','comercial'].forEach(mod => {
+    if (out.includes(mod) && !out.some(t => t.startsWith(mod + ':'))) moduleSectionList(mod).forEach(x => out.push(mod + ':' + x.id));
+  });
+  return out;
+}
 
 let PROFILE = null;
 let CURRENT_USER_ID = null;
@@ -820,8 +841,8 @@ async function setTab(id){
     window.__contactosFilterOpen = false;
     window.__contactosPage = 0;
   }
-  if (id === 'trafico') { window.__traficoView = 'home'; window.__traficoSection = 'transportistas'; resetTransportistasState(); }
-  if (id === 'comercial') { window.__comercialSection = 'clientes'; window.__comercialView = 'home'; window.__showingContactoDetail = false; resetComercialClientesState(); resetTarifasState(); }
+  if (id === 'trafico') traficoEnterSection((moduleAllowedSections('trafico')[0] || TRAFICO_SECTIONS[0]).id);
+  if (id === 'comercial') { window.__comercialSection = (moduleAllowedSections('comercial')[0] || COMERCIAL_SECTIONS[0]).id; window.__comercialView = 'home'; window.__showingContactoDetail = false; resetComercialClientesState(); resetTarifasState(); }
   if (id === 'clientes') { window.__clientesFilterOpen = false; }
   if (id === 'admin') {
     window.__adminView = 'list'; window.__adminEditMode = false; window.__adminSearch = '';
@@ -3615,28 +3636,30 @@ function tplContactoTransportistaContactoCard(c, editMode){
 // filtradas a este transportista, con alta/edición/borrado directos).
 function tplContactoTabTransporte(c, editMode){
   const rutas = transportistaRutas.filter(r => r.contactoId === c.id);
+  // Añadir/editar coberturas lleva a Transporte → Rutas: solo si tiene ese apartado.
+  const canRutas = sectionAllowedFor(PROFILE, 'trafico', 'colaboradores');
   return tplContactoTransportistaContactoCard(c, editMode) + `
     <div class="card" style="margin-top:20px;padding:0;overflow-x:auto;">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 18px 12px;">
         <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Rutas que cubre <span style="font-weight:400;color:var(--mutedFaint);">(${rutas.length})</span></div>
-        <button class="btn btn-ghost" onclick="openColabRutaForm(null, '${c.id}')">+ Añadir cobertura</button>
+        ${canRutas ? `<button class="btn btn-ghost" onclick="openColabRutaForm(null, '${c.id}')">+ Añadir cobertura</button>` : ''}
       </div>
       ${rutas.length ? `
       <table class="tf-table">
-        <thead><tr>${thSort('Ruta','text')}${thSort('Vehículo','text')}${thSort('Observaciones','text')}<th>Acciones</th></tr></thead>
+        <thead><tr>${thSort('Ruta','text')}${thSort('Vehículo','text')}${thSort('Observaciones','text')}${canRutas ? '<th>Acciones</th>' : ''}</tr></thead>
         <tbody>
           ${rutas.map(r => `
             <tr>
               <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona+r.destinoZona)}">${esc(r.origenZona)} → ${esc(r.destinoZona)}</td>
               <td style="color:var(--muted);" data-sort-value="${esc(r.tipoVehiculo)}">${r.tipoVehiculo ? esc(r.tipoVehiculo) : '—'}</td>
               <td style="color:var(--muted);" data-sort-value="${esc(r.observaciones)}">${r.observaciones ? esc(r.observaciones) : '—'}</td>
-              <td style="white-space:nowrap;">
+              ${canRutas ? `<td style="white-space:nowrap;">
                 <button onclick="openColabRutaForm('${r.id}')" title="Editar" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;cursor:pointer;vertical-align:middle;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
                 <button onclick="deleteColabRuta('${r.id}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);font-size:14px;padding:2px 4px;cursor:pointer;">🗑</button>
-              </td>
+              </td>` : ''}
             </tr>`).join('')}
         </tbody>
-      </table>` : `<div style="color:var(--mutedFaint);font-size:12.5px;padding:0 18px 18px;">Todavía no cubre ninguna ruta. Se apuntan aquí o en Transporte → Rutas.</div>`}
+      </table>` : `<div style="color:var(--mutedFaint);font-size:12.5px;padding:0 18px 18px;">Todavía no cubre ninguna ruta.${canRutas ? ' Se apuntan aquí o en Transporte → Rutas.' : ''}</div>`}
     </div>`;
 }
 // Contenido de la pestaña "Autónomos": resumen de conductores (se gestionan en el módulo Autónomos).
@@ -6491,13 +6514,18 @@ const TRAFICO_SECTIONS = [
   { id: 'deca', label: 'DeCA' },
   { id: 'direcciones', label: 'Direcciones' },
 ];
-function traficoSection(){ return window.__traficoSection || 'transportistas'; }
+// El apartado abierto, siempre uno que la persona tenga permitido (si no, el primero que sí).
+function traficoSection(){
+  const allowed = moduleAllowedSections('trafico');
+  const s = window.__traficoSection || 'transportistas';
+  return allowed.some(x => x.id === s) || !allowed.length ? s : allowed[0].id;
+}
 function tplTraficoBar(){
   const sec = traficoSection();
   return `
     <div style="display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
       <div style="display:flex;gap:2px;flex-wrap:wrap;">
-        ${TRAFICO_SECTIONS.map(s => moduleTabBtnHtml(`setTraficoSection('${s.id}')`, s.label, s.id === sec)).join('')}
+        ${moduleAllowedSections('trafico').map(s => moduleTabBtnHtml(`setTraficoSection('${s.id}')`, s.label, s.id === sec)).join('')}
       </div>
     </div>`;
 }
@@ -6512,6 +6540,12 @@ function setTraficoSection(id){
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
   if (!colabRutaConfirmLeaveForm()) return;
+  if (!sectionAllowedFor(PROFILE, 'trafico', id)) return;
+  traficoEnterSection(id);
+  renderHeader(); renderTab();
+}
+// Deja el apartado recién abierto en su pantalla principal (lista).
+function traficoEnterSection(id){
   window.__decaFormDirty = false;
   window.__direccionFormDirty = false;
   window.__traficoSection = id;
@@ -6526,7 +6560,6 @@ function setTraficoSection(id){
   }
   if (id === 'transportistas') resetTransportistasState();
   if (id === 'colaboradores') resetColaboradoresState();
-  renderHeader(); renderTab();
 }
 function tplTrafico(){
   const sec = traficoSection();
@@ -6556,13 +6589,17 @@ const COMERCIAL_SECTIONS = [
   { id: 'clientes', label: 'Clientes' },
   { id: 'tarifas', label: 'Tarifas Transporte' },
 ];
-function comercialSection(){ return window.__comercialSection || 'clientes'; }
+function comercialSection(){
+  const allowed = moduleAllowedSections('comercial');
+  const s = window.__comercialSection || 'clientes';
+  return allowed.some(x => x.id === s) || !allowed.length ? s : allowed[0].id;
+}
 function tplComercialBar(){
   const sec = comercialSection();
   return `
     <div style="display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
       <div style="display:flex;gap:2px;flex-wrap:wrap;">
-        ${COMERCIAL_SECTIONS.map(s => moduleTabBtnHtml(`setComercialSection('${s.id}')`, s.label, s.id === sec)).join('')}
+        ${moduleAllowedSections('comercial').map(s => moduleTabBtnHtml(`setComercialSection('${s.id}')`, s.label, s.id === sec)).join('')}
       </div>
     </div>`;
 }
@@ -6576,6 +6613,7 @@ function resetComercialClientesState(){
 }
 function setComercialSection(id){
   if (!tarifaConfirmLeaveForm()) return;
+  if (!sectionAllowedFor(PROFILE, 'comercial', id)) return;
   window.__tarifaFormDirty = false;
   window.__comercialSection = id;
   window.__comercialView = 'home';
@@ -10786,14 +10824,14 @@ const PERM_ROLES = {
   fichaje: { label: 'Solo fichaje (conductor)', tabs: [], hint: 'Solo ve la pantalla para fichar su jornada; hay que vincularle un conductor.' },
   custom: { label: 'Personalizado', hint: 'Elige a mano qué módulos ve.' },
 };
-function permState(p){ return { isAdmin: !!p.isAdmin, allowedTabs: (p.allowedTabs||[]).slice(), canEditSchedule: !!p.canEditSchedule, driverId: p.driverId || null, nombre: p.nombre || '', apellidos: p.apellidos || '' }; }
+function permState(p){ return { isAdmin: !!p.isAdmin, allowedTabs: permExpandTabs(p.allowedTabs||[]), canEditSchedule: !!p.canEditSchedule, driverId: p.driverId || null, nombre: p.nombre || '', apellidos: p.apellidos || '' }; }
 function permDetectRole(s){
   if (s.isAdmin) return 'admin';
-  const tabs = [...s.allowedTabs].sort().join(',');
+  const tabs = permExpandTabs(s.allowedTabs).sort().join(',');
   if (!tabs && (s.driverId || s.wantsFichaje)) return 'fichaje';
   for (const k of ['organizador','carretillero','trafico','comercial','administracion']) {
     const r = PERM_ROLES[k];
-    if ([...r.tabs].sort().join(',') === tabs && !!r.schedule === !!s.canEditSchedule) return k;
+    if (permExpandTabs(r.tabs).sort().join(',') === tabs && !!r.schedule === !!s.canEditSchedule) return k;
   }
   return 'custom';
 }
@@ -10804,7 +10842,7 @@ function permRoleLabel(s){
 function permApplyRole(d, role){
   d.isAdmin = role === 'admin';
   const r = PERM_ROLES[role];
-  if (r && r.tabs) { d.allowedTabs = r.tabs.slice(); d.canEditSchedule = !!r.schedule; }
+  if (r && r.tabs) { d.allowedTabs = permExpandTabs(r.tabs); d.canEditSchedule = !!r.schedule; }
 }
 function permModuleGroups(){
   const groups = [];
@@ -10870,9 +10908,18 @@ function adminChangeSummary(before, after){
   if ((before.apellidos||'') !== (after.apellidos||'')) lines.push(`Apellidos: "${before.apellidos||'—'}" → "${after.apellidos||'—'}"`);
   const rb = permRoleLabel(before), ra = permRoleLabel(after);
   if (rb !== ra) lines.push(`Rol: "${rb}" → "${ra}"`);
-  const label = id => { const t = TABS.find(x=>x.id===id); return t ? permLabel(t) : id; };
-  const added = after.allowedTabs.filter(t => !before.allowedTabs.includes(t)).map(label);
-  const removed = before.allowedTabs.filter(t => !after.allowedTabs.includes(t)).map(label);
+  // Un apartado ("trafico:deca") se nombra "Transporte › DeCA"; al dar o quitar un
+  // módulo entero solo se apunta el módulo, no cada uno de sus apartados.
+  const label = id => {
+    const [m, sec] = id.split(':');
+    const t = TABS.find(x=>x.id===m);
+    const ml = t ? permLabel(t) : m;
+    const it = sec && (moduleSectionList(m) || []).find(x => x.id === sec);
+    return sec ? `${ml} › ${it ? it.label : sec}` : ml;
+  };
+  const shown = id => !id.includes(':') || (before.allowedTabs.includes(id.split(':')[0]) && after.allowedTabs.includes(id.split(':')[0]));
+  const added = after.allowedTabs.filter(t => !before.allowedTabs.includes(t) && shown(t)).map(label);
+  const removed = before.allowedTabs.filter(t => !after.allowedTabs.includes(t) && shown(t)).map(label);
   if (added.length) lines.push(`Módulos añadidos: ${added.join(', ')}`);
   if (removed.length) lines.push(`Módulos quitados: ${removed.join(', ')}`);
   const sb = before.allowedTabs.includes('citas') && before.canEditSchedule, sa = after.allowedTabs.includes('citas') && after.canEditSchedule;
@@ -10894,7 +10941,8 @@ function adminFilteredList(){
 }
 function adminCardHtml(p){
   const s = permState(p);
-  const modules = s.isAdmin ? 'Acceso total' : `${s.allowedTabs.length} módulo${s.allowedTabs.length!==1?'s':''}`;
+  const nMods = s.allowedTabs.filter(t => !t.includes(':')).length;
+  const modules = s.isAdmin ? 'Acceso total' : `${nMods} módulo${nMods!==1?'s':''}`;
   const dr = p.driverId ? drivers.find(d=>d.id===p.driverId) : null;
   const nombre = profileDisplayName(p);
   const hasNombre = nombre && nombre !== p.email;
@@ -11008,8 +11056,18 @@ function adminDraftRole(role){ permApplyRole(window.__adminDraft, role); window.
 function adminDraftTab(tabId, checked){
   const d = window.__adminDraft;
   d.wantsFichaje = false;
-  d.allowedTabs = checked ? [...new Set([...d.allowedTabs, tabId])] : d.allowedTabs.filter(t => t !== tabId);
+  // Encender un módulo con apartados los da todos; apagarlo los quita todos.
+  d.allowedTabs = checked ? permExpandTabs([...new Set([...d.allowedTabs, tabId])]) : d.allowedTabs.filter(t => t !== tabId && !t.startsWith(tabId + ':'));
   if (tabId === 'citas' && !checked) d.canEditSchedule = false;
+  window.__adminFormDirty = true; renderTab();
+}
+// Un apartado de Transporte o Comercial. Si se quita el último, se apaga el módulo.
+function adminDraftSection(mod, sec, checked){
+  const d = window.__adminDraft;
+  const key = mod + ':' + sec;
+  d.wantsFichaje = false;
+  d.allowedTabs = checked ? [...new Set([...d.allowedTabs, mod, key])] : d.allowedTabs.filter(t => t !== key);
+  if (!d.allowedTabs.some(t => t.startsWith(mod + ':'))) d.allowedTabs = d.allowedTabs.filter(t => t !== mod);
   window.__adminFormDirty = true; renderTab();
 }
 function adminDraftSchedule(checked){ window.__adminDraft.canEditSchedule = checked; window.__adminFormDirty = true; renderTab(); }
@@ -11060,6 +11118,7 @@ function tplAdminViewCard(p){
       <div style="margin-bottom:16px;">
         <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--mutedFaint);margin-bottom:8px;">${esc(g.name)}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">${g.items.map(chip).join('')}</div>
+        ${g.items.filter(t => moduleSectionList(t.id) && permHasTab(s, t.id)).map(t => `<div style="font-size:12px;color:var(--muted);margin-top:8px;">${esc(permLabel(t))}: <b>${esc(moduleSectionList(t.id).filter(x => sectionAllowedFor(s, t.id, x.id)).map(x => x.label).join(' · '))}</b></div>`).join('')}
         ${g.items.some(t=>t.id==='citas') && permHasTab(s,'citas') ? `<div style="font-size:12px;color:var(--muted);margin-top:8px;">Puede editar el horario del almacén: <b>${(s.isAdmin||s.canEditSchedule)?'sí':'no'}</b></div>` : ''}
       </div>`).join('')}`;
 }
@@ -11102,6 +11161,14 @@ function tplAdminEditForm(p){
                   <input type="checkbox" ${(d.isAdmin||d.canEditSchedule)?'checked':''} ${(d.isAdmin||!d.allowedTabs.includes('citas'))?'disabled':''} onchange="adminDraftSchedule(this.checked)" style="width:auto;" />
                   Puede editar el horario del almacén
                 </label>` : ''}
+              ${moduleSectionList(t.id) ? `
+                <div style="display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:8px;${permHasTab(d,t.id)?'':'opacity:.5;'}">
+                  ${moduleSectionList(t.id).map(x => `
+                    <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);cursor:pointer;">
+                      <input type="checkbox" ${sectionAllowedFor(d, t.id, x.id)?'checked':''} ${d.isAdmin?'disabled':''} onchange="adminDraftSection('${t.id}', '${x.id}', this.checked)" style="width:auto;" />
+                      ${esc(x.label)}
+                    </label>`).join('')}
+                </div>` : ''}
             </div>
             <input type="checkbox" class="switch" ${permHasTab(d,t.id)?'checked':''} ${d.isAdmin?'disabled':''} onchange="adminDraftTab('${t.id}', this.checked)" />
           </div>`).join('')}
@@ -11197,8 +11264,9 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
     if (last.warehouseId && WAREHOUSES.some(w=>w.id===last.warehouseId)) currentWarehouseId = last.warehouseId;
     // No solo la pestaña: también la pantalla concreta en la que estaba dentro de
     // ella, para que un F5 / Ctrl+F5 deje el panel exactamente como se dejó.
-    if (TRAFICO_SECTIONS.some(s=>s.id===last.traficoSection)) window.__traficoSection = last.traficoSection;
-    if (last.comercialSection) window.__comercialSection = last.comercialSection;
+    if (moduleAllowedSections('trafico').some(s=>s.id===last.traficoSection)) window.__traficoSection = last.traficoSection;
+    else if (last.tab === 'trafico') traficoEnterSection(traficoSection());
+    if (moduleAllowedSections('comercial').some(s=>s.id===last.comercialSection)) window.__comercialSection = last.comercialSection;
     if (last.administracionView) window.__administracionView = last.administracionView;
     if (['home','empresas','lista','detalle','dashboard'].includes(last.autonomosView)) {
       window.__autonomosView = last.autonomosView;

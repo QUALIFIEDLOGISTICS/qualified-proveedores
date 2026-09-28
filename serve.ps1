@@ -35,13 +35,18 @@ try {
       $bytes = [IO.File]::ReadAllBytes($filePath)
       $response.ContentType = $contentType
       $response.ContentLength64 = $bytes.Length
-      $response.OutputStream.Write($bytes, 0, $bytes.Length)
+      # Una petición HEAD no lleva cuerpo: escribirlo tumbaba el servidor.
+      if ($request.HttpMethod -ne "HEAD") {
+        try { $response.OutputStream.Write($bytes, 0, $bytes.Length) } catch {}
+      }
     } else {
       $response.StatusCode = 404
       $notFoundBytes = [Text.Encoding]::UTF8.GetBytes("404 - No encontrado: $path")
-      $response.OutputStream.Write($notFoundBytes, 0, $notFoundBytes.Length)
+      if ($request.HttpMethod -ne "HEAD") {
+        try { $response.OutputStream.Write($notFoundBytes, 0, $notFoundBytes.Length) } catch {}
+      }
     }
-    $response.OutputStream.Close()
+    try { $response.OutputStream.Close() } catch {}
   }
 } finally {
   $listener.Stop()
