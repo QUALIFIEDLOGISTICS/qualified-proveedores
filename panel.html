@@ -6767,6 +6767,7 @@ const FR_DEPT_CIUDAD = {
 // ES08 → "Barcelona" (provincias), FR84 → "Orange" (ciudad de referencia del departamento).
 function tarifaZonaHint(z){
   z = z || '';
+  if (/^[A-Z]{2}$/.test(z)) return tarifaPaisNombre(z) + ' (todo el país)';
   if (/^ES\d{2}$/.test(z)) return CP_PROVINCIA[z.slice(2)] || '';
   if (/^FR\d{2}$/.test(z)) return FR_DEPT_CIUDAD[z.slice(2)] || '';
   return '';
@@ -7893,14 +7894,26 @@ function colabMailtoUrl({ to, bcc, subject, body }){
   params.push('body=' + encodeURIComponent(body));
   return `mailto:${to || ''}?${params.join('&')}`;
 }
-// Filas que cubren exactamente esa ruta (mismo sentido).
+// Una cobertura se puede apuntar por zona concreta (ES08) o por país entero
+// (ES, sin los 2 dígitos) cuando el transportista cubre todo el país — p. ej.
+// "desde Barcelona a toda Italia". Una zona cubre otra si son iguales, o si
+// una de las dos es solo el país y la otra empieza por ese país.
+const COLAB_ZONA_RE = /^[A-Z]{2}([0-9A-Z]{2})?$/;
+function colabZonaCubre(rutaZona, buscada){
+  if (!rutaZona || !buscada) return false;
+  if (rutaZona === buscada) return true;
+  if (rutaZona.length === 2) return buscada.startsWith(rutaZona);
+  if (buscada.length === 2) return rutaZona.startsWith(buscada);
+  return false;
+}
+// Filas que cubren esa ruta (mismo sentido), zona exacta o país entero.
 function colabRutasQueCubren(origen, destino){
-  return transportistaRutas.filter(r => r.origenZona === origen && r.destinoZona === destino);
+  return transportistaRutas.filter(r => colabZonaCubre(r.origenZona, origen) && colabZonaCubre(r.destinoZona, destino));
 }
 function colabResultadosHtml(){
   const origen = window.__colabBuscarOrigen || '';
   const destino = window.__colabBuscarDestino || '';
-  if (!TARIFA_ZONA_RE.test(origen) || !TARIFA_ZONA_RE.test(destino)) {
+  if (!COLAB_ZONA_RE.test(origen) || !COLAB_ZONA_RE.test(destino)) {
     return `<div style="color:var(--mutedFaint);font-size:12.5px;">Elige un país y una zona de origen y de destino para ver quién cubre esa ruta.</div>`;
   }
   const filas = colabRutasQueCubren(origen, destino);
@@ -7956,7 +7969,7 @@ function colabTablaBodyHtml(){
           <tr>
             <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(r.updatedAt||'')}">${r.updatedAt ? fmtDateDMY(r.updatedAt) : '—'}</td>
             <td style="font-weight:600;cursor:${c?'pointer':'default'};" data-sort-value="${esc(nombre)}" ${c?`onclick="openTransportistaFicha('${c.id}')"`:''}>${esc(nombre)}</td>
-            <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona+r.destinoZona)}">${esc(r.origenZona)} → ${esc(r.destinoZona)}</td>
+            <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona+r.destinoZona)}" title="${esc([tarifaZonaHint(r.origenZona), tarifaZonaHint(r.destinoZona)].filter(Boolean).join(' → '))}">${esc(r.origenZona)} → ${esc(r.destinoZona)}</td>
             <td style="color:var(--muted);" data-sort-value="${esc(r.tipoVehiculo)}">${r.tipoVehiculo ? esc(r.tipoVehiculo) : '—'}</td>
             <td style="color:var(--muted);" data-sort-value="${r.tarifaBase||''}">${r.tarifaBase!==null&&r.tarifaBase!==undefined ? eur2(r.tarifaBase) : '—'}</td>
             <td data-sort-value="${r.indexacion?'Si':'No'}">${r.indexacion ? '<span class="badge" style="background:#3F8F5F;">Sí</span>' : '<span class="badge" style="background:var(--mutedFaint);">No</span>'}</td>
@@ -8221,8 +8234,8 @@ async function submitColabRutaForm(editId){
   const tarifaBaseRaw = document.getElementById('colr-tarifa-base').value;
   const indexacion = document.getElementById('colr-indexacion').checked;
   const observaciones = document.getElementById('colr-obs').value.trim();
-  if (!TARIFA_ZONA_RE.test(origenZona)) { errEl.textContent = 'La zona de origen tiene que ser un país y 2 caracteres, por ejemplo ES08.'; return; }
-  if (!TARIFA_ZONA_RE.test(destinoZona)) { errEl.textContent = 'La zona de destino tiene que ser un país y 2 caracteres, por ejemplo FR13.'; return; }
+  if (!COLAB_ZONA_RE.test(origenZona)) { errEl.textContent = 'La zona de origen tiene que ser un país y 2 caracteres (ES08), o solo el país para cubrirlo entero (ES).'; return; }
+  if (!COLAB_ZONA_RE.test(destinoZona)) { errEl.textContent = 'La zona de destino tiene que ser un país y 2 caracteres (FR13), o solo el país para cubrirlo entero (FR).'; return; }
   const btns = [...document.querySelectorAll('.colr-submit-btn')];
   btns.forEach(b => b.disabled = true);
   const { error } = await supabaseClient.from('transportista_rutas').update({
@@ -8256,8 +8269,8 @@ async function submitColabRutasNuevas(){
     const indexacion = (document.getElementById(`colr-${i}-idx`) || {}).checked || false;
     if (!o && !d && !obs) return; // fila vacía
     const nombreFila = `Fila ${n + 1}`;
-    if (!TARIFA_ZONA_RE.test(o)) { errores.push(`${nombreFila}: la zona de origen debe ser país y 2 caracteres (ES08).`); return; }
-    if (!TARIFA_ZONA_RE.test(d)) { errores.push(`${nombreFila}: la zona de destino debe ser país y 2 caracteres (FR13).`); return; }
+    if (!COLAB_ZONA_RE.test(o)) { errores.push(`${nombreFila}: la zona de origen debe ser país y 2 caracteres (ES08), o solo el país para cubrirlo entero (ES).`); return; }
+    if (!COLAB_ZONA_RE.test(d)) { errores.push(`${nombreFila}: la zona de destino debe ser país y 2 caracteres (FR13), o solo el país para cubrirlo entero (FR).`); return; }
     const key = o + '|' + d;
     if (vistas[key]) { errores.push(`${nombreFila}: repite la ruta de la fila ${vistas[key]}.`); return; }
     if (yaTiene.has(key)) { errores.push(`${nombreFila}: ${c.nombre} ya tiene apuntada esa ruta (${o} → ${d}).`); return; }
