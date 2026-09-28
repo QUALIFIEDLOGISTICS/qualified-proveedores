@@ -9372,6 +9372,7 @@ function driversListBodyHtml(){
   );
   if (companyFilter) list = list.filter(d => d.companyId === companyFilter);
   list = list.slice().sort((a,b) => a.name.localeCompare(b.name, 'es'));
+  window.__driversNavContext = { ids: list.map(d=>d.id) };
 
   if (!list.length) {
     return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search ? 'Ningún conductor coincide con la búsqueda.' : statusFilter==='archivados' ? 'No hay conductores inactivos.' : 'Todavía no hay conductores. Empieza dando de alta uno.'}</div>`;
@@ -9540,7 +9541,38 @@ function buildMonthRows(driverId, year, month){
 }
 
 /* ============================= AUTÓNOMOS: FICHA DETALLE ============================= */
+function driverNavGoto(offset){
+  const nav = window.__driversNavContext;
+  if (!nav || !nav.ids.length) return;
+  const idx = nav.ids.indexOf(window.__autonomosDriverId);
+  if (idx === -1) return;
+  const newIdx = (idx + offset + nav.ids.length) % nav.ids.length;
+  openDriverDetail(nav.ids[newIdx]);
+}
+// Cabecera compartida entre la ficha de conductor Plaza y la de Piso Móvil:
+// flechitas para moverse por la lista filtrada actual (igual que en la
+// ficha de Contacto) + "Acción" con Editar/Archivar-Activar.
+function driverDetailActionsHtml(d){
+  const nav = window.__driversNavContext;
+  const navIdx = nav ? nav.ids.indexOf(d.id) : -1;
+  return `
+    ${navIdx>-1 && nav.ids.length>1 ? `
+    <div style="display:flex;align-items:center;gap:4px;">
+      <button onclick="driverNavGoto(-1)" title="Conductor anterior" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13px;">←</button>
+      <span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${navIdx+1}/${nav.ids.length}</span>
+      <button onclick="driverNavGoto(1)" title="Conductor siguiente" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13px;">→</button>
+    </div>` : ''}
+    <button class="btn btn-ghost" onclick="openDriverModal('${d.id}')">Editar conductor</button>
+    <div style="position:relative;">
+      <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__driverActionMenuOpen=!window.__driverActionMenuOpen; renderTab();">Acción ▾</button>
+      ${window.__driverActionMenuOpen ? `
+        <div onclick="event.stopPropagation();" style="position:absolute;top:100%;right:0;margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:150px;">
+          <button class="btn btn-ghost" style="width:100%;justify-content:flex-start;white-space:nowrap;color:${d.archived?'var(--success)':'var(--danger)'};" onclick="window.__driverActionMenuOpen=false; ${d.archived?`unarchiveDriver('${d.id}')`:`confirmArchiveDriver('${d.id}')`}">${d.archived?'↩ Activar':'🗄 Archivar'}</button>
+        </div>` : ''}
+    </div>`;
+}
 function openDriverDetail(id){
+  window.__driverActionMenuOpen = false;
   currentTab='autonomos'; window.__autonomosView='detalle'; window.__autonomosDriverId=id;
   // Se entra viendo el último periodo con datos registrados — fichajes
   // diarios para conductores Plaza, facturación mensual para Piso Móvil —
@@ -9566,7 +9598,7 @@ function openDriverDetail(id){
   window.__autonomosWeek = 'todas';
   renderHeader(); renderTab();
 }
-function backToDriversList(){ window.__autonomosView='lista'; window.__autonomosDriverId=null; renderTab(); }
+function backToDriversList(){ window.__autonomosView='lista'; window.__autonomosDriverId=null; window.__driverActionMenuOpen=false; renderTab(); }
 
 function tplDriverDetail(){
   const d = drivers.find(x=>x.id===window.__autonomosDriverId);
@@ -9667,9 +9699,8 @@ function tplDriverDetail(){
             </div>
           </div>
         </div>
-        <div style="display:flex;gap:8px;">
-          <button class="btn btn-ghost" onclick="openDriverModal('${d.id}')">Editar conductor</button>
-          <button class="btn btn-ghost" style="color:${d.archived?'var(--success)':'var(--danger)'};" onclick="${d.archived?`unarchiveDriver('${d.id}')`:`confirmArchiveDriver('${d.id}')`}">${d.archived?'↩ Activar':'🗄 Archivar'}</button>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          ${driverDetailActionsHtml(d)}
         </div>
       </div>
       ${(() => { const r = getRatesForDate(d.id, today()); return `
@@ -10045,9 +10076,8 @@ function tplPisoMovilDetail(d){
             </div>
           </div>
         </div>
-        <div style="display:flex;gap:8px;">
-          <button class="btn btn-ghost" onclick="openDriverModal('${d.id}')">Editar conductor</button>
-          <button class="btn btn-ghost" style="color:${d.archived?'var(--success)':'var(--danger)'};" onclick="${d.archived?`unarchiveDriver('${d.id}')`:`confirmArchiveDriver('${d.id}')`}">${d.archived?'↩ Activar':'🗄 Archivar'}</button>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          ${driverDetailActionsHtml(d)}
         </div>
       </div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
