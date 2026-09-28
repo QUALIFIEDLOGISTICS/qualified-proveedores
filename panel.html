@@ -6764,12 +6764,23 @@ const FR_DEPT_CIUDAD = {
   '84':'Orange','85':'La Roche-sur-Yon','86':'Poitiers','87':'Limoges','88':'Épinal','89':'Auxerre','90':'Belfort','91':'Évry',
   '92':'Nanterre','93':'Bobigny','94':'Créteil','95':'Cergy',
 };
-// ES08 → "Barcelona" (provincias), FR84 → "Orange" (ciudad de referencia del departamento).
+// Italia: sus 20 regiones oficiales (código ISTAT 01-20) — igual de concretas
+// que las provincias españolas o los departamentos franceses, para poder
+// cubrir solo una región (p. ej. "IT15" = Campania) y no siempre todo el país.
+const IT_REGION = {
+  '01':'Piemonte','02':'Valle de Aosta','03':'Lombardía','04':'Trentino-Alto Adigio','05':'Véneto',
+  '06':'Friuli-Venecia Julia','07':'Liguria','08':'Emilia-Romaña','09':'Toscana','10':'Umbría',
+  '11':'Las Marcas','12':'Lacio','13':'Abruzo','14':'Molise','15':'Campania','16':'Apulia',
+  '17':'Basilicata','18':'Calabria','19':'Sicilia','20':'Cerdeña',
+};
+// ES08 → "Barcelona" (provincias), FR84 → "Orange" (ciudad de referencia del departamento),
+// IT15 → "Campania" (regiones). Un código de país solo (sin dígitos) es "todo el país".
 function tarifaZonaHint(z){
   z = z || '';
   if (/^[A-Z]{2}$/.test(z)) return tarifaPaisNombre(z) + ' (todo el país)';
   if (/^ES\d{2}$/.test(z)) return CP_PROVINCIA[z.slice(2)] || '';
   if (/^FR\d{2}$/.test(z)) return FR_DEPT_CIUDAD[z.slice(2)] || '';
+  if (/^IT\d{2}$/.test(z)) return IT_REGION[z.slice(2)] || '';
   return '';
 }
 // "08500 Vic" (o solo el CP / solo la ciudad si falta el otro dato).
@@ -7861,9 +7872,29 @@ function openTransportistaFicha(id){
   window.__contactoNavContext = { label: 'Transportistas', ids: [id] };
   openContactoModal(id);
 }
+// Tablas de zona conocidas por país, para poder cubrir una región/provincia
+// concreta y no solo todo el país entero.
+const COLAB_ZONAS_TABLA = { ES: CP_PROVINCIA, FR: FR_DEPT_CIUDAD, IT: IT_REGION };
+// Sugerencias de zona: para que se pueda buscar por nombre ("Barcelona",
+// "Campania", "Italia") sin tener que saberse el código, se ofrece el país
+// entero de "todo el país" para cualquier país, más su desglose por región o
+// provincia si lo conocemos (España, Francia, Italia); el resto de países
+// solo ofrecen "todo el país" hasta que se necesite más detalle.
 function colabZonasDatalistHtml(field){
-  const zonas = [...new Set(transportistaRutas.map(r => r[field]).filter(Boolean))].sort();
-  return zonas.map(z => `<option value="${esc(z)}" label="${esc(tarifaZonaHint(z))}">`).join('');
+  const vistos = new Set();
+  const opts = [];
+  const add = (value, label) => { if (!value || vistos.has(value)) return; vistos.add(value); opts.push({ value, label }); };
+  EU_COUNTRIES.forEach(nombre => {
+    const cc = CONTACTO_PAIS_CODIGOS[nombre];
+    if (!cc) return;
+    add(cc, `${nombre} (todo el país)`);
+    const tabla = COLAB_ZONAS_TABLA[cc];
+    if (tabla) Object.keys(tabla).sort().forEach(k => add(cc + k, `${nombre} — ${tabla[k]}`));
+  });
+  // Alguna cobertura ya guardada con un código que no esté en la lista de arriba
+  // (p. ej. escrito a mano para un país sin tabla) también se sugiere.
+  [...new Set(transportistaRutas.map(r => r[field]).filter(Boolean))].sort().forEach(z => add(z, tarifaZonaHint(z)));
+  return opts.map(o => `<option value="${esc(o.value)}" label="${esc(o.label)}">`).join('');
 }
 // País → zona del buscador (igual que el filtro de Tarifas): solo países con alguna
 // cobertura guardada, y la zona se ve como "ES17 · Girona".
@@ -7879,9 +7910,11 @@ function colabZonasOptionsHtml(field, cc, selected){
 // Mayúsculas y sin espacios al escribir una zona (formulario de alta), y refresca lo que dependa de ella.
 function colabZonaInput(id, after){
   const el = document.getElementById(id);
-  el.value = el.value.toUpperCase().replace(/\s/g, '');
+  // No se quitan los espacios al escribir: además del código (ES08) se puede
+  // buscar por nombre ("Campania", "Valle de Aosta"), que sí los lleva.
+  el.value = el.value.toUpperCase();
   const hint = document.getElementById(id + '-hint');
-  if (hint) hint.textContent = tarifaZonaHint(el.value);
+  if (hint) hint.textContent = tarifaZonaHint(el.value.replace(/\s/g, ''));
   if (after) after();
 }
 function colabOfertaAsunto(o, d){ return `Viaje disponible ${o} → ${d}`; }
@@ -8109,13 +8142,13 @@ function colabRutaEditFieldsHtml(editing){
     <div style="display:flex;gap:10px;">
       <div class="field" style="flex:1;">
         <label>Zona de origen</label>
-        <input id="colr-origen-zona" maxlength="4" data-combo="colr-origenes-datalist" autocomplete="off" placeholder="Ej. ES08" style="font-family:var(--mono);" oninput="colabZonaInput('colr-origen-zona')" value="${esc(editing.origenZona)}" />
+        <input id="colr-origen-zona" maxlength="30" data-combo="colr-origenes-datalist" autocomplete="off" placeholder="ES08 o Barcelona" style="font-family:var(--mono);" oninput="colabZonaInput('colr-origen-zona')" value="${esc(editing.origenZona)}" />
         <datalist id="colr-origenes-datalist">${colabZonasDatalistHtml('origenZona')}</datalist>
         <div id="colr-origen-zona-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;">${esc(tarifaZonaHint(editing.origenZona))}</div>
       </div>
       <div class="field" style="flex:1;">
         <label>Zona de destino</label>
-        <input id="colr-destino-zona" maxlength="4" data-combo="colr-destinos-datalist" autocomplete="off" placeholder="Ej. FR13" style="font-family:var(--mono);" oninput="colabZonaInput('colr-destino-zona')" value="${esc(editing.destinoZona)}" />
+        <input id="colr-destino-zona" maxlength="30" data-combo="colr-destinos-datalist" autocomplete="off" placeholder="IT o toda Italia" style="font-family:var(--mono);" oninput="colabZonaInput('colr-destino-zona')" value="${esc(editing.destinoZona)}" />
         <datalist id="colr-destinos-datalist">${colabZonasDatalistHtml('destinoZona')}</datalist>
         <div id="colr-destino-zona-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;">${esc(tarifaZonaHint(editing.destinoZona))}</div>
       </div>
@@ -8136,11 +8169,11 @@ function colabRutaRowHtml(i){
     <tr class="colr-row" data-i="${i}">
       <td style="padding:5px 4px;color:var(--mutedFaint);font-size:12px;text-align:right;width:26px;">${i+1}</td>
       <td style="padding:5px 4px;min-width:110px;">
-        <input id="colr-${i}-o" maxlength="4" data-combo="colr-origenes" autocomplete="off" placeholder="ES08" style="font-family:var(--mono);text-transform:uppercase;" oninput="colabRutaRowZonaInput(${i},'o')" />
+        <input id="colr-${i}-o" maxlength="30" data-combo="colr-origenes" autocomplete="off" placeholder="ES08" style="font-family:var(--mono);text-transform:uppercase;" oninput="colabRutaRowZonaInput(${i},'o')" />
         <div id="colr-${i}-oh" class="tf-lugar" style="min-height:14px;margin-top:2px;"></div>
       </td>
       <td style="padding:5px 4px;min-width:110px;">
-        <input id="colr-${i}-d" maxlength="4" data-combo="colr-destinos" autocomplete="off" placeholder="FR13" style="font-family:var(--mono);text-transform:uppercase;" oninput="colabRutaRowZonaInput(${i},'d')" />
+        <input id="colr-${i}-d" maxlength="30" data-combo="colr-destinos" autocomplete="off" placeholder="FR13" style="font-family:var(--mono);text-transform:uppercase;" oninput="colabRutaRowZonaInput(${i},'d')" />
         <div id="colr-${i}-dh" class="tf-lugar" style="min-height:14px;margin-top:2px;"></div>
       </td>
       <td style="padding:5px 4px;min-width:140px;"><select id="colr-${i}-v">${colabTipoVehiculoOptionsHtml('')}</select></td>
@@ -8183,8 +8216,8 @@ function colabRutaRemoveRow(i){
 }
 function colabRutaRowZonaInput(i, s){
   const el = document.getElementById(`colr-${i}-${s}`);
-  el.value = el.value.toUpperCase().replace(/\s/g, '');
-  document.getElementById(`colr-${i}-${s}h`).textContent = tarifaZonaHint(el.value);
+  el.value = el.value.toUpperCase();
+  document.getElementById(`colr-${i}-${s}h`).textContent = tarifaZonaHint(el.value.replace(/\s/g, ''));
   window.__colabRutaFormDirty = true;
 }
 function tplColabRutaFormPage(){
