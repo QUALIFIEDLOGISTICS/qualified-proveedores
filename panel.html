@@ -8788,6 +8788,7 @@ function tplDecaFormFields(e){
           <datalist id="dc-transportistas-datalist">
             ${contactos.filter(c=>!c.archived && c.esTransportista).map(c=>`<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('')}
           </datalist>
+          <button type="button" onclick="openQuickTransportistaModal()" style="background:none;border:none;padding:5px 0 0;font-size:12.5px;color:var(--primary);cursor:pointer;">+ Crear transportista que no esté en la lista</button>
         </div>
         <div class="field"><label>NIF</label><input id="dc-transportista-nif" maxlength="20" value="${esc(e.transportistaNif||'')}" /></div>
         <div class="field"><label>Domicilio</label><input id="dc-transportista-domicilio" maxlength="250" value="${esc(e.transportistaDomicilio||'')}" /></div>
@@ -8956,6 +8957,97 @@ async function submitQuickCargador(){
     contactos.push(c);
     contactos.sort((a,b) => a.nombre.localeCompare(b.nombre));
     await logContactoHistorial(c.id, 'Contacto creado (alta rápida desde el DeCA) como Cliente de transporte.');
+    fill(c);
+  } catch (err) {
+    errEl.textContent = 'No se pudo crear: ' + (err && err.message ? err.message : 'error desconocido.');
+    btn.disabled = false;
+  }
+}
+// Alta rápida de un transportista sin salir del DeCA: mismo formulario que el
+// del cargador contractual, pero marca al contacto como Transportista.
+function openQuickTransportistaModal(){
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:620px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <h3 class="modal-title">Nuevo transportista</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">Se guarda en Contactos como transportista, y se rellena en este DeCA sin salir de aquí. El correo y teléfono de transporte, y el logo, se pueden añadir después desde Transporte → Transportistas.</div>
+        <div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:6px;">
+          <div style="flex:1;min-width:0;">
+            <div class="field"><label>Razón social</label><input id="qt-nombre" maxlength="150" style="text-transform:uppercase;" oninput="uppercaseInput(this)" value="${esc((document.getElementById('dc-transportista-nombre')||{}).value||'')}" /></div>
+            <div class="field"><label>Nombre comercial</label><input id="qt-nombre-comercial" maxlength="150" style="text-transform:uppercase;" oninput="uppercaseInput(this)" /></div>
+            <div class="field"><label>NIF</label><input id="qt-nif" maxlength="20" style="text-transform:uppercase;" oninput="uppercaseInput(this)" /></div>
+          </div>
+          <div style="flex-shrink:0;text-align:center;" title="Guarda el contacto para poder subir un logo">
+            <div style="width:100px;height:100px;border-radius:10px;border:1px dashed var(--border);overflow:hidden;display:flex;align-items:center;justify-content:center;background:#fff;">
+              <span style="color:var(--mutedFaint);font-size:11px;padding:4px;">Logo</span>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Calle 1</label><input id="qt-calle1" maxlength="150" /></div>
+          <div class="field" style="flex:1;"><label>Calle 2</label><input id="qt-calle2" maxlength="150" /></div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Código postal</label><input id="qt-cp" maxlength="10" oninput="autofillCiudadProvinciaFromCp('qt')" /></div>
+          <div class="field" style="flex:2;"><label>Ciudad</label><input id="qt-ciudad" maxlength="100" onblur="this.value = formatCiudad(this.value);" /></div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Provincia</label><input id="qt-provincia" maxlength="100" /></div>
+          <div class="field" style="flex:1;"><label>País</label><select id="qt-pais">${paisOptionsHtml('España')}</select></div>
+        </div>
+        <div id="qt-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button id="qt-submit" class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitQuickTransportista()">Crear y usar</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const el = document.getElementById('qt-nombre'); if (el) el.focus(); }, 0);
+}
+async function submitQuickTransportista(){
+  const errEl = document.getElementById('qt-error');
+  errEl.textContent = '';
+  const v = id => document.getElementById(id).value.trim();
+  const nombre = v('qt-nombre').toUpperCase(), nombreComercial = v('qt-nombre-comercial').toUpperCase(), nif = v('qt-nif').toUpperCase();
+  if (!nombre) { errEl.textContent = 'Indica la razón social.'; return; }
+  const fill = (c) => {
+    document.getElementById('dc-transportista-nombre').value = c.nombre;
+    document.getElementById('dc-transportista-nif').value = c.nif || '';
+    document.getElementById('dc-transportista-domicilio').value = cargadorDireccionCompleta(c);
+    const dl = document.getElementById('dc-transportistas-datalist');
+    if (dl) dl.innerHTML = contactos.filter(x=>!x.archived && x.esTransportista).map(x=>`<option value="${esc(x.nombre)}" label="${esc([x.nombreComercial, x.nif].filter(Boolean).join(' · '))}">`).join('');
+    window.__decaFormDirty = true;
+    closeModal();
+  };
+  // Si ya existe un contacto con ese NIF o ese nombre no se duplica: se usa.
+  const dup = contactos.find(c => !c.archived && ((nif && c.nif && c.nif.toUpperCase() === nif) || c.nombre.toUpperCase() === nombre));
+  const btn = document.getElementById('qt-submit');
+  btn.disabled = true;
+  try {
+    if (dup) {
+      if (!dup.esTransportista) {
+        const { data, error } = await supabaseClient.from('contactos').update({ es_transportista: true }).eq('id', dup.id).select();
+        if (error || !data || !data.length) throw (error || new Error('ya existe un contacto con ese nombre o NIF, pero no tienes permiso para marcarlo como transportista. Pídelo a Administración.'));
+        dup.esTransportista = true;
+        await logContactoHistorial(dup.id, 'Marcado como Transportista (desde el DeCA).');
+      }
+      fill(dup);
+      return;
+    }
+    const row = {
+      nombre, nombre_comercial: nombreComercial || null, nif: nif || null, calle1: v('qt-calle1') || null, calle2: v('qt-calle2') || null, codigo_postal: v('qt-cp') || null,
+      ciudad: v('qt-ciudad') || null, provincia: v('qt-provincia') || null, pais: v('qt-pais') || null, es_transportista: true,
+    };
+    const { data, error } = await supabaseClient.from('contactos').insert(row).select().single();
+    if (error || !data) throw (error || new Error('sin permiso o error desconocido.'));
+    const c = { id: data.id, nombre, nombreComercial, nif, archived: false, esClienteAlmacen: false, esClienteTransporte: false, esTransportista: true, esAutonomos: false, warehouseIds: [],
+      calle1: row.calle1 || '', calle2: row.calle2 || '', codigoPostal: row.codigo_postal || '', ciudad: row.ciudad || '', provincia: row.provincia || '', pais: row.pais || '', logoStoragePath: null,
+      emailTransportista: '', telefonoTransportista: '', nombreTransportista: '', apellidosTransportista: '', cargoTransportista: '' };
+    contactos.push(c);
+    contactos.sort((a,b) => a.nombre.localeCompare(b.nombre));
+    await logContactoHistorial(c.id, 'Contacto creado (alta rápida desde el DeCA) como Transportista.');
     fill(c);
   } catch (err) {
     errEl.textContent = 'No se pudo crear: ' + (err && err.message ? err.message : 'error desconocido.');
