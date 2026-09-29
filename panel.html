@@ -3380,6 +3380,9 @@ function closeContactoDetail(){
   window.__contactoDetailTab = null;
   window.__contactoHistorial = null;
   window.__contactoFormDirty = false;
+  // Si se cancela sin crear nada el cliente de "+ Crear cliente que no esté
+  // en la lista" (Nueva tarifa), no queda pendiente para la próxima vez.
+  window.__tarifaClienteReturnPending = false;
   // Si esta ficha se abrió desde "Crear cargador/transportista" en el DeCA
   // (ver decaIrACrearContacto), se vuelve allí en vez de a donde se
   // estuviera antes — con los datos rellenos si se ha guardado
@@ -4033,6 +4036,7 @@ async function submitContactoForm(editId){
     if (changeLines.length) await logContactoHistorial(contactoId, changeLines.join('\n'));
     await Promise.all([loadClients(), loadCompanies()]);
     if (!editId && window.__decaReturnContactoRole) { decaVolverDesdeContacto(contactos.find(x=>x.id===contactoId)); return; }
+    if (!editId && window.__tarifaClienteReturnPending) { window.__tarifaClienteReturnPending = false; openTarifaForm(null, null, contactoId); return; }
     openContactoModal(contactoId);
   } catch (error) {
     showFormError(errEl, 'No se pudo guardar: ' + (error && error.message ? error.message : 'error desconocido.'));
@@ -7036,7 +7040,10 @@ function tplTarifasPage(){
   const seg = (id, label) => `<button type="button" onclick="window.__tarifasView='${id}'; renderTab();" style="border:none;border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer;background:${view===id?'var(--primary)':'transparent'};color:${view===id?'var(--primary-text)':'var(--muted)'};font-weight:${view===id?600:500};">${label}</button>`;
   const sel = (w, title) => `style="flex:1;min-width:${w}px;max-width:210px;" title="${title}"`;
   return `
-    <div style="font-family:var(--display);font-size:22px;margin-bottom:14px;">Tarifas Transporte</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:14px;">
+      <div style="font-family:var(--display);font-size:22px;">Tarifas Transporte</div>
+      <button class="btn btn-primary" onclick="openNuevaTarifaClienteModal()">+ Nueva tarifa</button>
+    </div>
     <div class="card" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px;margin-bottom:14px;">
       <div style="display:inline-flex;gap:2px;padding:2px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;flex-shrink:0;">${seg('vigentes', 'Vigentes')}${seg('historial', 'Históricas')}</div>
       <input placeholder="Buscar…" value="${esc(window.__tarifasSearch||'')}" oninput="window.__tarifasSearch=this.value; refreshTarifasListBody();" style="flex:1.4;min-width:170px;max-width:280px;" />
@@ -7085,6 +7092,51 @@ function resetTarifasState(){
   window.__tarifasPaisD = '';
   window.__tarifasTipo = '';
   window.__tarifasGasoil = '';
+}
+// "+ Nueva tarifa" desde el listado general (no desde la ficha de un cliente):
+// primero hay que saber para quién es, así que se pregunta el cliente y luego
+// se abre su "Nueva tarifa" de siempre (openTarifaForm), exactamente igual
+// que si se hubiera abierto desde su ficha.
+function nuevaTarifaClientesOptionsHtml(){
+  return contactos.filter(c => !c.archived && c.esClienteTransporte).map(c => `<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('');
+}
+function openNuevaTarifaClienteModal(){
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:420px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <h3 class="modal-title">Nueva tarifa</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">¿Para qué cliente? Se abrirá su ficha con la tarifa ya lista para rellenar.</div>
+        <div class="field">
+          <label>Cliente</label>
+          <input id="ntc-cliente" maxlength="150" data-combo="ntc-clientes-datalist" autocomplete="off" placeholder="Elige un cliente de transporte" onkeydown="if(event.key==='Enter'){ event.preventDefault(); submitNuevaTarifaCliente(); }" />
+          <datalist id="ntc-clientes-datalist">${nuevaTarifaClientesOptionsHtml()}</datalist>
+        </div>
+        <button type="button" onclick="closeModal(); crearClienteParaNuevaTarifa();" style="background:none;border:none;padding:0 0 12px;font-size:12.5px;color:var(--primary);cursor:pointer;">+ Crear cliente que no esté en la lista</button>
+        <div id="ntc-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitNuevaTarifaCliente()">Continuar</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const el = document.getElementById('ntc-cliente'); if (el) el.focus(); }, 0);
+}
+function submitNuevaTarifaCliente(){
+  const errEl = document.getElementById('ntc-error');
+  const nombre = document.getElementById('ntc-cliente').value.trim();
+  const cliente = contactos.find(c => !c.archived && c.esClienteTransporte && c.nombre.toUpperCase() === nombre.toUpperCase());
+  if (!cliente) { errEl.textContent = 'Elige un cliente de la lista, o créalo si todavía no existe.'; return; }
+  closeModal();
+  openTarifaForm(null, null, cliente.id);
+}
+// Si el cliente tampoco existe todavía: se crea (ficha real de Comercial,
+// mismo mecanismo que "Crear cargador/transportista" del DeCA) y, en vez de
+// quedarse viendo su ficha, se va directo a su "Nueva tarifa".
+function crearClienteParaNuevaTarifa(){
+  window.__tarifaClienteReturnPending = true;
+  openContactoModal(null, contactoPresetForNavLabel('Comercial'));
 }
 
 /* ---- Tarifas: formulario ---- */
