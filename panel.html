@@ -2809,8 +2809,6 @@ async function loadContactos(){
     warehouseIds: (c.contacto_warehouses||[]).map(cw=>cw.warehouse_id),
     calle1: c.calle1 || '', calle2: c.calle2 || '', codigoPostal: c.codigo_postal || '',
     ciudad: c.ciudad || '', provincia: c.provincia || '', pais: c.pais || '',
-    emailTransportista: c.email_transportista || '', telefonoTransportista: c.telefono_transportista || '',
-    nombreTransportista: c.nombre_transportista || '', apellidosTransportista: c.apellidos_transportista || '', cargoTransportista: c.cargo_transportista || '',
     logoStoragePath: c.logo_storage_path || null, createdAt: c.created_at || null,
   }));
   refreshContactoLogoThumbnails();
@@ -3652,63 +3650,125 @@ async function saveContactoWarehouses(id){
     if (el) el.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'error desconocido.');
   }
 }
-// Correo y teléfono para avisar a un transportista cuando hay un viaje disponible:
-// se ven y se editan desde su ficha en Transporte → Transportistas; el resto de sus
-// datos (nombre, dirección, NIF…) solo se cambia en Contactos.
-function tplContactoTransportistaContactoCard(c, editMode){
-  const title = `<div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:6px;">Contacto de transporte</div>`;
-  const nota = `<div style="font-size:12px;color:var(--mutedFaint);margin-bottom:10px;">Persona, correo y teléfono para avisar cuando hay un viaje disponible.</div>`;
-  if (!editMode) {
-    const dato = (icon, label, valor, idx) => `
-      <div style="display:flex;align-items:center;gap:12px;min-width:0;padding:16px 18px;${idx > 0 ? 'border-left:1px solid var(--border);' : ''}">
-        <div style="width:34px;height:34px;border-radius:50%;background:rgba(27,58,107,0.08);color:var(--primary);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS[icon], 17, 'currentColor', 2)}</div>
-        <div style="min-width:0;">
-          <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--mutedFaint);margin-bottom:2px;">${esc(label)}</div>
-          <div style="font-size:13.5px;font-weight:600;color:${valor ? 'var(--text)' : 'var(--mutedFaint)'};overflow-wrap:anywhere;">${valor ? esc(valor) : 'Sin apuntar'}</div>
-        </div>
-      </div>`;
-    const nombreCompleto = [c.nombreTransportista, c.apellidosTransportista].filter(Boolean).join(' ');
-    return `
-    <div class="card" style="padding:0;overflow:hidden;">
-      <div style="display:flex;align-items:center;gap:16px;padding:20px 22px 18px;">
-        <div style="width:52px;height:52px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.truck, 24, 'currentColor', 2)}</div>
-        <div style="min-width:0;">
-          <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Contacto de transporte</div>
-          <div style="font-size:12px;color:var(--mutedFaint);margin-top:2px;">Persona, correo y teléfono para avisar cuando hay un viaje disponible.</div>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));background:var(--panel2);border-top:1px solid var(--border);">
-        ${dato('user', 'Nombre y apellidos', nombreCompleto, 0)}
-        ${dato('briefcase', 'Cargo', c.cargoTransportista, 1)}
-        ${dato('mail', 'Correo', c.emailTransportista, 2)}
-        ${dato('phone', 'Teléfono', c.telefonoTransportista, 3)}
+// Personas de contacto de un transportista, para avisar cuando hay un viaje
+// disponible: una empresa grande puede tener varias, cada una centrada en
+// algo (rutas nacionales, internacional, facturación...). Se ven y se editan
+// desde su ficha en Transporte → Transportistas; el resto de sus datos
+// (nombre, dirección, NIF…) solo se cambia en Contactos.
+function tplTransportistaContactoTile(p){
+  const dato = (icon, label, valor, idx) => `
+    <div style="display:flex;align-items:center;gap:12px;min-width:0;padding:16px 18px;${idx > 0 ? 'border-left:1px solid var(--border);' : ''}">
+      <div style="width:34px;height:34px;border-radius:50%;background:rgba(27,58,107,0.08);color:var(--primary);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS[icon], 17, 'currentColor', 2)}</div>
+      <div style="min-width:0;">
+        <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--mutedFaint);margin-bottom:2px;">${esc(label)}</div>
+        <div style="font-size:13.5px;font-weight:600;color:${valor ? 'var(--text)' : 'var(--mutedFaint)'};overflow-wrap:anywhere;">${valor ? esc(valor) : 'Sin apuntar'}</div>
       </div>
     </div>`;
-  }
+  const nombreCompleto = [p.nombre, p.apellidos].filter(Boolean).join(' ') || 'Sin nombre';
   return `
-    <div class="card" oninput="window.__contactoFormDirty=true;" onchange="window.__contactoFormDirty=true;">
-      ${title}${nota}
-      <div style="display:flex;gap:10px;">
-        <div class="field" style="flex:1;"><label>Nombre</label><input id="ct-transp-nombre" maxlength="100" value="${esc(c.nombreTransportista||'')}" placeholder="Nombre" /></div>
-        <div class="field" style="flex:1;"><label>Apellidos</label><input id="ct-transp-apellidos" maxlength="150" value="${esc(c.apellidosTransportista||'')}" placeholder="Apellidos" /></div>
+    <div class="card" style="padding:0;overflow:hidden;margin-top:14px;">
+      <div style="display:flex;align-items:center;gap:14px;padding:16px 20px 12px;">
+        <div style="width:40px;height:40px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.user, 19, 'currentColor', 2)}</div>
+        <div style="min-width:0;flex:1;">
+          <div style="font-family:var(--display);font-size:15px;font-weight:700;color:var(--text);">${esc(nombreCompleto)}</div>
+          ${p.ambito ? `<div style="font-size:11px;font-weight:600;color:var(--primary);background:rgba(27,58,107,0.08);border-radius:999px;padding:2px 9px;display:inline-block;margin-top:4px;">${esc(p.ambito)}</div>` : ''}
+        </div>
+        <button onclick="openTransportistaContactoModal('${p.contactoId}', '${p.id}')" title="Editar" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;cursor:pointer;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+        <button onclick="deleteTransportistaContacto('${p.id}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);font-size:14px;padding:2px 4px;cursor:pointer;">🗑</button>
       </div>
-      <div class="field"><label>Cargo</label><input id="ct-transp-cargo" maxlength="100" value="${esc(c.cargoTransportista||'')}" placeholder="Ej. Responsable de tráfico" /></div>
-      <div class="field"><label>Correo</label><input id="ct-transp-email" type="email" maxlength="150" value="${esc(c.emailTransportista||'')}" placeholder="ofertas@transportista.com" /></div>
-      <div class="field"><label>Teléfono</label><input id="ct-transp-telefono" type="tel" maxlength="30" value="${esc(c.telefonoTransportista||'')}" placeholder="+34 600 00 00 00" /></div>
-      <div id="ct-transp-error" style="color:var(--danger);font-size:12.5px;margin:4px 0;"></div>
-      <div style="margin-top:6px;">
-        <button class="btn btn-ghost" onclick="exitContactoEditMode()">Cancelar</button>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));background:var(--panel2);border-top:1px solid var(--border);">
+        ${dato('briefcase', 'Cargo', p.cargo, 0)}
+        ${dato('mail', 'Correo', p.email, 1)}
+        ${dato('phone', 'Teléfono', p.telefono, 2)}
       </div>
     </div>`;
 }
-// Contenido completo de la pestaña "Transporte": el correo/teléfono de arriba,
+function openTransportistaContactoModal(contactoId, personaId){
+  const p = personaId ? transportistaContactos.find(x=>x.id===personaId) : null;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:480px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <h3 class="modal-title">${p?'Editar contacto':'Nuevo contacto de transporte'}</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">Persona a la que avisar cuando hay un viaje disponible.</div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Nombre</label><input id="tp-nombre" maxlength="100" value="${esc(p?p.nombre:'')}" /></div>
+          <div class="field" style="flex:1;"><label>Apellidos</label><input id="tp-apellidos" maxlength="150" value="${esc(p?p.apellidos:'')}" /></div>
+        </div>
+        <div class="field"><label>Cargo</label><input id="tp-cargo" maxlength="100" placeholder="Ej. Responsable de tráfico" value="${esc(p?p.cargo:'')}" /></div>
+        <div class="field"><label>Ámbito (opcional)</label><input id="tp-ambito" maxlength="100" placeholder="Ej. Rutas nacionales, Internacional, Facturación" value="${esc(p?p.ambito:'')}" /></div>
+        <div class="field"><label>Correo</label><input id="tp-email" type="email" maxlength="150" value="${esc(p?p.email:'')}" placeholder="ofertas@transportista.com" /></div>
+        <div class="field"><label>Teléfono</label><input id="tp-telefono" type="tel" maxlength="30" value="${esc(p?p.telefono:'')}" placeholder="+34 600 00 00 00" /></div>
+        <div id="tp-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary tp-submit-btn" style="flex:1;justify-content:center;" onclick="submitTransportistaContacto('${contactoId}', '${personaId||''}')">${p?'Guardar':'Añadir'}</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const el = document.getElementById('tp-nombre'); if (el) el.focus(); }, 0);
+}
+async function submitTransportistaContacto(contactoId, personaId){
+  const errEl = document.getElementById('tp-error');
+  errEl.textContent = '';
+  const v = id => document.getElementById(id).value.trim();
+  const nombre = v('tp-nombre'), apellidos = v('tp-apellidos'), cargo = v('tp-cargo'), ambito = v('tp-ambito'), email = v('tp-email'), telefono = v('tp-telefono');
+  if (!nombre && !apellidos) { errEl.textContent = 'Indica al menos el nombre.'; return; }
+  const btn = document.querySelector('.tp-submit-btn');
+  if (btn) btn.disabled = true;
+  const etiqueta = [nombre, apellidos].filter(Boolean).join(' ');
+  try {
+    if (personaId) {
+      const { error } = await supabaseClient.from('transportista_contactos').update({
+        nombre: nombre || null, apellidos: apellidos || null, cargo: cargo || null, ambito: ambito || null, email: email || null, telefono: telefono || null,
+      }).eq('id', personaId);
+      if (error) throw error;
+      Object.assign(transportistaContactos.find(x=>x.id===personaId), { nombre, apellidos, cargo, ambito, email, telefono });
+      await logContactoHistorial(contactoId, `Contacto de transporte actualizado: ${etiqueta}.`);
+    } else {
+      const { data, error } = await supabaseClient.from('transportista_contactos').insert({
+        contacto_id: contactoId, nombre: nombre || null, apellidos: apellidos || null, cargo: cargo || null, ambito: ambito || null, email: email || null, telefono: telefono || null,
+      }).select().single();
+      if (error || !data) throw (error || new Error('sin datos'));
+      transportistaContactos.push({ id: data.id, contactoId, nombre, apellidos, cargo, ambito, email, telefono, createdAt: data.created_at });
+      await logContactoHistorial(contactoId, `Contacto de transporte añadido: ${etiqueta}.`);
+    }
+    closeModal();
+    renderTab();
+  } catch (err) {
+    errEl.textContent = 'No se pudo guardar: ' + (err && err.message ? err.message : 'error desconocido.');
+    if (btn) btn.disabled = false;
+  }
+}
+async function deleteTransportistaContacto(id){
+  const p = transportistaContactos.find(x=>x.id===id);
+  if (!p) return;
+  const etiqueta = [p.nombre, p.apellidos].filter(Boolean).join(' ') || 'sin nombre';
+  if (!confirm(`¿Eliminar el contacto "${etiqueta}"?`)) return;
+  const { error } = await supabaseClient.from('transportista_contactos').delete().eq('id', id);
+  if (error) { alert('No se pudo eliminar: ' + error.message); return; }
+  transportistaContactos = transportistaContactos.filter(x=>x.id!==id);
+  await logContactoHistorial(p.contactoId, `Contacto de transporte eliminado: ${etiqueta}.`);
+  renderTab();
+}
+// Contenido completo de la pestaña "Transporte": los contactos de arriba,
 // y debajo las rutas que cubre (las mismas de Transporte → Rutas, aquí
 // filtradas a este transportista, con alta/edición/borrado directos).
-function tplContactoTabTransporte(c, editMode){
+function tplContactoTabTransporte(c){
+  const personas = transportistaContactos.filter(p => p.contactoId === c.id);
   const rutas = transportistaRutas.filter(r => r.contactoId === c.id);
   // Añadir/editar coberturas lleva a Transporte → Rutas: solo si tiene ese apartado.
   const canRutas = sectionAllowedFor(PROFILE, 'trafico', 'colaboradores');
-  return tplContactoTransportistaContactoCard(c, editMode) + `
+  return `
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div>
+        <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Contacto de transporte</div>
+        <div style="font-size:12px;color:var(--mutedFaint);margin-top:2px;">Personas, correo y teléfono para avisar cuando hay un viaje disponible.</div>
+      </div>
+      <button class="btn btn-ghost" onclick="openTransportistaContactoModal('${c.id}')">+ Añadir contacto</button>
+    </div>
+    ${personas.length ? personas.map(tplTransportistaContactoTile).join('') : `<div class="card" style="color:var(--mutedFaint);font-size:12.5px;text-align:center;padding:20px;margin-top:14px;">Todavía no hay ningún contacto apuntado.</div>`}
     <div class="card" style="margin-top:20px;padding:0;overflow-x:auto;">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 18px 12px;">
         <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Rutas que cubre <span style="font-weight:400;color:var(--mutedFaint);">(${rutas.length})</span></div>
@@ -3753,45 +3813,6 @@ function verAutonomosDeContacto(companyId){
   if (window.__showingContactoDetail) return; // había cambios sin guardar y se ha cancelado el cierre
   currentTab = 'autonomos';
   openCompanyDrivers(companyId);
-}
-// Guarda el contacto de transporte (nombre, apellidos, cargo, correo, teléfono; botón
-// Guardar de esa tarjeta, dentro de Transportistas).
-async function saveContactoTransportistaContacto(id){
-  const c = contactos.find(x=>x.id===id);
-  if (!c) return;
-  const errEl = document.getElementById('ct-transp-error');
-  if (errEl) errEl.textContent = '';
-  const nombre = document.getElementById('ct-transp-nombre').value.trim();
-  const apellidos = document.getElementById('ct-transp-apellidos').value.trim();
-  const cargo = document.getElementById('ct-transp-cargo').value.trim();
-  const email = document.getElementById('ct-transp-email').value.trim();
-  const telefono = document.getElementById('ct-transp-telefono').value.trim();
-  const finish = () => { window.__contactoDetailEditMode = false; window.__contactoFormDirty = false; renderTab(); };
-  const sinCambios = nombre === (c.nombreTransportista||'') && apellidos === (c.apellidosTransportista||'')
-    && cargo === (c.cargoTransportista||'') && email === (c.emailTransportista||'') && telefono === (c.telefonoTransportista||'');
-  if (sinCambios) { finish(); return; }
-  document.querySelectorAll('#tab-content button').forEach(b => { b.disabled = true; });
-  try {
-    const { error } = await supabaseClient.from('contactos').update({
-      nombre_transportista: nombre || null, apellidos_transportista: apellidos || null, cargo_transportista: cargo || null,
-      email_transportista: email || null, telefono_transportista: telefono || null,
-    }).eq('id', id);
-    if (error) throw error;
-    const lines = [];
-    if ((c.nombreTransportista||'') !== nombre) lines.push(`Nombre de contacto: "${c.nombreTransportista||'—'}" → "${nombre||'—'}"`);
-    if ((c.apellidosTransportista||'') !== apellidos) lines.push(`Apellidos de contacto: "${c.apellidosTransportista||'—'}" → "${apellidos||'—'}"`);
-    if ((c.cargoTransportista||'') !== cargo) lines.push(`Cargo: "${c.cargoTransportista||'—'}" → "${cargo||'—'}"`);
-    if ((c.emailTransportista||'') !== email) lines.push(`Correo de transporte: "${c.emailTransportista||'—'}" → "${email||'—'}"`);
-    if ((c.telefonoTransportista||'') !== telefono) lines.push(`Teléfono de transporte: "${c.telefonoTransportista||'—'}" → "${telefono||'—'}"`);
-    c.nombreTransportista = nombre; c.apellidosTransportista = apellidos; c.cargoTransportista = cargo;
-    c.emailTransportista = email; c.telefonoTransportista = telefono;
-    if (lines.length) await logContactoHistorial(id, lines.join('\n'));
-    finish();
-  } catch (error) {
-    document.querySelectorAll('#tab-content button').forEach(b => { b.disabled = false; });
-    const el = document.getElementById('ct-transp-error');
-    if (el) el.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'error desconocido.');
-  }
 }
 // Tarifas de un cliente, dentro de su ficha (Comercial → Clientes): aquí es donde
 // se suben, se actualizan (↻ crea una nueva con fecha de hoy) y se eliminan. Arriba
@@ -3919,13 +3940,13 @@ function tplContactoDetailPage(){
   const tabs = contactoDetailTabs(editing, nav);
   const activeTab = tabs.some(t => t.id === window.__contactoDetailTab) ? window.__contactoDetailTab : 'general';
   const editMode = !!window.__contactoDetailEditMode;
-  const editableTab = activeTab === 'general' || activeTab === 'almacen' || activeTab === 'transporte';
+  const editableTab = activeTab === 'general' || activeTab === 'almacen';
   const inComercial = activeTab === 'comercial';
   const historial = Array.isArray(window.__contactoHistorial) ? window.__contactoHistorial.filter(h => !(h.resumen || '').startsWith(TARIFA_LOG_PREFIX)) : window.__contactoHistorial;
   const tabContentHtml = () => {
     if (activeTab === 'almacen') return tplContactoAlmacenCard(editing, editMode);
     if (activeTab === 'comercial') return tplContactoTarifasCard(editing) + tplContactoTarifasHistoricasCard(editing);
-    if (activeTab === 'transporte') return tplContactoTabTransporte(editing, editMode);
+    if (activeTab === 'transporte') return tplContactoTabTransporte(editing);
     if (activeTab === 'autonomos') return tplContactoTabAutonomos(editing);
     return editMode
       ? `<div class="card" oninput="window.__contactoFormDirty=true;" onchange="window.__contactoFormDirty=true;">${tplContactoEditForm(c, editing, editId)}</div>`
@@ -3955,7 +3976,6 @@ function tplContactoDetailPage(){
         ${!editMode && editableTab ? `<button class="btn btn-ghost" onclick="enterContactoEditMode()">Editar</button>` : ''}
         ${editMode && activeTab==='general' ? `<button class="btn btn-primary" onclick="submitContactoForm('${editId}')">Guardar</button>` : ''}
         ${editMode && activeTab==='almacen' ? `<button class="btn btn-primary" onclick="saveContactoWarehouses('${editId}')">Guardar</button>` : ''}
-        ${editMode && activeTab==='transporte' ? `<button class="btn btn-primary" onclick="saveContactoTransportistaContacto('${editId}')">Guardar</button>` : ''}
       </div>
     </div>
     ${tplContactoHeaderCard(editing)}
@@ -8038,6 +8058,16 @@ async function loadTransportistaRutas(){
     tarifaBase: r.tarifa_base === null || r.tarifa_base === undefined ? null : Number(r.tarifa_base), indexacion: !!r.indexacion,
   }));
 }
+// Personas de contacto de un transportista: una empresa grande puede tener
+// varias, cada una centrada en algo (rutas nacionales, internacional...).
+let transportistaContactos = [];
+async function loadTransportistaContactos(){
+  const { data } = await supabaseClient.from('transportista_contactos').select('*').order('created_at', { ascending: true });
+  transportistaContactos = (data||[]).map(p => ({
+    id: p.id, contactoId: p.contacto_id, nombre: p.nombre || '', apellidos: p.apellidos || '', cargo: p.cargo || '',
+    ambito: p.ambito || '', email: p.email || '', telefono: p.telefono || '', createdAt: p.created_at,
+  }));
+}
 function resetColaboradoresState(){
   window.__colabView = 'home';
   window.__colabBuscarPaisO = '';
@@ -8133,28 +8163,34 @@ function colabResultadosHtml(){
   const conContacto = filas.map(r => ({ r, c: contactos.find(x => x.id === r.contactoId) })).filter(x => x.c);
   if (!conContacto.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;">Ningún transportista apuntado cubre ${esc(origen)} → ${esc(destino)}.</div>`;
   const asunto = colabOfertaAsunto(origen, destino), cuerpo = colabOfertaCuerpo(origen, destino);
-  const conCorreo = conContacto.filter(x => x.c.emailTransportista);
-  const contactarTodos = conCorreo.length > 1
-    ? `<a class="btn btn-primary" href="${esc(colabMailtoUrl({ bcc: conCorreo.map(x=>x.c.emailTransportista).join(','), subject: asunto, body: cuerpo }))}">Contactar a los ${conCorreo.length} por correo</a>`
+  // Una empresa puede tener varios contactos (una por ámbito); se bccan todos los correos apuntados.
+  const todosCorreos = [...new Set(conContacto.flatMap(({c}) => transportistaContactos.filter(p => p.contactoId === c.id && p.email).map(p => p.email)))];
+  const contactarTodos = todosCorreos.length > 1
+    ? `<a class="btn btn-primary" href="${esc(colabMailtoUrl({ bcc: todosCorreos.join(','), subject: asunto, body: cuerpo }))}">Contactar a los ${todosCorreos.length} por correo</a>`
     : '';
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
       <div style="font-size:12.5px;color:var(--muted);">${conContacto.length} transportista${conContacto.length===1?'':'s'} cubre${conContacto.length===1?'':'n'} esta ruta</div>
       ${contactarTodos}
     </div>
-    ${conContacto.map(({r,c}) => `
-      <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--border);flex-wrap:wrap;">
-        <div style="flex:1;min-width:180px;">
-          <div style="font-weight:600;font-size:13.5px;cursor:pointer;" onclick="openTransportistaFicha('${c.id}')">${esc((c.nombreComercial||'').trim() || c.nombre)}</div>
-          <div style="font-size:12px;color:var(--muted);margin-top:2px;">${c.emailTransportista ? esc(c.emailTransportista) : 'Sin correo apuntado'}${c.telefonoTransportista ? ' · ' + esc(c.telefonoTransportista) : ''}</div>
-          ${r.tipoVehiculo ? `<div style="font-size:11.5px;color:var(--mutedFaint);margin-top:2px;">${esc(r.tipoVehiculo)}</div>` : ''}
-          ${r.tarifaBase!==null&&r.tarifaBase!==undefined ? `<div style="font-size:11.5px;color:var(--muted);font-weight:600;margin-top:2px;">${eur2(r.tarifaBase)}${r.indexacion ? ' + indexación' : ''}</div>` : ''}
-          ${r.observaciones ? `<div style="font-size:11.5px;color:var(--mutedFaint);margin-top:2px;">${esc(r.observaciones)}</div>` : ''}
-        </div>
-        ${c.emailTransportista
-          ? `<a class="btn btn-ghost" href="${esc(colabMailtoUrl({ to: c.emailTransportista, subject: asunto, body: cuerpo }))}">Contactar por correo</a>`
-          : `<button class="btn btn-ghost" disabled title="Apúntale un correo en Transporte → Transportistas">Sin correo</button>`}
-      </div>`).join('')}`;
+    ${conContacto.map(({r,c}) => {
+      const personas = transportistaContactos.filter(p => p.contactoId === c.id);
+      return `
+      <div style="padding:10px 0;border-top:1px solid var(--border);">
+        <div style="font-weight:600;font-size:13.5px;cursor:pointer;" onclick="openTransportistaFicha('${c.id}')">${esc((c.nombreComercial||'').trim() || c.nombre)}</div>
+        ${r.tipoVehiculo ? `<div style="font-size:11.5px;color:var(--mutedFaint);margin-top:2px;">${esc(r.tipoVehiculo)}</div>` : ''}
+        ${r.tarifaBase!==null&&r.tarifaBase!==undefined ? `<div style="font-size:11.5px;color:var(--muted);font-weight:600;margin-top:2px;">${eur2(r.tarifaBase)}${r.indexacion ? ' + indexación' : ''}</div>` : ''}
+        ${r.observaciones ? `<div style="font-size:11.5px;color:var(--mutedFaint);margin-top:2px;">${esc(r.observaciones)}</div>` : ''}
+        ${personas.length ? personas.map(p => `
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:8px;padding:8px 10px;background:var(--panel2);border-radius:8px;">
+            <div style="font-size:12px;color:var(--muted);">
+              <b>${esc([p.nombre, p.apellidos].filter(Boolean).join(' ') || 'Sin nombre')}</b>${p.ambito ? ` · ${esc(p.ambito)}` : ''}<br>
+              ${p.email ? esc(p.email) : 'Sin correo apuntado'}${p.telefono ? ' · ' + esc(p.telefono) : ''}
+            </div>
+            ${p.email ? `<a class="btn btn-ghost" href="${esc(colabMailtoUrl({ to: p.email, subject: asunto, body: cuerpo }))}">Contactar por correo</a>` : ''}
+          </div>`).join('') : `<div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">Sin ningún contacto apuntado (se añade desde su ficha en Transporte → Transportistas).</div>`}
+      </div>`;
+    }).join('')}`;
 }
 function colaboradoresFilteredRutas(){
   const search = (window.__colabSearch || '').toLowerCase();
@@ -11590,7 +11626,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   }
 
   await loadWarehouses();
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadTransportistaRutas()]);
+  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadTransportistaRutas(), loadTransportistaContactos()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
