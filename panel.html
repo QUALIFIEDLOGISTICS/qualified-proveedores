@@ -3965,7 +3965,7 @@ function tplContactoDetailPage(){
   const inComercial = activeTab === 'comercial';
   const historial = Array.isArray(window.__contactoHistorial) ? window.__contactoHistorial.filter(h => !(h.resumen || '').startsWith(TARIFA_LOG_PREFIX)) : window.__contactoHistorial;
   const tabContentHtml = () => {
-    if (activeTab === 'almacen') return tplContactoAlmacenCard(editing, editMode);
+    if (activeTab === 'almacen') return tplContactoAlmacenCard(editing, editMode) + tplAlmacenajeTarifasCard(editing) + tplAlmacenajeTarifasHistoricasCard(editing);
     if (activeTab === 'comercial') return tplContactoPersonasCard(editing) + tplContactoTarifasCard(editing) + tplContactoTarifasHistoricasCard(editing);
     if (activeTab === 'transporte') return tplContactoTabTransporte(editing);
     if (activeTab === 'autonomos') return tplContactoTabAutonomos(editing);
@@ -6945,6 +6945,190 @@ function tarifaPeriodos(list){
     out.push({ ...t, vigente: !newer, hasta, anterior: g[i + 1] || null });
   }));
   return out.sort(tarifaCmpReciente);
+}
+/* ---- Tarifa de almacenaje de un cliente (SGA, fase 1) ----
+   Cuánto se le cobra por tener mercancía guardada (palet, por tipo de palet,
+   m², bobina) y por los movimientos (entrada/salida). No depende del
+   almacén: es la tarifa pactada con ese cliente, se ve y se edita desde la
+   pestaña Almacén de su ficha. Un cliente puede combinar varios tipos a la
+   vez (p. ej. palets Europeos + m²): cada combinación (tipo + subtipo) es
+   su propia "línea", con su propio histórico de precios — mismo mecanismo
+   de vigente/histórica que ya usan las Tarifas de transporte (tarifaPeriodos).
+   Editar una línea corrige el mismo registro; para un precio nuevo desde
+   una fecha, se añade otra línea con esa fecha (la más reciente pasa a
+   vigente sola, sin tocar el resto del histórico). */
+let almacenajeTarifas = [];
+async function loadAlmacenajeTarifas(){
+  const { data } = await supabaseClient.from('almacenaje_tarifas').select('*').order('fecha', { ascending: false });
+  almacenajeTarifas = (data||[]).map(t => ({
+    id: t.id, createdAt: t.created_at, clienteId: t.cliente_id, fecha: t.fecha,
+    tipo: t.tipo, subtipo: t.subtipo || '', precio: Number(t.precio), observaciones: t.observaciones || '',
+  }));
+}
+const ALMACENAJE_TIPOS = [
+  { id: 'palet', label: 'Palet' },
+  { id: 'm2', label: 'M² ocupado' },
+  { id: 'bobina', label: 'Bobina' },
+  { id: 'entrada', label: 'Entrada (movimiento)' },
+  { id: 'salida', label: 'Salida (movimiento)' },
+];
+function almacenajeTipoLabel(tipo){ return (ALMACENAJE_TIPOS.find(x=>x.id===tipo)||{}).label || tipo; }
+function almacenajeEsPalet(tipo){ return tipo === 'palet'; }
+function almacenajeEsMovimiento(tipo){ return tipo === 'entrada' || tipo === 'salida'; }
+function almacenajeUnidadTxt(tipo){ return almacenajeEsMovimiento(tipo) ? '/movimiento' : '/día'; }
+function almacenajeEtiqueta(t){ return t.subtipo ? `${almacenajeTipoLabel(t.tipo)} ${t.subtipo}` : almacenajeTipoLabel(t.tipo); }
+function almacenajePrecioTxt(t){ return eur2(t.precio) + almacenajeUnidadTxt(t.tipo); }
+// La "línea" es la combinación tipo+subtipo: dos precios de "Palet Europeo"
+// forman histórico entre sí, pero no afectan a "Palet Americano" ni a "M²".
+function almacenajeLineaKey(t){ return [t.clienteId, t.tipo, (t.subtipo||'').trim().toUpperCase()].join('|'); }
+function almacenajePeriodos(list){
+  const groups = {};
+  list.slice().sort(tarifaCmpReciente).forEach(t => { (groups[almacenajeLineaKey(t)] = groups[almacenajeLineaKey(t)] || []).push(t); });
+  const out = [];
+  Object.values(groups).forEach(g => g.forEach((t, i) => {
+    const newer = i > 0 ? g[i - 1] : null;
+    let hasta = null;
+    if (newer) { hasta = tarifaDiaAnterior(newer.fecha); if (hasta < t.fecha) hasta = t.fecha; }
+    out.push({ ...t, vigente: !newer, hasta, anterior: g[i + 1] || null });
+  }));
+  return out.sort(tarifaCmpReciente);
+}
+const ALMACENAJE_LOG_PREFIX = 'Almacenaje · ';
+async function logAlmacenajeHistorial(clienteId, texto){
+  if (texto) await logContactoHistorial(clienteId, ALMACENAJE_LOG_PREFIX + texto);
+}
+function almacenajeSubtiposDatalistHtml(){
+  const subtipos = [...new Set(almacenajeTarifas.filter(t=>t.tipo==='palet' && t.subtipo).map(t=>t.subtipo))].sort();
+  return subtipos.map(s => `<option value="${esc(s)}">`).join('');
+}
+function tplAlmacenajeTarifaRowFieldsToggle(){
+  const tipo = document.getElementById('at-tipo').value;
+  document.getElementById('at-subtipo-field').style.display = tipo === 'palet' ? '' : 'none';
+  document.getElementById('at-precio-label').textContent = `Precio (€${almacenajeUnidadTxt(tipo)})`;
+}
+function openAlmacenajeTarifaModal(clienteId, editId){
+  const t = editId ? almacenajeTarifas.find(x=>x.id===editId) : null;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:440px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <h3 class="modal-title">${t?'Editar línea de tarifa':'Nueva línea de tarifa'}</h3><button class="close-x" onclick="closeModal()">✕</button>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">${t?'Corrige esta línea. Para un precio nuevo desde una fecha, mejor añade otra línea del mismo tipo.':'Si ya existe una línea vigente del mismo tipo, esta pasa a ser la nueva vigente y la anterior queda en el histórico.'}</div>
+        <div class="field"><label>Tipo</label><select id="at-tipo" onchange="tplAlmacenajeTarifaRowFieldsToggle()">${ALMACENAJE_TIPOS.map(x=>`<option value="${x.id}" ${t&&t.tipo===x.id||(!t&&x.id==='palet')?'selected':''}>${esc(x.label)}</option>`).join('')}</select></div>
+        <div class="field" id="at-subtipo-field" style="display:${!t||t.tipo==='palet'?'':'none'};">
+          <label>Tipo de palet</label>
+          <input id="at-subtipo" maxlength="60" data-combo="at-subtipos-datalist" autocomplete="off" placeholder="Ej. Europeo, Americano" value="${esc(t?t.subtipo:'')}" />
+          <datalist id="at-subtipos-datalist">${almacenajeSubtiposDatalistHtml()}</datalist>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Fecha desde</label><input id="at-fecha" type="date" value="${esc(t?t.fecha:today())}" /></div>
+          <div class="field" style="flex:1;"><label id="at-precio-label">Precio (€${almacenajeUnidadTxt(t?t.tipo:'palet')})</label><input id="at-precio" type="text" inputmode="decimal" maxlength="10" placeholder="Ej. 0,45" value="${t&&t.precio!=null?esc(String(t.precio).replace('.', ',')):''}" /></div>
+        </div>
+        <div class="field"><label>Observaciones (opcional)</label><input id="at-obs" maxlength="250" value="${esc(t?t.observaciones:'')}" /></div>
+        <div id="at-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary at-submit-btn" style="flex:1;justify-content:center;" onclick="submitAlmacenajeTarifa('${clienteId}', '${editId||''}')">${t?'Guardar':'Añadir'}</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const el = document.getElementById('at-precio'); if (el) el.focus(); }, 0);
+}
+async function submitAlmacenajeTarifa(clienteId, editId){
+  const errEl = document.getElementById('at-error');
+  errEl.textContent = '';
+  const tipo = document.getElementById('at-tipo').value;
+  const subtipo = tipo === 'palet' ? document.getElementById('at-subtipo').value.trim() : '';
+  const fecha = document.getElementById('at-fecha').value;
+  const precioTxt = document.getElementById('at-precio').value.trim();
+  const observaciones = document.getElementById('at-obs').value.trim();
+  if (tipo === 'palet' && !subtipo) { errEl.textContent = 'Indica el tipo de palet.'; return; }
+  if (!fecha) { errEl.textContent = 'Indica la fecha.'; return; }
+  const precio = Number(precioTxt.replace(',', '.'));
+  if (!precioTxt || !isFinite(precio) || precio < 0) { errEl.textContent = 'Indica el precio.'; return; }
+  const btn = document.querySelector('.at-submit-btn');
+  if (btn) btn.disabled = true;
+  const payload = { cliente_id: clienteId, fecha, tipo, subtipo: subtipo || null, precio, observaciones: observaciones || null };
+  const etiqueta = subtipo ? `${almacenajeTipoLabel(tipo)} ${subtipo}` : almacenajeTipoLabel(tipo);
+  try {
+    if (editId) {
+      const { error } = await supabaseClient.from('almacenaje_tarifas').update(payload).eq('id', editId);
+      if (error) throw error;
+      Object.assign(almacenajeTarifas.find(x=>x.id===editId), { fecha, tipo, subtipo, precio, observaciones });
+      await logAlmacenajeHistorial(clienteId, `ha corregido la línea ${etiqueta} a ${eur2(precio)}${almacenajeUnidadTxt(tipo)}.`);
+    } else {
+      const { data, error } = await supabaseClient.from('almacenaje_tarifas').insert({ ...payload, created_by: currentUserEmail() }).select().single();
+      if (error || !data) throw (error || new Error('sin datos'));
+      almacenajeTarifas.push({ id: data.id, createdAt: data.created_at, clienteId, fecha, tipo, subtipo, precio, observaciones });
+      await logAlmacenajeHistorial(clienteId, `ha añadido la línea ${etiqueta} a ${eur2(precio)}${almacenajeUnidadTxt(tipo)}, vigente desde el ${fmtDateDMY(fecha)}.`);
+    }
+    closeModal();
+    renderTab();
+  } catch (err) {
+    errEl.textContent = 'No se pudo guardar: ' + (err && err.message ? err.message : 'error desconocido.');
+    if (btn) btn.disabled = false;
+  }
+}
+async function deleteAlmacenajeTarifa(id){
+  const t = almacenajeTarifas.find(x=>x.id===id);
+  if (!t) return;
+  if (!confirm(`¿Eliminar la línea "${almacenajeEtiqueta(t)}" de ${fmtDateDMY(t.fecha)}?`)) return;
+  const { error } = await supabaseClient.from('almacenaje_tarifas').delete().eq('id', id);
+  if (error) { alert('No se pudo eliminar: ' + error.message); return; }
+  almacenajeTarifas = almacenajeTarifas.filter(x=>x.id!==id);
+  await logAlmacenajeHistorial(t.clienteId, `ha eliminado la línea ${almacenajeEtiqueta(t)}.`);
+  renderTab();
+}
+function tplAlmacenajeTarifasCard(c){
+  const vigentes = almacenajePeriodos(almacenajeTarifas.filter(t=>t.clienteId===c.id)).filter(t=>t.vigente);
+  return `
+    <div class="card" style="margin-top:20px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;">
+        <div>
+          <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Tarifa de almacenaje</div>
+          <div style="font-size:12px;color:var(--mutedFaint);margin-top:2px;">Lo pactado con este cliente por almacenaje y movimientos. Puede combinar varios tipos a la vez.</div>
+        </div>
+        <button class="btn btn-ghost" onclick="openAlmacenajeTarifaModal('${c.id}')">+ Añadir línea</button>
+      </div>
+      ${vigentes.length ? `
+      <table class="tf-table" style="margin-top:10px;">
+        <thead><tr>${thSort('Tipo','text')}${thSort('Precio','number','style="text-align:right;"')}${thSort('Vigente desde','date')}${thSort('Observaciones','text')}<th>Acciones</th></tr></thead>
+        <tbody>
+          ${vigentes.map(t => `
+            <tr>
+              <td data-sort-value="${esc(almacenajeEtiqueta(t))}">${esc(almacenajeEtiqueta(t))}</td>
+              <td class="tf-precio" data-sort-value="${t.precio}">${esc(almacenajePrecioTxt(t))}</td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
+              <td style="color:var(--muted);" data-sort-value="${esc(t.observaciones)}">${t.observaciones ? esc(t.observaciones) : '—'}</td>
+              <td style="white-space:nowrap;">
+                <button onclick="openAlmacenajeTarifaModal('${c.id}', '${t.id}')" title="Editar" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;cursor:pointer;vertical-align:middle;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+                <button onclick="deleteAlmacenajeTarifa('${t.id}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);font-size:14px;padding:2px 4px;cursor:pointer;">🗑</button>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>` : `<div style="color:var(--mutedFaint);font-size:12.5px;margin-top:10px;">Todavía no hay ninguna línea de tarifa para este cliente.</div>`}
+    </div>`;
+}
+function tplAlmacenajeTarifasHistoricasCard(c){
+  const historicas = almacenajePeriodos(almacenajeTarifas.filter(t=>t.clienteId===c.id)).filter(t=>!t.vigente);
+  if (!historicas.length) return '';
+  return `
+    <div class="card" style="margin-top:14px;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:10px;">Histórico de almacenaje <span style="font-weight:400;color:var(--mutedFaint);">(${historicas.length})</span></div>
+      <table class="tf-table tf-hist">
+        <thead><tr>${thSort('Tipo','text')}${thSort('Precio','number','style="text-align:right;"')}${thSort('Vigente del','date')}${thSort('Hasta','date')}</tr></thead>
+        <tbody>
+          ${historicas.map(t => `
+            <tr>
+              <td data-sort-value="${esc(almacenajeEtiqueta(t))}">${esc(almacenajeEtiqueta(t))}</td>
+              <td class="tf-precio" data-sort-value="${t.precio}">${esc(almacenajePrecioTxt(t))}</td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(t.hasta)}">${fmtDateDMY(t.hasta)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
 }
 /* ---- Historial de cambios de tarifas (ficha del cliente en Comercial) ----
    Cada alta, cambio o baja de una tarifa queda anotado en el historial del cliente
@@ -11647,7 +11831,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   }
 
   await loadWarehouses();
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadTransportistaRutas(), loadTransportistaContactos()]);
+  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadTransportistaRutas(), loadTransportistaContactos(), loadAlmacenajeTarifas()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
