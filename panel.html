@@ -1055,8 +1055,12 @@ function computeBreadcrumbSegments(){
     return [{label: comercialSection() === 'tarifas' ? 'Tarifas Transporte' : 'Clientes', onclick:null}];
   }
   if (currentTab === ALMACEN_CONFIG_TAB) {
+    if (window.__apView === 'form') {
+      const p = window.__apFormId ? almacenajeProducto(window.__apFormId) : null;
+      return [{label:'Productos', onclick:'backToAlmacenajeProductos()'}, {label: p ? p.nombre : 'Nuevo producto', onclick:null}];
+    }
     const wh = window.__whFormId ? allWarehouses.find(w=>w.id===window.__whFormId) : null;
-    return [{label:'Configuración', onclick:'backToWarehouses()'}, {label: wh ? wh.name : 'Nuevo almacén', onclick:null}];
+    return [{label:'Almacenes', onclick:'backToWarehouses()'}, {label: wh ? wh.name : 'Nuevo almacén', onclick:null}];
   }
   if (currentTab === 'trafico') {
     // (La barra del módulo ya indica la sección; el camino solo sale en los formularios.)
@@ -1195,9 +1199,9 @@ function tplAlmacenBar(){
    y un historial de quién cambió qué y cuándo. */
 const WAREHOUSE_COLORS = ['#2E6F95', '#C98A2E', '#8A4A35', '#3F8F5F', '#7C5CBF', '#C1443D', '#2C9A93', '#D9A72C', '#5C6670', '#1B3A6B'];
 const WAREHOUSES_PAGE_SIZE = 80;
-function almacenIsSubpage(){ return currentTab === ALMACEN_CONFIG_TAB && window.__whView === 'form'; }
+function almacenIsSubpage(){ return currentTab === ALMACEN_CONFIG_TAB && (window.__whView === 'form' || window.__apView === 'form'); }
 function warehouseConfirmLeaveForm(){
-  if (almacenIsSubpage() && window.__whEditMode && window.__whFormDirty) {
+  if (currentTab === ALMACEN_CONFIG_TAB && window.__whView === 'form' && window.__whEditMode && window.__whFormDirty) {
     return confirm('Tienes cambios sin guardar. ¿Seguro que quieres salir sin guardar?');
   }
   return true;
@@ -1212,6 +1216,9 @@ function resetWarehouseConfigState(){
   window.__whSearch = '';
   window.__whFilterOpen = false;
   window.__whPage = 0;
+  window.__almacenConfigSection = 'almacenes';
+  window.__apView = 'list';
+  window.__apFormId = null;
 }
 function backToWarehouses(){
   if (!warehouseConfirmLeaveForm()) return;
@@ -1276,8 +1283,20 @@ function refreshWarehousesListBody(){
   const pag = document.getElementById('wh-pagination');
   if (pag) pag.innerHTML = tplWarehousesPaginationHtml();
 }
+function almacenConfigSection(){ return window.__almacenConfigSection || 'almacenes'; }
+function setAlmacenConfigSection(id){
+  window.__almacenConfigSection = id;
+  renderTab();
+}
+function tplAlmacenConfigTabsHtml(){
+  const section = almacenConfigSection();
+  const tab = (id, label) => `<button onclick="setAlmacenConfigSection('${id}')" style="background:none;border:none;border-bottom:2px solid ${section===id?'var(--primary)':'transparent'};padding:7px 2px;margin-right:20px;font-size:13px;font-weight:${section===id?700:500};color:${section===id?'var(--primary)':'var(--muted)'};cursor:pointer;">${esc(label)}</button>`;
+  return `<div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:20px;">${tab('almacenes','Almacenes')}${tab('productos','Productos')}</div>`;
+}
 function tplAlmacenConfig(){
-  return window.__whView === 'form' ? tplWarehouseFormPage() : tplWarehousesPage();
+  if (window.__whView === 'form') return tplWarehouseFormPage();
+  if (window.__apView === 'form') return tplAlmacenajeProductoFormPage();
+  return tplAlmacenConfigTabsHtml() + (almacenConfigSection() === 'productos' ? tplAlmacenajeProductosPage() : tplWarehousesPage());
 }
 function tplWarehousesPage(){
   const archivedView = (window.__whListView || 'activos') === 'archivados';
@@ -1285,8 +1304,8 @@ function tplWarehousesPage(){
     <div style="display:flex;align-items:center;gap:14px;margin-bottom:22px;">
       <div style="width:48px;height:48px;border-radius:12px;background:rgba(92,102,112,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.settings, 24, '#5C6670')}</div>
       <div>
-        <div style="font-family:var(--display);font-size:22px;">Configuración</div>
-        <div style="font-size:12.5px;color:var(--mutedFaint);">Almacenes: dales de alta, cámbiales el nombre o archívalos.</div>
+        <div style="font-family:var(--display);font-size:22px;">Almacenes</div>
+        <div style="font-size:12.5px;color:var(--mutedFaint);">Dales de alta, cámbiales el nombre o archívalos.</div>
       </div>
     </div>
     <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:16px;">
@@ -6984,25 +7003,34 @@ async function loadAlmacenajeTarifas(){
     categoria: t.tipo_actividad || almacenajeCategoriaDe(t.tipo),
   }));
 }
-// "Tipo" (qué es exactamente) y "categoria"/Tipo de actividad (para agrupar
-// en estadísticas: Almacenaje, Movimiento o Extra) son cosas distintas. La
-// categoría la decide el tipo elegido, nunca se pregunta aparte — así no
-// hay forma de marcar "Palet" como Extra por error — pero se guarda tal
-// cual en cada línea (no se recalcula sola) para que si el día de mañana
-// cambia la categoría de un tipo, las estadísticas ya guardadas no cambien
-// solas con el tiempo.
+// Catálogo de "Productos" de almacenaje (Palet, M², Bobina, Entrada, Salida,
+// Hora operario...): antes una lista fija en el código, ahora se gestiona
+// desde Almacén → Configuración → Productos (sin tocar código para añadir un
+// extra nuevo). Las 3 categorías (Almacenaje/Movimiento/Extra) sí son fijas
+// — son la taxonomía de las estadísticas — pero qué producto va en cada una
+// lo decide quien gestione el catálogo. Un producto archivado sigue
+// resolviéndose bien en las tarifas ya guardadas, solo deja de ofrecerse
+// para tarifas nuevas.
+let almacenajeProductos = [];
+async function loadAlmacenajeProductos(){
+  const { data } = await supabaseClient.from('almacenaje_productos').select('*').order('nombre', { ascending: true });
+  almacenajeProductos = (data||[]).map(p => ({
+    id: p.id, createdAt: p.created_at, nombre: p.nombre, categoria: p.categoria, unidad: p.unidad,
+    usaSubtipo: !!p.usa_subtipo, subtipoLabel: p.subtipo_label || '', archived: !!p.archived,
+  }));
+}
+function almacenajeProducto(tipo){ return almacenajeProductos.find(p=>p.id===tipo); }
+// "Tipo" (qué producto es exactamente) y "categoria"/Tipo de actividad (para
+// agrupar en estadísticas: Almacenaje, Movimiento o Extra) son cosas
+// distintas. La categoría la decide el producto elegido, nunca se pregunta
+// aparte — así no hay forma de marcar "Palet" como Extra por error — pero se
+// guarda tal cual en cada línea de tarifa (no se recalcula sola) para que si
+// el día de mañana cambia la categoría de un producto, las estadísticas ya
+// guardadas no cambien solas con el tiempo.
 const ALMACENAJE_CATEGORIAS = { almacenaje: 'Almacenaje', movimiento: 'Movimiento', extra: 'Extra' };
-const ALMACENAJE_TIPOS = [
-  { id: 'palet', label: 'Palet', categoria: 'almacenaje' },
-  { id: 'm2', label: 'M² ocupado', categoria: 'almacenaje' },
-  { id: 'bobina', label: 'Bobina', categoria: 'almacenaje' },
-  { id: 'entrada', label: 'Entrada', categoria: 'movimiento' },
-  { id: 'salida', label: 'Salida', categoria: 'movimiento' },
-  { id: 'hora_operario', label: 'Hora operario', categoria: 'extra' },
-  { id: 'hora_carretilla', label: 'Hora carretilla', categoria: 'extra' },
-];
-function almacenajeTipoLabel(tipo){ return (ALMACENAJE_TIPOS.find(x=>x.id===tipo)||{}).label || tipo; }
-function almacenajeCategoriaDe(tipo){ return (ALMACENAJE_TIPOS.find(x=>x.id===tipo)||{}).categoria || 'extra'; }
+const ALMACENAJE_UNIDADES = { dia: '/día', mes: '/mes', movimiento: '/movimiento', hora: '/hora' };
+function almacenajeTipoLabel(tipo){ const p = almacenajeProducto(tipo); return p ? p.nombre : tipo; }
+function almacenajeCategoriaDe(tipo){ const p = almacenajeProducto(tipo); return p ? p.categoria : 'extra'; }
 function almacenajeCategoriaLabel(cat){ return ALMACENAJE_CATEGORIAS[cat] || cat; }
 // Orden de la tabla al abrirla (antes de que se pulse ninguna cabecera para
 // reordenar a mano): primero por categoría (Almacenaje, Movimiento, Extra) y
@@ -7019,17 +7047,159 @@ function almacenajeCategoriaBadgeHtml(cat){
   return `<span style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:${color};background:${color}1A;border-radius:999px;padding:2px 9px;white-space:nowrap;">${esc(almacenajeCategoriaLabel(cat))}</span>`;
 }
 // Desplegable de Tipo agrupado por categoría (optgroup), para que se vea
-// ordenado según se vayan añadiendo más "extras" con el tiempo.
+// ordenado según se vayan añadiendo más "extras" con el tiempo. Solo se
+// ofrecen los productos activos (un archivado no se puede elegir de nuevo,
+// pero las tarifas que ya lo usaban lo siguen mostrando bien).
 function almacenajeTipoOptionsHtml(selected){
-  return Object.keys(ALMACENAJE_CATEGORIAS).map(cat => `
-    <optgroup label="${esc(ALMACENAJE_CATEGORIAS[cat])}">
-      ${ALMACENAJE_TIPOS.filter(x=>x.categoria===cat).map(x=>`<option value="${x.id}" ${x.id===selected?'selected':''}>${esc(x.label)}</option>`).join('')}
-    </optgroup>`).join('');
+  const activos = almacenajeProductos.filter(p => !p.archived || p.id === selected);
+  return Object.keys(ALMACENAJE_CATEGORIAS).map(cat => {
+    const deEstaCategoria = activos.filter(p=>p.categoria===cat);
+    if (!deEstaCategoria.length) return '';
+    return `<optgroup label="${esc(ALMACENAJE_CATEGORIAS[cat])}">
+      ${deEstaCategoria.map(p=>`<option value="${p.id}" ${p.id===selected?'selected':''}>${esc(p.nombre)}</option>`).join('')}
+    </optgroup>`;
+  }).join('');
 }
-function almacenajeEsPalet(tipo){ return tipo === 'palet'; }
-function almacenajeEsMovimiento(tipo){ return tipo === 'entrada' || tipo === 'salida'; }
-function almacenajeEsPorHora(tipo){ return tipo === 'hora_operario' || tipo === 'hora_carretilla'; }
-function almacenajeUnidadTxt(tipo){ return almacenajeEsMovimiento(tipo) ? '/movimiento' : almacenajeEsPorHora(tipo) ? '/hora' : tipo === 'm2' ? '/mes' : '/día'; }
+function almacenajeUsaSubtipo(tipo){ const p = almacenajeProducto(tipo); return !!(p && p.usaSubtipo); }
+function almacenajeSubtipoLabel(tipo){ const p = almacenajeProducto(tipo); return (p && p.subtipoLabel) || 'Subtipo'; }
+function almacenajeUnidadTxt(tipo){ const p = almacenajeProducto(tipo); return ALMACENAJE_UNIDADES[p ? p.unidad : 'dia'] || '/día'; }
+
+/* ---- Almacén → Configuración → Productos (catálogo, CRUD) ---- */
+const ALMACENAJE_UNIDAD_LABELS = { dia: 'Por día', mes: 'Por mes', movimiento: 'Por movimiento', hora: 'Por hora' };
+// Identificador del producto a partir del nombre ("Retractilado" → "retractilado"),
+// con el mismo formato (minúsculas y guion bajo) que ya llevan los 7 sembrados.
+function almacenajeProductoSlug(nombre){
+  const base = nombre.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'producto';
+  let id = base, n = 2;
+  while (almacenajeProductos.some(p => p.id === id)) id = `${base}_${n++}`;
+  return id;
+}
+function openAlmacenajeProductoForm(editId){
+  window.__apView = 'form';
+  window.__apFormId = editId || null;
+  renderTab();
+  window.scrollTo(0, 0);
+  if (!editId) setTimeout(() => { const el = document.getElementById('ap-nombre'); if (el) el.focus(); }, 0);
+}
+function backToAlmacenajeProductos(){
+  window.__apView = 'list';
+  window.__apFormId = null;
+  renderTab();
+}
+function almacenajeProductoFormToggleSubtipo(){
+  const box = document.getElementById('ap-usasubtipo');
+  const wrap = document.getElementById('ap-subtipolabel-wrap');
+  if (wrap) wrap.style.display = box.checked ? '' : 'none';
+}
+async function submitAlmacenajeProducto(editId){
+  const nombre = (document.getElementById('ap-nombre').value || '').trim();
+  const categoria = document.getElementById('ap-categoria').value;
+  const unidad = document.getElementById('ap-unidad').value;
+  const usaSubtipo = document.getElementById('ap-usasubtipo').checked;
+  const subtipoLabel = (document.getElementById('ap-subtipolabel').value || '').trim();
+  if (!nombre) { alert('Ponle un nombre al producto.'); return; }
+  if (usaSubtipo && !subtipoLabel) { alert('Ponle un nombre al subtipo (p. ej. "Tipo de palet").'); return; }
+  const editing = editId ? almacenajeProducto(editId) : null;
+  const row = { nombre, categoria, unidad, usa_subtipo: usaSubtipo, subtipo_label: usaSubtipo ? subtipoLabel : null };
+  if (editing) {
+    const { error } = await supabaseClient.from('almacenaje_productos').update(row).eq('id', editing.id);
+    if (error) { alert('No se pudo guardar: ' + error.message); return; }
+    Object.assign(editing, { nombre, categoria, unidad, usaSubtipo, subtipoLabel: row.subtipo_label || '' });
+  } else {
+    const id = almacenajeProductoSlug(nombre);
+    const { data, error } = await supabaseClient.from('almacenaje_productos').insert({ id, ...row }).select().single();
+    if (error) { alert('No se pudo crear: ' + error.message); return; }
+    almacenajeProductos.push({ id: data.id, createdAt: data.created_at, nombre, categoria, unidad, usaSubtipo, subtipoLabel: row.subtipo_label || '', archived: false });
+  }
+  backToAlmacenajeProductos();
+}
+async function setAlmacenajeProductoArchived(id, archived){
+  const p = almacenajeProducto(id);
+  if (!p) return;
+  if (archived && !confirm(`¿Archivar "${p.nombre}"? Dejará de poder elegirse en tarifas nuevas; las que ya lo usan seguirán viéndose bien.`)) return;
+  const { error } = await supabaseClient.from('almacenaje_productos').update({ archived }).eq('id', id);
+  if (error) { alert('No se pudo guardar: ' + error.message); return; }
+  p.archived = archived;
+  renderTab();
+}
+function tplAlmacenajeProductosPage(){
+  const list = almacenajeProductos.slice().sort((a, b) => {
+    const oa = ALMACENAJE_CATEGORIA_ORDEN[a.categoria] ?? 9;
+    const ob = ALMACENAJE_CATEGORIA_ORDEN[b.categoria] ?? 9;
+    return oa !== ob ? oa - ob : a.nombre.localeCompare(b.nombre, 'es');
+  });
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:22px;flex-wrap:wrap;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div style="width:48px;height:48px;border-radius:12px;background:rgba(124,92,191,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.tag, 24, '#7C5CBF')}</div>
+        <div>
+          <div style="font-family:var(--display);font-size:22px;">Productos</div>
+          <div style="font-size:12.5px;color:var(--mutedFaint);">Los conceptos que se pueden tarifar en Almacenaje. Añade uno nuevo sin tocar código.</div>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="openAlmacenajeProductoForm()">+ Nuevo producto</button>
+    </div>
+    ${list.length ? `
+    <table class="tf-table">
+      <thead><tr>${thSort('Actividad','text')}${thSort('Nombre','text')}${thSort('Unidad','text')}${thSort('Subtipo','text')}${thSort('Estado','text')}<th>Acciones</th></tr></thead>
+      <tbody>
+        ${list.map(p => `
+          <tr style="${p.archived?'opacity:0.6;':''}">
+            <td data-sort-value="${esc(almacenajeCategoriaLabel(p.categoria))}">${almacenajeCategoriaBadgeHtml(p.categoria)}</td>
+            <td data-sort-value="${esc(p.nombre)}">${esc(p.nombre)}</td>
+            <td data-sort-value="${esc(ALMACENAJE_UNIDAD_LABELS[p.unidad]||'')}">${esc(ALMACENAJE_UNIDAD_LABELS[p.unidad]||'—')}</td>
+            <td style="color:var(--muted);" data-sort-value="${esc(p.subtipoLabel)}">${p.usaSubtipo ? esc(p.subtipoLabel || 'Sí') : '—'}</td>
+            <td data-sort-value="${p.archived?'Archivado':'Activo'}">${p.archived ? '<span style="color:var(--mutedFaint);">Archivado</span>' : '<span style="color:#3F8F5F;">Activo</span>'}</td>
+            <td style="white-space:nowrap;">
+              <button onclick="openAlmacenajeProductoForm('${p.id}')" title="Editar" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;cursor:pointer;vertical-align:middle;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+              <button onclick="setAlmacenajeProductoArchived('${p.id}', ${!p.archived})" title="${p.archived?'Activar':'Archivar'}" style="background:none;border:none;color:var(--mutedFaint);font-size:12.5px;padding:4px 6px;cursor:pointer;">${p.archived?'Activar':'Archivar'}</button>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>` : `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Todavía no hay ningún producto creado.</div>`}
+  `;
+}
+function tplAlmacenajeProductoFormPage(){
+  const editId = window.__apFormId;
+  const editing = editId ? almacenajeProducto(editId) : null;
+  const p = editing || {};
+  return `
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:22px;">
+      <div style="width:48px;height:48px;border-radius:12px;background:rgba(124,92,191,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.tag, 24, '#7C5CBF')}</div>
+      <div>
+        <div style="font-family:var(--display);font-size:22px;">${editing ? esc(editing.nombre) : 'Nuevo producto'}</div>
+        <div style="font-size:12.5px;color:var(--mutedFaint);">Un concepto tarifable en Almacenaje (p. ej. Palet, M², Retractilado…).</div>
+      </div>
+    </div>
+    <div class="card" style="max-width:520px;">
+      <div class="field"><label>Nombre</label><input id="ap-nombre" maxlength="60" placeholder="Ej. Retractilado" value="${esc(p.nombre||'')}" /></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:200px;">
+          <label>Tipo de actividad</label>
+          <select id="ap-categoria">${Object.keys(ALMACENAJE_CATEGORIAS).map(cat => `<option value="${cat}" ${p.categoria===cat?'selected':''}>${esc(ALMACENAJE_CATEGORIAS[cat])}</option>`).join('')}</select>
+        </div>
+        <div class="field" style="flex:1;min-width:200px;">
+          <label>Unidad de cobro</label>
+          <select id="ap-unidad">${Object.keys(ALMACENAJE_UNIDAD_LABELS).map(u => `<option value="${u}" ${p.unidad===u?'selected':''}>${esc(ALMACENAJE_UNIDAD_LABELS[u])}</option>`).join('')}</select>
+        </div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin:4px 0 14px;">
+        <input type="checkbox" id="ap-usasubtipo" style="width:auto;" ${p.usaSubtipo?'checked':''} onchange="almacenajeProductoFormToggleSubtipo()" />
+        Necesita un subtipo (p. ej. Palet Europeo / Americano)
+      </label>
+      <div class="field" id="ap-subtipolabel-wrap" style="${p.usaSubtipo?'':'display:none;'}margin-bottom:4px;">
+        <label>Nombre del subtipo</label>
+        <input id="ap-subtipolabel" maxlength="40" placeholder="Ej. Tipo de palet" value="${esc(p.subtipoLabel||'')}" />
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:16px;">
+        <div>${editing ? `<button class="btn btn-ghost" onclick="setAlmacenajeProductoArchived('${editing.id}', ${!editing.archived})">${editing.archived?'Activar':'Archivar'}</button>` : ''}</div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" onclick="backToAlmacenajeProductos()">Cancelar</button>
+          <button class="btn btn-primary" onclick="submitAlmacenajeProducto(${editing ? `'${editing.id}'` : 'null'})">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+}
 function almacenajeEtiqueta(t){ return t.subtipo ? `${almacenajeTipoLabel(t.tipo)} ${t.subtipo}` : almacenajeTipoLabel(t.tipo); }
 function almacenajePrecioTxt(t){ return eur2(t.precio) + almacenajeUnidadTxt(t.tipo); }
 // La "línea" es la combinación tipo+subtipo: dos precios de "Palet Europeo"
@@ -7052,12 +7222,14 @@ async function logAlmacenajeHistorial(clienteId, texto){
   if (texto) await logContactoHistorial(clienteId, ALMACENAJE_LOG_PREFIX + texto);
 }
 function almacenajeSubtiposDatalistHtml(){
-  const subtipos = [...new Set(almacenajeTarifas.filter(t=>t.tipo==='palet' && t.subtipo).map(t=>t.subtipo))].sort();
+  const subtipos = [...new Set(almacenajeTarifas.filter(t=>almacenajeUsaSubtipo(t.tipo) && t.subtipo).map(t=>t.subtipo))].sort();
   return subtipos.map(s => `<option value="${esc(s)}">`).join('');
 }
 function tplAlmacenajeTarifaRowFieldsToggle(){
   const tipo = document.getElementById('at-tipo').value;
-  document.getElementById('at-subtipo-field').style.display = tipo === 'palet' ? '' : 'none';
+  document.getElementById('at-subtipo-field').style.display = almacenajeUsaSubtipo(tipo) ? '' : 'none';
+  const subLabelEl = document.getElementById('at-subtipo-label');
+  if (subLabelEl) subLabelEl.textContent = almacenajeSubtipoLabel(tipo);
   document.getElementById('at-precio-label').textContent = `Precio (€${almacenajeUnidadTxt(tipo)})`;
 }
 // Corrige una línea ya existente (p. ej. un error de tecleo). Para un precio
@@ -7074,8 +7246,8 @@ function openAlmacenajeTarifaModal(clienteId, editId){
         </div>
         <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">Corrige esta línea. Para un precio nuevo desde una fecha, mejor añade otra línea del mismo tipo con «+ Añadir línea».</div>
         <div class="field"><label>Tipo</label><select id="at-tipo" onchange="tplAlmacenajeTarifaRowFieldsToggle()">${almacenajeTipoOptionsHtml(t.tipo)}</select></div>
-        <div class="field" id="at-subtipo-field" style="display:${t.tipo==='palet'?'':'none'};">
-          <label>Tipo de palet</label>
+        <div class="field" id="at-subtipo-field" style="display:${almacenajeUsaSubtipo(t.tipo)?'':'none'};">
+          <label id="at-subtipo-label">${esc(almacenajeSubtipoLabel(t.tipo))}</label>
           <input id="at-subtipo" maxlength="60" data-combo="at-subtipos-datalist" autocomplete="off" placeholder="Ej. Europeo, Americano" value="${esc(t.subtipo)}" />
           <datalist id="at-subtipos-datalist">${almacenajeSubtiposDatalistHtml()}</datalist>
         </div>
@@ -7097,11 +7269,11 @@ async function submitAlmacenajeTarifa(clienteId, editId){
   const errEl = document.getElementById('at-error');
   errEl.textContent = '';
   const tipo = document.getElementById('at-tipo').value;
-  const subtipo = tipo === 'palet' ? document.getElementById('at-subtipo').value.trim() : '';
+  const subtipo = almacenajeUsaSubtipo(tipo) ? document.getElementById('at-subtipo').value.trim() : '';
   const fecha = document.getElementById('at-fecha').value;
   const precioTxt = document.getElementById('at-precio').value.trim();
   const observaciones = document.getElementById('at-obs').value.trim();
-  if (tipo === 'palet' && !subtipo) { errEl.textContent = 'Indica el tipo de palet.'; return; }
+  if (almacenajeUsaSubtipo(tipo) && !subtipo) { errEl.textContent = `Indica ${almacenajeSubtipoLabel(tipo).toLowerCase()}.`; return; }
   if (!fecha) { errEl.textContent = 'Indica la fecha.'; return; }
   const precio = Number(precioTxt.replace(',', '.'));
   if (!precioTxt || !isFinite(precio) || precio < 0) { errEl.textContent = 'Indica el precio.'; return; }
@@ -7146,10 +7318,12 @@ function backFromAlmacenajeForm(){
 }
 function almacenajeFilaTipoChange(i){
   const tipo = document.getElementById(`af-${i}-tipo`).value;
+  const usa = almacenajeUsaSubtipo(tipo);
   const subtipoEl = document.getElementById(`af-${i}-subtipo`);
-  subtipoEl.disabled = tipo !== 'palet';
-  subtipoEl.style.opacity = tipo === 'palet' ? '1' : '0.5';
-  if (tipo !== 'palet') subtipoEl.value = '';
+  subtipoEl.disabled = !usa;
+  subtipoEl.style.opacity = usa ? '1' : '0.5';
+  subtipoEl.placeholder = usa ? almacenajeSubtipoLabel(tipo) : '';
+  if (!usa) subtipoEl.value = '';
   window.__almacenajeFormDirty = true;
 }
 function almacenajeFilaRowHtml(i){
@@ -7199,7 +7373,7 @@ function tplAlmacenajeTarifaFormPage(c){
           <thead><tr>
             <th style="padding:6px 4px;text-align:right;">#</th>
             <th style="padding:6px 4px;">Tipo</th>
-            <th style="padding:6px 4px;">Tipo de palet</th>
+            <th style="padding:6px 4px;">Subtipo</th>
             <th style="padding:6px 4px;">Vigente desde</th>
             <th style="padding:6px 4px;">Precio</th>
             <th style="padding:6px 4px;">Observaciones</th>
@@ -7228,7 +7402,7 @@ async function submitAlmacenajeTarifaForm(){
     const tipo = v('tipo'), subtipo = v('subtipo').trim(), fecha = v('fecha'), precioTxt = v('precio').trim(), obs = v('obs').trim();
     if (!precioTxt && !obs && !subtipo) return; // fila vacía
     const nombreFila = `Fila ${n + 1}`;
-    if (tipo === 'palet' && !subtipo) { errores.push(`${nombreFila}: indica el tipo de palet.`); return; }
+    if (almacenajeUsaSubtipo(tipo) && !subtipo) { errores.push(`${nombreFila}: indica ${almacenajeSubtipoLabel(tipo).toLowerCase()}.`); return; }
     if (!fecha) { errores.push(`${nombreFila}: indica la fecha.`); return; }
     const precio = Number(precioTxt.replace(',', '.'));
     if (!precioTxt || !isFinite(precio) || precio < 0) { errores.push(`${nombreFila}: indica el precio.`); return; }
@@ -12020,7 +12194,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   }
 
   await loadWarehouses();
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadTransportistaRutas(), loadTransportistaContactos(), loadAlmacenajeTarifas()]);
+  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadTransportistaRutas(), loadTransportistaContactos(), loadAlmacenajeTarifas(), loadAlmacenajeProductos()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
