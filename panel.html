@@ -6964,18 +6964,42 @@ async function loadAlmacenajeTarifas(){
   almacenajeTarifas = (data||[]).map(t => ({
     id: t.id, createdAt: t.created_at, clienteId: t.cliente_id, fecha: t.fecha,
     tipo: t.tipo, subtipo: t.subtipo || '', precio: Number(t.precio), observaciones: t.observaciones || '',
+    categoria: t.tipo_actividad || almacenajeCategoriaDe(t.tipo),
   }));
 }
+// "Tipo" (qué es exactamente) y "categoria"/Tipo de actividad (para agrupar
+// en estadísticas: Almacenaje, Movimiento o Extra) son cosas distintas. La
+// categoría la decide el tipo elegido, nunca se pregunta aparte — así no
+// hay forma de marcar "Palet" como Extra por error — pero se guarda tal
+// cual en cada línea (no se recalcula sola) para que si el día de mañana
+// cambia la categoría de un tipo, las estadísticas ya guardadas no cambien
+// solas con el tiempo.
+const ALMACENAJE_CATEGORIAS = { almacenaje: 'Almacenaje', movimiento: 'Movimiento', extra: 'Extra' };
 const ALMACENAJE_TIPOS = [
-  { id: 'palet', label: 'Palet' },
-  { id: 'm2', label: 'M² ocupado' },
-  { id: 'bobina', label: 'Bobina' },
-  { id: 'entrada', label: 'Entrada (movimiento)' },
-  { id: 'salida', label: 'Salida (movimiento)' },
-  { id: 'hora_operario', label: 'Hora operario' },
-  { id: 'hora_carretilla', label: 'Hora carretilla' },
+  { id: 'palet', label: 'Palet', categoria: 'almacenaje' },
+  { id: 'm2', label: 'M² ocupado', categoria: 'almacenaje' },
+  { id: 'bobina', label: 'Bobina', categoria: 'almacenaje' },
+  { id: 'entrada', label: 'Entrada', categoria: 'movimiento' },
+  { id: 'salida', label: 'Salida', categoria: 'movimiento' },
+  { id: 'hora_operario', label: 'Hora operario', categoria: 'extra' },
+  { id: 'hora_carretilla', label: 'Hora carretilla', categoria: 'extra' },
 ];
 function almacenajeTipoLabel(tipo){ return (ALMACENAJE_TIPOS.find(x=>x.id===tipo)||{}).label || tipo; }
+function almacenajeCategoriaDe(tipo){ return (ALMACENAJE_TIPOS.find(x=>x.id===tipo)||{}).categoria || 'extra'; }
+function almacenajeCategoriaLabel(cat){ return ALMACENAJE_CATEGORIAS[cat] || cat; }
+const ALMACENAJE_CATEGORIA_COLORS = { almacenaje: '#1B3A6B', movimiento: '#C98A2E', extra: '#7C5CBF' };
+function almacenajeCategoriaBadgeHtml(cat){
+  const color = ALMACENAJE_CATEGORIA_COLORS[cat] || 'var(--muted)';
+  return `<span style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:${color};background:${color}1A;border-radius:999px;padding:2px 9px;white-space:nowrap;">${esc(almacenajeCategoriaLabel(cat))}</span>`;
+}
+// Desplegable de Tipo agrupado por categoría (optgroup), para que se vea
+// ordenado según se vayan añadiendo más "extras" con el tiempo.
+function almacenajeTipoOptionsHtml(selected){
+  return Object.keys(ALMACENAJE_CATEGORIAS).map(cat => `
+    <optgroup label="${esc(ALMACENAJE_CATEGORIAS[cat])}">
+      ${ALMACENAJE_TIPOS.filter(x=>x.categoria===cat).map(x=>`<option value="${x.id}" ${x.id===selected?'selected':''}>${esc(x.label)}</option>`).join('')}
+    </optgroup>`).join('');
+}
 function almacenajeEsPalet(tipo){ return tipo === 'palet'; }
 function almacenajeEsMovimiento(tipo){ return tipo === 'entrada' || tipo === 'salida'; }
 function almacenajeEsPorHora(tipo){ return tipo === 'hora_operario' || tipo === 'hora_carretilla'; }
@@ -7023,7 +7047,7 @@ function openAlmacenajeTarifaModal(clienteId, editId){
           <h3 class="modal-title">Editar línea de tarifa</h3><button class="close-x" onclick="closeModal()">✕</button>
         </div>
         <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">Corrige esta línea. Para un precio nuevo desde una fecha, mejor añade otra línea del mismo tipo con «+ Añadir línea».</div>
-        <div class="field"><label>Tipo</label><select id="at-tipo" onchange="tplAlmacenajeTarifaRowFieldsToggle()">${ALMACENAJE_TIPOS.map(x=>`<option value="${x.id}" ${t.tipo===x.id?'selected':''}>${esc(x.label)}</option>`).join('')}</select></div>
+        <div class="field"><label>Tipo</label><select id="at-tipo" onchange="tplAlmacenajeTarifaRowFieldsToggle()">${almacenajeTipoOptionsHtml(t.tipo)}</select></div>
         <div class="field" id="at-subtipo-field" style="display:${t.tipo==='palet'?'':'none'};">
           <label>Tipo de palet</label>
           <input id="at-subtipo" maxlength="60" data-combo="at-subtipos-datalist" autocomplete="off" placeholder="Ej. Europeo, Americano" value="${esc(t.subtipo)}" />
@@ -7057,12 +7081,13 @@ async function submitAlmacenajeTarifa(clienteId, editId){
   if (!precioTxt || !isFinite(precio) || precio < 0) { errEl.textContent = 'Indica el precio.'; return; }
   const btn = document.querySelector('.at-submit-btn');
   if (btn) btn.disabled = true;
-  const payload = { fecha, tipo, subtipo: subtipo || null, precio, observaciones: observaciones || null };
+  const categoria = almacenajeCategoriaDe(tipo);
+  const payload = { fecha, tipo, subtipo: subtipo || null, precio, observaciones: observaciones || null, tipo_actividad: categoria };
   const etiqueta = subtipo ? `${almacenajeTipoLabel(tipo)} ${subtipo}` : almacenajeTipoLabel(tipo);
   try {
     const { error } = await supabaseClient.from('almacenaje_tarifas').update(payload).eq('id', editId);
     if (error) throw error;
-    Object.assign(almacenajeTarifas.find(x=>x.id===editId), { fecha, tipo, subtipo, precio, observaciones });
+    Object.assign(almacenajeTarifas.find(x=>x.id===editId), { fecha, tipo, subtipo, precio, observaciones, categoria });
     await logAlmacenajeHistorial(clienteId, `ha corregido la línea ${etiqueta} a ${eur2(precio)}${almacenajeUnidadTxt(tipo)}.`);
     closeModal();
     renderTab();
@@ -7105,7 +7130,7 @@ function almacenajeFilaRowHtml(i){
   return `
     <tr class="af-row" data-i="${i}">
       <td style="padding:5px 4px;color:var(--mutedFaint);font-size:12px;text-align:right;width:26px;">${i+1}</td>
-      <td style="padding:5px 4px;min-width:170px;"><select id="af-${i}-tipo" onchange="almacenajeFilaTipoChange(${i})">${ALMACENAJE_TIPOS.map(x=>`<option value="${x.id}" ${x.id==='palet'?'selected':''}>${esc(x.label)}</option>`).join('')}</select></td>
+      <td style="padding:5px 4px;min-width:170px;"><select id="af-${i}-tipo" onchange="almacenajeFilaTipoChange(${i})">${almacenajeTipoOptionsHtml('palet')}</select></td>
       <td style="padding:5px 4px;min-width:160px;"><input id="af-${i}-subtipo" maxlength="60" data-combo="af-subtipos" autocomplete="off" placeholder="Ej. Europeo" oninput="window.__almacenajeFormDirty=true;" /></td>
       <td style="padding:5px 4px;min-width:135px;"><input id="af-${i}-fecha" type="date" value="${today()}" /></td>
       <td style="padding:5px 4px;min-width:110px;"><input id="af-${i}-precio" inputmode="decimal" maxlength="10" placeholder="Precio €" /></td>
@@ -7181,7 +7206,7 @@ async function submitAlmacenajeTarifaForm(){
     if (!fecha) { errores.push(`${nombreFila}: indica la fecha.`); return; }
     const precio = Number(precioTxt.replace(',', '.'));
     if (!precioTxt || !isFinite(precio) || precio < 0) { errores.push(`${nombreFila}: indica el precio.`); return; }
-    filas.push({ cliente_id: clienteId, fecha, tipo, subtipo: subtipo || null, precio, observaciones: obs || null });
+    filas.push({ cliente_id: clienteId, fecha, tipo, subtipo: subtipo || null, precio, observaciones: obs || null, tipo_actividad: almacenajeCategoriaDe(tipo) });
   });
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   if (!filas.length) { errEl.textContent = 'Añade al menos una línea con su precio.'; return; }
@@ -7195,7 +7220,7 @@ async function submitAlmacenajeTarifaForm(){
   }
   data.forEach(row => almacenajeTarifas.push({
     id: row.id, createdAt: row.created_at, clienteId: row.cliente_id, fecha: row.fecha, tipo: row.tipo,
-    subtipo: row.subtipo || '', precio: Number(row.precio), observaciones: row.observaciones || '',
+    subtipo: row.subtipo || '', precio: Number(row.precio), observaciones: row.observaciones || '', categoria: row.tipo_actividad || almacenajeCategoriaDe(row.tipo),
   }));
   const resumen = filas.map(f => {
     const etiqueta = f.subtipo ? `${almacenajeTipoLabel(f.tipo)} ${f.subtipo}` : almacenajeTipoLabel(f.tipo);
@@ -7229,10 +7254,11 @@ function tplAlmacenajeTarifasCard(c){
       </div>
       ${vigentes.length ? `
       <table class="tf-table" style="margin-top:10px;">
-        <thead><tr>${thSort('Tipo','text')}${thSort('Precio','number','style="text-align:right;"')}${thSort('Vigente desde','date')}${thSort('Observaciones','text')}<th>Acciones</th></tr></thead>
+        <thead><tr>${thSort('Actividad','text')}${thSort('Tipo','text')}${thSort('Precio','number','style="text-align:right;"')}${thSort('Vigente desde','date')}${thSort('Observaciones','text')}<th>Acciones</th></tr></thead>
         <tbody>
           ${vigentes.map(t => `
             <tr>
+              <td data-sort-value="${esc(almacenajeCategoriaLabel(t.categoria))}">${almacenajeCategoriaBadgeHtml(t.categoria)}</td>
               <td data-sort-value="${esc(almacenajeEtiqueta(t))}">${esc(almacenajeEtiqueta(t))}</td>
               <td class="tf-precio" data-sort-value="${t.precio}">${esc(almacenajePrecioTxt(t))}</td>
               <td style="white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
@@ -7253,10 +7279,11 @@ function tplAlmacenajeTarifasHistoricasCard(c){
     <div class="card" style="margin-top:14px;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:10px;">Histórico de almacenaje <span style="font-weight:400;color:var(--mutedFaint);">(${historicas.length})</span></div>
       <table class="tf-table tf-hist">
-        <thead><tr>${thSort('Tipo','text')}${thSort('Precio','number','style="text-align:right;"')}${thSort('Vigente del','date')}${thSort('Hasta','date')}</tr></thead>
+        <thead><tr>${thSort('Actividad','text')}${thSort('Tipo','text')}${thSort('Precio','number','style="text-align:right;"')}${thSort('Vigente del','date')}${thSort('Hasta','date')}</tr></thead>
         <tbody>
           ${historicas.map(t => `
             <tr>
+              <td data-sort-value="${esc(almacenajeCategoriaLabel(t.categoria))}">${almacenajeCategoriaBadgeHtml(t.categoria)}</td>
               <td data-sort-value="${esc(almacenajeEtiqueta(t))}">${esc(almacenajeEtiqueta(t))}</td>
               <td class="tf-precio" data-sort-value="${t.precio}">${esc(almacenajePrecioTxt(t))}</td>
               <td style="white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
