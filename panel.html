@@ -166,6 +166,15 @@
   .colab-route-selects select{flex:1;min-width:130px;}
   .colab-route-arrow{width:38px;height:38px;border-radius:50%;background:#0F8B8D;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 14px rgba(15,139,141,.28);}
   @media (max-width:760px){.colab-route{grid-template-columns:1fr;}.colab-route-arrow{transform:rotate(90deg);margin:0 auto;}}
+  .colab-vrow{margin-top:14px;}
+  .colab-vchips{display:flex;flex-wrap:wrap;gap:8px;}
+  .colab-vchip{display:inline-flex;align-items:center;gap:7px;padding:6px 8px 6px 13px;border-radius:999px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;transition:border-color .12s,background .12s,color .12s;}
+  .colab-vchip span{font-size:11px;font-weight:700;color:var(--muted);background:var(--panel2);border-radius:999px;padding:1px 7px;min-width:20px;text-align:center;}
+  .colab-vchip:hover{border-color:#0F8B8D;}
+  .colab-vchip.on{background:#0F8B8D;border-color:#0F8B8D;color:#fff;}
+  .colab-vchip.on span{background:rgba(255,255,255,.22);color:#fff;}
+  .colab-vchip.zero:not(.on){opacity:.5;}
+  .colab-vclear{margin-left:8px;background:none;border:none;color:var(--primary);font-size:11px;font-weight:600;cursor:pointer;text-transform:none;letter-spacing:0;padding:0;font-family:inherit;}
   .colab-res-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;}
   .colab-res{border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--panel);display:flex;flex-direction:column;gap:8px;}
   .colab-res.best{border-color:color-mix(in srgb,#3F8F5F 45%,var(--border));box-shadow:0 0 0 3px color-mix(in srgb,#3F8F5F 10%,transparent);}
@@ -8781,6 +8790,8 @@ async function loadTransportistaContactos(){
   }));
 }
 function resetColaboradoresState(){
+  window.__colabBuscarVeh = [];
+  window.__colabTablaVeh = '';
   window.__colabView = 'home';
   window.__colabBuscarPaisO = '';
   window.__colabBuscarPaisD = '';
@@ -8886,7 +8897,9 @@ function colabResultadosHtml(){
   if (!COLAB_ZONA_RE.test(origen) || !COLAB_ZONA_RE.test(destino)) {
     return aviso('Elige un país y una zona de origen y de destino para ver quién cubre esa ruta.');
   }
-  const filas = colabRutasQueCubren(origen, destino);
+  const sel = window.__colabBuscarVeh || [];
+  const todasLasQueCubren = colabRutasQueCubren(origen, destino);
+  const filas = todasLasQueCubren.filter(r => colabVehMatch(r, sel));
   // Los más baratos primero (los que no tienen tarifa apuntada, al final).
   const conContacto = filas.map(r => ({ r, c: contactos.find(x => x.id === r.contactoId) })).filter(x => x.c)
     .sort((a, b) => {
@@ -8896,7 +8909,12 @@ function colabResultadosHtml(){
       if (pb == null) return -1;
       return pa - pb;
     });
-  if (!conContacto.length) return aviso(`Ningún transportista apuntado cubre ${esc(origen)} → ${esc(destino)}.`);
+  const nombresVeh = sel.map(v => v === COLAB_SIN_VEH ? 'vehículo sin especificar' : v).join(' o ');
+  // Con un vehículo concreto elegido, las coberturas sin tipo indicado no entran,
+  // pero se avisa de cuántas hay por si conviene preguntarles.
+  const sinTipo = sel.length && !sel.includes(COLAB_SIN_VEH) ? todasLasQueCubren.filter(r => !r.tipoVehiculo && contactos.some(x => x.id === r.contactoId)).length : 0;
+  const notaSinTipo = sinTipo ? `<div style="font-size:12px;color:var(--muted);background:var(--panel2);border-radius:8px;padding:8px 12px;margin-top:10px;">Hay ${sinTipo} cobertura${sinTipo===1?'':'s'} de esta ruta sin tipo de vehículo indicado que no se muestra${sinTipo===1?'':'n'} por el filtro.</div>` : '';
+  if (!conContacto.length) return aviso(`Ningún transportista ${sel.length ? `con ${esc(nombresVeh)} ` : 'apuntado '}cubre ${esc(origen)} → ${esc(destino)}.`) + notaSinTipo;
   const asunto = colabOfertaAsunto(origen, destino), cuerpo = colabOfertaCuerpo(origen, destino);
   // Una empresa puede tener varios contactos (una por ámbito); se bccan todos los correos apuntados.
   const todosCorreos = [...new Set(conContacto.flatMap(({c}) => transportistaContactos.filter(p => p.contactoId === c.id && p.email).map(p => p.email)))];
@@ -8906,7 +8924,7 @@ function colabResultadosHtml(){
   const conPrecio = conContacto.filter(x => x.r.tarifaBase != null).length;
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0 10px;">
-      <div style="font-size:13px;color:var(--text);"><b>${conContacto.length}</b> transportista${conContacto.length===1?'':'s'} cubre${conContacto.length===1?'':'n'} <span style="font-family:var(--mono);">${rutaZonaBanderaHtml(origen)} → ${rutaZonaBanderaHtml(destino)}</span></div>
+      <div style="font-size:13px;color:var(--text);"><b>${conContacto.length}</b> transportista${conContacto.length===1?'':'s'} ${sel.length ? `con ${esc(nombresVeh)} ` : ''}cubre${conContacto.length===1?'':'n'} <span style="font-family:var(--mono);">${rutaZonaBanderaHtml(origen)} → ${rutaZonaBanderaHtml(destino)}</span></div>
       ${contactarTodos}
     </div>
     <div class="colab-res-grid">
@@ -8941,15 +8959,50 @@ function colabResultadosHtml(){
           </div>`).join('') : `<div style="font-size:12px;color:var(--mutedFaint);">Sin ningún contacto apuntado (se añade desde su ficha en Transporte → Transportistas).</div>`}
       </div>`;
     }).join('')}
-    </div>`;
+    </div>${notaSinTipo}`;
 }
 function colaboradoresFilteredRutas(){
   const search = (window.__colabSearch || '').toLowerCase();
-  if (!search) return transportistaRutas;
+  const veh = window.__colabTablaVeh || '';
   return transportistaRutas.filter(r => {
+    if (veh && (r.tipoVehiculo || COLAB_SIN_VEH) !== veh) return false;
+    if (!search) return true;
     const c = contactos.find(x => x.id === r.contactoId);
     return c && (c.nombre.toLowerCase().includes(search) || (c.nombreComercial||'').toLowerCase().includes(search));
   });
+}
+/* ---- Filtro por tipo de vehículo ----
+   Una cobertura sin tipo indicado cuenta como "Sin especificar" (clave
+   COLAB_SIN_VEH): al filtrar por un vehículo concreto no se mezcla, porque no
+   se sabe si ese transportista lo tiene. */
+const COLAB_SIN_VEH = '__none';
+function colabVehMatch(r, sel){
+  return !sel.length || sel.includes(r.tipoVehiculo || COLAB_SIN_VEH);
+}
+function colabToggleVeh(v){
+  const sel = (window.__colabBuscarVeh || []).slice();
+  const i = sel.indexOf(v);
+  if (i >= 0) sel.splice(i, 1); else sel.push(v);
+  window.__colabBuscarVeh = sel;
+  renderTab();
+}
+function colabLimpiarVeh(){ window.__colabBuscarVeh = []; renderTab(); }
+// Etiquetas de vehículo con cuántas coberturas hay de cada tipo (para la ruta
+// elegida, o en total si todavía no hay ruta). Se pueden combinar varias.
+function colabVehChipsHtml(){
+  const sel = window.__colabBuscarVeh || [];
+  const o = window.__colabBuscarOrigen || '', d = window.__colabBuscarDestino || '';
+  const base = (COLAB_ZONA_RE.test(o) && COLAB_ZONA_RE.test(d)) ? colabRutasQueCubren(o, d) : transportistaRutas;
+  const chip = (val, label) => {
+    const n = base.filter(r => (r.tipoVehiculo || COLAB_SIN_VEH) === val).length;
+    const on = sel.includes(val);
+    return `<button type="button" class="colab-vchip${on ? ' on' : ''}${n ? '' : ' zero'}" onclick="colabToggleVeh(${esc(JSON.stringify(val))})">${esc(label)}<span>${n}</span></button>`;
+  };
+  return `
+    <div class="colab-vrow">
+      <div class="colab-route-label">${homeIcon(HOME_ICON_PATHS.truck, 14, 'currentColor', 1.8)}Vehículo${sel.length ? `<button type="button" class="colab-vclear" onclick="colabLimpiarVeh()">Quitar filtro</button>` : ''}</div>
+      <div class="colab-vchips">${COLAB_TIPOS_VEHICULO.map(t => chip(t, t)).join('')}${chip(COLAB_SIN_VEH, 'Sin especificar')}</div>
+    </div>`;
 }
 function refreshColabTablaBody(){
   const el = document.getElementById('colab-tabla-body');
@@ -9043,16 +9096,22 @@ function tplColaboradoresPage(){
             "window.__colabBuscarPaisD=this.value; window.__colabBuscarDestino=''; renderTab();",
             "window.__colabBuscarDestino=this.value; renderTab();")}
         </div>
+        ${colabVehChipsHtml()}
         <div id="colab-resultados">${colabResultadosHtml()}</div>
       </div>
     </div>
     <div class="card deca-card" style="--dc-accent:#5C6670;">
       ${decaCardHead('list', `Todas las coberturas (${transportistaRutas.length})`, 'Haz clic en una cabecera para ordenar')}
-      <div style="padding:12px 18px 6px;">
+      <div style="padding:12px 18px 6px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
         <div class="deca-search deca-form" style="max-width:340px;">
           <input placeholder="Buscar por transportista…" value="${esc(window.__colabSearch||'')}" oninput="window.__colabSearch=this.value; refreshColabTablaBody();" />
           <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
         </div>
+        <select onchange="window.__colabTablaVeh=this.value; refreshColabTablaBody();" title="Filtrar por tipo de vehículo" style="width:auto;min-width:190px;">
+          <option value="">Todos los vehículos</option>
+          ${COLAB_TIPOS_VEHICULO.map(t => `<option value="${esc(t)}" ${window.__colabTablaVeh===t?'selected':''}>${esc(t)}</option>`).join('')}
+          <option value="${COLAB_SIN_VEH}" ${window.__colabTablaVeh===COLAB_SIN_VEH?'selected':''}>Sin especificar</option>
+        </select>
       </div>
       <div id="colab-tabla-body" style="overflow-x:auto;">${colabTablaBodyHtml()}</div>
     </div>
