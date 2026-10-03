@@ -10125,9 +10125,6 @@ function decaCopiarQrImagen(d){
     return navigator.clipboard.write([new ClipboardItem({ 'image/png': decaQrShareBlob(d) })]).then(() => true).catch(() => false);
   } catch (err) { return Promise.resolve(false); }
 }
-function decaEnviarTexto(d){
-  return `DeCA ${d.codigo || ''}`.trim() + ` · Qualified Logistics\nTransporte del ${fmtDateY(d.fechaTransporte)}.\nEscanee el código QR adjunto, o abra este enlace para ver el documento:\n${d.pdfUrl}`;
-}
 function decaEnviarEstado(msg, ok){
   const el = document.getElementById('deca-send-status');
   if (!el) return;
@@ -10177,25 +10174,28 @@ async function decaEnviarWhatsapp(id){
   const num = decaTelNormaliza(telTxt);
   if (num === null) { decaEnviarEstado('El teléfono no parece válido. Escríbelo con prefijo (+34 612 345 678) o déjalo vacío para elegir el chat en WhatsApp.', false); if (telEl) telEl.focus(); return; }
   if (num) decaTelGuardar(d, telTxt);
-  // En el ordenador la ventana se abre ya, dentro del clic (si no, el navegador la bloquea).
-  const w = window.open(`https://wa.me/${num}?text=` + encodeURIComponent(decaEnviarTexto(d)), '_blank');
+  // Lo que hay que mandar es la FOTO del QR (el conductor se la enseña al
+  // agente), no un enlace: el chat se abre vacío y la imagen va ya copiada
+  // para pegarla. La ventana se abre dentro del clic (si no, el navegador la bloquea).
+  const w = window.open(num ? `https://wa.me/${num}` : 'https://web.whatsapp.com/', '_blank');
   const ok = await decaCopiarQrImagen(d);
-  const donde = num ? `en el chat de +${num}` : 'con el enlace';
-  if (!w) decaEnviarEstado('El navegador ha bloqueado la ventana de WhatsApp: permite las ventanas emergentes o usa «Copiar QR».', false);
-  else if (ok) decaEnviarEstado(`WhatsApp abierto ${donde}. El QR está copiado: ${num ? 'pégalo en el mensaje' : 'elige el chat del conductor y pégalo'} con <b>Ctrl+V</b>.`);
-  else decaEnviarEstado(`WhatsApp abierto ${donde}. Para adjuntar la imagen usa «Descargar imagen».`);
+  const donde = num ? ` en el chat de +${num}` : '';
+  if (!w) { decaEnviarEstado('El navegador ha bloqueado la ventana de WhatsApp: permite las ventanas emergentes o usa «Copiar QR».', false); return; }
+  if (ok) decaEnviarEstado(`WhatsApp abierto${donde}. La foto del QR está copiada: ${num ? 'pulsa en el mensaje y pega' : 'elige el chat del conductor y pega'} con <b>Ctrl+V</b>, luego enviar.`);
+  else { await decaDescargarQrImagen(id, true); decaEnviarEstado(`WhatsApp abierto${donde}. Tu navegador no deja copiar la imagen: se ha descargado la foto del QR, adjúntala con el clip 📎.`, false); }
 }
 async function decaEnviarCorreo(id){
   const d = decaDocuments.find(x => x.id === id);
   if (!d || !d.pdfUrl) return;
   const copiando = decaCopiarQrImagen(d);
   const asunto = `DeCA ${d.codigo || ''} · Qualified Logistics`.replace(/\s+/g, ' ').trim();
-  const cuerpo = `Buenos días,\n\nTe enviamos el DeCA ${d.codigo || ''} del transporte del ${fmtDateY(d.fechaTransporte)}.\n\nEnlace para ver el documento (es lo que abre el código QR):\n${d.pdfUrl}\n\nUn saludo.`;
+  const cuerpo = `Buenos días,\n\nTe enviamos el código QR del DeCA ${d.codigo || ''} (transporte del ${fmtDateY(d.fechaTransporte)}). Enséñalo al agente si te lo solicita: se escanea directamente desde la pantalla del móvil.\n\nUn saludo.`;
   const a = document.createElement('a');
   a.href = `mailto:?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`;
   document.body.appendChild(a); a.click(); a.remove();
   const ok = await copiando;
-  decaEnviarEstado(ok ? 'Correo abierto con el enlace. El QR está copiado: pégalo en el mensaje con <b>Ctrl+V</b>.' : 'Correo abierto con el enlace. Para adjuntar la imagen usa «Descargar imagen».');
+  if (ok) decaEnviarEstado('Correo abierto. La foto del QR está copiada: pégala en el mensaje con <b>Ctrl+V</b>.');
+  else { await decaDescargarQrImagen(id, true); decaEnviarEstado('Correo abierto. Tu navegador no deja copiar la imagen: se ha descargado la foto del QR, adjúntala al mensaje.', false); }
 }
 async function decaDescargarQrImagen(id, silencioso){
   const d = decaDocuments.find(x => x.id === id);
