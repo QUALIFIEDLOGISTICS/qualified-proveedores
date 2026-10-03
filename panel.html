@@ -3959,12 +3959,8 @@ async function deleteTransportistaContacto(id){
 function tplContactoPersonasCard(c){
   const personas = transportistaContactos.filter(p => p.contactoId === c.id);
   return `
-    <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-      <div>
-        <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Contactos</div>
-        <div style="font-size:12px;color:var(--mutedFaint);margin-top:2px;">Personas de esta empresa, cada una con su correo, teléfono y ámbito.</div>
-      </div>
-      <button class="btn btn-ghost" onclick="openTransportistaContactoModal('${c.id}')">+ Añadir contacto</button>
+    <div class="card deca-card" style="--dc-accent:#3F8F5F;">
+      ${decaCardHead('users', 'Contactos', 'Personas de esta empresa, cada una con su correo, teléfono y ámbito.', `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openTransportistaContactoModal('${c.id}')">+ Añadir contacto</button>`)}
     </div>
     ${personas.length ? personas.map(tplTransportistaContactoTile).join('') : `<div class="card" style="color:var(--mutedFaint);font-size:12.5px;text-align:center;padding:20px;margin-top:14px;">Todavía no hay ningún contacto apuntado.</div>`}`;
 }
@@ -3972,29 +3968,49 @@ function tplContactoTabTransporte(c){
   const rutas = transportistaRutas.filter(r => r.contactoId === c.id);
   // Añadir/editar coberturas lleva a Transporte → Rutas: solo si tiene ese apartado.
   const canRutas = sectionAllowedFor(PROFILE, 'trafico', 'colaboradores');
-  return tplContactoPersonasCard(c) + `
-    <div class="card" style="margin-top:20px;padding:0;overflow-x:auto;">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 18px 12px;">
-        <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Rutas que cubre <span style="font-weight:400;color:var(--mutedFaint);">(${rutas.length})</span></div>
-        ${canRutas ? `<button class="btn btn-ghost" onclick="openColabRutaForm(null, '${c.id}')">+ Añadir cobertura</button>` : ''}
+  // Perfil: de un vistazo qué cubre este transportista, a partir de sus coberturas.
+  const paises = [...new Set(rutas.flatMap(r => [r.origenZona, r.destinoZona]).map(z => String(z || '').slice(0, 2)).filter(Boolean))]
+    .sort((a, b) => tarifaPaisNombre(a).localeCompare(tarifaPaisNombre(b), 'es'));
+  const servicios = Object.keys(COLAB_SERVICIOS).filter(k => rutas.some(r => (r.servicios || []).includes(k)));
+  const vehiculos = COLAB_TIPOS_VEHICULO.filter(t => rutas.some(r => r.tipoVehiculo === t));
+  const sinIndicar = '<span style="color:var(--mutedFaint);">Sin indicar</span>';
+  const perfil = rutas.length ? `
+    <div class="card deca-card" style="--dc-accent:#C1443D;margin-bottom:20px;">
+      ${decaCardHead('truck', 'Perfil de transporte', 'Resumen de lo que cubre este transportista')}
+      <div class="deca-card-body">
+        <div class="deca-view-grid" style="margin-bottom:0;">
+          ${decaViewRow('list', 'Rutas', `<b>${rutas.length}</b> cobertura${rutas.length === 1 ? '' : 's'}`, '#0F8B8D')}
+          ${decaViewRow('pin', 'Países', paises.length ? paises.map(cc => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:10px;white-space:nowrap;">${tarifaFlagHtml(cc)}${esc(tarifaPaisNombre(cc))}</span>`).join('') : sinIndicar, '#2E6F95')}
+          ${decaViewRow('box', 'Servicios', servicios.length ? servicios.map(k => `<span class="colab-chip${k === 'GRUA' ? ' grua' : ''}">${esc(COLAB_SERVICIOS[k])}</span>`).join(' ') : sinIndicar, '#7C5CBF')}
+          ${decaViewRow('truck', 'Vehículos', vehiculos.length ? vehiculos.map(t => `<span class="colab-chip veh">${esc(t)}</span>`).join(' ') : sinIndicar, '#3F8F5F')}
+        </div>
       </div>
+    </div>` : '';
+  const rutasCard = `
+    <div class="card deca-card" style="--dc-accent:#0F8B8D;margin-top:20px;">
+      ${decaCardHead('pin', `Rutas que cubre (${rutas.length})`, 'Origen → destino, servicio y tarifa de cada cobertura', canRutas ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openColabRutaForm(null, '${c.id}')">+ Añadir cobertura</button>` : '')}
       ${rutas.length ? `
+      <div style="overflow-x:auto;">
       <table class="tf-table">
-        <thead><tr>${thSort('Ruta','text')}${thSort('Vehículo','text')}${thSort('Observaciones','text')}${canRutas ? '<th>Acciones</th>' : ''}</tr></thead>
+        <thead><tr>${thSort('Ruta','text')}${thSort('Servicio','text')}${thSort('Vehículo','text')}${thSort('Tarifa base','number','style="text-align:right;"')}${thSort('Observaciones','text')}${canRutas ? '<th>Acciones</th>' : ''}</tr></thead>
         <tbody>
           ${rutas.map(r => `
             <tr>
-              <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona+r.destinoZona)}">${rutaZonaBanderaHtml(r.origenZona)} → ${rutaZonaBanderaHtml(r.destinoZona)}</td>
-              <td style="color:var(--muted);" data-sort-value="${esc(r.tipoVehiculo)}">${r.tipoVehiculo ? esc(r.tipoVehiculo) : '—'}</td>
+              <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona+r.destinoZona)}">${colabEsGrua(r) ? `${rutaZonaBanderaHtml(r.origenZona)}<span style="font-family:var(--body);font-size:11px;color:var(--muted);margin-left:6px;">zona de servicio</span>` : `${rutaZonaBanderaHtml(r.origenZona)} → ${rutaZonaBanderaHtml(r.destinoZona)}`}</td>
+              <td data-sort-value="${esc((r.servicios||[]).join(','))}">${colabServiciosChipsHtml(r)}</td>
+              <td data-sort-value="${esc(r.tipoVehiculo)}">${r.tipoVehiculo ? `<span class="colab-chip veh">${esc(r.tipoVehiculo)}</span>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+              <td class="tf-precio" data-sort-value="${r.tarifaBase??''}">${r.tarifaBase !== null && r.tarifaBase !== undefined ? `${colabPrecioTxt(r)}${r.indexacion ? ' <small>+ indexación</small>' : ''}` : '<span style="color:var(--mutedFaint);font-weight:400;">—</span>'}</td>
               <td style="color:var(--muted);" data-sort-value="${esc(r.observaciones)}">${r.observaciones ? esc(r.observaciones) : '—'}</td>
               ${canRutas ? `<td style="white-space:nowrap;">
-                <button onclick="openColabRutaForm('${r.id}')" title="Editar" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;cursor:pointer;vertical-align:middle;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
-                <button onclick="deleteColabRuta('${r.id}')" title="Eliminar" style="background:none;border:none;color:var(--mutedFaint);font-size:14px;padding:2px 4px;cursor:pointer;">🗑</button>
+                <button class="deca-act" onclick="openColabRutaForm('${r.id}')" title="Editar">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+                <button class="deca-act danger" onclick="deleteColabRuta('${r.id}')" title="Eliminar">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>
               </td>` : ''}
             </tr>`).join('')}
         </tbody>
-      </table>` : `<div style="color:var(--mutedFaint);font-size:12.5px;padding:0 18px 18px;">Todavía no cubre ninguna ruta.${canRutas ? ' Se apuntan aquí o en Transporte → Rutas.' : ''}</div>`}
+      </table>
+      </div>` : `<div style="color:var(--mutedFaint);font-size:12.5px;padding:18px;">Todavía no cubre ninguna ruta.${canRutas ? ' Se apuntan aquí o en Transporte → Rutas.' : ''}</div>`}
     </div>`;
+  return perfil + tplContactoPersonasCard(c) + rutasCard;
 }
 // Contenido de la pestaña "Autónomos": resumen de conductores (se gestionan en el módulo Autónomos).
 function tplContactoTabAutonomos(c){
@@ -8727,7 +8743,7 @@ function tplTransportistasFilterDropdown(){
         ${label}
       </label>`;
   return `
-    <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:190px;">
+    <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:0;margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:190px;">
       ${opt('Archivados', view==='archivados', "window.__transpView=this.checked?'archivados':'activos'; window.__transpPage=0; renderTab();")}
       <div style="height:1px;background:var(--border);margin:6px 0;"></div>
       ${opt('Autónomos', !!window.__transpAutonomos, "window.__transpAutonomos=this.checked; window.__transpPage=0; renderTab();")}
@@ -8735,31 +8751,33 @@ function tplTransportistasFilterDropdown(){
 }
 function tplTransportistasPage(){
   const filterCount = ((window.__transpView || 'activos') === 'archivados' ? 1 : 0) + (window.__transpAutonomos ? 1 : 0);
+  const activos = contactos.filter(c => c.esTransportista && !c.archived);
+  const conRutas = activos.filter(c => transportistaRutas.some(r => r.contactoId === c.id)).length;
+  const autonomos = activos.filter(c => c.esAutonomos).length;
   return `
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;">
-      <div style="display:flex;align-items:center;gap:14px;">
-        <div style="width:48px;height:48px;border-radius:12px;background:rgba(193,68,61,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-          ${homeIcon(HOME_ICON_PATHS.truck, 24, '#C1443D')}
-        </div>
-        <div>
-          <div style="font-family:var(--display);font-size:22px;">Transportistas</div>
-          <div style="font-size:12.5px;color:var(--mutedFaint);">Todos los contactos marcados como transportista. Su correo y teléfono de transporte se editan aquí; el resto de sus datos, en Contactos.</div>
-        </div>
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.truck, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 280px;">
+        <div class="deca-banner-title">Transportistas</div>
+        <div class="deca-banner-sub">Todos los contactos marcados como transportista. Su correo y teléfono de transporte se editan aquí; el resto de sus datos, en Contactos.</div>
+      </div>
+      <div class="deca-banner-actions">
+        <div class="deca-stat"><b>${activos.length}</b><span>Activos</span></div>
+        <div class="deca-stat"><b>${conRutas}</b><span>Con rutas</span></div>
+        <div class="deca-stat"><b>${autonomos}</b><span>Autónomos</span></div>
+        ${(window.__transpView||'activos')==='archivados' ? '' : `<button class="btn btn-primary deca-new-btn" onclick='openContactoModal(null, {esTransportista:true})'>${homeIcon(HOME_ICON_PATHS.truck, 17, 'currentColor', 1.8)}<span>Nuevo transportista</span></button>`}
       </div>
     </div>
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-self:start;">
-        <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
-          <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__transpSearch||'')}" oninput="window.__transpSearch=this.value; window.__transpPage=0; refreshTransportistasListBody();" style="padding-left:34px;" />
-          <span style="position:absolute;left:11px;top:10px;display:flex;">${homeIcon(HOME_ICON_PATHS.search, 17, 'var(--mutedFaint)', 1.8)}</span>
-        </div>
-        ${(window.__transpView||'activos')==='archivados' ? '' : `<button class="btn btn-primary" onclick='openContactoModal(null, {esTransportista:true})'>+ Nuevo transportista</button>`}
+    <div class="card deca-toolbar">
+      <div class="deca-search">
+        <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__transpSearch||'')}" oninput="window.__transpSearch=this.value; window.__transpPage=0; refreshTransportistasListBody();" />
+        <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      <div style="position:relative;justify-self:center;">
+      <div style="position:relative;">
         <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__transpFilterOpen=!window.__transpFilterOpen; renderTab();">Filtros${filterCount?` (${filterCount})`:''} ▾</button>
         ${window.__transpFilterOpen ? tplTransportistasFilterDropdown() : ''}
       </div>
-      <div style="display:flex;align-items:center;gap:14px;justify-self:end;">${contactosLayoutToggleHtml()}<div id="transp-pagination" style="display:flex;align-items:center;gap:8px;justify-self:end;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplTransportistasPaginationHtml()}</div></div>
+      <div style="display:flex;align-items:center;gap:14px;margin-left:auto;">${contactosLayoutToggleHtml()}<div id="transp-pagination" style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplTransportistasPaginationHtml()}</div></div>
     </div>
     <div id="transp-list-body">${transportistasListBodyHtml()}</div>`;
 }
@@ -10104,10 +10122,11 @@ function decaSetCreacionAhora(){
 // Cabecera de cada tarjeta del formulario: icono en un cuadro de color + título
 // y una línea de ayuda, sobre una franja teñida del color de la tarjeta (que se
 // define en la propia tarjeta con --dc-accent).
-function decaCardHead(icon, title, sub){
+function decaCardHead(icon, title, sub, actionHtml){
   return `<div class="deca-card-head">
     <span class="deca-card-icon">${homeIcon(HOME_ICON_PATHS[icon], 19, '#fff', 1.8)}</span>
-    <div><div class="deca-card-title">${esc(title)}</div>${sub ? `<div class="deca-card-sub">${esc(sub)}</div>` : ''}</div>
+    <div style="min-width:0;"><div class="deca-card-title">${esc(title)}</div>${sub ? `<div class="deca-card-sub">${esc(sub)}</div>` : ''}</div>
+    ${actionHtml ? `<div style="margin-left:auto;flex-shrink:0;">${actionHtml}</div>` : ''}
   </div>`;
 }
 // Input con un icono dentro (y, si hace falta, un sufijo fijo a la derecha, p. ej. "kg").
