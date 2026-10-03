@@ -141,7 +141,7 @@
   .deca-detalle summary::-webkit-details-marker{display:none;}
   .deca-detalle summary svg{transition:transform .15s;}
   .deca-detalle[open] summary svg{transform:rotate(90deg);}
-  .deca-send-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}
+  .deca-send-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;}
   .deca-send-btn{display:flex;flex-direction:column;align-items:center;gap:3px;padding:14px 8px 12px;border-radius:12px;border:1px solid color-mix(in srgb,var(--dc-accent) 28%,var(--border));background:color-mix(in srgb,var(--dc-accent) 7%,var(--panel));cursor:pointer;color:var(--text);font-family:inherit;transition:transform .12s,background .12s,box-shadow .12s;}
   .deca-send-btn:hover{background:color-mix(in srgb,var(--dc-accent) 14%,var(--panel));transform:translateY(-1px);box-shadow:0 6px 14px color-mix(in srgb,var(--dc-accent) 22%,transparent);}
   .deca-send-ico{width:40px;height:40px;border-radius:12px;background:var(--dc-accent);display:flex;align-items:center;justify-content:center;margin-bottom:4px;}
@@ -9686,58 +9686,6 @@ async function decaQrShareBlob(d){
   ctx.fillText(`CVE: ${decaCveCode(d.pdfUrl)}`, canvas.width / 2, pad + qrSize + 106);
   return await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
 }
-// Envía solo la imagen del QR (no el PDF de dos páginas) — pensado para
-// mandarla rápido por WhatsApp o correo al conductor: la enseña en la
-// pantalla del móvil y el agente la escanea directamente desde ahí.
-//   1) Móvil con panel de compartir nativo (aparece WhatsApp si está instalada).
-//   2) Escritorio: SIEMPRE se descarga la imagen (es lo único 100% fiable
-//      en cualquier navegador) y, si el navegador lo permite, además se
-//      copia al portapapeles como atajo — pero sin abrir ninguna pestaña
-//      nueva de WhatsApp Web (si se abre una sin sesión iniciada, pide
-//      escanear un código y no hay donde pegar). Se usa la que ya tenga
-//      abierta el propio usuario.
-async function shareDecaQr(id){
-  const d = decaDocuments.find(x=>x.id===id);
-  if (!d) return;
-  if (!d.pdfUrl) { alert('Este DeCA no tiene enlace de QR todavía.'); return; }
-  try {
-    const blob = await decaQrShareBlob(d);
-    const fileName = `QR-${decaPdfFileName(d)}`.replace(/\.pdf$/i, '.png');
-    const file = new File([blob], fileName, { type: 'image/png' });
-
-    // El panel de compartir nativo (navigator.share) también existe en
-    // Windows/Mac de escritorio, pero ahí no sirve para esto: no ofrece
-    // "copiar" ni lleva a WhatsApp Web, y confunde. Solo se usa en el
-    // móvil, donde SÍ aparece WhatsApp como una opción real para enviar.
-    const esMovil = /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent);
-    if (esMovil && navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file], title: `QR DeCA ${d.codigo || ''}`.trim(), text: 'Escanee este código para ver el DeCA.' });
-      return;
-    }
-
-    let copiedOk = false;
-    if (navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
-      try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); copiedOk = true; } catch (clipErr) { /* no pasa nada, se sigue solo con la descarga */ }
-    }
-
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-    alert(
-      (copiedOk
-        ? 'Imagen del QR descargada (' + fileName + ') y copiada al portapapeles.\n\nVe a tu WhatsApp Web (la pestaña que ya tengas abierta, no hace falta abrir una nueva), entra en la conversación del conductor y pega con Ctrl+V.'
-        : 'Imagen del QR descargada (' + fileName + ').')
-      + '\n\nSi no se pega, adjúntala a mano: icono del clip 📎 → Fotos y vídeos → elige el archivo descargado.'
-    );
-  } catch (err) {
-    if (err && err.name === 'AbortError') return; // el usuario cerró el panel de compartir
-    alert('No se pudo compartir el QR: ' + (err && err.message ? err.message : 'error desconocido.'));
-  }
-}
 
 /* ---- DeCA: formulario crear/editar ---- */
 // Texto que se guarda en Origen/Destino al elegir una dirección de la
@@ -10140,64 +10088,8 @@ async function decaEnviarCopiar(id){
   const d = decaDocuments.find(x => x.id === id);
   if (!d || !d.pdfUrl) return;
   const ok = await decaCopiarQrImagen(d);
-  if (ok) decaEnviarEstado('QR copiado al portapapeles. Pégalo donde quieras con Ctrl+V.');
+  if (ok) decaEnviarEstado('Foto del QR copiada. Ve al chat de WhatsApp del conductor y pégala con <b>Ctrl+V</b>.');
   else { decaEnviarEstado('Tu navegador no deja copiar la imagen: se ha descargado en su lugar.', false); decaDescargarQrImagen(id, true); }
-}
-const DECA_ES_MOVIL = () => /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent);
-// Teléfono → solo dígitos con prefijo de país, como pide wa.me. Acepta
-// "+34 612 345 678", "0034612345678" o "612345678" (9 cifras = España).
-// Devuelve null si no parece un número válido.
-function decaTelNormaliza(txt){
-  const t = String(txt || '').trim();
-  if (!t) return '';
-  let digits = t.replace(/\D/g, '');
-  if (t.startsWith('+')) { /* ya lleva prefijo */ }
-  else if (digits.startsWith('00')) digits = digits.slice(2);
-  else if (digits.length === 9) digits = '34' + digits;
-  return digits.length >= 10 && digits.length <= 15 ? digits : null;
-}
-// Último teléfono usado con cada transportista (solo en este navegador, para
-// no teclearlo cada vez; no se guarda en la base de datos).
-function decaTelClave(d){ return String(d.transportistaNombre || '').trim().toUpperCase(); }
-function decaTelGuardado(d){
-  try { return (JSON.parse(localStorage.getItem('decaTelConductor') || '{}'))[decaTelClave(d)] || ''; } catch (e) { return ''; }
-}
-function decaTelGuardar(d, txt){
-  try {
-    const m = JSON.parse(localStorage.getItem('decaTelConductor') || '{}');
-    m[decaTelClave(d)] = txt;
-    localStorage.setItem('decaTelConductor', JSON.stringify(m));
-  } catch (e) { /* sin almacenamiento: no pasa nada */ }
-}
-async function decaEnviarWhatsapp(id){
-  const d = decaDocuments.find(x => x.id === id);
-  if (!d || !d.pdfUrl) return;
-  // En el móvil se abre el panel de compartir con la imagen ya adjunta.
-  if (DECA_ES_MOVIL()) { await shareDecaQr(id); return; }
-  const telEl = document.getElementById('deca-send-tel');
-  const telTxt = telEl ? telEl.value.trim() : '';
-  const num = decaTelNormaliza(telTxt);
-  if (num === null) { decaEnviarEstado('El teléfono no parece válido. Escríbelo con prefijo (+34 612 345 678) o déjalo vacío para elegir el chat en WhatsApp.', false); if (telEl) telEl.focus(); return; }
-  if (num) decaTelGuardar(d, telTxt);
-  // Lo que hay que mandar es la FOTO del QR (el conductor se la enseña al
-  // agente), no un enlace: el chat se abre vacío y la imagen va ya copiada
-  // para pegarla. PRIMERO se copia y DESPUÉS se abre WhatsApp: al abrir la
-  // pestaña nueva esta página pierde el foco y el navegador ya no deja
-  // copiar, con lo que se pegaría lo último que hubiera en el portapapeles
-  // (p. ej. un enlace). Abrir justo después sigue contando como clic del usuario.
-  const ok = await decaCopiarQrImagen(d);
-  const url = num ? `https://wa.me/${num}` : 'https://web.whatsapp.com/';
-  // Si no se ha podido copiar NO se abre WhatsApp a ciegas: en la otra pestaña
-  // no se vería este aviso y se pegaría lo que hubiera antes en el portapapeles.
-  if (!ok) {
-    await decaDescargarQrImagen(id, true);
-    decaEnviarEstado(`No se ha podido copiar la foto del QR (el navegador no lo permite). Se ha <b>descargado</b> en tu carpeta de Descargas: abre WhatsApp y adjúntala con el clip 📎. <button type="button" class="btn btn-ghost" style="padding:3px 10px;font-size:12px;margin-left:4px;" onclick="window.open('${url}','_blank')">Abrir WhatsApp</button>`, false);
-    return;
-  }
-  const w = window.open(url, '_blank');
-  const donde = num ? ` en el chat de +${num}` : '';
-  if (!w) decaEnviarEstado('El navegador ha bloqueado la ventana de WhatsApp: permite las ventanas emergentes o usa «Copiar QR».', false);
-  else decaEnviarEstado(`WhatsApp abierto${donde}. La foto del QR está copiada: ${num ? 'pulsa en el mensaje y pega' : 'elige el chat del conductor y pega'} con <b>Ctrl+V</b>, luego enviar.`);
 }
 async function decaEnviarCorreo(id){
   const d = decaDocuments.find(x => x.id === id);
@@ -10270,16 +10162,9 @@ function openDecaEnviarModal(id, recienCreado){
             <div id="deca-qr-holder" style="display:flex;justify-content:center;"></div>
             <div style="font-size:12px;color:var(--muted);text-align:center;">Se escanea directamente desde la pantalla del móvil<br><span style="color:var(--primary);font-weight:700;">CVE: ${esc(decaCveCode(d.pdfUrl))}</span></div>
           </div>
-          ${DECA_ES_MOVIL() ? '' : `
-          <div class="field deca-form" style="margin-bottom:12px;">
-            <label>Teléfono del conductor <span style="color:var(--mutedFaint);font-weight:400;">(opcional)</span></label>
-            ${decaInputIcon('phone', `<input id="deca-send-tel" type="tel" inputmode="tel" maxlength="20" autocomplete="off" placeholder="Ej. 612 345 678 o +34 612 345 678" value="${esc(decaTelGuardado(d))}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); decaEnviarWhatsapp('${d.id}'); }" />`)}
-            <div style="font-size:11.5px;color:var(--mutedFaint);margin-top:5px;">Con número, WhatsApp abre directamente su chat. Sin prefijo se entiende España (+34).</div>
-          </div>`}
           <div class="deca-send-grid">
-            ${decaSendBtnHtml('chat', 'WhatsApp', 'Abre el chat', '#3F8F5F', `decaEnviarWhatsapp('${d.id}')`)}
+            ${decaSendBtnHtml('copy', 'Copiar QR', 'Para pegar en WhatsApp', '#7C5CBF', `decaEnviarCopiar('${d.id}')`)}
             ${decaSendBtnHtml('mail', 'Correo', 'Abre el mensaje', '#2E6F95', `decaEnviarCorreo('${d.id}')`)}
-            ${decaSendBtnHtml('copy', 'Copiar QR', 'Al portapapeles', '#7C5CBF', `decaEnviarCopiar('${d.id}')`)}
           </div>
           <div id="deca-send-status" style="min-height:38px;font-size:12.5px;line-height:1.45;margin:12px 2px 4px;"></div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
@@ -10330,9 +10215,6 @@ function decaDetalleGridHtml(d){
 // "Ver" abre la misma ventana que sale al crear el DeCA, para poder mandar el
 // QR al conductor más tarde (los datos están en el desplegable de abajo).
 function openDecaViewModal(id){ openDecaEnviarModal(id, false); }
-function copyDecaLink(url){
-  navigator.clipboard.writeText(url).catch(()=>{});
-}
 function confirmDeleteDeca(id){
   const d = decaDocuments.find(x=>x.id===id);
   if (!d) return;
