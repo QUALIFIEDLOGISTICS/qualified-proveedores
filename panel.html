@@ -10141,17 +10141,49 @@ async function decaEnviarCopiar(id){
   if (ok) decaEnviarEstado('QR copiado al portapapeles. Pégalo donde quieras con Ctrl+V.');
   else { decaEnviarEstado('Tu navegador no deja copiar la imagen: se ha descargado en su lugar.', false); decaDescargarQrImagen(id, true); }
 }
+const DECA_ES_MOVIL = () => /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent);
+// Teléfono → solo dígitos con prefijo de país, como pide wa.me. Acepta
+// "+34 612 345 678", "0034612345678" o "612345678" (9 cifras = España).
+// Devuelve null si no parece un número válido.
+function decaTelNormaliza(txt){
+  const t = String(txt || '').trim();
+  if (!t) return '';
+  let digits = t.replace(/\D/g, '');
+  if (t.startsWith('+')) { /* ya lleva prefijo */ }
+  else if (digits.startsWith('00')) digits = digits.slice(2);
+  else if (digits.length === 9) digits = '34' + digits;
+  return digits.length >= 10 && digits.length <= 15 ? digits : null;
+}
+// Último teléfono usado con cada transportista (solo en este navegador, para
+// no teclearlo cada vez; no se guarda en la base de datos).
+function decaTelClave(d){ return String(d.transportistaNombre || '').trim().toUpperCase(); }
+function decaTelGuardado(d){
+  try { return (JSON.parse(localStorage.getItem('decaTelConductor') || '{}'))[decaTelClave(d)] || ''; } catch (e) { return ''; }
+}
+function decaTelGuardar(d, txt){
+  try {
+    const m = JSON.parse(localStorage.getItem('decaTelConductor') || '{}');
+    m[decaTelClave(d)] = txt;
+    localStorage.setItem('decaTelConductor', JSON.stringify(m));
+  } catch (e) { /* sin almacenamiento: no pasa nada */ }
+}
 async function decaEnviarWhatsapp(id){
   const d = decaDocuments.find(x => x.id === id);
   if (!d || !d.pdfUrl) return;
   // En el móvil se abre el panel de compartir con la imagen ya adjunta.
-  if (/Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent)) { await shareDecaQr(id); return; }
+  if (DECA_ES_MOVIL()) { await shareDecaQr(id); return; }
+  const telEl = document.getElementById('deca-send-tel');
+  const telTxt = telEl ? telEl.value.trim() : '';
+  const num = decaTelNormaliza(telTxt);
+  if (num === null) { decaEnviarEstado('El teléfono no parece válido. Escríbelo con prefijo (+34 612 345 678) o déjalo vacío para elegir el chat en WhatsApp.', false); if (telEl) telEl.focus(); return; }
+  if (num) decaTelGuardar(d, telTxt);
   // En el ordenador la ventana se abre ya, dentro del clic (si no, el navegador la bloquea).
-  const w = window.open('https://wa.me/?text=' + encodeURIComponent(decaEnviarTexto(d)), '_blank');
+  const w = window.open(`https://wa.me/${num}?text=` + encodeURIComponent(decaEnviarTexto(d)), '_blank');
   const ok = await decaCopiarQrImagen(d);
+  const donde = num ? `en el chat de +${num}` : 'con el enlace';
   if (!w) decaEnviarEstado('El navegador ha bloqueado la ventana de WhatsApp: permite las ventanas emergentes o usa «Copiar QR».', false);
-  else if (ok) decaEnviarEstado('WhatsApp abierto con el enlace. El QR está copiado: elige el chat del conductor y pega con <b>Ctrl+V</b>.');
-  else decaEnviarEstado('WhatsApp abierto con el enlace. Para adjuntar la imagen usa «Descargar imagen».');
+  else if (ok) decaEnviarEstado(`WhatsApp abierto ${donde}. El QR está copiado: ${num ? 'pégalo en el mensaje' : 'elige el chat del conductor y pégalo'} con <b>Ctrl+V</b>.`);
+  else decaEnviarEstado(`WhatsApp abierto ${donde}. Para adjuntar la imagen usa «Descargar imagen».`);
 }
 async function decaEnviarCorreo(id){
   const d = decaDocuments.find(x => x.id === id);
@@ -10207,6 +10239,12 @@ function openDecaEnviarModal(id){
             <div id="deca-qr-holder" style="display:flex;justify-content:center;"></div>
             <div style="font-size:12px;color:var(--muted);text-align:center;">Se escanea directamente desde la pantalla del móvil<br><span style="color:var(--primary);font-weight:700;">CVE: ${esc(decaCveCode(d.pdfUrl))}</span></div>
           </div>
+          ${DECA_ES_MOVIL() ? '' : `
+          <div class="field deca-form" style="margin-bottom:12px;">
+            <label>Teléfono del conductor <span style="color:var(--mutedFaint);font-weight:400;">(opcional)</span></label>
+            ${decaInputIcon('phone', `<input id="deca-send-tel" type="tel" inputmode="tel" maxlength="20" autocomplete="off" placeholder="Ej. 612 345 678 o +34 612 345 678" value="${esc(decaTelGuardado(d))}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); decaEnviarWhatsapp('${d.id}'); }" />`)}
+            <div style="font-size:11.5px;color:var(--mutedFaint);margin-top:5px;">Con número, WhatsApp abre directamente su chat. Sin prefijo se entiende España (+34).</div>
+          </div>`}
           <div class="deca-send-grid">
             ${decaSendBtnHtml('chat', 'WhatsApp', 'Abre el chat', '#3F8F5F', `decaEnviarWhatsapp('${d.id}')`)}
             ${decaSendBtnHtml('mail', 'Correo', 'Abre el mensaje', '#2E6F95', `decaEnviarCorreo('${d.id}')`)}
@@ -10226,7 +10264,7 @@ function openDecaEnviarModal(id){
       </div>
     </div>`;
   const holder = document.getElementById('deca-qr-holder');
-  if (holder) holder.innerHTML = `<img src="${qrDataUrl(d.pdfUrl, 6)}" width="200" height="200" style="border:1px solid var(--border);border-radius:10px;background:#fff;padding:6px;box-sizing:content-box;" />`;
+  if (holder) holder.innerHTML = `<img src="${qrDataUrl(d.pdfUrl, 6)}" width="164" height="164" style="border:1px solid var(--border);border-radius:10px;background:#fff;padding:6px;box-sizing:content-box;" />`;
 }
 
 /* ---- DeCA: ver / eliminar ---- */
