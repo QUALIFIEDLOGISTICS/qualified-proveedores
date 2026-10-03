@@ -136,6 +136,11 @@
   .deca-view-head.ok{background:linear-gradient(135deg,color-mix(in srgb,#3F8F5F 11%,var(--panel)),var(--panel) 75%);border-bottom-color:color-mix(in srgb,#3F8F5F 22%,var(--border));}
   .deca-view-head.ok .deca-banner-icon{background:#3F8F5F;box-shadow:0 4px 10px rgba(63,143,95,.28);}
   .deca-view-head.ok .deca-code-pill{background:rgba(63,143,95,.14);color:#2F7049;}
+  .deca-detalle{margin-bottom:14px;border-top:1px solid var(--border);padding-top:4px;}
+  .deca-detalle summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;padding:10px 2px;font-size:13px;font-weight:600;color:var(--primary);user-select:none;}
+  .deca-detalle summary::-webkit-details-marker{display:none;}
+  .deca-detalle summary svg{transition:transform .15s;}
+  .deca-detalle[open] summary svg{transform:rotate(90deg);}
   .deca-send-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}
   .deca-send-btn{display:flex;flex-direction:column;align-items:center;gap:3px;padding:14px 8px 12px;border-radius:12px;border:1px solid color-mix(in srgb,var(--dc-accent) 28%,var(--border));background:color-mix(in srgb,var(--dc-accent) 7%,var(--panel));cursor:pointer;color:var(--text);font-family:inherit;transition:transform .12s,background .12s,box-shadow .12s;}
   .deca-send-btn:hover{background:color-mix(in srgb,var(--dc-accent) 14%,var(--panel));transform:translateY(-1px);box-shadow:0 6px 14px color-mix(in srgb,var(--dc-accent) 22%,transparent);}
@@ -10108,7 +10113,7 @@ function backToDecaList(){
     renderHeader(); renderTab();
     // Al crear: directo a enviar el QR al conductor (no se abre ningún PDF).
     // Al editar el QR no cambia, así que basta con ver el detalle.
-    if (editId) openDecaViewModal(newId); else openDecaEnviarModal(newId);
+    openDecaEnviarModal(newId, !editId);
   } catch (err) {
     errEl.textContent = 'No se pudo generar/guardar el DeCA: ' + (err && err.message ? err.message : 'error desconocido.');
     btns.forEach(b => { b.disabled = false; b.innerHTML = decaSubmitInner(editId ? 'Guardar y regenerar PDF' : 'Crear DeCA'); });
@@ -10220,20 +10225,37 @@ function decaSendBtnHtml(icon, titulo, sub, accent, onclick){
     <span class="deca-send-sub">${esc(sub)}</span>
   </button>`;
 }
-function openDecaEnviarModal(id){
+function decaModalHeadHtml(d, recienCreado){
+  return `<div class="deca-view-head${recienCreado ? ' ok' : ''}">
+    <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS[recienCreado ? 'checkCircle' : 'file'], 22, '#fff', 1.8)}</span>
+    <div style="min-width:0;flex:1;">
+      <div class="deca-banner-title" style="font-size:19px;">${recienCreado ? 'DeCA creado' : 'DeCA'}${d.codigo ? `<span class="deca-code-pill">${esc(d.codigo)}</span>` : ''}</div>
+      <div class="deca-banner-sub" style="margin-top:1px;">${recienCreado ? 'Mándale el QR al conductor ahora' : `Transporte del ${esc(fmtDateY(d.fechaTransporte))} · envíale el QR al conductor`}</div>
+    </div>
+    <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+  </div>`;
+}
+// Ventana de un DeCA: el QR y las formas de mandárselo al conductor (WhatsApp,
+// correo, copiar), con los datos del documento en un desplegable. Es la misma
+// que sale nada más crearlo (recienCreado) y la que abre "Ver" en la lista, para
+// poder enviarlo también más tarde.
+function openDecaEnviarModal(id, recienCreado){
   const d = decaDocuments.find(x => x.id === id);
   if (!d) return;
+  if (!d.pdfUrl) {
+    document.getElementById('modal-slot').innerHTML = `
+      <div class="modal-overlay">
+        <div class="modal-box" style="max-width:560px;padding:0;border-radius:14px;">
+          ${decaModalHeadHtml(d, false)}
+          <div class="deca-view-body">${decaDetalleGridHtml(d)}<div style="color:var(--mutedFaint);font-size:12.5px;">Sin PDF generado, así que todavía no hay QR que enviar.</div></div>
+        </div>
+      </div>`;
+    return;
+  }
   document.getElementById('modal-slot').innerHTML = `
     <div class="modal-overlay">
-      <div class="modal-box" style="max-width:520px;padding:0;border-radius:14px;">
-        <div class="deca-view-head ok">
-          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.checkCircle, 22, '#fff', 1.8)}</span>
-          <div style="min-width:0;flex:1;">
-            <div class="deca-banner-title" style="font-size:19px;">DeCA creado${d.codigo ? `<span class="deca-code-pill">${esc(d.codigo)}</span>` : ''}</div>
-            <div class="deca-banner-sub" style="margin-top:1px;">Mándale el QR al conductor ahora</div>
-          </div>
-          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
-        </div>
+      <div class="modal-box" style="max-width:560px;padding:0;border-radius:14px;">
+        ${decaModalHeadHtml(d, !!recienCreado)}
         <div class="deca-view-body">
           <div class="deca-view-qr" style="margin-bottom:14px;">
             <div id="deca-qr-holder" style="display:flex;justify-content:center;"></div>
@@ -10254,12 +10276,14 @@ function openDecaEnviarModal(id){
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
             <button class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px;" onclick="decaDescargarQrImagen('${d.id}')">${homeIcon(HOME_ICON_PATHS.download, 14, 'currentColor', 2)}<span>Descargar imagen</span></button>
             <button class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px;" onclick="decaEnviarCopiarEnlace('${d.id}')">${homeIcon(HOME_ICON_PATHS.copy, 14, 'currentColor', 2)}<span>Copiar enlace</span></button>
-            <button class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px;" onclick="openDecaDriverPdf('${d.id}')">${homeIcon(HOME_ICON_PATHS.file, 14, 'currentColor', 2)}<span>Abrir PDF</span></button>
+            <button class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px;" title="Página 1: QR · después una página de información por cada carga o entrega. El archivo se llama ${esc(decaPdfFileName(d))}" onclick="downloadDecaPdf('${d.id}')">${homeIcon(HOME_ICON_PATHS.download, 14, 'currentColor', 2)}<span>Descargar PDF</span></button>
+            <button class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px;" title="Página 1: QR · después una página de información por cada carga o entrega" onclick="openDecaDriverPdf('${d.id}')">${homeIcon(HOME_ICON_PATHS.file, 14, 'currentColor', 2)}<span>Abrir PDF</span></button>
           </div>
-          <div style="display:flex;gap:10px;">
-            <button class="btn btn-ghost deca-cancel" style="flex:1;justify-content:center;" onclick="openDecaViewModal('${d.id}')">Ver detalle</button>
-            <button class="btn btn-primary deca-submit" style="flex:1;justify-content:center;" onclick="closeModal()">Hecho</button>
-          </div>
+          <details class="deca-detalle">
+            <summary>${homeIcon(HOME_ICON_PATHS.chevron, 14, 'currentColor', 2.2)}<span>Datos del DeCA</span></summary>
+            <div style="margin-top:10px;">${decaDetalleGridHtml(d)}</div>
+          </details>
+          <button class="btn btn-primary deca-submit" style="width:100%;justify-content:center;" onclick="closeModal()">${recienCreado ? 'Hecho' : 'Cerrar'}</button>
         </div>
       </div>
     </div>`;
@@ -10274,27 +10298,14 @@ function decaViewRow(icon, label, valueHtml, accent, full){
     <div style="min-width:0;"><div class="deca-view-label">${esc(label)}</div><div class="deca-view-value">${valueHtml}</div></div>
   </div>`;
 }
-function openDecaViewModal(id){
-  const d = decaDocuments.find(x=>x.id===id);
-  if (!d) return;
+function decaDetalleGridHtml(d){
   // Una lista numerada si hay más de un punto de carga/entrega; si no, el texto tal cual.
   const puntos = (principal, extras) => extras.length
     ? [principal, ...extras].map((p, i) => `<div style="margin-top:${i ? 4 : 0}px;"><span class="deca-view-n">${i + 1}</span>${esc(p)}</div>`).join('')
     : esc(principal);
   const cargas = d.origenesExtra || [], entregas = d.destinosExtra || [];
   const mono = 'font-family:var(--mono);font-size:13px;';
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box" style="max-width:600px;padding:0;border-radius:14px;">
-        <div class="deca-view-head">
-          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.file, 21, '#fff', 1.8)}</span>
-          <div style="min-width:0;flex:1;">
-            <div class="deca-banner-title" style="font-size:19px;">DeCA${d.codigo ? `<span class="deca-code-pill">${esc(d.codigo)}</span>` : ''}</div>
-            <div class="deca-banner-sub" style="margin-top:1px;">Transporte del ${fmtDateY(d.fechaTransporte)}</div>
-          </div>
-          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
-        </div>
-        <div class="deca-view-body">
+  return `
           <div class="deca-view-grid">
             ${decaViewRow('building', 'Cargador contractual', `<b>${esc(d.cargadorNombre)}</b><div style="color:var(--muted);font-size:12.5px;">${esc(d.cargadorNif)}</div>`, '#2E6F95')}
             ${decaViewRow('truck', 'Transportista efectivo', `<b>${esc(d.transportistaNombre)}</b><div style="color:var(--muted);font-size:12.5px;">${esc(d.transportistaNif)}</div>`, '#3F8F5F')}
@@ -10305,28 +10316,11 @@ function openDecaViewModal(id){
             ${decaViewRow('calendar', 'Fecha del transporte', esc(fmtDateY(d.fechaTransporte)), '#4A90C2')}
             ${d.creacionFecha ? decaViewRow('clock', 'Creación', `${esc(fmtDateY(d.creacionFecha))}${d.creacionHora ? `<div style="color:var(--muted);font-size:12.5px;">${esc(d.creacionHora)}</div>` : ''}`, '#4A90C2') : ''}
             ${d.observaciones ? decaViewRow('file', 'Observaciones', esc(d.observaciones), '#5C6670', true) : ''}
-          </div>
-          ${d.pdfUrl ? `
-          <div class="deca-view-qr">
-            <img src="${esc(d.pdfUrl)}" style="display:none;" onerror="this.style.display='none';" />
-            <div id="deca-qr-holder" style="display:flex;justify-content:center;"></div>
-            <div style="font-size:11px;color:var(--mutedFaint);word-break:break-all;text-align:center;max-width:100%;">${esc(d.pdfUrl)}</div>
-          </div>
-          <button class="btn btn-primary deca-submit" style="width:100%;margin-bottom:10px;box-shadow:0 6px 16px rgba(27,58,107,.22);" title="Manda solo la imagen del QR (no el PDF) para que el conductor la enseñe en el móvil. En el ordenador: copia la imagen y abre WhatsApp Web para pegarla (Ctrl+V)." onclick="shareDecaQr('${d.id}')">${homeIcon(HOME_ICON_PATHS.upload, 17, 'currentColor', 1.8)}<span>Enviar QR al conductor (WhatsApp / correo)</span></button>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;">
-            <button class="btn btn-ghost" style="flex:1;justify-content:center;min-width:140px;" title="Página 1: QR · después una página de información por cada carga o entrega. El archivo se llama ${esc(decaPdfFileName(d))}" onclick="downloadDecaPdf('${d.id}')">${homeIcon(HOME_ICON_PATHS.download, 15, 'currentColor', 2)}<span>Descargar PDF</span></button>
-            <button class="btn btn-ghost" style="flex:1;justify-content:center;min-width:140px;" title="Página 1: QR · después una página de información por cada carga o entrega" onclick="openDecaDriverPdf('${d.id}')">${homeIcon(HOME_ICON_PATHS.file, 15, 'currentColor', 2)}<span>Abrir PDF</span></button>
-            <button class="btn btn-ghost" style="flex:1;justify-content:center;min-width:140px;" title="El enlace que abre el QR (solo la información)" onclick="copyDecaLink('${esc(d.pdfUrl)}')">${homeIcon(HOME_ICON_PATHS.copy, 15, 'currentColor', 2)}<span>Copiar enlace del QR</span></button>
-          </div>` : `<div style="color:var(--mutedFaint);font-size:12.5px;">Sin PDF generado.</div>`}
-        </div>
-      </div>
-    </div>`;
-  if (d.pdfUrl) {
-    const dataUrl = qrDataUrl(d.pdfUrl, 5);
-    const holder = document.getElementById('deca-qr-holder');
-    if (holder) holder.innerHTML = `<img src="${dataUrl}" width="180" height="180" style="border:1px solid var(--border);border-radius:10px;background:#fff;padding:6px;box-sizing:content-box;" />`;
-  }
+          </div>`;
 }
+// "Ver" abre la misma ventana que sale al crear el DeCA, para poder mandar el
+// QR al conductor más tarde (los datos están en el desplegable de abajo).
+function openDecaViewModal(id){ openDecaEnviarModal(id, false); }
 function copyDecaLink(url){
   navigator.clipboard.writeText(url).catch(()=>{});
 }
