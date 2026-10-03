@@ -8856,8 +8856,10 @@ function colabHintHtml(z){
   if (!txt) return '';
   return `<span style="display:inline-flex;align-items:center;gap:6px;">${tarifaFlagHtml(z)}${esc(txt)}</span>`;
 }
-function colabOfertaAsunto(o, d){ return `Viaje disponible ${o} → ${d}`; }
-function colabOfertaCuerpo(o, d){ return `Hola,\n\nTenemos un viaje disponible en la ruta ${o} → ${d}. ¿Podéis cubrirlo?\n\nQuedamos a la espera de vuestra respuesta.\n\nUn saludo.`; }
+// Con un solo lado elegido ("desde ES" o "hacia FR") el texto lo dice tal cual.
+function colabRutaTextoPlano(o, d){ return o && d ? `${o} → ${d}` : o ? `desde ${o}` : `hacia ${d}`; }
+function colabOfertaAsunto(o, d){ return `Viaje disponible ${colabRutaTextoPlano(o, d)}`; }
+function colabOfertaCuerpo(o, d){ return `Hola,\n\nTenemos un viaje disponible ${o && d ? 'en la ruta ' : ''}${colabRutaTextoPlano(o, d)}. ¿Podéis cubrirlo?\n\nQuedamos a la espera de vuestra respuesta.\n\nUn saludo.`; }
 function colabMailtoUrl({ to, bcc, subject, body }){
   // Las direcciones no se codifican (van tal cual, con comas si hay varias); solo el asunto y el cuerpo.
   const params = [];
@@ -8879,8 +8881,17 @@ function colabZonaCubre(rutaZona, buscada){
   return false;
 }
 // Filas que cubren esa ruta (mismo sentido), zona exacta o país entero.
+// Un lado vacío significa "cualquiera" (p. ej. solo origen: todo lo que sale de ahí).
 function colabRutasQueCubren(origen, destino){
-  return transportistaRutas.filter(r => colabZonaCubre(r.origenZona, origen) && colabZonaCubre(r.destinoZona, destino));
+  return transportistaRutas.filter(r => (!origen || colabZonaCubre(r.origenZona, origen)) && (!destino || colabZonaCubre(r.destinoZona, destino)));
+}
+// Lo que se busca en cada lado: la zona si se ha elegido; si no, el país entero.
+// Así con solo "España" y "Francia" ya salen resultados, sin tener que concretar la zona.
+function colabBuscarClaves(){
+  return {
+    origen: window.__colabBuscarOrigen || window.__colabBuscarPaisO || '',
+    destino: window.__colabBuscarDestino || window.__colabBuscarPaisD || '',
+  };
 }
 function colabCopiar(txt, btn){
   navigator.clipboard.writeText(txt).then(() => {
@@ -8891,12 +8902,13 @@ function colabCopiar(txt, btn){
   }, () => {});
 }
 function colabResultadosHtml(){
-  const origen = window.__colabBuscarOrigen || '';
-  const destino = window.__colabBuscarDestino || '';
+  const { origen, destino } = colabBuscarClaves();
   const aviso = (txt) => `<div style="color:var(--mutedFaint);font-size:12.5px;padding:14px 4px 2px;">${txt}</div>`;
-  if (!COLAB_ZONA_RE.test(origen) || !COLAB_ZONA_RE.test(destino)) {
-    return aviso('Elige un país y una zona de origen y de destino para ver quién cubre esa ruta.');
+  if (!origen && !destino) {
+    return aviso('Elige un país de origen y/o de destino para ver quién cubre esa ruta. La zona es opcional: solo concreta si quieres afinar.');
   }
+  const ladoTxt = (z, vacio) => z ? rutaZonaBanderaHtml(z) : `<span style="font-family:var(--body);color:var(--muted);">${vacio}</span>`;
+  const rutaTxt = `${ladoTxt(origen, 'cualquier origen')} → ${ladoTxt(destino, 'cualquier destino')}`;
   const sel = window.__colabBuscarVeh || [];
   const todasLasQueCubren = colabRutasQueCubren(origen, destino);
   const filas = todasLasQueCubren.filter(r => colabVehMatch(r, sel));
@@ -8914,7 +8926,7 @@ function colabResultadosHtml(){
   // pero se avisa de cuántas hay por si conviene preguntarles.
   const sinTipo = sel.length && !sel.includes(COLAB_SIN_VEH) ? todasLasQueCubren.filter(r => !r.tipoVehiculo && contactos.some(x => x.id === r.contactoId)).length : 0;
   const notaSinTipo = sinTipo ? `<div style="font-size:12px;color:var(--muted);background:var(--panel2);border-radius:8px;padding:8px 12px;margin-top:10px;">Hay ${sinTipo} cobertura${sinTipo===1?'':'s'} de esta ruta sin tipo de vehículo indicado que no se muestra${sinTipo===1?'':'n'} por el filtro.</div>` : '';
-  if (!conContacto.length) return aviso(`Ningún transportista ${sel.length ? `con ${esc(nombresVeh)} ` : 'apuntado '}cubre ${esc(origen)} → ${esc(destino)}.`) + notaSinTipo;
+  if (!conContacto.length) return aviso(`Ningún transportista ${sel.length ? `con ${esc(nombresVeh)} ` : 'apuntado '}cubre <span style="font-family:var(--mono);">${rutaTxt}</span>.`) + notaSinTipo;
   const asunto = colabOfertaAsunto(origen, destino), cuerpo = colabOfertaCuerpo(origen, destino);
   // Una empresa puede tener varios contactos (una por ámbito); se bccan todos los correos apuntados.
   const todosCorreos = [...new Set(conContacto.flatMap(({c}) => transportistaContactos.filter(p => p.contactoId === c.id && p.email).map(p => p.email)))];
@@ -8924,7 +8936,7 @@ function colabResultadosHtml(){
   const conPrecio = conContacto.filter(x => x.r.tarifaBase != null).length;
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0 10px;">
-      <div style="font-size:13px;color:var(--text);"><b>${conContacto.length}</b> transportista${conContacto.length===1?'':'s'} ${sel.length ? `con ${esc(nombresVeh)} ` : ''}cubre${conContacto.length===1?'':'n'} <span style="font-family:var(--mono);">${rutaZonaBanderaHtml(origen)} → ${rutaZonaBanderaHtml(destino)}</span></div>
+      <div style="font-size:13px;color:var(--text);"><b>${conContacto.length}</b> transportista${conContacto.length===1?'':'s'} ${sel.length ? `con ${esc(nombresVeh)} ` : ''}cubre${conContacto.length===1?'':'n'} <span style="font-family:var(--mono);">${rutaTxt}</span></div>
       ${contactarTodos}
     </div>
     <div class="colab-res-grid">
@@ -8991,8 +9003,8 @@ function colabLimpiarVeh(){ window.__colabBuscarVeh = []; renderTab(); }
 // elegida, o en total si todavía no hay ruta). Se pueden combinar varias.
 function colabVehChipsHtml(){
   const sel = window.__colabBuscarVeh || [];
-  const o = window.__colabBuscarOrigen || '', d = window.__colabBuscarDestino || '';
-  const base = (COLAB_ZONA_RE.test(o) && COLAB_ZONA_RE.test(d)) ? colabRutasQueCubren(o, d) : transportistaRutas;
+  const { origen: o, destino: d } = colabBuscarClaves();
+  const base = (o || d) ? colabRutasQueCubren(o, d) : transportistaRutas;
   const chip = (val, label) => {
     const n = base.filter(r => (r.tipoVehiculo || COLAB_SIN_VEH) === val).length;
     const on = sel.includes(val);
