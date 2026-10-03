@@ -184,6 +184,11 @@
   .colab-price{font-family:var(--display);font-size:19px;font-weight:700;color:var(--text);white-space:nowrap;text-align:right;line-height:1.1;}
   .colab-price small{display:block;font-family:var(--body);font-size:10.5px;font-weight:600;color:var(--muted);margin-top:2px;}
   .colab-chip{display:inline-block;padding:2px 9px;border-radius:999px;background:color-mix(in srgb,#0F8B8D 12%,var(--panel));color:#0B6E70;font-size:11px;font-weight:700;}
+  .colab-serv{display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;font-size:12px;}
+  .colab-serv.row{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:13px;}
+  .colab-serv label{display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;}
+  .colab-chip.veh{background:var(--panel2);color:var(--muted);}
+  .colab-chip.grua{background:color-mix(in srgb,#C98A2E 16%,var(--panel));color:#8A5A12;}
   .colab-best{display:inline-block;padding:2px 9px;border-radius:999px;background:#3F8F5F;color:#fff;font-size:10.5px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;}
   .colab-person{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:9px 10px;background:var(--panel2);border-radius:9px;}
   .colab-person .info{font-size:12px;color:var(--muted);min-width:0;overflow-wrap:anywhere;}
@@ -8767,7 +8772,25 @@ function tplTransportistasPage(){
    Transporte → Transportistas.
 ========================================================= */
 let transportistaRutas = [];
-const COLAB_TIPOS_VEHICULO = ['Lona', 'Frigorífico', 'Cisterna', 'Plataforma', 'Furgón', 'Portacontenedores', 'Bañera', 'Piso Móvil', 'Grúa'];
+const COLAB_TIPOS_VEHICULO = ['Lona', 'Frigorífico', 'Cisterna', 'Plataforma', 'Furgón', 'Portacontenedores', 'Bañera', 'Piso Móvil'];
+/* Servicio que hace el transportista en esa cobertura (los mismos tipos que
+   Tarifas Transporte). Se pueden combinar (completo + grupaje) salvo la Grúa,
+   que funciona distinto: no es una ruta A → B sino una ZONA DE SERVICIO (solo
+   actúa allí) y se cobra por horas, así que va sola, con una única zona y la
+   tarifa base en €/hora. Se guarda con destino = origen. */
+const COLAB_SERVICIOS = { FTL: 'Camión completo', LTL: 'Grupaje', GRANEL: 'Piso móvil / granel', GRUA: 'Grúa' };
+const COLAB_SERVICIOS_CORTO = { FTL: 'Completo', LTL: 'Grupaje', GRANEL: 'Granel', GRUA: 'Grúa' };
+const COLAB_SIN_SERV = '__none';
+function colabEsGrua(r){ return (r.servicios || []).includes('GRUA'); }
+function colabServiciosChipsHtml(r){
+  const s = r.servicios || [];
+  if (!s.length) return '<span style="color:var(--mutedFaint);">—</span>';
+  return s.map(k => `<span class="colab-chip${k === 'GRUA' ? ' grua' : ''}">${esc(COLAB_SERVICIOS_CORTO[k] || k)}</span>`).join(' ');
+}
+// Precio de una cobertura: la Grúa se cobra por horas.
+function colabPrecioTxt(r){
+  return r.tarifaBase == null ? '' : eur2(r.tarifaBase) + (colabEsGrua(r) ? '/h' : '');
+}
 function colabTipoVehiculoOptionsHtml(selected){
   return `<option value="">Sin especificar</option>${COLAB_TIPOS_VEHICULO.map(t => `<option value="${esc(t)}" ${t===selected?'selected':''}>${esc(t)}</option>`).join('')}`;
 }
@@ -8777,6 +8800,7 @@ async function loadTransportistaRutas(){
     id: r.id, contactoId: r.contacto_id, origenZona: (r.origen_zona||'').toUpperCase(), destinoZona: (r.destino_zona||'').toUpperCase(),
     tipoVehiculo: r.tipo_vehiculo || '', observaciones: r.observaciones || '', createdAt: r.created_at, updatedAt: r.updated_at || r.created_at,
     tarifaBase: r.tarifa_base === null || r.tarifa_base === undefined ? null : Number(r.tarifa_base), indexacion: !!r.indexacion,
+    servicios: Array.isArray(r.servicios) ? r.servicios : [],
   }));
 }
 // Personas de contacto de un transportista: una empresa grande puede tener
@@ -8792,6 +8816,8 @@ async function loadTransportistaContactos(){
 function resetColaboradoresState(){
   window.__colabBuscarVeh = [];
   window.__colabTablaVeh = '';
+  window.__colabBuscarServ = [];
+  window.__colabTablaServ = '';
   window.__colabView = 'home';
   window.__colabBuscarPaisO = '';
   window.__colabBuscarPaisD = '';
@@ -8910,11 +8936,15 @@ function colabResultadosHtml(){
   const ladoTxt = (z, vacio) => z ? rutaZonaBanderaHtml(z) : `<span style="font-family:var(--body);color:var(--muted);">${vacio}</span>`;
   const rutaTxt = `${ladoTxt(origen, 'cualquier origen')} → ${ladoTxt(destino, 'cualquier destino')}`;
   const sel = window.__colabBuscarVeh || [];
+  const selS = window.__colabBuscarServ || [];
   const todasLasQueCubren = colabRutasQueCubren(origen, destino);
-  const filas = todasLasQueCubren.filter(r => colabVehMatch(r, sel));
-  // Los más baratos primero (los que no tienen tarifa apuntada, al final).
+  const filas = todasLasQueCubren.filter(r => colabVehMatch(r, sel) && colabServMatch(r, selS));
+  // Los más baratos primero (los que no tienen tarifa apuntada, al final). La grúa
+  // va aparte, detrás: su precio es por hora y no se compara con el de un viaje.
   const conContacto = filas.map(r => ({ r, c: contactos.find(x => x.id === r.contactoId) })).filter(x => x.c)
     .sort((a, b) => {
+      const ga = colabEsGrua(a.r) ? 1 : 0, gb = colabEsGrua(b.r) ? 1 : 0;
+      if (ga !== gb) return ga - gb;
       const pa = a.r.tarifaBase, pb = b.r.tarifaBase;
       if (pa == null && pb == null) return 0;
       if (pa == null) return 1;
@@ -8922,29 +8952,45 @@ function colabResultadosHtml(){
       return pa - pb;
     });
   const nombresVeh = sel.map(v => v === COLAB_SIN_VEH ? 'vehículo sin especificar' : v).join(' o ');
-  // Con un vehículo concreto elegido, las coberturas sin tipo indicado no entran,
-  // pero se avisa de cuántas hay por si conviene preguntarles.
-  const sinTipo = sel.length && !sel.includes(COLAB_SIN_VEH) ? todasLasQueCubren.filter(r => !r.tipoVehiculo && contactos.some(x => x.id === r.contactoId)).length : 0;
-  const notaSinTipo = sinTipo ? `<div style="font-size:12px;color:var(--muted);background:var(--panel2);border-radius:8px;padding:8px 12px;margin-top:10px;">Hay ${sinTipo} cobertura${sinTipo===1?'':'s'} de esta ruta sin tipo de vehículo indicado que no se muestra${sinTipo===1?'':'n'} por el filtro.</div>` : '';
-  if (!conContacto.length) return aviso(`Ningún transportista ${sel.length ? `con ${esc(nombresVeh)} ` : 'apuntado '}cubre <span style="font-family:var(--mono);">${rutaTxt}</span>.`) + notaSinTipo;
+  const nombresServ = selS.map(v => v === COLAB_SIN_SERV ? 'servicio sin indicar' : (COLAB_SERVICIOS[v] || v)).join(' o ');
+  const filtroTxt = [nombresServ, nombresVeh].filter(Boolean).join(', ');
+  // Con un vehículo o servicio concreto elegido, las coberturas sin ese dato indicado no
+  // entran, pero se avisa de cuántas hay por si conviene preguntarles.
+  const faltaDato = r => (sel.length && !sel.includes(COLAB_SIN_VEH) && !r.tipoVehiculo) || (selS.length && !selS.includes(COLAB_SIN_SERV) && !(r.servicios || []).length);
+  const sinTipo = (sel.length || selS.length) ? todasLasQueCubren.filter(r => faltaDato(r) && contactos.some(x => x.id === r.contactoId)).length : 0;
+  const notaSinTipo = sinTipo ? `<div style="font-size:12px;color:var(--muted);background:var(--panel2);border-radius:8px;padding:8px 12px;margin-top:10px;">Hay ${sinTipo} cobertura${sinTipo===1?'':'s'} de esta ruta sin vehículo o servicio indicado que no se muestra${sinTipo===1?'':'n'} por el filtro.</div>` : '';
+  if (!conContacto.length) return aviso(`Ningún transportista ${filtroTxt ? `con ${esc(filtroTxt)} ` : 'apuntado '}cubre <span style="font-family:var(--mono);">${rutaTxt}</span>.`) + notaSinTipo;
   const asunto = colabOfertaAsunto(origen, destino), cuerpo = colabOfertaCuerpo(origen, destino);
   // Una empresa puede tener varios contactos (una por ámbito); se bccan todos los correos apuntados.
   const todosCorreos = [...new Set(conContacto.flatMap(({c}) => transportistaContactos.filter(p => p.contactoId === c.id && p.email).map(p => p.email)))];
   const contactarTodos = todosCorreos.length > 1
     ? `<a class="btn btn-primary" style="text-decoration:none;" href="${esc(colabMailtoUrl({ bcc: todosCorreos.join(','), subject: asunto, body: cuerpo }))}">${homeIcon(HOME_ICON_PATHS.mail, 15, 'currentColor', 2)}<span>Contactar a los ${todosCorreos.length} por correo</span></a>`
     : '';
-  const conPrecio = conContacto.filter(x => x.r.tarifaBase != null).length;
+  // "Mejor precio": el más barato de cada grupo (viajes por un lado, grúas por otro),
+  // solo si en ese grupo hay al menos dos con tarifa apuntada.
+  const mejores = new Set();
+  [conContacto.filter(x => !colabEsGrua(x.r)), conContacto.filter(x => colabEsGrua(x.r))].forEach(grupo => {
+    const conTarifa = grupo.filter(x => x.r.tarifaBase != null);
+    if (conTarifa.length > 1) mejores.add(conTarifa[0].r.id);
+  });
+  // Una persona de contacto cuyo "ámbito" nombra la zona (p. ej. "Sevilla") va primero.
+  const coincideZona = (p, r) => {
+    const a = (p.ambito || '').toLowerCase();
+    if (!a) return false;
+    return [r.origenZona, tarifaZonaHint(r.origenZona), tarifaZonaHint(r.destinoZona)].some(t => t && a.includes(String(t).toLowerCase()));
+  };
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0 10px;">
-      <div style="font-size:13px;color:var(--text);"><b>${conContacto.length}</b> transportista${conContacto.length===1?'':'s'} ${sel.length ? `con ${esc(nombresVeh)} ` : ''}cubre${conContacto.length===1?'':'n'} <span style="font-family:var(--mono);">${rutaTxt}</span></div>
+      <div style="font-size:13px;color:var(--text);"><b>${conContacto.length}</b> transportista${conContacto.length===1?'':'s'} ${filtroTxt ? `con ${esc(filtroTxt)} ` : ''}cubre${conContacto.length===1?'':'n'} <span style="font-family:var(--mono);">${rutaTxt}</span></div>
       ${contactarTodos}
     </div>
     <div class="colab-res-grid">
-    ${conContacto.map(({r,c}, idx) => {
-      const personas = transportistaContactos.filter(p => p.contactoId === c.id);
-      const esMejor = conPrecio > 1 && idx === 0 && r.tarifaBase != null;
+    ${conContacto.map(({r,c}) => {
+      const grua = colabEsGrua(r);
+      const personas = transportistaContactos.filter(p => p.contactoId === c.id).sort((a, b) => Number(coincideZona(b, r)) - Number(coincideZona(a, r)));
+      const esMejor = mejores.has(r.id);
       const precio = r.tarifaBase != null
-        ? `<div class="colab-price">${eur2(r.tarifaBase)}<small>${r.indexacion ? '+ indexación' : 'tarifa base'}</small></div>`
+        ? `<div class="colab-price">${colabPrecioTxt(r)}<small>${grua ? 'por hora' : (r.indexacion ? '+ indexación' : 'tarifa base')}</small></div>`
         : `<div style="font-size:11.5px;color:var(--mutedFaint);text-align:right;">Sin tarifa<br>apuntada</div>`;
       return `
       <div class="colab-res${esMejor ? ' best' : ''}">
@@ -8952,7 +8998,11 @@ function colabResultadosHtml(){
           <div style="min-width:0;">
             ${esMejor ? '<span class="colab-best">Mejor precio</span><br>' : ''}
             <div class="colab-res-name" style="${esMejor ? 'margin-top:5px;' : ''}" onclick="openTransportistaFicha('${c.id}')">${esc((c.nombreComercial||'').trim() || c.nombre)}</div>
-            ${r.tipoVehiculo ? `<span class="colab-chip" style="margin-top:6px;">${esc(r.tipoVehiculo)}</span>` : ''}
+            <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;">
+              ${(r.servicios || []).map(k => `<span class="colab-chip${k === 'GRUA' ? ' grua' : ''}">${esc(COLAB_SERVICIOS_CORTO[k] || k)}</span>`).join('')}
+              ${r.tipoVehiculo ? `<span class="colab-chip veh">${esc(r.tipoVehiculo)}</span>` : ''}
+            </div>
+            ${grua ? `<div style="font-size:12px;color:var(--muted);margin-top:6px;">Zona de servicio: <span style="font-family:var(--mono);">${rutaZonaBanderaHtml(r.origenZona)}</span>${tarifaZonaHint(r.origenZona) ? ' · ' + esc(tarifaZonaHint(r.origenZona)) : ''}</div>` : ''}
           </div>
           ${precio}
         </div>
@@ -8960,7 +9010,7 @@ function colabResultadosHtml(){
         ${personas.length ? personas.map(p => `
           <div class="colab-person">
             <div class="info">
-              <b>${esc([p.nombre, p.apellidos].filter(Boolean).join(' ') || 'Sin nombre')}</b>${p.ambito ? ` · ${esc(p.ambito)}` : ''}<br>
+              <b>${esc([p.nombre, p.apellidos].filter(Boolean).join(' ') || 'Sin nombre')}</b>${p.ambito ? ` · ${esc(p.ambito)}` : ''}${coincideZona(p, r) ? ' <span class="colab-best" style="background:#0F8B8D;">Su zona</span>' : ''}<br>
               ${p.email ? esc(p.email) : 'Sin correo apuntado'}${p.telefono ? ' · ' + esc(p.telefono) : ''}
             </div>
             <div class="acts">
@@ -8976,8 +9026,10 @@ function colabResultadosHtml(){
 function colaboradoresFilteredRutas(){
   const search = (window.__colabSearch || '').toLowerCase();
   const veh = window.__colabTablaVeh || '';
+  const serv = window.__colabTablaServ || '';
   return transportistaRutas.filter(r => {
     if (veh && (r.tipoVehiculo || COLAB_SIN_VEH) !== veh) return false;
+    if (serv && !colabServMatch(r, [serv])) return false;
     if (!search) return true;
     const c = contactos.find(x => x.id === r.contactoId);
     return c && (c.nombre.toLowerCase().includes(search) || (c.nombreComercial||'').toLowerCase().includes(search));
@@ -8999,6 +9051,35 @@ function colabToggleVeh(v){
   renderTab();
 }
 function colabLimpiarVeh(){ window.__colabBuscarVeh = []; renderTab(); }
+// Mismo filtro para el servicio (completo, grupaje, granel, grúa); varios a la vez.
+function colabServMatch(r, sel){
+  if (!sel.length) return true;
+  const s = r.servicios || [];
+  return sel.some(v => v === COLAB_SIN_SERV ? !s.length : s.includes(v));
+}
+function colabToggleServ(v){
+  const sel = (window.__colabBuscarServ || []).slice();
+  const i = sel.indexOf(v);
+  if (i >= 0) sel.splice(i, 1); else sel.push(v);
+  window.__colabBuscarServ = sel;
+  renderTab();
+}
+function colabLimpiarServ(){ window.__colabBuscarServ = []; renderTab(); }
+function colabServChipsHtml(){
+  const sel = window.__colabBuscarServ || [];
+  const { origen: o, destino: d } = colabBuscarClaves();
+  const base = (o || d) ? colabRutasQueCubren(o, d) : transportistaRutas;
+  const chip = (val, label) => {
+    const n = base.filter(r => val === COLAB_SIN_SERV ? !(r.servicios || []).length : (r.servicios || []).includes(val)).length;
+    const on = sel.includes(val);
+    return `<button type="button" class="colab-vchip${on ? ' on' : ''}${n ? '' : ' zero'}" onclick="colabToggleServ(${esc(JSON.stringify(val))})">${esc(label)}<span>${n}</span></button>`;
+  };
+  return `
+    <div class="colab-vrow">
+      <div class="colab-route-label">${homeIcon(HOME_ICON_PATHS.box, 14, 'currentColor', 1.8)}Servicio${sel.length ? `<button type="button" class="colab-vclear" onclick="colabLimpiarServ()">Quitar filtro</button>` : ''}</div>
+      <div class="colab-vchips">${Object.keys(COLAB_SERVICIOS).map(k => chip(k, COLAB_SERVICIOS[k])).join('')}${chip(COLAB_SIN_SERV, 'Sin indicar')}</div>
+    </div>`;
+}
 // Etiquetas de vehículo con cuántas coberturas hay de cada tipo (para la ruta
 // elegida, o en total si todavía no hay ruta). Se pueden combinar varias.
 function colabVehChipsHtml(){
@@ -9038,7 +9119,7 @@ function colabTablaBodyHtml(){
   if (!list.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;padding:22px 0;text-align:center;">${window.__colabSearch ? 'Ningún transportista coincide con la búsqueda.' : 'Todavía no hay ninguna cobertura apuntada.'}</div>`;
   return `
     <table class="tf-table">
-      <thead><tr>${thSort('Última edición','date')}${thSort('Transportista','text')}${thSort('Ruta','text')}${thSort('Vehículo','text')}${thSort('Tarifa base','number','style="text-align:right;"')}${thSort('Indexación','text')}${thSort('Observaciones','text')}<th>Acciones</th></tr></thead>
+      <thead><tr>${thSort('Última edición','date')}${thSort('Transportista','text')}${thSort('Ruta','text')}${thSort('Servicio','text')}${thSort('Vehículo','text')}${thSort('Tarifa base','number','style="text-align:right;"')}${thSort('Indexación','text')}${thSort('Observaciones','text')}<th>Acciones</th></tr></thead>
       <tbody>
         ${list.map(r => {
           const c = contactos.find(x => x.id === r.contactoId);
@@ -9047,9 +9128,10 @@ function colabTablaBodyHtml(){
           <tr>
             <td style="color:var(--muted);white-space:nowrap;" title="${r.updatedAt ? esc(fmtDateDMY(r.updatedAt)) : ''}" data-sort-value="${esc(r.updatedAt||'')}">${colabRelativo(r.updatedAt)}</td>
             <td style="font-weight:600;cursor:${c?'pointer':'default'};" data-sort-value="${esc(nombre)}" ${c?`onclick="openTransportistaFicha('${c.id}')"`:''}>${esc(nombre)}</td>
-            <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona+r.destinoZona)}" title="${esc([tarifaZonaHint(r.origenZona), tarifaZonaHint(r.destinoZona)].filter(Boolean).join(' → '))}">${rutaZonaBanderaHtml(r.origenZona)} → ${rutaZonaBanderaHtml(r.destinoZona)}</td>
-            <td data-sort-value="${esc(r.tipoVehiculo)}">${r.tipoVehiculo ? `<span class="colab-chip">${esc(r.tipoVehiculo)}</span>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
-            <td class="tf-precio" data-sort-value="${r.tarifaBase??''}">${r.tarifaBase!==null&&r.tarifaBase!==undefined ? eur2(r.tarifaBase) : '<span style="color:var(--mutedFaint);font-weight:400;">—</span>'}</td>
+            <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona+r.destinoZona)}" title="${esc(colabEsGrua(r) ? 'Zona de servicio: ' + tarifaZonaHint(r.origenZona) : [tarifaZonaHint(r.origenZona), tarifaZonaHint(r.destinoZona)].filter(Boolean).join(' → '))}">${colabEsGrua(r) ? `${rutaZonaBanderaHtml(r.origenZona)}<span style="font-family:var(--body);font-size:11px;color:var(--muted);margin-left:6px;">zona de servicio</span>` : `${rutaZonaBanderaHtml(r.origenZona)} → ${rutaZonaBanderaHtml(r.destinoZona)}`}</td>
+            <td data-sort-value="${esc((r.servicios||[]).join(','))}">${colabServiciosChipsHtml(r)}</td>
+            <td data-sort-value="${esc(r.tipoVehiculo)}">${r.tipoVehiculo ? `<span class="colab-chip veh">${esc(r.tipoVehiculo)}</span>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+            <td class="tf-precio" data-sort-value="${r.tarifaBase??''}">${r.tarifaBase!==null&&r.tarifaBase!==undefined ? colabPrecioTxt(r) : '<span style="color:var(--mutedFaint);font-weight:400;">—</span>'}</td>
             <td data-sort-value="${r.indexacion?'Si':'No'}">${r.indexacion ? '<span class="badge" style="background:#3F8F5F;">Sí</span>' : '<span class="badge" style="background:var(--mutedFaint);">No</span>'}</td>
             <td style="color:var(--muted);" data-sort-value="${esc(r.observaciones)}">${r.observaciones ? esc(truncateText(r.observaciones, 40)) : '—'}</td>
             <td style="white-space:nowrap;">
@@ -9108,6 +9190,7 @@ function tplColaboradoresPage(){
             "window.__colabBuscarPaisD=this.value; window.__colabBuscarDestino=''; renderTab();",
             "window.__colabBuscarDestino=this.value; renderTab();")}
         </div>
+        ${colabServChipsHtml()}
         ${colabVehChipsHtml()}
         <div id="colab-resultados">${colabResultadosHtml()}</div>
       </div>
@@ -9119,6 +9202,11 @@ function tplColaboradoresPage(){
           <input placeholder="Buscar por transportista…" value="${esc(window.__colabSearch||'')}" oninput="window.__colabSearch=this.value; refreshColabTablaBody();" />
           <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
         </div>
+        <select onchange="window.__colabTablaServ=this.value; refreshColabTablaBody();" title="Filtrar por tipo de servicio" style="width:auto;min-width:190px;">
+          <option value="">Todos los servicios</option>
+          ${Object.keys(COLAB_SERVICIOS).map(k => `<option value="${k}" ${window.__colabTablaServ===k?'selected':''}>${esc(COLAB_SERVICIOS[k])}</option>`).join('')}
+          <option value="${COLAB_SIN_SERV}" ${window.__colabTablaServ===COLAB_SIN_SERV?'selected':''}>Sin indicar</option>
+        </select>
         <select onchange="window.__colabTablaVeh=this.value; refreshColabTablaBody();" title="Filtrar por tipo de vehículo" style="width:auto;min-width:190px;">
           <option value="">Todos los vehículos</option>
           ${COLAB_TIPOS_VEHICULO.map(t => `<option value="${esc(t)}" ${window.__colabTablaVeh===t?'selected':''}>${esc(t)}</option>`).join('')}
@@ -9150,6 +9238,7 @@ function openColabRutaForm(editId, presetContactoId){
   window.__colabN = 0;
   renderHeader(); renderTab();
   if (!editing) for (let k = 0; k < 4; k++) colabRutaAddRow(false);
+  else colabAplicaGrua('e');
   window.scrollTo(0, 0);
   setTimeout(() => { const el = document.getElementById(editing ? 'colr-origen-zona' : 'colr-transportista'); if (el) el.focus(); }, 0);
 }
@@ -9200,18 +9289,61 @@ function tplColabTransportistaFieldHtml(c, lock){
       </datalist>
     </div>`;
 }
+// Casillas del servicio (completo, grupaje, granel, grúa). scope: 'e' en la edición de una
+// cobertura, o el número de fila en el alta de varias. Cada una lleva id colr-<scope>-s-<CLAVE>.
+function colabServCheckboxesHtml(scope, selected, enFila){
+  const sc = scope === 'e' ? "'e'" : scope;
+  return `<div class="colab-serv${enFila ? '' : ' row'}">${Object.keys(COLAB_SERVICIOS).map(k => `<label title="${esc(COLAB_SERVICIOS[k])}"><input type="checkbox" id="colr-${scope}-s-${k}" ${(selected||[]).includes(k)?'checked':''} style="width:auto;" onchange="colabServChange(${sc}, '${k}')" />${esc(enFila ? COLAB_SERVICIOS_CORTO[k] : COLAB_SERVICIOS[k])}</label>`).join('')}</div>`;
+}
+function colabCampoIds(scope){
+  return scope === 'e'
+    ? { o:'colr-origen-zona', d:'colr-destino-zona', v:'colr-tipo-vehiculo', tb:'colr-tarifa-base', s: k => `colr-e-s-${k}` }
+    : { o:`colr-${scope}-o`, d:`colr-${scope}-d`, v:`colr-${scope}-v`, tb:`colr-${scope}-tb`, s: k => `colr-${scope}-s-${k}` };
+}
+// La Grúa va sola: no es una ruta A → B sino una zona de servicio con tarifa por horas.
+// Al marcarla se desmarcan los demás servicios (y al revés) y el formulario se adapta.
+function colabServChange(scope, key){
+  const ids = colabCampoIds(scope);
+  const box = k => document.getElementById(ids.s(k));
+  if (box(key).checked) {
+    if (key === 'GRUA') ['FTL', 'LTL', 'GRANEL'].forEach(k => { box(k).checked = false; });
+    else box('GRUA').checked = false;
+  }
+  colabAplicaGrua(scope);
+  window.__colabRutaFormDirty = true;
+}
+function colabAplicaGrua(scope){
+  const ids = colabCampoIds(scope);
+  const grua = document.getElementById(ids.s('GRUA')).checked;
+  const d = document.getElementById(ids.d), v = document.getElementById(ids.v), tb = document.getElementById(ids.tb);
+  if (d) { d.disabled = grua; if (grua) d.value = ''; d.placeholder = grua ? 'Misma zona' : (scope === 'e' ? 'IT o toda Italia' : 'FR13'); }
+  if (v) { v.disabled = grua; if (grua) v.value = ''; }
+  if (tb) tb.placeholder = grua ? '€/hora' : (scope === 'e' ? 'Ej. 850' : '€');
+  if (scope === 'e') {
+    const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    set('colr-origen-label', grua ? 'Zona de servicio' : 'Zona de origen');
+    set('colr-tb-label', grua ? 'Tarifa por hora' : 'Tarifa base');
+    const campoD = document.getElementById('colr-destino-field'); if (campoD) campoD.style.display = grua ? 'none' : '';
+  } else {
+    const h = document.getElementById(`colr-${scope}-dh`); if (h && grua) h.innerHTML = '';
+  }
+}
 // Edición de una sola cobertura ya existente: una fila de campos, como antes.
 function colabRutaEditFieldsHtml(editing){
   const zonaHint = z => colabHintHtml(z);
   return `
+    <div class="field">
+      <label>Servicio <span style="color:var(--mutedFaint);font-weight:400;">(se pueden marcar varios; la grúa va sola)</span></label>
+      ${colabServCheckboxesHtml('e', editing.servicios, false)}
+    </div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;">
       <div class="field" style="flex:1;min-width:220px;">
-        <label>Zona de origen <span class="dc-req">*</span></label>
+        <label><span id="colr-origen-label">Zona de origen</span> <span class="dc-req">*</span></label>
         ${decaInputIcon('pin', `<input id="colr-origen-zona" maxlength="30" data-combo="colr-origenes-datalist" autocomplete="off" placeholder="ES08 o Barcelona" style="font-family:var(--mono);" oninput="colabZonaInput('colr-origen-zona')" value="${esc(editing.origenZona)}" />`)}
         <datalist id="colr-origenes-datalist">${colabZonasDatalistHtml('origenZona')}</datalist>
         <div id="colr-origen-zona-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;">${zonaHint(editing.origenZona)}</div>
       </div>
-      <div class="field" style="flex:1;min-width:220px;">
+      <div class="field" id="colr-destino-field" style="flex:1;min-width:220px;">
         <label>Zona de destino <span class="dc-req">*</span></label>
         ${decaInputIcon('pin', `<input id="colr-destino-zona" maxlength="30" data-combo="colr-destinos-datalist" autocomplete="off" placeholder="IT o toda Italia" style="font-family:var(--mono);" oninput="colabZonaInput('colr-destino-zona')" value="${esc(editing.destinoZona)}" />`)}
         <datalist id="colr-destinos-datalist">${colabZonasDatalistHtml('destinoZona')}</datalist>
@@ -9220,7 +9352,7 @@ function colabRutaEditFieldsHtml(editing){
     </div>
     <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;">
       <div class="field" style="flex:1;min-width:200px;"><label>Tipo de vehículo <span style="color:var(--mutedFaint);font-weight:400;">(opcional)</span></label><select id="colr-tipo-vehiculo">${colabTipoVehiculoOptionsHtml(editing.tipoVehiculo)}</select></div>
-      <div class="field" style="flex:1;min-width:200px;"><label>Tarifa base <span style="color:var(--mutedFaint);font-weight:400;">(opcional)</span></label>${decaInputIcon('tag', `<input id="colr-tarifa-base" type="number" step="0.01" min="0" placeholder="Ej. 850" value="${editing.tarifaBase!==null&&editing.tarifaBase!==undefined?editing.tarifaBase:''}" />`, '€')}</div>
+      <div class="field" style="flex:1;min-width:200px;"><label><span id="colr-tb-label">Tarifa base</span> <span style="color:var(--mutedFaint);font-weight:400;">(opcional)</span></label>${decaInputIcon('tag', `<input id="colr-tarifa-base" type="number" step="0.01" min="0" placeholder="Ej. 850" value="${editing.tarifaBase!==null&&editing.tarifaBase!==undefined?editing.tarifaBase:''}" />`, '€')}</div>
       <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:13px;white-space:nowrap;">
         <input id="colr-indexacion" type="checkbox" ${editing.indexacion?'checked':''} style="width:auto;" />
         Indexación
@@ -9241,6 +9373,7 @@ function colabRutaRowHtml(i){
         <input id="colr-${i}-d" maxlength="30" data-combo="colr-destinos" autocomplete="off" placeholder="FR13" style="font-family:var(--mono);text-transform:uppercase;" oninput="colabRutaRowZonaInput(${i},'d')" />
         <div id="colr-${i}-dh" class="tf-lugar" style="min-height:14px;margin-top:2px;"></div>
       </td>
+      <td style="padding:5px 4px;min-width:150px;">${colabServCheckboxesHtml(i, [], true)}</td>
       <td style="padding:5px 4px;min-width:140px;"><select id="colr-${i}-v">${colabTipoVehiculoOptionsHtml('')}</select></td>
       <td style="padding:5px 4px;min-width:100px;"><input id="colr-${i}-tb" type="number" step="0.01" min="0" placeholder="€" /></td>
       <td style="padding:5px 4px;text-align:center;"><input id="colr-${i}-idx" type="checkbox" style="width:auto;" title="Indexación" /></td>
@@ -9256,12 +9389,13 @@ function colabRutaTablaHtml(){
     <datalist id="colr-origenes">${colabZonasDatalistHtml('origenZona')}</datalist>
     <datalist id="colr-destinos">${colabZonasDatalistHtml('destinoZona')}</datalist>
     <div style="overflow-x:auto;">
-      <table class="qr-table" style="width:100%;min-width:960px;table-layout:fixed;">
-        <colgroup><col style="width:30px"><col style="width:130px"><col style="width:130px"><col style="width:140px"><col style="width:100px"><col style="width:92px"><col style="width:208px"><col style="width:70px"></colgroup>
+      <table class="qr-table" style="width:100%;min-width:1130px;table-layout:fixed;">
+        <colgroup><col style="width:30px"><col style="width:130px"><col style="width:130px"><col style="width:170px"><col style="width:140px"><col style="width:100px"><col style="width:92px"><col style="width:208px"><col style="width:70px"></colgroup>
         <thead><tr>
           <th style="padding:6px 4px;text-align:right;">#</th>
-          <th style="padding:6px 4px;">Zona origen</th>
+          <th style="padding:6px 4px;">Zona origen<br><span style="font-weight:400;text-transform:none;letter-spacing:0;">(grúa: su zona)</span></th>
           <th style="padding:6px 4px;">Zona destino</th>
+          <th style="padding:6px 4px;">Servicio</th>
           <th style="padding:6px 4px;">Vehículo</th>
           <th style="padding:6px 4px;">Tarifa base</th>
           <th style="padding:6px 4px;text-align:center;">Indexación</th>
@@ -9293,6 +9427,8 @@ function colabRutaDupRow(i){
   const set = (id, v) => { const el = document.getElementById(`colr-${n}-${id}`); if (el) el.value = v; };
   set('o', src('o').value); set('d', src('d').value); set('v', src('v').value); set('tb', src('tb').value); set('obs', src('obs').value);
   document.getElementById(`colr-${n}-idx`).checked = src('idx').checked;
+  Object.keys(COLAB_SERVICIOS).forEach(k => { document.getElementById(`colr-${n}-s-${k}`).checked = document.getElementById(`colr-${i}-s-${k}`).checked; });
+  colabAplicaGrua(n);
   colabRutaRowZonaInput(n, 'o'); colabRutaRowZonaInput(n, 'd');
   document.getElementById(`colr-${n}-d`).focus();
   window.__colabRutaFormDirty = true;
@@ -9309,7 +9445,7 @@ function tplColabRutaFormPage(){
   const presetId = window.__colabRutaCtxContacto;
   const presetContacto = presetId ? contactos.find(x => x.id === presetId) : null;
   const lock = !!presetId;
-  const title = editing ? `Editar cobertura ${esc(editing.origenZona)} → ${esc(editing.destinoZona)}` : 'Nueva cobertura';
+  const title = editing ? (colabEsGrua(editing) ? `Editar grúa · zona ${esc(editing.origenZona)}` : `Editar cobertura ${esc(editing.origenZona)} → ${esc(editing.destinoZona)}`) : 'Nueva cobertura';
   const subtitle = editing ? 'Ruta que cubre este transportista.' : 'Una fila por ruta: se pueden apuntar varias de golpe para el mismo transportista.';
   const submitCall = editing ? `submitColabRutaForm('${editId}')` : 'submitColabRutasNuevas()';
   const submitLabel = editing ? 'Guardar' : 'Guardar rutas';
@@ -9348,18 +9484,21 @@ function tplColabRutaFormPage(){
 async function submitColabRutaForm(editId){
   const errEl = document.getElementById('colr-error');
   errEl.textContent = '';
+  const servicios = Object.keys(COLAB_SERVICIOS).filter(k => document.getElementById(`colr-e-s-${k}`).checked);
+  const grua = servicios.includes('GRUA');
   const origenZona = document.getElementById('colr-origen-zona').value.trim().toUpperCase();
-  const destinoZona = document.getElementById('colr-destino-zona').value.trim().toUpperCase();
-  const tipoVehiculo = document.getElementById('colr-tipo-vehiculo').value;
+  // La grúa actúa solo en su zona de servicio: se guarda con destino = origen y sin vehículo.
+  const destinoZona = grua ? origenZona : document.getElementById('colr-destino-zona').value.trim().toUpperCase();
+  const tipoVehiculo = grua ? '' : document.getElementById('colr-tipo-vehiculo').value;
   const tarifaBaseRaw = document.getElementById('colr-tarifa-base').value;
   const indexacion = document.getElementById('colr-indexacion').checked;
   const observaciones = document.getElementById('colr-obs').value.trim();
-  if (!COLAB_ZONA_RE.test(origenZona)) { errEl.textContent = 'La zona de origen tiene que ser un país y 2 caracteres (ES08), o solo el país para cubrirlo entero (ES).'; return; }
+  if (!COLAB_ZONA_RE.test(origenZona)) { errEl.textContent = grua ? 'La zona de servicio tiene que ser un país y 2 caracteres (ES41), o solo el país para cubrirlo entero (ES).' : 'La zona de origen tiene que ser un país y 2 caracteres (ES08), o solo el país para cubrirlo entero (ES).'; return; }
   if (!COLAB_ZONA_RE.test(destinoZona)) { errEl.textContent = 'La zona de destino tiene que ser un país y 2 caracteres (FR13), o solo el país para cubrirlo entero (FR).'; return; }
   const btns = [...document.querySelectorAll('.colr-submit-btn')];
   btns.forEach(b => b.disabled = true);
   const { error } = await supabaseClient.from('transportista_rutas').update({
-    origen_zona: origenZona, destino_zona: destinoZona, tipo_vehiculo: tipoVehiculo || null,
+    origen_zona: origenZona, destino_zona: destinoZona, tipo_vehiculo: tipoVehiculo || null, servicios,
     tarifa_base: tarifaBaseRaw === '' ? null : Number(tarifaBaseRaw), indexacion, observaciones: observaciones || null,
     updated_at: new Date().toISOString(),
   }).eq('id', editId);
@@ -9384,18 +9523,22 @@ async function submitColabRutasNuevas(){
   [...document.querySelectorAll('.colr-row')].forEach((tr, n) => {
     const i = tr.dataset.i;
     const v = id => (document.getElementById(`colr-${i}-${id}`) || {}).value || '';
-    const o = v('o').trim().toUpperCase(), d = v('d').trim().toUpperCase(), vehiculo = v('v'), obs = v('obs').trim();
+    const servicios = Object.keys(COLAB_SERVICIOS).filter(k => (document.getElementById(`colr-${i}-s-${k}`) || {}).checked);
+    const grua = servicios.includes('GRUA');
+    const o = v('o').trim().toUpperCase(), vehiculo = grua ? '' : v('v'), obs = v('obs').trim();
+    // La grúa actúa solo en su zona de servicio: destino = origen y sin vehículo.
+    const d = grua ? o : v('d').trim().toUpperCase();
     const tarifaBaseRaw = v('tb');
     const indexacion = (document.getElementById(`colr-${i}-idx`) || {}).checked || false;
-    if (!o && !d && !obs) return; // fila vacía
+    if (!o && !d && !obs && !servicios.length) return; // fila vacía
     const nombreFila = `Fila ${n + 1}`;
-    if (!COLAB_ZONA_RE.test(o)) { errores.push(`${nombreFila}: la zona de origen debe ser país y 2 caracteres (ES08), o solo el país para cubrirlo entero (ES).`); return; }
+    if (!COLAB_ZONA_RE.test(o)) { errores.push(grua ? `${nombreFila}: la zona de servicio de la grúa debe ser país y 2 caracteres (ES41), o solo el país para cubrirlo entero (ES).` : `${nombreFila}: la zona de origen debe ser país y 2 caracteres (ES08), o solo el país para cubrirlo entero (ES).`); return; }
     if (!COLAB_ZONA_RE.test(d)) { errores.push(`${nombreFila}: la zona de destino debe ser país y 2 caracteres (FR13), o solo el país para cubrirlo entero (FR).`); return; }
     const key = o + '|' + d;
     if (vistas[key]) { errores.push(`${nombreFila}: repite la ruta de la fila ${vistas[key]}.`); return; }
     if (yaTiene.has(key)) { errores.push(`${nombreFila}: ${c.nombre} ya tiene apuntada esa ruta (${o} → ${d}).`); return; }
     vistas[key] = n + 1;
-    filas.push({ contacto_id: c.id, origen_zona: o, destino_zona: d, tipo_vehiculo: vehiculo || null, tarifa_base: tarifaBaseRaw === '' ? null : Number(tarifaBaseRaw), indexacion, observaciones: obs || null });
+    filas.push({ contacto_id: c.id, origen_zona: o, destino_zona: d, tipo_vehiculo: vehiculo || null, servicios, tarifa_base: tarifaBaseRaw === '' ? null : Number(tarifaBaseRaw), indexacion, observaciones: obs || null });
   });
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   if (!filas.length) { errEl.textContent = 'Escribe al menos una ruta.'; return; }
