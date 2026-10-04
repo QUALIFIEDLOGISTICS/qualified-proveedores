@@ -1164,6 +1164,8 @@ function computeBreadcrumbSegments(){
     if (window.__comercialView === 'tarifaForm') {
       const tf = window.__tarifaFormId ? tarifas.find(t=>t.id===window.__tarifaFormId) : null;
       const last = {label: tf ? `Tarifa ${tf.origenZona} → ${tf.destinoZona}` : (window.__tarifaPreset && window.__tarifaFormId === null && window.__tarifaPreset.precio === '' ? 'Actualizar tarifa' : 'Nueva tarifa'), onclick:null};
+      // Si todavía no se ha elegido cliente (se abre desde Tarifas Transporte), se cuelga de Tarifas.
+      if (!window.__tarifaCtxCliente) return [{label:'Tarifas Transporte', onclick:'backToTarifas()'}, last];
       return [{label:'Clientes', onclick:'backToComercialClientes()'}, {label: tarifaClienteNombre(window.__tarifaCtxCliente), onclick:'backToTarifas()'}, last];
     }
     if (window.__comercialView === 'tarifaRapida') {
@@ -7866,7 +7868,7 @@ function tplTarifasPage(){
         <div class="deca-stat"><b>${nVigentes}</b><span>Vigentes</span></div>
         <div class="deca-stat"><b>${periodos.length - nVigentes}</b><span>Históricas</span></div>
         <div class="deca-stat"><b>${nClientes}</b><span>Clientes</span></div>
-        <button class="btn btn-primary deca-new-btn" onclick="openNuevaTarifaClienteModal()">${homeIcon(HOME_ICON_PATHS.file, 17, 'currentColor', 1.8)}<span>Nueva tarifa</span></button>
+        <button class="btn btn-primary deca-new-btn" onclick="openTarifaNuevaGeneral()">${homeIcon(HOME_ICON_PATHS.file, 17, 'currentColor', 1.8)}<span>Nueva tarifa</span></button>
       </div>
     </div>
     <div class="card deca-toolbar" style="gap:8px;">
@@ -7920,42 +7922,29 @@ function resetTarifasState(){
   window.__tarifasGasoil = '';
 }
 // "+ Nueva tarifa" desde el listado general (no desde la ficha de un cliente):
-// primero hay que saber para quién es, así que se pregunta el cliente y luego
-// se abre su "Nueva tarifa" de siempre (openTarifaForm), exactamente igual
-// que si se hubiera abierto desde su ficha.
+// se abre directamente el formulario completo, con el cliente como primer
+// campo (se elige o se crea con "+"). Ya no hay ventanita intermedia.
 function nuevaTarifaClientesOptionsHtml(){
   return contactos.filter(c => !c.archived && c.esClienteTransporte).map(c => `<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('');
 }
-function openNuevaTarifaClienteModal(){
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box" style="max-width:420px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-          <h3 class="modal-title">Nueva tarifa</h3><button class="close-x" onclick="closeModal()">✕</button>
-        </div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">¿Para qué cliente? Se abrirá su ficha con la tarifa ya lista para rellenar.</div>
-        <div class="field">
-          <label>Cliente</label>
-          <input id="ntc-cliente" maxlength="150" data-combo="ntc-clientes-datalist" autocomplete="off" placeholder="Elige un cliente de transporte" onkeydown="if(event.key==='Enter'){ event.preventDefault(); submitNuevaTarifaCliente(); }" />
-          <datalist id="ntc-clientes-datalist">${nuevaTarifaClientesOptionsHtml()}</datalist>
-        </div>
-        <button type="button" onclick="closeModal(); crearClienteParaNuevaTarifa();" style="background:none;border:none;padding:0 0 12px;font-size:12.5px;color:var(--primary);cursor:pointer;">+ Crear cliente que no esté en la lista</button>
-        <div id="ntc-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
-        <div style="display:flex;gap:10px;">
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitNuevaTarifaCliente()">Continuar</button>
-        </div>
-      </div>
-    </div>`;
-  setTimeout(() => { const el = document.getElementById('ntc-cliente'); if (el) el.focus(); }, 0);
+function openTarifaNuevaGeneral(){
+  window.__tarifaCtxCliente = null;
+  openTarifaForm(null, null, null);
 }
-function submitNuevaTarifaCliente(){
-  const errEl = document.getElementById('ntc-error');
-  const nombre = document.getElementById('ntc-cliente').value.trim();
-  const cliente = contactos.find(c => !c.archived && c.esClienteTransporte && c.nombre.toUpperCase() === nombre.toUpperCase());
-  if (!cliente) { errEl.textContent = 'Elige un cliente de la lista, o créalo si todavía no existe.'; return; }
-  closeModal();
-  openTarifaForm(null, null, cliente.id);
+function tarifaClienteBuscar(txt){
+  const n = String(txt || '').trim().toUpperCase();
+  if (!n) return null;
+  return contactos.find(c => !c.archived && c.esClienteTransporte && c.nombre.toUpperCase() === n) || null;
+}
+// Al elegir/escribir un cliente en el formulario: lo fija como contexto y
+// actualiza la miga de pan y el resumen de la tarifa.
+function tarifaClienteInput(){
+  const el = document.getElementById('tf-cliente');
+  if (!el) return;
+  const c = tarifaClienteBuscar(el.value);
+  window.__tarifaCtxCliente = c ? c.id : null;
+  const ok = document.getElementById('tf-cliente-ok');
+  if (ok) ok.style.display = c ? '' : 'none';
 }
 // Si el cliente tampoco existe todavía: se crea (ficha real de Comercial,
 // mismo mecanismo que "Crear cargador/transportista" del DeCA) y, en vez de
@@ -7978,6 +7967,8 @@ function tarifaConfirmLeaveForm(){
 function openTarifaForm(editId, cloneId, clienteId){
   const editing = editId ? tarifas.find(t => t.id === editId) : null;
   window.__tarifaCtxCliente = clienteId || (editing && editing.clienteId) || window.__tarifaCtxCliente || null;
+  // Sin cliente de contexto (Tarifas Transporte → Nueva tarifa) el cliente se elige dentro del formulario.
+  window.__tarifaClienteElegible = !editing && !window.__tarifaCtxCliente;
   window.__showingContactoDetail = false;
   // Se puede llegar aquí desde la pestaña Comercial de una ficha abierta desde
   // otro módulo (p. ej. Transportistas); sin esto, renderTab() seguiría
@@ -7991,7 +7982,7 @@ function openTarifaForm(editId, cloneId, clienteId){
   renderHeader(); renderTab();
   tarifaFormRefresh();
   window.scrollTo(0, 0);
-  setTimeout(() => { const el = document.getElementById(src ? 'tf-precio' : (editId ? null : 'tf-origen-zona')); if (el) el.focus(); }, 0);
+  setTimeout(() => { const el = document.getElementById(src ? 'tf-precio' : (editId ? null : (window.__tarifaClienteElegible ? 'tf-cliente' : 'tf-origen-zona'))); if (el) el.focus(); }, 0);
 }
 // Al guardar, cancelar o eliminar se vuelve a la ficha del cliente.
 function tarifaReturn(){
@@ -8185,6 +8176,7 @@ function tplTarifaFormPage(){
   // El cliente viene de la ficha desde la que se abre (nombre comercial si lo tiene).
   const clienteCtx = contactos.find(x => x.id === (window.__tarifaCtxCliente || e.clienteId));
   const clienteNombre = clienteCtx ? ((clienteCtx.nombreComercial || '').trim() || clienteCtx.nombre) : '';
+  const clienteElegible = !!window.__tarifaClienteElegible && !editing;
   const ltl = e.tipo === 'LTL';
   const submitLabel = editing ? 'Guardar' : 'Añadir';
   // Una tarifa vigente: si se le cambia el precio, la actual pasa a históricas.
@@ -8212,9 +8204,10 @@ function tplTarifaFormPage(){
             <div style="display:flex;gap:12px;flex-wrap:wrap;">
               <div class="field" style="flex:1;min-width:170px;max-width:210px;margin-bottom:0;"><label>Fecha ${req}</label>${ico('calendar', `<input id="tf-fecha" type="date" value="${esc(e.fecha||today())}" />`)}</div>
               <div class="field" style="flex:2;min-width:240px;margin-bottom:0;">
-                <label>Cliente</label>
-                ${ico('building', `<input id="tf-cliente" readonly value="${esc(clienteNombre)}" title="${esc(clienteCtx ? clienteCtx.nombre : '')}" style="background:var(--panel2);cursor:default;" />`)}
-                <div style="font-size:12px;color:var(--mutedFaint);margin-top:3px;">Las tarifas se suben desde la ficha del cliente.</div>
+                <label>Cliente ${clienteElegible ? req : ''}</label>
+                ${clienteElegible
+                  ? decaCampoConCrearHtml(ico('building', `<input id="tf-cliente" maxlength="150" data-combo="tf-clientes-datalist" autocomplete="off" placeholder="Elige un cliente de transporte" value="${esc(clienteCtx ? clienteCtx.nombre : '')}" oninput="tarifaClienteInput()" onchange="tarifaClienteInput()" />`), 'crearClienteParaNuevaTarifa()', 'Crear un cliente que no esté en la lista') + `<datalist id="tf-clientes-datalist">${nuevaTarifaClientesOptionsHtml()}</datalist>`
+                  : ico('building', `<input id="tf-cliente" readonly value="${esc(clienteNombre)}" title="${esc(clienteCtx ? clienteCtx.nombre : '')}" style="background:var(--panel2);cursor:default;" />`)}
               </div>
             </div>
           </div>
@@ -8326,8 +8319,11 @@ async function submitTarifaForm(editId, addAnother){
   const f = tarifaFormValues();
   const fail = msg => showFormError(errEl, msg);
   if (!f.fecha) return fail('Indica la fecha.');
+  const clienteEl = document.getElementById('tf-cliente');
+  const clienteEditable = !!clienteEl && !clienteEl.readOnly;
+  if (clienteEditable) tarifaClienteInput();
   const cliente = contactos.find(c => c.id === window.__tarifaCtxCliente);
-  if (!cliente) return fail('No se sabe a qué cliente pertenece la tarifa: ábrela desde la ficha del cliente.');
+  if (!cliente) return fail(clienteEditable ? 'Elige un cliente de la lista, o créalo con el botón + si todavía no existe.' : 'No se sabe a qué cliente pertenece la tarifa: ábrela desde la ficha del cliente.');
   if (!TARIFA_ZONA_RE.test(f.origenZona)) return fail('La zona de origen tiene que ser un país y 2 caracteres, por ejemplo ES08.');
   if (!TARIFA_ZONA_RE.test(f.destinoZona)) return fail('La zona de destino tiene que ser un país y 2 caracteres, por ejemplo FR13.');
   if (f.origen2Zona && !TARIFA_ZONA_RE.test(f.origen2Zona)) return fail('El segundo punto de carga tiene que ser un país y 2 caracteres, por ejemplo ES17.');
