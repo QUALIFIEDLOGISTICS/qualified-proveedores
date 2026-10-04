@@ -1032,9 +1032,9 @@ const TABS = [
   {id:'almacenconfig', label:'Configuración de almacenes', group:'Almacén'},
   {id:'trafico', label:'Transporte', group:'Transporte'},
   {id:'autonomos', label:'Autónomos', group:'Transporte'},
-  {id:'fichajes', label:'Fichajes', group:'Transporte'},
   {id:'comercial', label:'Comercial', group:'Comercial'},
   {id:'administracion', label:'Contactos', group:'Administración'},
+  {id:'fichajes', label:'Fichajes', group:'Administración'},
 ];
 const ADMIN_TAB = {id:'admin', label:'Gestión de Permisos', group:'Configuración'};
 // Apartados de Transporte y Comercial que se dan por separado. Se guardan en
@@ -1173,12 +1173,14 @@ function headerNavItems(){
   if (tabs.some(t => isAlmacenTab(t.id)) && almacenDefaultSection()) items.push({ label: 'Almacén', go: `setTab('${almacenDefaultSection()}')`, on: isAlmacenTab(cur) });
   if (has('trafico')) items.push({ label: 'Transporte', go: "setTab('trafico')", on: cur === 'trafico' });
   if (has('autonomos')) items.push({ label: 'Autónomos', go: "setTab('autonomos')", on: cur === 'autonomos' });
-  if (has('fichajes')) items.push({ label: 'Fichajes', go: "setTab('fichajes')", on: cur === 'fichajes' });
   if (has('comercial')) items.push({ label: 'Comercial', go: "setTab('comercial')", on: cur === 'comercial' });
-  if (has('administracion')) {
-    const secs = [sectionAllowedFor(PROFILE, 'administracion', 'contactos'), sectionAllowedFor(PROFILE, 'administracion', 'flota')];
-    const go = secs[0] && secs[1] ? "setTab('administracion')" : secs[0] ? 'openContactosFromHome()' : secs[1] ? 'openFlotaFromHome()' : "setTab('administracion')";
-    items.push({ label: 'Administración', go, on: cur === 'administracion' });
+  // Administración reúne Contactos, Flota y Fichajes (cada uno con su permiso).
+  const secs = has('administracion') ? [sectionAllowedFor(PROFILE, 'administracion', 'contactos') && 'contactos', sectionAllowedFor(PROFILE, 'administracion', 'flota') && 'flota'].filter(Boolean) : [];
+  if (has('fichajes')) secs.push('fichajes');
+  if (secs.length) {
+    const go = secs.length > 1 ? (has('administracion') ? "setTab('administracion')" : "setTab('fichajes')")
+      : secs[0] === 'contactos' ? 'openContactosFromHome()' : secs[0] === 'flota' ? 'openFlotaFromHome()' : "setTab('fichajes')";
+    items.push({ label: 'Administración', go, on: cur === 'administracion' || cur === 'fichajes' });
   }
   return items;
 }
@@ -1469,11 +1471,13 @@ function computeBreadcrumbSegments(){
     return [{label:'Autónomos', onclick:null}];
   }
   if (currentTab === 'fichajes') {
+    // Fichajes cuelga de Administración (si la persona no tiene el módulo entero, el primer tramo no es pulsable).
+    const adm = {label:'Administración', onclick: (PROFILE && (PROFILE.isAdmin || PROFILE.allowedTabs.includes('administracion'))) ? "setTab('administracion')" : null};
     if (window.__fichajesView === 'detalle') {
       const d = drivers.find(x=>x.id===window.__fichajesDriverId);
-      return [{label:'Fichajes', onclick:'backToFichajesDriversList()'}, {label: d ? d.name : '…', onclick:null}];
+      return [adm, {label:'Fichajes', onclick:'backToFichajesDriversList()'}, {label: d ? d.name : '…', onclick:null}];
     }
-    return [{label:'Fichajes', onclick:null}];
+    return [adm, {label:'Fichajes', onclick:null}];
   }
   if (currentTab === 'administracion') {
     if (window.__administracionView === 'contactos') return [{label:'Administración', onclick:'backToAdministracionHome()'}, {label:'Contactos', onclick:null}];
@@ -2168,7 +2172,10 @@ function tplAdministracion(){
   // se cae a uno que sí lo esté, igual que Tráfico y Comercial.
   let view = window.__administracionView;
   if ((view === 'contactos' || view === 'flota') && !allowed.some(x => x.id === view)) view = 'home';
-  if ((!view || view === 'home') && allowed.length === 1) view = allowed[0].id;
+  // Fichajes (con su propio permiso) también cuelga de Administración: si se tiene, hay que
+  // enseñar la portada con su tarjeta en vez de entrar directo al único apartado.
+  const hasFichajes = visibleTabs().some(t => t.id === 'fichajes');
+  if ((!view || view === 'home') && allowed.length === 1 && !hasFichajes) view = allowed[0].id;
   if (view === 'contactos') return tplContactosPage();
   if (view === 'flota') return tplFlotaPage();
   if (view === 'flotaForm') return tplFlotaFormPage();
@@ -2176,6 +2183,7 @@ function tplAdministracion(){
     <div style="max-width:1080px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;">
       ${allowed.some(x=>x.id==='contactos') ? autonomosHomeCard('users', '#5C6670', 'Contactos', 'Agenda de contactos: razón social, NIF y dirección.', 'openContactosModule()') : ''}
       ${allowed.some(x=>x.id==='flota') ? autonomosHomeCard('truck', '#C1443D', 'Flota', 'Tractoras y remolques con sus vencimientos.', 'openFlotaModule()') : ''}
+      ${hasFichajes ? autonomosHomeCard('clock', '#2C9A93', 'Fichajes', 'Jornadas fichadas por cada conductor.', "setTab('fichajes')") : ''}
     </div>`;
 }
 function openContactosModule(){
@@ -13053,7 +13061,7 @@ function permModuleGroups(){
 function permHasTab(s, id){ return s.isAdmin || s.allowedTabs.includes(id); }
 // El módulo "administracion" da acceso a Contactos y Flota (sus apartados, listados abajo).
 function permLabel(t){ return t.id === 'administracion' ? 'Administración' : t.label; }
-function permDesc(t){ return t.id === 'administracion' ? 'Contactos y flota.' : ((HOME_MODULES[t.id]||{}).description || ''); }
+function permDesc(t){ return t.id === 'administracion' ? 'Contactos y flota (Fichajes se da aparte).' : ((HOME_MODULES[t.id]||{}).description || ''); }
 function permAvatar(p, size){
   const letter = (profileDisplayName(p) || '?').trim().charAt(0).toUpperCase();
   return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:var(--primary);color:var(--primary-text);display:flex;align-items:center;justify-content:center;font-family:var(--display);font-size:${Math.round(size*0.42)}px;font-weight:700;flex-shrink:0;">${esc(letter)}</div>`;
