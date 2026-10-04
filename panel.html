@@ -3412,6 +3412,9 @@ function contactosFilteredList(){
   // Filtros por tipo (se pueden marcar los dos: salen los que cumplan alguno).
   if (roleFilters.length) list = list.filter(c => roleFilters.some(r => r === 'almacen' ? c.esClienteAlmacen : r === 'transportista' ? c.esTransportista : c.esAutonomos));
   if (window.__contactosRecientes) list = list.filter(contactoEsReciente);
+  const tipoSel = window.__comClTipo || '';
+  if (tipoSel === 'transporte') list = list.filter(c => c.esClienteTransporte);
+  if (tipoSel === 'almacen') list = list.filter(c => c.esClienteAlmacen);
   list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || c.nif.toLowerCase().includes(search));
   return { list, archivedView, search, roleFilters };
 }
@@ -4408,6 +4411,9 @@ function clientesFilteredList(){
   if (view === 'archivados') list = base.filter(c => c.archived && c.warehouseIds.includes(currentWarehouseId));
   else if (view === 'sinasignar') list = base.filter(c => !c.archived && c.warehouseIds.length === 0);
   else list = base.filter(c => !c.archived && c.warehouseIds.includes(currentWarehouseId));
+  const tipoSel = window.__comClTipo || '';
+  if (tipoSel === 'transporte') list = list.filter(c => c.esClienteTransporte);
+  if (tipoSel === 'almacen') list = list.filter(c => c.esClienteAlmacen);
   list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || (c.nombreComercial||'').toLowerCase().includes(search) || (c.nif||'').toLowerCase().includes(search));
   return { view, search, list };
 }
@@ -6995,6 +7001,7 @@ function comercialIsSubpage(){
 }
 function resetComercialClientesState(){
   window.__comClSearch = '';
+  window.__comClTipo = '';
   window.__comClPage = 0;
 }
 function setComercialSection(id){
@@ -7018,8 +7025,11 @@ const COM_CL_PAGE_SIZE = 80;
 function comercialClientesFilteredList(){
   const search = (window.__comClSearch || '').toLowerCase();
   let list = contactos.filter(c => (c.esClienteAlmacen || c.esClienteTransporte) && !c.archived);
+  const tipoSel = window.__comClTipo || '';
+  if (tipoSel === 'transporte') list = list.filter(c => c.esClienteTransporte);
+  if (tipoSel === 'almacen') list = list.filter(c => c.esClienteAlmacen);
   list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || (c.nombreComercial||'').toLowerCase().includes(search) || (c.nif||'').toLowerCase().includes(search));
-  return { list, archivedView: false, search, tipos: [] };
+  return { list, archivedView: false, search, tipos: tipoSel ? [tipoSel] : [] };
 }
 function comercialClientesGoToPage(delta){
   window.__comClPage = Math.max(0, (window.__comClPage||0) + delta);
@@ -7054,27 +7064,37 @@ function comercialClientesListBodyHtml(){
   return contactosGridHtml(list.slice(page * COM_CL_PAGE_SIZE, (page + 1) * COM_CL_PAGE_SIZE), archivedView, undefined, true);
 }
 function tplComercialClientesPage(){
+  const todos = contactos.filter(c => (c.esClienteAlmacen || c.esClienteTransporte) && !c.archived);
+  const nTransporte = todos.filter(c => c.esClienteTransporte).length;
+  const nAlmacen = todos.filter(c => c.esClienteAlmacen).length;
+  const conTarifas = todos.filter(c => tarifas.some(t => t.clienteId === c.id)).length;
+  const tipo = window.__comClTipo || '';
+  const seg = (id, label) => `<button type="button" onclick="window.__comClTipo='${id}'; window.__comClPage=0; renderTab();" style="border:none;border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer;background:${tipo===id?'var(--primary)':'transparent'};color:${tipo===id?'var(--primary-text)':'var(--muted)'};font-weight:${tipo===id?600:500};">${label}</button>`;
   return `
-    <div style="display:flex;align-items:center;gap:14px;margin-bottom:22px;">
-      <div style="width:48px;height:48px;border-radius:12px;background:rgba(201,138,46,0.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-        ${homeIcon(HOME_ICON_PATHS.users, 24, '#C98A2E')}
+    <div style="--bn-accent:#C98A2E;">
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.users, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 280px;">
+        <div class="deca-banner-title">Clientes</div>
+        <div class="deca-banner-sub">Los contactos marcados como cliente, de almacén o de transporte. Sus datos se editan en su ficha; desde ahí también se gestionan sus tarifas.</div>
       </div>
-      <div>
-        <div style="font-family:var(--display);font-size:22px;">Clientes</div>
-        <div style="font-size:12.5px;color:var(--mutedFaint);">Los contactos marcados como cliente, de almacén o de transporte.</div>
+      <div class="deca-banner-actions">
+        <div class="deca-stat"><b>${nTransporte}</b><span>Transporte</span></div>
+        <div class="deca-stat"><b>${nAlmacen}</b><span>Almacén</span></div>
+        <div class="deca-stat"><b>${conTarifas}</b><span>Con tarifas</span></div>
+        <button class="btn btn-primary deca-new-btn" onclick='openContactoModal(null, {esClienteTransporte:true})'>${homeIcon(HOME_ICON_PATHS.users, 17, 'currentColor', 1.8)}<span>Nuevo cliente</span></button>
       </div>
     </div>
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-self:start;">
-        <div style="position:relative;flex:1;min-width:220px;max-width:320px;">
-          <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__comClSearch||'')}" oninput="window.__comClSearch=this.value; window.__comClPage=0; refreshComercialClientesListBody();" style="padding-left:34px;" />
-          <span style="position:absolute;left:11px;top:10px;display:flex;">${homeIcon(HOME_ICON_PATHS.search, 17, 'var(--mutedFaint)', 1.8)}</span>
-        </div>
-        <button class="btn btn-primary" onclick='openContactoModal(null, {esClienteTransporte:true})'>+ Nuevo cliente</button>
+    <div class="card deca-toolbar">
+      <div class="deca-search">
+        <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__comClSearch||'')}" oninput="window.__comClSearch=this.value; window.__comClPage=0; refreshComercialClientesListBody();" />
+        <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      <div style="display:flex;align-items:center;gap:14px;justify-self:end;">${contactosLayoutToggleHtml()}<div id="com-cl-pagination" style="display:flex;align-items:center;gap:8px;justify-self:end;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplComercialClientesPaginationHtml()}</div></div>
+      <div style="display:inline-flex;gap:2px;padding:2px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;flex-shrink:0;">${seg('', 'Todos')}${seg('transporte', 'Transporte')}${seg('almacen', 'Almacén')}</div>
+      <div style="display:flex;align-items:center;gap:14px;margin-left:auto;">${contactosLayoutToggleHtml()}<div id="com-cl-pagination" style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplComercialClientesPaginationHtml()}</div></div>
     </div>
-    <div id="com-cl-list-body">${comercialClientesListBodyHtml()}</div>`;
+    <div id="com-cl-list-body">${comercialClientesListBodyHtml()}</div>
+    </div>`;
 }
 
 /* ============================= TARIFAS =============================
@@ -8764,6 +8784,9 @@ function transportistasFilteredList(){
   const search = (window.__transpSearch || '').toLowerCase();
   let list = contactos.filter(c => c.esTransportista && !!c.archived === archivedView);
   if (window.__transpAutonomos) list = list.filter(c => c.esAutonomos);
+  const tipoSel = window.__comClTipo || '';
+  if (tipoSel === 'transporte') list = list.filter(c => c.esClienteTransporte);
+  if (tipoSel === 'almacen') list = list.filter(c => c.esClienteAlmacen);
   list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || (c.nombreComercial||'').toLowerCase().includes(search) || (c.nif||'').toLowerCase().includes(search));
   return { list, archivedView, search };
 }
