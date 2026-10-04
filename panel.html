@@ -163,6 +163,25 @@
   .alm-tile.pick:has(input:focus-visible){outline:2px solid var(--wc);outline-offset:2px;}
   .alm-empty{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:12px;background:rgba(193,68,61,.07);border:1px solid rgba(193,68,61,.22);color:#A5352F;font-size:13px;font-weight:600;line-height:1.45;}
   .alm-empty svg{flex-shrink:0;margin-top:2px;}
+  /* Documentos */
+  .doc-seg{display:inline-flex;gap:2px;padding:2px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;flex-shrink:0;}
+  .doc-seg button{border:none;border-radius:6px;padding:6px 13px;font-size:13px;cursor:pointer;background:transparent;color:var(--muted);font-weight:500;font-family:var(--body);white-space:nowrap;}
+  .doc-seg button.on{background:var(--primary);color:var(--primary-text);font-weight:600;}
+  .doc-table td{vertical-align:middle;}
+  .doc-row{cursor:pointer;}
+  .doc-row.drop td{background:color-mix(in srgb,var(--primary) 9%,var(--panel)) !important;}
+  .doc-ref{font-family:var(--mono);font-size:12.5px;font-weight:600;}
+  .doc-sub{font-size:11.5px;color:var(--mutedFaint);}
+  .doc-obs{max-width:260px;min-width:140px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;font-size:12.5px;color:var(--muted);line-height:1.4;}
+  .doc-cell-atts{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:200px;}
+  .doc-att{display:inline-flex;align-items:center;gap:6px;max-width:220px;padding:3px 4px 3px 3px;border:1px solid var(--border);border-radius:9px;background:var(--panel);}
+  .doc-att .pdf-thumb{width:26px;height:34px;border-radius:5px;border:1px solid var(--border);background:rgba(193,68,61,.08);color:var(--danger);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:zoom-in;flex-shrink:0;}
+  .doc-att-n{font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;max-width:130px;}
+  .doc-att-x{background:none;border:none;color:var(--mutedFaint);padding:4px;display:flex;border-radius:6px;cursor:pointer;}
+  .doc-att-x:hover{color:var(--danger);background:var(--panel2);}
+  .doc-add{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:9px;border:1px dashed color-mix(in srgb,var(--primary) 45%,var(--border));color:var(--primary);font-size:12.5px;font-weight:600;cursor:pointer;background:color-mix(in srgb,var(--primary) 5%,var(--panel));white-space:nowrap;}
+  .doc-add:hover{background:color-mix(in srgb,var(--primary) 12%,var(--panel));}
+  .doc-busy{font-size:12px;color:var(--muted);}
   /* Tarjetas de Direcciones */
   .dir-card.card{cursor:pointer;display:flex;gap:16px;align-items:flex-start;padding:18px;border-radius:14px;box-shadow:0 1px 2px rgba(27,58,107,.05),0 6px 18px rgba(27,58,107,.05);transition:border-color .14s,box-shadow .14s,transform .14s;}
   .dir-card.card:hover{border-color:color-mix(in srgb,var(--primary) 45%,var(--border));box-shadow:0 2px 4px rgba(27,58,107,.06),0 12px 28px rgba(27,58,107,.1);transform:translateY(-1px);}
@@ -6219,89 +6238,231 @@ async function submitAppointmentInner(editId){
   closeModal(); renderTab();
 }
 
-function tplDocumentos(){
+/* ============================= DOCUMENTOS =============================
+   Las reservas del almacén (con hora y sin hora) de un día, con su referencia,
+   transportista y observaciones, y los albaranes de cada una: se pueden adjuntar
+   varios PDF desde la propia fila (botón o arrastrando) sin abrir la reserva. Por
+   defecto se ve el día de mañana, para ir preparándolo. */
+const DOC_MODOS = [['hoy', 'Hoy'], ['manana', 'Mañana'], ['pasado', 'Pasado'], ['7dias', '7 días'], ['rango', 'Rango'], ['todos', 'Todos']];
+function docAddDays(n){ const d = new Date(today() + 'T00:00:00'); d.setDate(d.getDate() + n); return toDateStr(d); }
+function docMode(){ return window.__docMode || 'manana'; }
+// Límites del rango que se está viendo ([null, null] = todos los días).
+function docBounds(){
+  const m = docMode();
+  if (m === 'hoy') return [today(), today()];
+  if (m === 'manana') return [docAddDays(1), docAddDays(1)];
+  if (m === 'pasado') return [docAddDays(2), docAddDays(2)];
+  if (m === 'dia') { const d = window.__docDay || today(); return [d, d]; }
+  if (m === '7dias') return [today(), docAddDays(7)];
+  if (m === 'rango') return [window.__docRangeFrom || today(), window.__docRangeTo || docAddDays(7)];
+  return [null, null];
+}
+function setDocMode(m){ window.__docMode = m; renderTab(); }
+function docSetDay(v){ if (!v) return; window.__docDay = v; window.__docMode = 'dia'; renderTab(); }
+function docShiftDay(delta){
+  const base = docBounds()[0] || today();
+  const d = new Date(base + 'T00:00:00'); d.setDate(d.getDate() + delta);
+  window.__docDay = toDateStr(d); window.__docMode = 'dia'; renderTab();
+}
+function docAllRows(){
+  const appt = appointments[currentWarehouseId].map(a => ({
+    kind: 'appt', id: a.id, date: a.date, time: a.start, clientId: a.clientId, type: a.type, status: a.status || 'planificado',
+    ref: a.cargoRef || '', carrier: a.carrier || '', plate: a.plate || '', trailer: a.trailerPlate || '', notes: a.notes || '', attachments: a.attachments || [],
+  }));
+  const unsch = unscheduled[currentWarehouseId].map(u => ({
+    kind: 'unsched', id: u.id, date: u.date, time: null, clientId: u.clientId, type: u.type, status: u.status || 'planificado',
+    ref: u.cargoRef || '', carrier: u.carrier || '', plate: u.plate || '', trailer: u.trailerPlate || '', notes: u.notes || '', attachments: u.attachments || [],
+  }));
+  return [...appt, ...unsch];
+}
+// Filas dentro del rango de fechas (sin aplicar los demás filtros), para los contadores.
+function docRowsInRange(){
+  const [from, to] = docBounds();
+  return docAllRows().filter(r => (!from || r.date >= from) && (!to || r.date <= to));
+}
+function docRowsFiltered(){
   const filter = window.__docFilter || 'todos';
   const typeFilter = window.__docTypeFilter || 'todos';
-  const search = (window.__docSearch || '').toLowerCase();
-  if (window.__docRangeFrom === undefined) window.__docRangeFrom = today();
-  if (window.__docRangeTo === undefined) { const d = new Date(today()+'T00:00:00'); d.setDate(d.getDate()+7); window.__docRangeTo = toDateStr(d); }
-  const rangeMode = window.__docRangeMode || '7dias';
-
-  const schedRows = appointments[currentWarehouseId].map(a => ({
-    kind: 'appt', id: a.id, date: a.date, time: a.start, clientId: a.clientId,
-    type: a.type, status: a.status || 'planificado', attachments: a.attachments || [],
-  }));
-  const unschedRows = unscheduled[currentWarehouseId].map(u => ({
-    kind: 'unsched', id: u.id, date: u.date, time: null, clientId: u.clientId,
-    type: u.type, status: u.status || 'planificado', attachments: u.attachments || [],
-  }));
-  let rows = [...schedRows, ...unschedRows];
-
-  if (rangeMode !== 'todos') {
-    if (window.__docRangeFrom) rows = rows.filter(r => r.date >= window.__docRangeFrom);
-    if (window.__docRangeTo) rows = rows.filter(r => r.date <= window.__docRangeTo);
-  }
+  const search = (window.__docSearch || '').trim().toLowerCase();
+  let rows = docRowsInRange();
   if (filter === 'con') rows = rows.filter(r => r.attachments.length > 0);
   if (filter === 'sin') rows = rows.filter(r => r.attachments.length === 0);
   if (typeFilter !== 'todos') rows = rows.filter(r => r.type === typeFilter);
-  if (search) rows = rows.filter(r => clientName(r.clientId).toLowerCase().includes(search));
-
-  rows.sort((a,b) => (a.date+' '+(a.time||'')).localeCompare(b.date+' '+(b.time||'')));
-
-  const inRange = rangeMode === 'todos' ? [...schedRows, ...unschedRows] : [...schedRows, ...unschedRows].filter(r =>
-    (!window.__docRangeFrom || r.date >= window.__docRangeFrom) && (!window.__docRangeTo || r.date <= window.__docRangeTo));
-  const countCon = inRange.filter(r=>r.attachments.length>0).length;
-  const countSin = inRange.filter(r=>r.attachments.length===0).length;
-  const countEntradas = inRange.filter(r=>r.type==='descarga').length;
-  const countSalidas = inRange.filter(r=>r.type==='carga').length;
-
+  if (search) rows = rows.filter(r => [clientName(r.clientId), r.ref, r.carrier, r.plate, r.trailer, r.notes].join(' ').toLowerCase().includes(search));
+  rows.sort((a, b) => (a.date + ' ' + (a.time || '99:99')).localeCompare(b.date + ' ' + (b.time || '99:99')));
+  return rows;
+}
+function docStatsHtml(){
+  const inRange = docRowsInRange();
+  const sin = inRange.filter(r => r.attachments.length === 0).length;
   return `
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
-      <button class="btn ${rangeMode==='hoy'?'btn-primary':'btn-ghost'}" onclick="setDocRange('hoy')">Hoy</button>
-      <button class="btn ${rangeMode==='7dias'?'btn-primary':'btn-ghost'}" onclick="setDocRange('7dias')">Próximos 7 días</button>
-      <button class="btn ${rangeMode==='30dias'?'btn-primary':'btn-ghost'}" onclick="setDocRange('30dias')">Próximos 30 días</button>
-      <button class="btn ${rangeMode==='todos'?'btn-primary':'btn-ghost'}" onclick="setDocRange('todos')">Todos los días</button>
-      <span style="color:var(--mutedFaint);font-size:12px;">o rango personalizado:</span>
-      <input type="date" value="${window.__docRangeFrom}" onchange="window.__docRangeFrom=this.value; window.__docRangeMode='custom'; renderTab();" style="width:150px;" />
-      <span style="color:var(--mutedFaint);">–</span>
-      <input type="date" value="${window.__docRangeTo}" onchange="window.__docRangeTo=this.value; window.__docRangeMode='custom'; renderTab();" style="width:150px;" />
-    </div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">
-      ${rangeMode==='todos' ? 'Mostrando todos los días registrados.' : `Mostrando del ${fmtDate(window.__docRangeFrom)} al ${fmtDate(window.__docRangeTo)}.`}
-    </div>
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
-      <button class="btn ${filter==='todos'?'btn-primary':'btn-ghost'}" onclick="window.__docFilter='todos'; renderTab();">Todos (${inRange.length})</button>
-      <button class="btn ${filter==='sin'?'btn-primary':'btn-ghost'}" onclick="window.__docFilter='sin'; renderTab();">📄 Sin adjunto (${countSin})</button>
-      <button class="btn ${filter==='con'?'btn-primary':'btn-ghost'}" onclick="window.__docFilter='con'; renderTab();">📎 Con adjunto (${countCon})</button>
-    </div>
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
-      <button class="btn ${typeFilter==='todos'?'btn-primary':'btn-ghost'}" onclick="window.__docTypeFilter='todos'; renderTab();">Cargas y descargas</button>
-      <button class="btn ${typeFilter==='descarga'?'btn-primary':'btn-ghost'}" onclick="window.__docTypeFilter='descarga'; renderTab();">⬇ Descargas (${countEntradas})</button>
-      <button class="btn ${typeFilter==='carga'?'btn-primary':'btn-ghost'}" onclick="window.__docTypeFilter='carga'; renderTab();">⬆ Cargas (${countSalidas})</button>
-      <div style="flex:1;min-width:160px;"><input placeholder="Buscar por cliente…" value="${esc(window.__docSearch||'')}" onkeyup="window.__docSearch=this.value; renderTab();" /></div>
-    </div>
-    <div class="card" style="padding:0;overflow:hidden;">
-      <table><thead><tr>${thSort('Fecha','date')}${thSort('Hora','text')}${thSort('Cliente','text')}${thSort('Tipo','text')}${thSort('Estado','text')}${thSort('Adjuntos','number')}</tr></thead><tbody>
-        ${rows.map(r => `
-          <tr onclick="openFromDocumentos('${r.kind}','${r.id}','${r.date}')" style="cursor:pointer;">
-            <td data-sort-value="${esc(r.date||'')}">${fmtDate(r.date)}</td>
-            <td style="color:var(--muted);">${r.time || '<span style="color:var(--mutedFaint);">sin hora</span>'}</td>
-            <td>${esc(clientName(r.clientId))}</td>
-            <td style="text-transform:capitalize;color:var(--muted);">${esc(r.type)}</td>
-            <td><span style="text-transform:capitalize;color:${APPT_STATUS_COLORS[r.status]};font-weight:600;font-size:12px;">${esc(r.status)}</span></td>
-            <td data-sort-value="${r.attachments.length}">${r.attachments.length ? `<div style="display:flex;align-items:center;gap:6px;">${r.attachments.slice(0, 3).map(a => { window.__attRegistry[a.id] = a; return `<div class="pdf-thumb" data-att="${a.id}" onclick="event.stopPropagation(); openPdfPreview('${a.id}')" title="${esc(a.name)}" style="width:28px;height:36px;border-radius:4px;border:1px solid var(--border);background:rgba(193,68,61,0.08);color:var(--danger);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:zoom-in;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.file, 14, 'currentColor', 1.8)}</div>`; }).join('')}${r.attachments.length > 3 ? `<span style="font-size:12px;color:var(--muted);">+${r.attachments.length - 3}</span>` : ''}</div>` : `<span style="color:var(--mutedFaint);">— sin adjuntar</span>`}</td>
-          </tr>`).join('') || `<tr><td colspan="6" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin resultados en este rango de fechas</td></tr>`}
-      </tbody></table>
+    <div class="deca-stat"><b>${inRange.length}</b><span>Reservas</span></div>
+    <div class="deca-stat"><b>${sin}</b><span>Sin albarán</span></div>
+    <div class="deca-stat"><b>${inRange.length - sin}</b><span>Con albarán</span></div>`;
+}
+function docAttShort(name){
+  const n = String(name || '').replace(/\.pdf$/i, '');
+  return n.length > 22 ? n.slice(0, 20) + '…' : n;
+}
+function docAttCellHtml(r){
+  const busy = (window.__docBusy || {})[r.id];
+  const chips = r.attachments.map(a => { window.__attRegistry[a.id] = a; return `
+    <span class="doc-att">
+      <span class="pdf-thumb" data-att="${a.id}" onclick="event.stopPropagation(); openPdfPreview('${a.id}')" title="Ver ${esc(a.name)}">${homeIcon(HOME_ICON_PATHS.file, 14, 'currentColor', 1.8)}</span>
+      <span class="doc-att-n" onclick="event.stopPropagation(); openPdfPreview('${a.id}')" title="${esc(a.name)}">${esc(docAttShort(a.name))}</span>
+      <button type="button" class="doc-att-x" onclick="event.stopPropagation(); docRemoveAtt('${r.kind}','${r.id}','${a.id}')" title="Quitar este albarán">${homeIcon(HOME_ICON_PATHS.x, 13, 'currentColor', 2.2)}</button>
+    </span>`; }).join('');
+  return `
+    <div class="doc-cell-atts" onclick="event.stopPropagation();">
+      ${chips}
+      ${busy ? `<span class="doc-busy">Subiendo ${busy}…</span>` : ''}
+      <label class="doc-add${r.attachments.length ? '' : ' empty'}" title="Adjuntar uno o varios PDF (también puedes arrastrarlos a la fila)">
+        ${homeIcon(HOME_ICON_PATHS.upload, 14, 'currentColor', 2)}<span>${r.attachments.length ? 'Añadir' : 'Adjuntar albarán'}</span>
+        <input type="file" accept="application/pdf" multiple style="display:none;" onchange="docAddFiles('${r.kind}','${r.id}', this.files); this.value='';" />
+      </label>
     </div>`;
 }
-function setDocRange(mode){
-  window.__docRangeMode = mode;
-  if (mode === 'hoy') { window.__docRangeFrom = today(); window.__docRangeTo = today(); }
-  else if (mode === '7dias' || mode === '30dias') {
-    window.__docRangeFrom = today();
-    const d = new Date(today()+'T00:00:00'); d.setDate(d.getDate() + (mode==='7dias'?7:30));
-    window.__docRangeTo = toDateStr(d);
+function docRowHtml(r, showDate){
+  const dia = new Date(r.date + 'T00:00:00').toLocaleDateString('es-ES', { weekday: 'short', day: '2-digit', month: 'short' });
+  const tipoIcon = r.type === 'descarga' ? HOME_ICON_PATHS.download : HOME_ICON_PATHS.upload;
+  return `
+    <tr class="doc-row" onclick="openFromDocumentos('${r.kind}','${r.id}','${r.date}')" title="Abrir la reserva"
+      ondragover="event.preventDefault(); this.classList.add('drop');" ondragleave="this.classList.remove('drop');"
+      ondrop="event.preventDefault(); this.classList.remove('drop'); docAddFiles('${r.kind}','${r.id}', event.dataTransfer.files);">
+      ${showDate ? `<td style="white-space:nowrap;text-transform:capitalize;" data-sort-value="${esc(r.date)}">${esc(dia)}</td>` : ''}
+      <td style="white-space:nowrap;" data-sort-value="${esc(r.time || '99:99')}">${r.time ? `<b>${esc(r.time)}</b>` : '<span style="color:var(--mutedFaint);">sin hora</span>'}</td>
+      <td data-sort-value="${esc(clientName(r.clientId))}"><b>${esc(clientName(r.clientId))}</b></td>
+      <td style="white-space:nowrap;" data-sort-value="${esc(r.type)}"><span style="display:inline-flex;align-items:center;gap:6px;color:var(--muted);text-transform:capitalize;">${homeIcon(tipoIcon, 14, 'currentColor', 2)}${esc(r.type)}</span></td>
+      <td data-sort-value="${esc(r.ref)}">${r.ref ? `<span class="doc-ref">${esc(r.ref)}</span>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+      <td data-sort-value="${esc(r.carrier)}">${r.carrier || r.plate || r.trailer
+        ? `${r.carrier ? `<div>${esc(r.carrier)}</div>` : ''}<div class="doc-sub" style="font-family:var(--mono);">${esc([r.plate, r.trailer].filter(Boolean).join(' · ')) || ''}</div>`
+        : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+      <td data-sort-value="${esc(r.notes)}">${r.notes ? `<div class="doc-obs" title="${esc(r.notes)}">${esc(r.notes)}</div>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+      <td style="white-space:nowrap;" data-sort-value="${esc(r.status)}"><span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);text-transform:capitalize;"><span style="width:8px;height:8px;border-radius:50%;background:${APPT_STATUS_COLORS[r.status]};"></span>${esc(r.status)}</span></td>
+      <td data-sort-value="${r.attachments.length}">${docAttCellHtml(r)}</td>
+    </tr>`;
+}
+function docBodyHtml(){
+  const rows = docRowsFiltered();
+  const [from, to] = docBounds();
+  const showDate = from !== to;
+  if (!rows.length) {
+    const hay = docRowsInRange().length > 0;
+    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${hay ? 'Ninguna reserva coincide con los filtros.' : (from && from === to ? 'No hay reservas este día.' : 'No hay reservas en este rango de fechas.')}</div>`;
   }
+  return `
+    <div class="card doc-table-card" style="padding:0;overflow-x:auto;">
+      <table class="tf-table doc-table">
+        <thead><tr>${showDate ? thSort('Día', 'date') : ''}${thSort('Hora', 'text')}${thSort('Cliente', 'text')}${thSort('Tipo', 'text')}${thSort('Referencia', 'text')}${thSort('Transporte', 'text')}${thSort('Observaciones', 'text')}${thSort('Estado', 'text')}${thSort('Albaranes', 'number')}</tr></thead>
+        <tbody>${rows.map(r => docRowHtml(r, showDate)).join('')}</tbody>
+      </table>
+    </div>`;
+}
+function refreshDocBody(){
+  const el = document.getElementById('doc-list-body');
+  if (el) el.innerHTML = docBodyHtml();
+  hydratePdfThumbs();
+}
+function tplDocumentos(){
+  const wh = currentWh();
+  const mode = docMode();
+  const [from, to] = docBounds();
+  const inRange = docRowsInRange();
+  const filter = window.__docFilter || 'todos';
+  const typeFilter = window.__docTypeFilter || 'todos';
+  const countSin = inRange.filter(r => r.attachments.length === 0).length;
+  const segBtn = (id, label, cur, setter) => `<button type="button" class="${cur === id ? 'on' : ''}" onclick="${setter.replace('__ID__', id)}">${label}</button>`;
+  const diaLargo = from && from === to ? (() => { const s = new Date(from + 'T00:00:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }); return s.charAt(0).toUpperCase() + s.slice(1); })() : '';
+  return `
+    <div style="--bn-accent:var(--primary);">
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.file, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 280px;">
+        <div class="deca-banner-title">Documentos</div>
+        <div class="deca-banner-sub">${esc(wh.name)} · las reservas del día con su referencia, observaciones y albaranes. Adjunta los PDF desde cada fila.</div>
+      </div>
+      <div class="deca-banner-actions" id="doc-stats">${docStatsHtml()}</div>
+    </div>
+    <div class="card deca-toolbar">
+      <div class="doc-seg">${DOC_MODOS.map(([id, label]) => segBtn(id, label, mode, "setDocMode('__ID__')")).join('')}</div>
+      ${['hoy', 'manana', 'pasado', 'dia'].includes(mode) ? `
+        <div style="display:inline-flex;align-items:center;gap:6px;">
+          <button class="btn btn-ghost" onclick="docShiftDay(-1)" title="Día anterior">←</button>
+          <input type="date" value="${from}" onchange="docSetDay(this.value)" style="width:150px;" />
+          <button class="btn btn-ghost" onclick="docShiftDay(1)" title="Día siguiente">→</button>
+        </div>
+        <span style="font-size:13px;font-weight:600;color:var(--text);">${esc(diaLargo)}</span>` : ''}
+      ${mode === 'rango' ? `
+        <div style="display:inline-flex;align-items:center;gap:6px;">
+          <input type="date" value="${from}" onchange="window.__docRangeFrom=this.value; renderTab();" style="width:150px;" />
+          <span style="color:var(--mutedFaint);">–</span>
+          <input type="date" value="${to}" onchange="window.__docRangeTo=this.value; renderTab();" style="width:150px;" />
+        </div>` : ''}
+      ${mode === '7dias' ? `<span style="font-size:12.5px;color:var(--muted);">Del ${esc(fmtDate(from))} al ${esc(fmtDate(to))}</span>` : ''}
+      ${mode === 'todos' ? `<span style="font-size:12.5px;color:var(--muted);">Todos los días registrados</span>` : ''}
+    </div>
+    <div class="card deca-toolbar">
+      <div class="deca-search">
+        <input placeholder="Buscar por cliente, referencia, matrícula, observaciones…" value="${esc(window.__docSearch||'')}" oninput="window.__docSearch=this.value; refreshDocBody();" />
+        <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
+      </div>
+      <div class="doc-seg">
+        ${segBtn('todos', `Todos (${inRange.length})`, filter, "window.__docFilter='__ID__'; renderTab();")}
+        ${segBtn('sin', `Sin albarán (${countSin})`, filter, "window.__docFilter='__ID__'; renderTab();")}
+        ${segBtn('con', `Con albarán (${inRange.length - countSin})`, filter, "window.__docFilter='__ID__'; renderTab();")}
+      </div>
+      <div class="doc-seg">
+        ${segBtn('todos', 'Cargas y descargas', typeFilter, "window.__docTypeFilter='__ID__'; renderTab();")}
+        ${segBtn('descarga', `Descargas (${inRange.filter(r => r.type === 'descarga').length})`, typeFilter, "window.__docTypeFilter='__ID__'; renderTab();")}
+        ${segBtn('carga', `Cargas (${inRange.filter(r => r.type === 'carga').length})`, typeFilter, "window.__docTypeFilter='__ID__'; renderTab();")}
+      </div>
+    </div>
+    <div id="doc-list-body">${docBodyHtml()}</div>
+    </div>`;
+}
+function docFindRow(kind, id){
+  return (kind === 'appt' ? appointments[currentWarehouseId] : unscheduled[currentWarehouseId]).find(x => x.id === id);
+}
+// Adjunta uno o varios PDF a una reserva directamente desde Documentos.
+async function docAddFiles(kind, id, fileList){
+  const files = Array.from(fileList || []);
+  const row = docFindRow(kind, id);
+  if (!row || !files.length) return;
+  const parentType = kind === 'appt' ? 'appointment' : 'unscheduled';
+  window.__docBusy = window.__docBusy || {};
+  let done = 0;
+  for (const file of files) {
+    if (file.type !== 'application/pdf' && !(file.type === '' && /\.pdf$/i.test(file.name))) { appToast(`"${file.name}" no es un PDF.`); continue; }
+    if (file.size > MAX_ATTACHMENT_MB*1024*1024) { appToast(`"${file.name}" pesa demasiado (${(file.size/1024/1024).toFixed(1).replace('.', ',')} MB; máx ${MAX_ATTACHMENT_MB} MB).`); continue; }
+    window.__docBusy[id] = `${done + 1}/${files.length}`;
+    refreshDocBody();
+    const safeName = file.name.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9._-]+/g, '_');
+    const path = `attachments/${nextId()}-${safeName}`;
+    const { error: upErr } = await supabaseClient.storage.from(DOCS_BUCKET).upload(path, file, { contentType: 'application/pdf' });
+    if (upErr) { appToast(`No se pudo subir "${file.name}": ${upErr.message || 'error desconocido.'}`); continue; }
+    const { data, error } = await supabaseClient.from('attachments').insert({ parent_type: parentType, parent_id: id, name: file.name, storage_path: path, size: file.size }).select().single();
+    if (error || !data) {
+      await supabaseClient.storage.from(DOCS_BUCKET).remove([path]);
+      appToast(`No se pudo guardar "${file.name}": ${error && error.message ? error.message : 'error desconocido.'}`);
+      continue;
+    }
+    const url = await signedUrl(path);
+    row.attachments = [...(row.attachments || []), { id: data.id, name: file.name, size: file.size, storage_path: path, url }];
+    done++;
+  }
+  delete window.__docBusy[id];
+  renderTab();
+  if (done) appToast(done === 1 ? 'Albarán adjuntado.' : `${done} albaranes adjuntados.`, 'ok');
+}
+async function docRemoveAtt(kind, id, attId){
+  const row = docFindRow(kind, id);
+  const a = row && (row.attachments || []).find(x => x.id === attId);
+  if (!a) return;
+  if (!(await appConfirm({ title: 'Quitar albarán', name: a.name, message: 'Se quitará de esta reserva.', confirmLabel: 'Quitar', tone: 'danger', icon: 'trash' }))) return;
+  const { error } = await supabaseClient.from('attachments').delete().eq('id', attId);
+  if (error) { appToast('No se pudo quitar: ' + error.message); return; }
+  if (a.storage_path) await supabaseClient.storage.from(DOCS_BUCKET).remove([a.storage_path]);
+  row.attachments = row.attachments.filter(x => x.id !== attId);
   renderTab();
 }
 function openFromDocumentos(kind, id, date){
