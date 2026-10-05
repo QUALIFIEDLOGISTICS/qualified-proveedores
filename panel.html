@@ -229,6 +229,13 @@
   .wcl-row input[type="checkbox"]{width:18px !important;height:18px;flex-shrink:0;accent-color:var(--primary);}
   .wcl-tag{font-size:11px;font-weight:600;padding:2px 9px;border-radius:999px;background:var(--panel2);color:var(--muted);white-space:nowrap;max-width:190px;overflow:hidden;text-overflow:ellipsis;}
   .wcl-tag.none{color:var(--mutedFaint);font-weight:500;}
+  .doc-seg button .cl-n{margin-left:4px;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--panel);color:var(--muted);}
+  .doc-seg button.on .cl-n{background:rgba(255,255,255,.22);color:#fff;}
+  .cl-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:middle;}
+  .cl-wh{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;}
+  .cl-wh-chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:var(--panel2);border:1px solid var(--border);color:var(--muted);white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis;}
+  .cl-wh-chip i{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+  .cl-wh-chip.none{border-style:dashed;background:transparent;color:var(--mutedFaint);font-weight:500;}
   /* Tarjetas de Direcciones */
   .dir-card.card{cursor:pointer;display:flex;gap:16px;align-items:flex-start;padding:18px;border-radius:14px;box-shadow:0 1px 2px rgba(27,58,107,.05),0 6px 18px rgba(27,58,107,.05);transition:border-color .14s,box-shadow .14s,transform .14s;}
   .dir-card.card:hover{border-color:color-mix(in srgb,var(--primary) 45%,var(--border));box-shadow:0 2px 4px rgba(27,58,107,.06),0 12px 28px rgba(27,58,107,.1);transform:translateY(-1px);}
@@ -1559,7 +1566,7 @@ function moduleTabBtnHtml(onclick, label, on){
 }
 function tplAlmacenBar(){
   const sections = almacenVisibleSections();
-  const inConfig = currentTab === ALMACEN_CONFIG_TAB;
+  const inConfig = currentTab === ALMACEN_CONFIG_TAB || currentTab === 'clientes';
   const tabBtn = (id, label) => moduleTabBtnHtml(`setTab('${id}')`, label, id === currentTab);
   // El selector de almacén va a la derecha: así las pestañas no se mueven al entrar en
   // Configuración (donde el selector no hace falta y se oculta).
@@ -3755,7 +3762,10 @@ function contactoCardHtml(c, archivedView, opts){
     return `
     <div class="card contact-card" role="button" tabindex="0" title="${esc(titulo)}" style="cursor:pointer;display:flex;gap:14px;align-items:center;height:96px;padding:14px 14px 14px 16px;overflow:hidden;${archivedView?'opacity:0.7;':''}" onclick="${abrir}" onkeydown="if(event.key==='Enter'){ this.click(); }">
       <div style="width:64px;height:64px;border-radius:12px;overflow:hidden;flex-shrink:0;border:1px solid var(--border);background:#fff;box-shadow:0 2px 8px rgba(27,58,107,0.08);">${contactoLogoThumbHtml(c)}</div>
-      <div style="min-width:0;flex:1;font-family:var(--display);font-size:15px;font-weight:700;line-height:1.3;color:var(--text);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;">${esc(titulo)}</div>
+      <div style="min-width:0;flex:1;">
+        <div style="font-family:var(--display);font-size:15px;font-weight:700;line-height:1.3;color:var(--text);display:-webkit-box;-webkit-line-clamp:${o.footerHtml ? 1 : 2};-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;">${esc(titulo)}</div>
+        ${o.footerHtml || ''}
+      </div>
       <div style="width:26px;height:26px;border-radius:50%;background:var(--panel2);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${homeIcon(HOME_ICON_PATHS.chevron, 15, 'var(--muted)', 2.2)}</div>
     </div>`;
   }
@@ -4942,16 +4952,33 @@ async function deleteContacto(id){
 // Pestañas: Activos (los asignados a este almacén), Sin asignar (a ningún
 // almacén todavía) y Archivados.
 const CLIENTES_PAGE_SIZE = 80;
+// Clientes de almacén: se ven todos y se filtran por almacén (o "Sin almacén") con las fichas de arriba.
+// window.__clientesAlmacen: '' = todos · id de un almacén · '__sin' = sin ningún almacén asignado.
+function clientesAlmacenFiltro(){
+  const f = window.__clientesAlmacen || '';
+  return (f === '__sin' || WAREHOUSES.some(w => w.id === f)) ? f : '';
+}
+function setClientesAlmacen(id){
+  window.__clientesAlmacen = id || '';
+  window.__clientesPage = 0;
+  renderTab();
+}
 function clientesFilteredList(){
   const view = window.__clientsView || 'activos';
   const search = (window.__clientesSearch || '').toLowerCase();
-  const base = contactos.filter(c => c.esClienteAlmacen);
-  let list;
-  if (view === 'archivados') list = base.filter(c => c.archived && c.warehouseIds.includes(currentWarehouseId));
-  else if (view === 'sinasignar') list = base.filter(c => !c.archived && c.warehouseIds.length === 0);
-  else list = base.filter(c => !c.archived && c.warehouseIds.includes(currentWarehouseId));
+  const almacen = clientesAlmacenFiltro();
+  let list = contactos.filter(c => c.esClienteAlmacen && !!c.archived === (view === 'archivados'));
+  if (almacen === '__sin') list = list.filter(c => !(c.warehouseIds || []).length);
+  else if (almacen) list = list.filter(c => (c.warehouseIds || []).includes(almacen));
   list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || (c.nombreComercial||'').toLowerCase().includes(search) || (c.nif||'').toLowerCase().includes(search));
   return { view, search, list };
+}
+// Almacenes de un cliente como chips pequeños con el color de cada uno (en tarjetas y lista).
+function clienteAlmacenesChipsHtml(c, max){
+  const ws = (c.warehouseIds || []).map(id => WAREHOUSES.find(w => w.id === id)).filter(Boolean);
+  if (!ws.length) return `<div class="cl-wh"><span class="cl-wh-chip none">Sin almacén</span></div>`;
+  const shown = ws.slice(0, max || 3);
+  return `<div class="cl-wh">${shown.map(w => `<span class="cl-wh-chip" title="${esc(w.name)}"><i style="background:${w.color};"></i>${esc(w.name)}</span>`).join('')}${ws.length > shown.length ? `<span class="cl-wh-chip">+${ws.length - shown.length}</span>` : ''}</div>`;
 }
 function clientesGoToPage(delta){
   window.__clientesPage = Math.max(0, (window.__clientesPage||0) + delta);
@@ -4989,7 +5016,7 @@ function clientesListaHtml(list, archivedView){
   return `
     <div class="card" style="padding:0;overflow-x:auto;">
       <table class="tf-table">
-        <thead><tr>${thSort('Cliente','text')}</tr></thead>
+        <thead><tr>${thSort('Cliente','text')}${thSort('Almacenes','text')}</tr></thead>
         <tbody>
           ${list.map(c => {
             const titulo = (c.nombreComercial || '').trim() || c.nombre;
@@ -4998,6 +5025,7 @@ function clientesListaHtml(list, archivedView){
               <td data-sort-value="${esc(titulo)}"><div style="display:flex;align-items:center;gap:12px;min-width:0;">
                 <div style="width:34px;height:34px;border-radius:8px;overflow:hidden;flex-shrink:0;border:1px solid var(--border);">${contactoLogoThumbHtml(c)}</div>
                 <span style="font-weight:600;">${esc(titulo)}</span></div></td>
+              <td data-sort-value="${esc((c.warehouseIds||[]).map(id => (WAREHOUSES.find(w=>w.id===id)||{}).name||'').join(', '))}">${clienteAlmacenesChipsHtml(c, 4).replace('margin-top:5px', '')}</td>
             </tr>`;
           }).join('')}
         </tbody>
@@ -5015,7 +5043,7 @@ function clientesListBodyHtml(){
   const page = window.__clientesPage || 0;
   const pageList = list.slice(page * CLIENTES_PAGE_SIZE, (page + 1) * CLIENTES_PAGE_SIZE);
   if (clientesLayoutActual() === 'lista') return clientesListaHtml(pageList, view === 'archivados');
-  return contactosGridHtml(pageList, view === 'archivados', { simple: true });
+  return contactosGridHtml(pageList, view === 'archivados', c => ({ simple: true, footerHtml: clienteAlmacenesChipsHtml(c) }));
 }
 // Desplegable "Filtros" del panel de Clientes (igual que el de Contactos).
 function tplClientesFilterDropdown(){
@@ -5035,30 +5063,38 @@ function setClientesView(view){
 }
 function tplClientes(){
   const view = window.__clientsView === 'archivados' ? 'archivados' : 'activos';
-  const wh = currentWh();
+  const almacen = clientesAlmacenFiltro();
   const base = contactos.filter(c => c.esClienteAlmacen);
-  const activos = base.filter(c => !c.archived && c.warehouseIds.includes(currentWarehouseId)).length;
-  const archivados = base.filter(c => c.archived && c.warehouseIds.includes(currentWarehouseId)).length;
-  const sinAsignar = base.filter(c => !c.archived && c.warehouseIds.length === 0).length;
+  const activos = base.filter(c => !c.archived);
+  const sinAsignar = activos.filter(c => !(c.warehouseIds || []).length).length;
+  const archivados = base.length - activos.length;
+  const pool = base.filter(c => !!c.archived === (view === 'archivados'));
+  const chip = (id, label, n, color) => `<button type="button" class="${almacen === id ? 'on' : ''}" onclick="setClientesAlmacen('${id}')">${color ? `<i class="cl-dot" style="background:${color};"></i>` : ''}${esc(label)} <span class="cl-n">${n}</span></button>`;
+  const filtroNombre = almacen === '__sin' ? 'sin almacén' : almacen ? (WAREHOUSES.find(w => w.id === almacen) || {}).name : '';
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.users, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 280px;">
         <div class="deca-banner-title">Clientes</div>
-        <div class="deca-banner-sub">Clientes de almacén${wh ? ' de ' + esc(wh.name) : ''}.</div>
+        <div class="deca-banner-sub">Todos los clientes de almacén${filtroNombre ? ` · filtrando por ${esc(filtroNombre)}` : ''}. Filtra por almacén con los botones de abajo.</div>
       </div>
       <div class="deca-banner-actions">
-        <div class="deca-stat"><b>${activos}</b><span>Activos</span></div>
+        <div class="deca-stat"><b>${activos.length}</b><span>Activos</span></div>
         <div class="deca-stat"><b>${sinAsignar}</b><span>Sin almacén</span></div>
         <div class="deca-stat"><b>${archivados}</b><span>Archivados</span></div>
-        ${view==='archivados' ? '' : `<button class="btn btn-primary deca-new-btn" onclick='openContactoModal(null, {esClienteAlmacen:true, warehouseIds:["${currentWarehouseId}"]})'>${homeIcon(HOME_ICON_PATHS.users, 17, 'currentColor', 1.8)}<span>Nuevo cliente</span></button>`}
+        ${view==='archivados' ? '' : `<button class="btn btn-primary deca-new-btn" onclick='openContactoModal(null, {esClienteAlmacen:true, warehouseIds:${JSON.stringify(almacen && almacen !== '__sin' ? [almacen] : [])}})'>${homeIcon(HOME_ICON_PATHS.users, 17, 'currentColor', 1.8)}<span>Nuevo cliente</span></button>`}
       </div>
     </div>
     <div class="card deca-toolbar">
       <div class="deca-search">
-        <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__clientesSearch||'')}" oninput="window.__clientesSearch=this.value; window.__clientesPage=0; refreshClientesListBody();" />
+        <input placeholder="Buscar en todos los clientes por nombre o NIF…" value="${esc(window.__clientesSearch||'')}" oninput="window.__clientesSearch=this.value; window.__clientesPage=0; refreshClientesListBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
+      </div>
+      <div class="doc-seg" style="flex-wrap:wrap;">
+        ${chip('', 'Todos', pool.length)}
+        ${WAREHOUSES.map(w => chip(w.id, w.name, pool.filter(c => (c.warehouseIds || []).includes(w.id)).length, w.color)).join('')}
+        ${chip('__sin', 'Sin almacén', pool.filter(c => !(c.warehouseIds || []).length).length)}
       </div>
       <div style="position:relative;">
         <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__clientesFilterOpen=!window.__clientesFilterOpen; renderTab();">Filtros${view==='archivados'?' (1)':''} ▾</button>
@@ -5069,7 +5105,6 @@ function tplClientes(){
     <div id="clientes-list-body">${clientesListBodyHtml()}</div>
     </div>`;
 }
-
 // Cada reserva del día se coloca en una columna (0 o 1) fija para todo su
 // horario, en vez de recalcularse franja a franja — si no, una reserva de
 // varias franjas podía aparecer a la izquierda en una franja y saltar a la
