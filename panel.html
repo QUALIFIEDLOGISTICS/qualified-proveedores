@@ -229,6 +229,7 @@
   .wcl-row input[type="checkbox"]{width:18px !important;height:18px;flex-shrink:0;accent-color:var(--primary);}
   .wcl-tag{font-size:11px;font-weight:600;padding:2px 9px;border-radius:999px;background:var(--panel2);color:var(--muted);white-space:nowrap;max-width:190px;overflow:hidden;text-overflow:ellipsis;}
   .wcl-tag.none{color:var(--mutedFaint);font-weight:500;}
+  input.af-locked,.deca-form input.af-locked{background:var(--panel2) !important;color:var(--text);cursor:not-allowed;font-weight:600;}
   .doc-seg button .cl-n{margin-left:4px;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--panel);color:var(--muted);}
   .doc-seg button.on .cl-n{background:rgba(255,255,255,.22);color:#fff;}
   .cl-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:middle;}
@@ -7915,7 +7916,7 @@ async function loadAlmacenajeProductos(){
   const { data } = await supabaseClient.from('almacenaje_productos').select('*').order('nombre', { ascending: true });
   almacenajeProductos = (data||[]).map(p => ({
     id: p.id, createdAt: p.created_at, nombre: p.nombre, categoria: p.categoria, unidad: p.unidad,
-    usaSubtipo: !!p.usa_subtipo, subtipoLabel: p.subtipo_label || '', archived: !!p.archived,
+    usaSubtipo: !!p.usa_subtipo, subtipoLabel: p.subtipo_label || '', subtipoValor: p.subtipo_valor || '', archived: !!p.archived,
   }));
 }
 function almacenajeProducto(tipo){ return almacenajeProductos.find(p=>p.id===tipo); }
@@ -7961,6 +7962,8 @@ function almacenajeTipoOptionsHtml(selected){
 }
 function almacenajeUsaSubtipo(tipo){ const p = almacenajeProducto(tipo); return !!(p && p.usaSubtipo); }
 function almacenajeSubtipoLabel(tipo){ const p = almacenajeProducto(tipo); return (p && p.subtipoLabel) || 'Subtipo'; }
+// Subtipo ya definido en el producto: si lo tiene, se rellena solo en las tarifas y no se puede cambiar.
+function almacenajeSubtipoFijo(tipo){ const p = almacenajeProducto(tipo); return (p && p.usaSubtipo && p.subtipoValor) ? p.subtipoValor : ''; }
 function almacenajeUnidadTxt(tipo){ const p = almacenajeProducto(tipo); return ALMACENAJE_UNIDADES[p ? p.unidad : 'dia'] || '/día'; }
 
 /* ---- Almacén → Configuración → Productos (catálogo, CRUD) ---- */
@@ -7995,20 +7998,21 @@ async function submitAlmacenajeProducto(editId){
   const categoria = document.getElementById('ap-categoria').value;
   const unidad = document.getElementById('ap-unidad').value;
   const usaSubtipo = document.getElementById('ap-usasubtipo').checked;
-  const subtipoLabel = (document.getElementById('ap-subtipolabel').value || '').trim();
+  const subtipoValor = (document.getElementById('ap-subtipolabel').value || '').trim();
   if (!nombre) { appToast('Ponle un nombre al producto.'); return; }
-  if (usaSubtipo && !subtipoLabel) { appToast('Ponle un nombre al subtipo (p. ej. "Tipo de palet").'); return; }
+  if (usaSubtipo && !subtipoValor) { appToast('Escribe el subtipo del producto (p. ej. "Europeo").'); return; }
   const editing = editId ? almacenajeProducto(editId) : null;
-  const row = { nombre, categoria, unidad, usa_subtipo: usaSubtipo, subtipo_label: usaSubtipo ? subtipoLabel : null };
+  // El subtipo del producto es su valor fijo; también se guarda como etiqueta para los textos que la usan.
+  const row = { nombre, categoria, unidad, usa_subtipo: usaSubtipo, subtipo_label: usaSubtipo ? subtipoValor : null, subtipo_valor: usaSubtipo ? subtipoValor : null };
   if (editing) {
     const { error } = await supabaseClient.from('almacenaje_productos').update(row).eq('id', editing.id);
     if (error) { appToast('No se pudo guardar: ' + error.message); return; }
-    Object.assign(editing, { nombre, categoria, unidad, usaSubtipo, subtipoLabel: row.subtipo_label || '' });
+    Object.assign(editing, { nombre, categoria, unidad, usaSubtipo, subtipoLabel: row.subtipo_label || '', subtipoValor: row.subtipo_valor || '' });
   } else {
     const id = almacenajeProductoSlug(nombre);
     const { data, error } = await supabaseClient.from('almacenaje_productos').insert({ id, ...row }).select().single();
     if (error) { appToast('No se pudo crear: ' + error.message); return; }
-    almacenajeProductos.push({ id: data.id, createdAt: data.created_at, nombre, categoria, unidad, usaSubtipo, subtipoLabel: row.subtipo_label || '', archived: false });
+    almacenajeProductos.push({ id: data.id, createdAt: data.created_at, nombre, categoria, unidad, usaSubtipo, subtipoLabel: row.subtipo_label || '', subtipoValor: row.subtipo_valor || '', archived: false });
   }
   backToAlmacenajeProductos();
 }
@@ -8052,7 +8056,7 @@ function tplAlmacenajeProductosPage(){
             <td data-sort-value="${esc(almacenajeCategoriaLabel(p.categoria))}">${almacenajeCategoriaBadgeHtml(p.categoria)}</td>
             <td data-sort-value="${esc(p.nombre)}"><b>${esc(p.nombre)}</b></td>
             <td data-sort-value="${esc(ALMACENAJE_UNIDAD_LABELS[p.unidad]||'')}">${esc(ALMACENAJE_UNIDAD_LABELS[p.unidad]||'—')}</td>
-            <td style="color:var(--muted);" data-sort-value="${esc(p.subtipoLabel)}">${p.usaSubtipo ? esc(p.subtipoLabel || 'Sí') : '—'}</td>
+            <td style="color:var(--muted);" data-sort-value="${esc(p.subtipoValor || p.subtipoLabel)}">${p.usaSubtipo ? (p.subtipoValor ? esc(p.subtipoValor) : '<span style="color:var(--mutedFaint);" title="Sin subtipo definido: en las tarifas se escribe a mano">Sin definir</span>') : '—'}</td>
             <td data-sort-value="${p.archived?'Archivado':'Activo'}">${p.archived ? '<span style="color:var(--mutedFaint);">Archivado</span>' : '<span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--success);"></span>Activo</span>'}</td>
             <td style="white-space:nowrap;">
               <button class="deca-act" onclick="openAlmacenajeProductoForm('${p.id}')" title="Editar">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
@@ -8096,11 +8100,12 @@ function tplAlmacenajeProductoFormPage(){
           </div>
           <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin:4px 0 14px;">
             <input type="checkbox" id="ap-usasubtipo" style="width:auto;" ${p.usaSubtipo?'checked':''} onchange="almacenajeProductoFormToggleSubtipo()" />
-            Necesita un subtipo (p. ej. Palet Europeo / Americano)
+            Lleva un subtipo (se rellena solo en las tarifas y no se puede cambiar)
           </label>
           <div class="field" id="ap-subtipolabel-wrap" style="${p.usaSubtipo?'':'display:none;'}margin-bottom:0;">
-            <label>Nombre del subtipo</label>
-            ${decaInputIcon('list', `<input id="ap-subtipolabel" maxlength="40" placeholder="Ej. Tipo de palet" value="${esc(p.subtipoLabel||'')}" />`)}
+            <label>Subtipo <span class="dc-req">*</span></label>
+            ${decaInputIcon('list', `<input id="ap-subtipolabel" maxlength="40" placeholder="Ej. Europeo" value="${esc(p.subtipoValor||'')}" />`)}
+            <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">Si necesitas dos variantes (p. ej. Palet Europeo y Palet Americano), crea un producto por cada una.</div>
           </div>
         </div>
       </div>
@@ -8143,6 +8148,14 @@ function tplAlmacenajeTarifaRowFieldsToggle(){
   document.getElementById('at-subtipo-field').style.display = almacenajeUsaSubtipo(tipo) ? '' : 'none';
   const subLabelEl = document.getElementById('at-subtipo-label');
   if (subLabelEl) subLabelEl.textContent = almacenajeSubtipoLabel(tipo);
+  const subEl = document.getElementById('at-subtipo');
+  if (subEl) {
+    const fijo = almacenajeSubtipoFijo(tipo);
+    subEl.readOnly = !!fijo;
+    subEl.classList.toggle('af-locked', !!fijo);
+    if (fijo) { subEl.value = fijo; subEl.removeAttribute('data-combo'); subEl.title = 'Viene del producto; se cambia en Configuración → Productos'; }
+    else { subEl.setAttribute('data-combo', 'at-subtipos-datalist'); subEl.removeAttribute('title'); }
+  }
   document.getElementById('at-precio-label').textContent = `Precio (€${almacenajeUnidadTxt(tipo)})`;
   const actividadEl = document.getElementById('at-actividad');
   if (actividadEl) actividadEl.innerHTML = almacenajeCategoriaBadgeHtml(almacenajeCategoriaDe(tipo));
@@ -8167,7 +8180,7 @@ function openAlmacenajeTarifaModal(clienteId, editId){
         </div>
         <div class="field" id="at-subtipo-field" style="display:${almacenajeUsaSubtipo(t.tipo)?'':'none'};">
           <label id="at-subtipo-label">${esc(almacenajeSubtipoLabel(t.tipo))}</label>
-          <input id="at-subtipo" maxlength="60" data-combo="at-subtipos-datalist" autocomplete="off" placeholder="Ej. Europeo, Americano" value="${esc(t.subtipo)}" />
+          <input id="at-subtipo" maxlength="60" ${almacenajeSubtipoFijo(t.tipo) ? "" : `data-combo="at-subtipos-datalist"`} autocomplete="off" placeholder="Ej. Europeo, Americano" value="${esc(almacenajeSubtipoFijo(t.tipo) || t.subtipo)}" ${almacenajeSubtipoFijo(t.tipo) ? `readonly class="af-locked" title="Viene del producto; se cambia en Configuración → Productos"` : ""} />
           <datalist id="at-subtipos-datalist">${almacenajeSubtiposDatalistHtml()}</datalist>
         </div>
         <div style="display:flex;gap:10px;">
@@ -8235,14 +8248,26 @@ function backFromAlmacenajeForm(){
   window.__almacenajeFormDirty = false;
   renderTab();
 }
+// Pone el campo Subtipo de una fila según el producto elegido: sin subtipo → desactivado;
+// con subtipo definido en el producto → se rellena solo y queda bloqueado; con subtipo pero
+// sin valor definido (productos antiguos) → se escribe a mano, como siempre.
+function almacenajeSubtipoAplicar(el, tipo, comboId){
+  const usa = almacenajeUsaSubtipo(tipo), fijo = almacenajeSubtipoFijo(tipo);
+  el.disabled = !usa;
+  el.style.opacity = usa ? '1' : '0.5';
+  el.readOnly = !!fijo;
+  el.classList.toggle('af-locked', !!fijo);
+  if (fijo) { el.value = fijo; el.removeAttribute('data-combo'); el.placeholder = ''; el.title = 'Viene del producto; se cambia en Configuración → Productos'; }
+  else {
+    if (comboId) el.setAttribute('data-combo', comboId);
+    el.removeAttribute('title');
+    el.placeholder = usa ? almacenajeSubtipoLabel(tipo) : '';
+    if (!usa) el.value = '';
+  }
+}
 function almacenajeFilaTipoChange(i){
   const tipo = document.getElementById(`af-${i}-tipo`).value;
-  const usa = almacenajeUsaSubtipo(tipo);
-  const subtipoEl = document.getElementById(`af-${i}-subtipo`);
-  subtipoEl.disabled = !usa;
-  subtipoEl.style.opacity = usa ? '1' : '0.5';
-  subtipoEl.placeholder = usa ? almacenajeSubtipoLabel(tipo) : '';
-  if (!usa) subtipoEl.value = '';
+  almacenajeSubtipoAplicar(document.getElementById(`af-${i}-subtipo`), tipo, 'af-subtipos');
   const actividadEl = document.getElementById(`af-${i}-actividad`);
   if (actividadEl) actividadEl.innerHTML = almacenajeCategoriaBadgeHtml(almacenajeCategoriaDe(tipo));
   window.__almacenajeFormDirty = true;
@@ -8263,6 +8288,7 @@ function almacenajeFilaRowHtml(i){
 function almacenajeFilaAddRow(focus){
   const i = window.__almacenajeN++;
   document.getElementById('af-rows').insertAdjacentHTML('beforeend', almacenajeFilaRowHtml(i));
+  const dirtyAntes = window.__almacenajeFormDirty; almacenajeFilaTipoChange(i); window.__almacenajeFormDirty = dirtyAntes;
   if (focus) document.getElementById(`af-${i}-tipo`).focus();
 }
 function almacenajeFilaRemoveRow(i){
