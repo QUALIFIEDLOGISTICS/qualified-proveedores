@@ -222,6 +222,13 @@
   .perm-item-d{font-size:12px;color:var(--mutedFaint);line-height:1.4;margin-top:2px;}
   .perm-ck{width:22px;height:22px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
   .perm-no{color:var(--mutedFaint);font-weight:700;flex-shrink:0;}
+  .wcl-list{display:flex;flex-direction:column;gap:6px;max-height:46vh;overflow-y:auto;overflow-x:hidden;padding:2px;}
+  .wcl-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1.5px solid var(--border);border-radius:11px;background:var(--panel);cursor:pointer;transition:border-color .12s,background .12s;}
+  .wcl-row:hover{border-color:color-mix(in srgb,var(--primary) 40%,var(--border));}
+  .wcl-row:has(input:checked){border-color:var(--primary);background:color-mix(in srgb,var(--primary) 6%,var(--panel));}
+  .wcl-row input[type="checkbox"]{width:18px !important;height:18px;flex-shrink:0;accent-color:var(--primary);}
+  .wcl-tag{font-size:11px;font-weight:600;padding:2px 9px;border-radius:999px;background:var(--panel2);color:var(--muted);white-space:nowrap;max-width:190px;overflow:hidden;text-overflow:ellipsis;}
+  .wcl-tag.none{color:var(--mutedFaint);font-weight:500;}
   /* Tarjetas de Direcciones */
   .dir-card.card{cursor:pointer;display:flex;gap:16px;align-items:flex-start;padding:18px;border-radius:14px;box-shadow:0 1px 2px rgba(27,58,107,.05),0 6px 18px rgba(27,58,107,.05);transition:border-color .14s,box-shadow .14s,transform .14s;}
   .dir-card.card:hover{border-color:color-mix(in srgb,var(--primary) 45%,var(--border));box-shadow:0 2px 4px rgba(27,58,107,.06),0 12px 28px rgba(27,58,107,.1);transform:translateY(-1px);}
@@ -1860,11 +1867,130 @@ function whClientesViewCardHtml(w){
   const chips = clients.slice(0, 14).map(c => `<span class="ct-chip" style="--cc:#5C6670;"><i></i>${esc(c.nombreComercial || c.nombre)}</span>`).join('');
   return `
     <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:16px;">
-      ${decaCardHead('users', `Clientes asignados (${clients.length})`, 'Se asignan desde Clientes, en la ficha de cada cliente')}
+      ${decaCardHead('users', `Clientes asignados (${clients.length})`, 'Los clientes de almacén que trabajan en este almacén', `<button class="btn btn-primary" onclick="openWarehouseClientesModal('${w.id}')">${homeIcon(HOME_ICON_PATHS.users, 15, 'currentColor', 2)}<span>Asignar clientes</span></button>`)}
       <div class="deca-card-body">
-        ${clients.length ? `<div class="ct-chips" style="margin-top:0;">${chips}${clients.length > 14 ? `<span class="ct-chip" style="--cc:#5C6670;">+${clients.length - 14} más</span>` : ''}</div>` : `<div style="color:var(--mutedFaint);font-size:13px;">Todavía no tiene ningún cliente asignado.</div>`}
+        ${clients.length ? `<div class="ct-chips" style="margin-top:0;">${chips}${clients.length > 14 ? `<span class="ct-chip" style="--cc:#5C6670;">+${clients.length - 14} más</span>` : ''}</div>` : `<div style="color:var(--mutedFaint);font-size:13px;">Todavía no tiene ningún cliente asignado. Pulsa «Asignar clientes» para elegirlos.</div>`}
       </div>
     </div>`;
+}
+/* ---- Asignar clientes a un almacén (desde Configuración → ficha del almacén) ----
+   Lista de los clientes de almacén con casilla; al guardar solo se añaden o quitan los que han
+   cambiado (igual que al asignar almacenes desde la ficha de un cliente) y queda anotado en el
+   historial del almacén y en el de cada cliente afectado. */
+function whClientesCandidates(){
+  return contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => (a.nombreComercial || a.nombre).localeCompare(b.nombreComercial || b.nombre, 'es'));
+}
+function openWarehouseClientesModal(whId){
+  const w = allWarehouses.find(x => x.id === whId);
+  if (!w) return;
+  window.__whClId = whId;
+  window.__whClSearch = '';
+  window.__whClDraft = new Set(whClientesCandidates().filter(c => (c.warehouseIds || []).includes(whId)).map(c => c.id));
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:560px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.users, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;">
+            <div class="deca-banner-title" style="font-size:19px;">Clientes de ${esc(w.name)}</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">Marca los clientes que trabajan en este almacén</div>
+          </div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
+            <div class="deca-search" style="max-width:none;">
+              <input id="wcl-search" placeholder="Buscar cliente por nombre o NIF…" oninput="window.__whClSearch=this.value; refreshWhClientesList();" />
+              <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
+            </div>
+            <span id="wcl-count" style="font-size:12.5px;color:var(--muted);white-space:nowrap;"></span>
+          </div>
+          <div id="wcl-list" class="wcl-list"></div>
+          <div id="wcl-error" style="color:var(--danger);font-size:12.5px;margin:10px 0 0;"></div>
+          <div style="display:flex;gap:10px;margin-top:14px;">
+            <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary deca-submit wcl-save-btn" onclick="saveWarehouseClientes('${whId}')">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  refreshWhClientesList();
+  setTimeout(() => { const el = document.getElementById('wcl-search'); if (el) el.focus(); }, 0);
+}
+function refreshWhClientesList(){
+  const el = document.getElementById('wcl-list');
+  if (!el) return;
+  const q = (window.__whClSearch || '').trim().toLowerCase();
+  const whId = window.__whClId;
+  const list = whClientesCandidates().filter(c => !q || c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q));
+  el.innerHTML = list.length ? list.map(c => {
+    const otros = (c.warehouseIds || []).filter(id => id !== whId).map(id => (WAREHOUSES.find(x => x.id === id) || {}).name).filter(Boolean);
+    const titulo = (c.nombreComercial || '').trim() || c.nombre;
+    const sub = [(c.nombreComercial || '').trim() ? c.nombre : '', c.nif].filter(Boolean).join(' · ');
+    return `
+      <label class="wcl-row">
+        <input type="checkbox" ${window.__whClDraft.has(c.id) ? 'checked' : ''} onchange="whClientesToggle('${c.id}', this.checked)" />
+        <div style="min-width:0;flex:1;">
+          <div style="font-size:13.5px;font-weight:700;overflow-wrap:anywhere;">${esc(titulo)}</div>
+          ${sub ? `<div style="font-size:11.5px;color:var(--mutedFaint);overflow-wrap:anywhere;">${esc(sub)}</div>` : ''}
+        </div>
+        <span class="wcl-tag${otros.length ? '' : ' none'}">${otros.length ? 'También en ' + esc(otros.join(', ')) : 'Sin otro almacén'}</span>
+      </label>`;
+  }).join('') : `<div style="color:var(--mutedFaint);font-size:13px;text-align:center;padding:18px;">${q ? 'Ningún cliente coincide con la búsqueda.' : 'Todavía no hay clientes de almacén. Créalos en Almacén → Clientes.'}</div>`;
+  whClientesUpdateCount();
+}
+function whClientesUpdateCount(){
+  const el = document.getElementById('wcl-count');
+  if (el) el.textContent = `${window.__whClDraft.size} seleccionado${window.__whClDraft.size !== 1 ? 's' : ''}`;
+}
+function whClientesToggle(id, on){
+  if (on) window.__whClDraft.add(id); else window.__whClDraft.delete(id);
+  whClientesUpdateCount();
+}
+async function saveWarehouseClientes(whId){
+  const w = allWarehouses.find(x => x.id === whId);
+  const errEl = document.getElementById('wcl-error');
+  if (!w) return;
+  if (errEl) errEl.textContent = '';
+  const cands = whClientesCandidates();
+  const before = new Set(cands.filter(c => (c.warehouseIds || []).includes(whId)).map(c => c.id));
+  const draft = window.__whClDraft;
+  const added = [...draft].filter(id => !before.has(id));
+  const removed = [...before].filter(id => !draft.has(id));
+  if (!added.length && !removed.length) { closeModal(); return; }
+  const btns = [...document.querySelectorAll('.wcl-save-btn')];
+  btns.forEach(b => b.disabled = true);
+  try {
+    if (removed.length) {
+      const { error } = await supabaseClient.from('contacto_warehouses').delete().eq('warehouse_id', whId).in('contacto_id', removed);
+      if (error) throw error;
+    }
+    if (added.length) {
+      const { error } = await supabaseClient.from('contacto_warehouses').insert(added.map(id => ({ contacto_id: id, warehouse_id: whId })));
+      if (error) throw error;
+    }
+    const nombre = id => { const c = contactos.find(x => x.id === id); return c ? ((c.nombreComercial || '').trim() || c.nombre) : '—'; };
+    added.forEach(id => { const c = contactos.find(x => x.id === id); if (c) c.warehouseIds = [...new Set([...(c.warehouseIds || []), whId])]; });
+    removed.forEach(id => { const c = contactos.find(x => x.id === id); if (c) c.warehouseIds = (c.warehouseIds || []).filter(x => x !== whId); });
+    // Historial: en el de cada cliente (su lista de almacenes completa) y en el del almacén.
+    for (const id of [...added, ...removed]) {
+      const c = contactos.find(x => x.id === id);
+      const names = ((c && c.warehouseIds) || []).map(wid => (WAREHOUSES.find(x => x.id === wid) || {}).name).filter(Boolean).join(', ') || 'ninguno';
+      await logContactoHistorial(id, `Almacenes asignados: ${names}`);
+    }
+    const lines = [];
+    if (added.length) lines.push(`Clientes añadidos: ${added.map(nombre).join(', ')}`);
+    if (removed.length) lines.push(`Clientes quitados: ${removed.map(nombre).join(', ')}`);
+    await logWarehouseHistorial(whId, lines.join('\n'));
+    window.__whHistorial = warehouseHistorialCache[whId] || window.__whHistorial;
+    await loadClients();
+    closeModal();
+    renderTab();
+    appToast(`Clientes de ${w.name} actualizados.`, 'ok');
+  } catch (err) {
+    if (errEl) errEl.textContent = 'No se pudo guardar: ' + (err && err.message ? err.message : 'error desconocido.');
+    btns.forEach(b => b.disabled = false);
+  }
 }
 function tplWarehouseFormPage(){
   const editId = window.__whFormId;
