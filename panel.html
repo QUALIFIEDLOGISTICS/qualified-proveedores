@@ -7950,13 +7950,20 @@ function almacenajeCategoriaBadgeHtml(cat){
 // ordenado según se vayan añadiendo más "extras" con el tiempo. Solo se
 // ofrecen los productos activos (un archivado no se puede elegir de nuevo,
 // pero las tarifas que ya lo usaban lo siguen mostrando bien).
+// Texto de un producto en los desplegables: "Palet · Europeo". Si hay varios con el mismo nombre
+// (p. ej. dos "Palet"), el que no lleva subtipo definido se marca como "sin subtipo definido" para distinguirlos.
+function almacenajeProductoTexto(p){
+  if (p.usaSubtipo && p.subtipoValor) return `${p.nombre} · ${p.subtipoValor}`;
+  const repetido = almacenajeProductos.some(x => x.id !== p.id && x.nombre.trim().toLowerCase() === p.nombre.trim().toLowerCase());
+  return repetido ? `${p.nombre} · sin subtipo definido` : p.nombre;
+}
 function almacenajeTipoOptionsHtml(selected){
   const activos = almacenajeProductos.filter(p => !p.archived || p.id === selected);
   return Object.keys(ALMACENAJE_CATEGORIAS).map(cat => {
-    const deEstaCategoria = activos.filter(p=>p.categoria===cat);
+    const deEstaCategoria = activos.filter(p=>p.categoria===cat).sort((a, b) => almacenajeProductoTexto(a).localeCompare(almacenajeProductoTexto(b), 'es'));
     if (!deEstaCategoria.length) return '';
     return `<optgroup label="${esc(ALMACENAJE_CATEGORIAS[cat])}">
-      ${deEstaCategoria.map(p=>`<option value="${p.id}" ${p.id===selected?'selected':''}>${esc(p.nombre)}</option>`).join('')}
+      ${deEstaCategoria.map(p=>`<option value="${p.id}" ${p.id===selected?'selected':''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}
     </optgroup>`;
   }).join('');
 }
@@ -8018,6 +8025,10 @@ async function submitAlmacenajeProducto(editId){
   const subtipoValor = (document.getElementById('ap-subtipolabel').value || '').trim();
   const usaSubtipo = !!subtipoValor; // lleva subtipo si se ha escrito
   if (!nombre) { appToast('Ponle un nombre al producto.'); return; }
+  // Dos productos no pueden llamarse igual y tener el mismo subtipo (saldrían idénticos al elegirlos en una tarifa).
+  const clave = (n, s) => `${n.trim().toLowerCase()}|${(s || '').trim().toLowerCase()}`;
+  const repetido = almacenajeProductos.find(p => p.id !== editId && clave(p.nombre, p.subtipoValor) === clave(nombre, subtipoValor));
+  if (repetido) { appToast(`Ya existe «${almacenajeProductoTexto(repetido)}»${repetido.archived ? ' (archivado)' : ''}. Cambia el nombre o el subtipo para distinguirlos.`); return; }
   const editing = editId ? almacenajeProducto(editId) : null;
   // El subtipo del producto es su valor fijo; también se guarda como etiqueta para los textos que la usan.
   const row = { nombre, categoria, unidad, usa_subtipo: usaSubtipo, subtipo_label: usaSubtipo ? subtipoValor : null, subtipo_valor: usaSubtipo ? subtipoValor : null };
