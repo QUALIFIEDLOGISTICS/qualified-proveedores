@@ -8235,6 +8235,7 @@ function almacenajeConfirmLeaveForm(){
   return true;
 }
 function openAlmacenajeTarifaForm(clienteId){
+  window.__almacenajeEditar = false;
   window.__almacenajeFormClienteId = clienteId;
   window.__almacenajeFormDirty = false;
   window.__almacenajeN = 0;
@@ -8296,24 +8297,49 @@ function almacenajeFilaFechaChange(i){
   });
   window.__almacenajeFormDirty = true;
 }
-function almacenajeFilaRowHtml(i){
+function almacenajeFilaRowHtml(i, preset){
+  const precioTxt = preset ? String(preset.precio).replace('.', ',') : '';
   return `
-    <tr class="af-row" data-i="${i}">
+    <tr class="af-row" data-i="${i}"${preset ? ` data-id="${esc(preset.id)}"` : ''}>
       <td style="padding:5px 4px;color:var(--mutedFaint);font-size:12px;text-align:right;width:26px;">${i+1}</td>
-      <td style="padding:5px 4px;min-width:135px;"><input id="af-${i}-fecha" type="date" value="${almacenajeFechaFilaPrevia()}" onchange="almacenajeFilaFechaChange(${i})" /></td>
-      <td style="padding:5px 4px;min-width:170px;"><select id="af-${i}-tipo" onchange="almacenajeFilaTipoChange(${i})">${almacenajeTipoOptionsHtml('palet')}</select></td>
-      <td id="af-${i}-actividad" style="padding:5px 4px;">${almacenajeCategoriaBadgeHtml(almacenajeCategoriaDe('palet'))}</td>
+      <td style="padding:5px 4px;min-width:135px;"><input id="af-${i}-fecha" type="date" value="${preset ? esc(preset.fecha) : almacenajeFechaFilaPrevia()}" onchange="almacenajeFilaFechaChange(${i})" /></td>
+      <td style="padding:5px 4px;min-width:170px;"><select id="af-${i}-tipo" onchange="almacenajeFilaTipoChange(${i})">${almacenajeTipoOptionsHtml(preset ? preset.tipo : 'palet')}</select></td>
+      <td id="af-${i}-actividad" style="padding:5px 4px;">${almacenajeCategoriaBadgeHtml(almacenajeCategoriaDe(preset ? preset.tipo : 'palet'))}</td>
       <td style="padding:5px 4px;min-width:160px;"><input id="af-${i}-subtipo" maxlength="60" data-combo="af-subtipos" autocomplete="off" placeholder="Ej. Europeo" oninput="window.__almacenajeFormDirty=true;" /></td>
-      <td style="padding:5px 4px;min-width:110px;"><input id="af-${i}-precio" inputmode="decimal" maxlength="10" placeholder="Precio €" /></td>
-      <td style="padding:5px 4px;min-width:200px;"><input id="af-${i}-obs" maxlength="250" placeholder="Observaciones (opcional)" onkeydown="if(event.key==='Enter'){ event.preventDefault(); almacenajeFilaAddRow(true); }" /></td>
+      <td style="padding:5px 4px;min-width:110px;"><input id="af-${i}-precio" inputmode="decimal" maxlength="10" placeholder="Precio €" value="${esc(precioTxt)}" /></td>
+      <td style="padding:5px 4px;min-width:200px;"><input id="af-${i}-obs" maxlength="250" placeholder="Observaciones (opcional)" value="${preset ? esc(preset.observaciones || '') : ''}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); almacenajeFilaAddRow(true); }" /></td>
       <td style="padding:5px 0 5px 4px;"><button type="button" onclick="almacenajeFilaRemoveRow(${i})" title="Quitar fila" style="background:none;border:none;color:var(--mutedFaint);font-size:15px;">✕</button></td>
     </tr>`;
 }
-function almacenajeFilaAddRow(focus){
+// preset: una línea existente (modo "Editar tarifa"): la fila sale con sus datos y su fecha no se pisa.
+function almacenajeFilaAddRow(focus, preset){
   const i = window.__almacenajeN++;
-  document.getElementById('af-rows').insertAdjacentHTML('beforeend', almacenajeFilaRowHtml(i));
-  const dirtyAntes = window.__almacenajeFormDirty; almacenajeFilaTipoChange(i); window.__almacenajeFormDirty = dirtyAntes;
+  document.getElementById('af-rows').insertAdjacentHTML('beforeend', almacenajeFilaRowHtml(i, preset));
+  const dirtyAntes = window.__almacenajeFormDirty;
+  if (preset) {
+    const tr = document.querySelector(`.af-row[data-i="${i}"]`);
+    tr.dataset.fechaManual = '1';
+    document.getElementById(`af-${i}-tipo`).value = preset.tipo;
+    almacenajeFilaTipoChange(i);
+    const sub = document.getElementById(`af-${i}-subtipo`);
+    if (!sub.readOnly && !sub.disabled) sub.value = preset.subtipo || '';
+  } else almacenajeFilaTipoChange(i);
+  window.__almacenajeFormDirty = dirtyAntes;
   if (focus) document.getElementById(`af-${i}-tipo`).focus();
+}
+// "Editar tarifa": la misma pantalla que al crear, con todas las líneas vigentes del cliente ya
+// escritas para corregirlas de golpe, quitar las que sobren o añadir otras debajo.
+function openAlmacenajeTarifaEditar(clienteId){
+  window.__almacenajeFormClienteId = clienteId;
+  window.__almacenajeFormDirty = false;
+  window.__almacenajeEditar = true;
+  window.__almacenajeN = 0;
+  const vigentes = almacenajePeriodos(almacenajeTarifas.filter(t => t.clienteId === clienteId)).filter(t => t.vigente).sort(almacenajeOrdenDefecto);
+  window.__almacenajeOrigIds = vigentes.map(t => t.id);
+  renderTab();
+  vigentes.forEach(t => almacenajeFilaAddRow(false, t));
+  if (!vigentes.length) almacenajeFilaAddRow(false);
+  window.scrollTo(0, 0);
 }
 function almacenajeFilaRemoveRow(i){
   const row = document.querySelector(`.af-row[data-i="${i}"]`);
@@ -8327,13 +8353,13 @@ function tplAlmacenajeTarifaFormPage(c){
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.file, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
-        <div class="deca-banner-title">Nueva tarifa de almacenaje</div>
-        <div class="deca-banner-sub">${esc(nombre)} · una fila por línea; con Intro en observaciones se añade otra fila.</div>
+        <div class="deca-banner-title">${window.__almacenajeEditar ? 'Editar tarifa de almacenaje' : 'Nueva tarifa de almacenaje'}</div>
+        <div class="deca-banner-sub">${esc(nombre)} · ${window.__almacenajeEditar ? 'corrige las líneas vigentes, quita las que sobren o añade otras debajo.' : 'una fila por línea; con Intro en observaciones se añade otra fila.'}</div>
       </div>
     </div>
     <div class="deca-form" oninput="window.__almacenajeFormDirty=true;" onchange="window.__almacenajeFormDirty=true;" style="--dc-accent:var(--primary);">
       <div class="card deca-card">
-        ${decaCardHead('list', 'Líneas de tarifa', 'Se pueden apuntar varias de golpe; se guardan todas juntas')}
+        ${decaCardHead('list', window.__almacenajeEditar ? 'Líneas vigentes' : 'Líneas de tarifa', window.__almacenajeEditar ? 'Para un precio nuevo desde una fecha, añade una fila nueva del mismo producto con su fecha: la anterior pasa sola al histórico' : 'Se pueden apuntar varias de golpe; se guardan todas juntas')}
         <div class="deca-card-body">
           <datalist id="af-subtipos">${almacenajeSubtiposDatalistHtml()}</datalist>
           <div style="overflow-x:auto;">
@@ -8360,7 +8386,7 @@ function tplAlmacenajeTarifaFormPage(c){
       <div id="af-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
       <div class="deca-actions-row">
         <button class="btn btn-ghost deca-cancel" onclick="backFromAlmacenajeForm()">Cancelar</button>
-        <button class="btn btn-primary af-submit-btn deca-submit" onclick="submitAlmacenajeTarifaForm()">Guardar tarifas</button>
+        <button class="btn btn-primary af-submit-btn deca-submit" onclick="submitAlmacenajeTarifaForm()">${window.__almacenajeEditar ? 'Guardar cambios' : 'Guardar tarifas'}</button>
       </div>
     </div>
     </div>`;
@@ -8369,41 +8395,81 @@ async function submitAlmacenajeTarifaForm(){
   const errEl = document.getElementById('af-error');
   errEl.textContent = '';
   const clienteId = window.__almacenajeFormClienteId;
-  const filas = [];
+  const editar = !!window.__almacenajeEditar;
+  const nuevas = [];       // filas sin id: altas
+  const cambios = [];      // filas de líneas existentes que han cambiado: correcciones
+  const presentes = new Set();
   const errores = [];
   [...document.querySelectorAll('.af-row')].forEach((tr, n) => {
     const i = tr.dataset.i;
-    const v = id => (document.getElementById(`af-${i}-${id}`) || {}).value || '';
+    const id = tr.dataset.id || '';
+    const v = k => (document.getElementById(`af-${i}-${k}`) || {}).value || '';
     const tipo = v('tipo'), subtipo = v('subtipo').trim(), fecha = v('fecha'), precioTxt = v('precio').trim(), obs = v('obs').trim();
-    if (!precioTxt && !obs && !subtipo) return; // fila vacía
+    if (id) presentes.add(id);
+    if (!id && !precioTxt && !obs && !subtipo) return; // fila nueva vacía
     const nombreFila = `Fila ${n + 1}`;
     if (almacenajeUsaSubtipo(tipo) && !subtipo) { errores.push(`${nombreFila}: indica ${almacenajeSubtipoLabel(tipo).toLowerCase()}.`); return; }
     if (!fecha) { errores.push(`${nombreFila}: indica la fecha.`); return; }
     const precio = Number(precioTxt.replace(',', '.'));
     if (!precioTxt || !isFinite(precio) || precio < 0) { errores.push(`${nombreFila}: indica el precio.`); return; }
-    filas.push({ cliente_id: clienteId, fecha, tipo, subtipo: subtipo || null, precio, observaciones: obs || null, tipo_actividad: almacenajeCategoriaDe(tipo) });
+    const payload = { fecha, tipo, subtipo: subtipo || null, precio, observaciones: obs || null, tipo_actividad: almacenajeCategoriaDe(tipo) };
+    if (!id) { nuevas.push({ cliente_id: clienteId, ...payload }); return; }
+    const antes = almacenajeTarifas.find(t => t.id === id);
+    if (!antes) return;
+    const igual = antes.fecha === fecha && antes.tipo === tipo && (antes.subtipo || '') === subtipo && Number(antes.precio) === precio && (antes.observaciones || '') === obs;
+    if (!igual) cambios.push({ id, payload, antes });
   });
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
-  if (!filas.length) { errEl.textContent = 'Añade al menos una línea con su precio.'; return; }
+  const eliminar = editar ? (window.__almacenajeOrigIds || []).filter(id => !presentes.has(id) && almacenajeTarifas.some(t => t.id === id)) : [];
+  if (!nuevas.length && !cambios.length && !eliminar.length) {
+    if (editar) { window.__almacenajeFormDirty = false; window.__almacenajeFormClienteId = null; window.__almacenajeEditar = false; renderTab(); return; }
+    errEl.textContent = 'Añade al menos una línea con su precio.'; return;
+  }
+  if (eliminar.length) {
+    const nombres = eliminar.map(id => almacenajeEtiqueta(almacenajeTarifas.find(t => t.id === id)));
+    if (!(await appConfirm({ title: `Eliminar ${eliminar.length === 1 ? 'una línea' : eliminar.length + ' líneas'}`, name: nombres.join(' · '), message: 'Has quitado estas filas de la tarifa: se eliminarán al guardar.', confirmLabel: 'Guardar y eliminar', tone: 'danger', icon: 'trash' }))) return;
+  }
   const btns = [...document.querySelectorAll('.af-submit-btn')];
   btns.forEach(b => b.disabled = true);
-  const { data, error } = await supabaseClient.from('almacenaje_tarifas').insert(filas.map(f => ({ ...f, created_by: currentUserEmail() }))).select();
-  if (error || !data) {
-    errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'error desconocido.');
-    btns.forEach(b => b.disabled = false);
-    return;
+  const fallo = msg => { errEl.textContent = 'No se pudo guardar: ' + msg; btns.forEach(b => b.disabled = false); };
+  const resumen = [];
+  // 1) Correcciones de las líneas existentes
+  for (const c of cambios) {
+    const { error } = await supabaseClient.from('almacenaje_tarifas').update(c.payload).eq('id', c.id);
+    if (error) { fallo(error.message || 'error desconocido.'); return; }
+    const etiq = c.payload.subtipo ? `${almacenajeTipoLabel(c.payload.tipo)} ${c.payload.subtipo}` : almacenajeTipoLabel(c.payload.tipo);
+    const dif = [];
+    if (Number(c.antes.precio) !== c.payload.precio) dif.push(`precio de ${eur2(c.antes.precio)} a ${eur2(c.payload.precio)}${almacenajeUnidadTxt(c.payload.tipo)}`);
+    if (c.antes.fecha !== c.payload.fecha) dif.push(`fecha de ${fmtDateDMY(c.antes.fecha)} a ${fmtDateDMY(c.payload.fecha)}`);
+    if (c.antes.tipo !== c.payload.tipo || (c.antes.subtipo || '') !== (c.payload.subtipo || '')) dif.push(`producto de ${almacenajeEtiqueta(c.antes)} a ${etiq}`);
+    if ((c.antes.observaciones || '') !== (c.payload.observaciones || '')) dif.push('observaciones');
+    Object.assign(c.antes, { fecha: c.payload.fecha, tipo: c.payload.tipo, subtipo: c.payload.subtipo || '', precio: c.payload.precio, observaciones: c.payload.observaciones || '', categoria: c.payload.tipo_actividad });
+    resumen.push(`ha corregido la línea ${etiq}: ${dif.join(', ') || 'sin cambios de precio'}.`);
   }
-  data.forEach(row => almacenajeTarifas.push({
-    id: row.id, createdAt: row.created_at, clienteId: row.cliente_id, fecha: row.fecha, tipo: row.tipo,
-    subtipo: row.subtipo || '', precio: Number(row.precio), observaciones: row.observaciones || '', categoria: row.tipo_actividad || almacenajeCategoriaDe(row.tipo),
-  }));
-  const resumen = filas.map(f => {
-    const etiqueta = f.subtipo ? `${almacenajeTipoLabel(f.tipo)} ${f.subtipo}` : almacenajeTipoLabel(f.tipo);
-    return `ha añadido la línea ${etiqueta} a ${eur2(f.precio)}${almacenajeUnidadTxt(f.tipo)}, vigente desde el ${fmtDateDMY(f.fecha)}.`;
-  }).join('\n');
-  await logAlmacenajeHistorial(clienteId, resumen);
+  // 2) Líneas quitadas
+  if (eliminar.length) {
+    const { error } = await supabaseClient.from('almacenaje_tarifas').delete().in('id', eliminar);
+    if (error) { fallo(error.message || 'error desconocido.'); return; }
+    eliminar.forEach(id => { const t = almacenajeTarifas.find(x => x.id === id); if (t) resumen.push(`ha eliminado la línea ${almacenajeEtiqueta(t)}.`); });
+    almacenajeTarifas = almacenajeTarifas.filter(t => !eliminar.includes(t.id));
+  }
+  // 3) Líneas nuevas
+  if (nuevas.length) {
+    const { data, error } = await supabaseClient.from('almacenaje_tarifas').insert(nuevas.map(f => ({ ...f, created_by: currentUserEmail() }))).select();
+    if (error || !data) { fallo(error && error.message ? error.message : 'error desconocido.'); return; }
+    data.forEach(row => almacenajeTarifas.push({
+      id: row.id, createdAt: row.created_at, clienteId: row.cliente_id, fecha: row.fecha, tipo: row.tipo,
+      subtipo: row.subtipo || '', precio: Number(row.precio), observaciones: row.observaciones || '', categoria: row.tipo_actividad || almacenajeCategoriaDe(row.tipo),
+    }));
+    nuevas.forEach(f => {
+      const etiqueta = f.subtipo ? `${almacenajeTipoLabel(f.tipo)} ${f.subtipo}` : almacenajeTipoLabel(f.tipo);
+      resumen.push(`ha añadido la línea ${etiqueta} a ${eur2(f.precio)}${almacenajeUnidadTxt(f.tipo)}, vigente desde el ${fmtDateDMY(f.fecha)}.`);
+    });
+  }
+  await logAlmacenajeHistorial(clienteId, resumen.join('\n'));
   window.__almacenajeFormDirty = false;
   window.__almacenajeFormClienteId = null;
+  window.__almacenajeEditar = false;
   renderTab();
 }
 async function deleteAlmacenajeTarifa(id){
@@ -8420,11 +8486,14 @@ function tplAlmacenajeTarifasCard(c){
   const vigentes = almacenajePeriodos(almacenajeTarifas.filter(t=>t.clienteId===c.id)).filter(t=>t.vigente).sort(almacenajeOrdenDefecto);
   return `
     <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:20px;">
-      ${decaCardHead('file', `Tarifa de almacenaje (${vigentes.length})`, 'Lo pactado con este cliente por almacenaje y movimientos. Puede combinar varios tipos a la vez.', `<button class="btn btn-primary" onclick="openAlmacenajeTarifaForm('${c.id}')">+ Añadir línea</button>`)}
+      ${decaCardHead('file', `Tarifa de almacenaje (${vigentes.length})`, 'Lo pactado con este cliente por almacenaje y movimientos. Puede combinar varios tipos a la vez.', `<div style="display:flex;gap:8px;flex-wrap:wrap;">
+        ${vigentes.length ? `<button class="btn btn-ghost" style="background:var(--panel);padding:10px 18px;font-size:13.5px;" onclick="openAlmacenajeTarifaEditar('${c.id}')" title="Corregir de golpe todas las líneas, quitar las que sobren o añadir otras">${homeIcon(HOME_ICON_PATHS.edit, 16, 'currentColor', 2)}<span>Editar tarifa</span></button>` : ''}
+        <button class="btn btn-primary" style="padding:10px 18px;font-size:13.5px;" onclick="openAlmacenajeTarifaForm('${c.id}')">+ Añadir línea</button>
+      </div>`)}
       ${vigentes.length ? `
       <div style="overflow-x:auto;">
       <table class="tf-table">
-        <thead><tr>${thSort('Actividad','text')}${thSort('Tipo','text')}${thSort('Precio','number','style="text-align:right;"')}${thSort('Vigente desde','date')}${thSort('Observaciones','text')}<th>Acciones</th></tr></thead>
+        <thead><tr>${thSort('Actividad','text')}${thSort('Tipo','text')}${thSort('Precio','number','style="text-align:right;"')}${thSort('Vigente desde','date')}${thSort('Observaciones','text')}</tr></thead>
         <tbody>
           ${vigentes.map(t => `
             <tr>
@@ -8433,10 +8502,6 @@ function tplAlmacenajeTarifasCard(c){
               <td class="tf-precio" data-sort-value="${t.precio}">${esc(almacenajePrecioTxt(t))}</td>
               <td style="white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
               <td style="color:var(--muted);" data-sort-value="${esc(t.observaciones)}">${t.observaciones ? esc(t.observaciones) : '—'}</td>
-              <td style="white-space:nowrap;">
-                <button class="deca-act" onclick="openAlmacenajeTarifaModal('${c.id}', '${t.id}')" title="Editar">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
-                <button class="deca-act danger" onclick="deleteAlmacenajeTarifa('${t.id}')" title="Eliminar">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>
-              </td>
             </tr>`).join('')}
         </tbody>
       </table>
