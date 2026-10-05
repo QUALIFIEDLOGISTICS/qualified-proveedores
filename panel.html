@@ -7976,16 +7976,39 @@ function almacenajeProductoSlug(nombre){
   while (almacenajeProductos.some(p => p.id === id)) id = `${base}_${n++}`;
   return id;
 }
-function openAlmacenajeProductoForm(editId){
+// Mismo orden que la lista de Productos (por actividad y luego por nombre): también el de las flechas de la ficha.
+function almacenajeProductosOrdenados(){
+  return almacenajeProductos.slice().sort((a, b) => {
+    const oa = ALMACENAJE_CATEGORIA_ORDEN[a.categoria] ?? 9;
+    const ob = ALMACENAJE_CATEGORIA_ORDEN[b.categoria] ?? 9;
+    return oa !== ob ? oa - ob : a.nombre.localeCompare(b.nombre, 'es');
+  });
+}
+function openAlmacenajeProductoForm(editId, keepNav){
+  if (!keepNav) window.__apNavIds = almacenajeProductosOrdenados().map(p => p.id);
   window.__apView = 'form';
   window.__apFormId = editId || null;
+  window.__apFormDirty = false;
   renderTab();
   window.scrollTo(0, 0);
   if (!editId) setTimeout(() => { const el = document.getElementById('ap-nombre'); if (el) el.focus(); }, 0);
 }
+function almacenajeProductoConfirmLeave(){
+  if (window.__apView === 'form' && window.__apFormDirty) return leaveGuard();
+  return true;
+}
+// Flechas de la ficha de un producto: anterior / siguiente de la lista.
+function almacenajeProductoNavGoto(offset){
+  const ids = window.__apNavIds || [];
+  const idx = ids.indexOf(window.__apFormId);
+  if (idx === -1 || !ids.length) return;
+  if (!almacenajeProductoConfirmLeave()) return;
+  openAlmacenajeProductoForm(ids[(idx + offset + ids.length) % ids.length], true);
+}
 function backToAlmacenajeProductos(){
   window.__apView = 'list';
   window.__apFormId = null;
+  window.__apFormDirty = false;
   renderTab();
 }
 function almacenajeProductoFormToggleSubtipo(){
@@ -8026,11 +8049,7 @@ async function setAlmacenajeProductoArchived(id, archived){
   renderTab();
 }
 function tplAlmacenajeProductosPage(){
-  const list = almacenajeProductos.slice().sort((a, b) => {
-    const oa = ALMACENAJE_CATEGORIA_ORDEN[a.categoria] ?? 9;
-    const ob = ALMACENAJE_CATEGORIA_ORDEN[b.categoria] ?? 9;
-    return oa !== ob ? oa - ob : a.nombre.localeCompare(b.nombre, 'es');
-  });
+  const list = almacenajeProductosOrdenados();
   const activos = list.filter(p => !p.archived).length;
   return `
     <div style="--bn-accent:var(--primary);">
@@ -8081,9 +8100,17 @@ function tplAlmacenajeProductoFormPage(){
         <div class="deca-banner-title">${editing ? esc(editing.nombre) : 'Nuevo producto'}</div>
         <div class="deca-banner-sub">Un concepto tarifable en Almacenaje (p. ej. Palet, M², Retractilado…).</div>
       </div>
-      ${editing ? `<div class="deca-banner-actions"><button class="btn btn-ghost" style="background:var(--panel);" onclick="setAlmacenajeProductoArchived('${editing.id}', ${!editing.archived})">${editing.archived?'Activar':'Archivar'}</button></div>` : ''}
+      ${editing ? (() => {
+        const ids = window.__apNavIds || [];
+        const idx = ids.indexOf(editing.id);
+        const arrow = (offset, title, ch) => `<button onclick="almacenajeProductoNavGoto(${offset})" title="${title}" style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 11px;cursor:pointer;color:var(--muted);font-size:13px;">${ch}</button>`;
+        return `<div class="deca-banner-actions">
+          ${idx > -1 && ids.length > 1 ? `<div style="display:flex;align-items:center;gap:4px;">${arrow(-1, 'Producto anterior', '←')}<span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${idx + 1}/${ids.length}</span>${arrow(1, 'Producto siguiente', '→')}</div>` : ''}
+          <button class="btn btn-ghost" style="background:var(--panel);" onclick="setAlmacenajeProductoArchived('${editing.id}', ${!editing.archived})">${editing.archived?'Activar':'Archivar'}</button>
+        </div>`;
+      })() : ''}
     </div>
-    <div class="deca-form" style="max-width:640px;--dc-accent:var(--primary);">
+    <div class="deca-form" oninput="window.__apFormDirty=true;" onchange="window.__apFormDirty=true;" style="max-width:640px;--dc-accent:var(--primary);">
       <div class="card deca-card">
         ${decaCardHead('tag', 'Datos del producto', 'Cómo se llama y cómo se cobra')}
         <div class="deca-card-body">
@@ -13871,7 +13898,7 @@ function leaveGuard(){
  'contactoNavGoto', 'closeContactoDetail', 'setContactoDetailTab', 'exitContactoEditMode', 'newContactoFromContext',
  'setTraficoSection', 'backToTraficoHome', 'setComercialSection', 'backFromAlmacenajeForm',
  'backToTarifas', 'backToComercialClientes', 'backToColabRutas', 'backToDecaList',
- 'backToAdminList', 'adminNavGoto', 'adminExitEdit'].forEach(name => {
+ 'backToAdminList', 'adminNavGoto', 'adminExitEdit', 'almacenajeProductoNavGoto'].forEach(name => {
   const orig = window[name];
   if (typeof orig !== 'function') return;
   window[name] = function(){
