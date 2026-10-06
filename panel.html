@@ -9129,11 +9129,56 @@ function almacenajeSubtipoAplicar(el, tipo, comboId){
     if (!usa) el.value = '';
   }
 }
+// Un producto (con su subtipo) solo puede estar una vez en la tarifa de un cliente: ni dos filas iguales
+// ni uno que el cliente ya tenga vigente (para cambiar su precio se usa «Editar tarifa»).
+function almacenajeClaveLinea(tipo, subtipo){ return `${tipo}|${String(subtipo || '').trim().toUpperCase()}`; }
+function almacenajeClavesUsadas(excluirI){
+  const claves = new Set();
+  if (!window.__almacenajeEditar) {
+    almacenajePeriodos(almacenajeTarifas.filter(t => t.clienteId === window.__almacenajeFormClienteId)).filter(t => t.vigente)
+      .forEach(t => claves.add(almacenajeClaveLinea(t.tipo, t.subtipo)));
+  }
+  document.querySelectorAll('.af-row').forEach(tr => {
+    if (tr.dataset.i === String(excluirI)) return;
+    const tipoEl = document.getElementById(`af-${tr.dataset.i}-tipo`);
+    if (!tipoEl) return;
+    const subEl = document.getElementById(`af-${tr.dataset.i}-subtipo`);
+    claves.add(almacenajeClaveLinea(tipoEl.value, subEl ? subEl.value : ''));
+  });
+  return claves;
+}
+// Producto sin subtipo libre: su clave es fija, así que se puede marcar como ya usado en el desplegable.
+function almacenajeClaveProducto(p){ return (p.usaSubtipo && !p.subtipoValor) ? null : almacenajeClaveLinea(p.id, p.usaSubtipo ? p.subtipoValor : ''); }
+function almacenajeActualizarOpciones(){
+  document.querySelectorAll('.af-row').forEach(tr => {
+    const sel = document.getElementById(`af-${tr.dataset.i}-tipo`);
+    if (!sel) return;
+    const usadas = almacenajeClavesUsadas(tr.dataset.i);
+    [...sel.options].forEach(op => {
+      const p = almacenajeProducto(op.value);
+      if (!p) return;
+      if (op.dataset.txt === undefined) op.dataset.txt = op.textContent;
+      const clave = almacenajeClaveProducto(p);
+      const ocupado = !!clave && usadas.has(clave) && op.value !== sel.value;
+      op.disabled = ocupado;
+      op.textContent = ocupado ? `${op.dataset.txt} — ya está en la tarifa` : op.dataset.txt;
+    });
+  });
+}
+// Una fila nueva arranca con el primer producto que todavía no está en la tarifa.
+function almacenajeElegirLibre(i){
+  const sel = document.getElementById(`af-${i}-tipo`);
+  if (!sel) return;
+  const usadas = almacenajeClavesUsadas(i);
+  const libre = [...sel.options].find(op => { const p = almacenajeProducto(op.value); const c = p && almacenajeClaveProducto(p); return !c || !usadas.has(c); });
+  if (libre) sel.value = libre.value;
+}
 function almacenajeFilaTipoChange(i){
   const tipo = document.getElementById(`af-${i}-tipo`).value;
   almacenajeSubtipoAplicar(document.getElementById(`af-${i}-subtipo`), tipo, 'af-subtipos');
   const actividadEl = document.getElementById(`af-${i}-actividad`);
   if (actividadEl) actividadEl.innerHTML = almacenajeCategoriaBadgeHtml(almacenajeCategoriaDe(tipo));
+  almacenajeActualizarOpciones();
   window.__almacenajeFormDirty = true;
 }
 // La fecha de una fila nueva es la de la fila de arriba (la primera empieza en hoy): así,
@@ -9187,7 +9232,8 @@ function almacenajeFilaAddRow(focus, preset){
     almacenajeFilaTipoChange(i);
     const sub = document.getElementById(`af-${i}-subtipo`);
     if (!sub.readOnly && !sub.disabled) sub.value = preset.subtipo || '';
-  } else almacenajeFilaTipoChange(i);
+    almacenajeActualizarOpciones();
+  } else { almacenajeElegirLibre(i); almacenajeFilaTipoChange(i); }
   window.__almacenajeFormDirty = dirtyAntes;
   if (focus) document.getElementById(`af-${i}-tipo`).focus();
 }
@@ -9208,7 +9254,7 @@ function openAlmacenajeTarifaEditar(clienteId, origen){
 }
 function almacenajeFilaRemoveRow(i){
   const row = document.querySelector(`.af-row[data-i="${i}"]`);
-  if (row && document.querySelectorAll('.af-row').length > 1) { row.remove(); window.__almacenajeFormDirty = true; }
+  if (row && document.querySelectorAll('.af-row').length > 1) { row.remove(); window.__almacenajeFormDirty = true; almacenajeActualizarOpciones(); }
 }
 function tplAlmacenajeTarifaFormPage(c){
   const nombre = (c.nombreComercial||'').trim() || c.nombre;
@@ -9266,13 +9312,15 @@ async function submitAlmacenajeTarifaForm(){
   const cambios = [];      // filas de líneas existentes que han cambiado: correcciones
   const presentes = new Set();
   const errores = [];
+  const clavesFilas = new Map();
+  const clavesVigentes = new Set(almacenajePeriodos(almacenajeTarifas.filter(t => t.clienteId === clienteId)).filter(t => t.vigente).map(t => almacenajeClaveLinea(t.tipo, t.subtipo)));
   [...document.querySelectorAll('.af-row')].forEach((tr, n) => {
     const i = tr.dataset.i;
     const id = tr.dataset.id || '';
     const v = k => (document.getElementById(`af-${i}-${k}`) || {}).value || '';
     const tipo = v('tipo'), subtipo = v('subtipo').trim(), fecha = v('fecha'), precioTxt = v('precio').trim(), minTxt = v('min').trim(), obs = v('obs').trim();
     if (id) presentes.add(id);
-    if (!id && !precioTxt && !obs && !subtipo) return; // fila nueva vacía
+    if (!id && !precioTxt && !obs && (!subtipo || almacenajeSubtipoFijo(tipo))) return; // fila nueva vacía (un subtipo fijo del producto no cuenta)
     const nombreFila = `Fila ${n + 1}`;
     if (almacenajeUsaSubtipo(tipo) && !subtipo) { errores.push(`${nombreFila}: indica ${almacenajeSubtipoLabel(tipo).toLowerCase()}.`); return; }
     if (!fecha) { errores.push(`${nombreFila}: indica la fecha.`); return; }
@@ -9280,6 +9328,11 @@ async function submitAlmacenajeTarifaForm(){
     const minimo = minTxt === '' ? null : Number(minTxt.replace(',', '.'));
     if (!precioTxt || !isFinite(precio) || precio < 0) { errores.push(`${nombreFila}: indica el precio.`); return; }
     if (minimo !== null && (!isFinite(minimo) || minimo < 0)) { errores.push(`${nombreFila}: el importe mínimo no es válido.`); return; }
+    const clave = almacenajeClaveLinea(tipo, subtipo);
+    const etiquetaFila = almacenajeEtiqueta({ tipo, subtipo });
+    if (clavesFilas.has(clave)) { errores.push(`${nombreFila}: «${etiquetaFila}» está repetido en la tarifa (ya está en la fila ${clavesFilas.get(clave)}).`); return; }
+    if (!editar && clavesVigentes.has(clave)) { errores.push(`${nombreFila}: «${etiquetaFila}» ya está en la tarifa de este cliente. Para cambiar su precio usa «Editar tarifa».`); return; }
+    clavesFilas.set(clave, n + 1);
     const payload = { fecha, tipo, subtipo: subtipo || null, precio, importe_minimo: minimo, observaciones: obs || null, tipo_actividad: almacenajeCategoriaDe(tipo) };
     if (!id) { nuevas.push({ cliente_id: clienteId, ...payload }); return; }
     const antes = almacenajeTarifas.find(t => t.id === id);
