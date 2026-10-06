@@ -237,6 +237,8 @@
   .ph-hint{margin-top:5px;}
   .ph-aud-list{display:flex;flex-direction:column;gap:6px;}
   .ph-aud-row{display:flex;align-items:center;gap:12px;padding:9px 12px;border:1px solid var(--border);border-radius:10px;background:var(--panel);}
+  .dc-relevo-row{border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-top:10px;background:var(--panel2);}
+  .dc-relevos-add{margin-top:10px;}
   input.af-locked,.deca-form input.af-locked{background:var(--panel2) !important;color:var(--text);cursor:not-allowed;font-weight:600;}
   .doc-seg button .cl-n{margin-left:4px;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--panel);color:var(--muted);}
   .doc-seg button.on .cl-n{background:rgba(255,255,255,.22);color:#fff;}
@@ -10841,7 +10843,7 @@ function refreshDecaListBody(){
 }
 function decaListBodyHtml(){
   const search = (window.__decaSearch || '').toLowerCase();
-  let list = decaDocuments.filter(d => !search || [d.codigo, d.cargadorNombre, d.transportistaNombre, d.origen, ...(d.origenesExtra||[]), d.destino, ...(d.destinosExtra||[]), d.matriculaTractora, d.matriculaRemolque].some(v => (v||'').toLowerCase().includes(search)));
+  let list = decaDocuments.filter(d => !search || [d.codigo, d.cargadorNombre, d.transportistaNombre, d.origen, ...(d.origenesExtra||[]), d.destino, ...(d.destinosExtra||[]), d.matriculaTractora, d.matriculaRemolque, ...(d.relevos||[]).map(r => r.matricula)].some(v => (v||'').toLowerCase().includes(search)));
   list = list.slice().sort((a,b) => (b.fechaTransporte||'').localeCompare(a.fechaTransporte||''));
   if (!list.length) {
     return `<div class="card deca-table-card"><div class="deca-empty"><span class="ico">${homeIcon(HOME_ICON_PATHS.file, 26, '#C1443D', 1.6)}</span><div style="font-size:14px;color:var(--text);font-weight:600;">${search ? 'Ningún DeCA coincide con la búsqueda' : 'Todavía no hay ningún DeCA creado'}</div><div style="font-size:12.5px;">${search ? 'Prueba con otro código, cliente, lugar o matrícula.' : 'Pulsa «Nuevo DeCA» para generar el primero.'}</div></div></div>`;
@@ -10861,7 +10863,7 @@ function decaListBodyHtml(){
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(d.transportistaNombre||'')}" title="${esc(d.transportistaNombre)}">${esc(truncateText(d.transportistaNombre, 22))}</td>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(decaLugarNombre(d.origen)||'')}" title="${esc([d.origen, ...(d.origenesExtra||[])].filter(Boolean).join(' · '))}">${esc(truncateText(decaLugarNombre(d.origen), 22))}${(d.origenesExtra||[]).length ? `<span class="deca-pill-extra">+${d.origenesExtra.length}</span>` : ''}</td>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(decaLugarNombre(d.destino)||'')}" title="${esc([d.destino, ...(d.destinosExtra||[])].filter(Boolean).join(' · '))}">${esc(truncateText(decaLugarNombre(d.destino), 22))}${(d.destinosExtra||[]).length ? `<span class="deca-pill-extra">+${d.destinosExtra.length}</span>` : ''}</td>
-              <td style="color:var(--muted);font-family:var(--mono);font-size:12.5px;">${esc(d.matriculaTractora)}</td>
+              <td style="color:var(--muted);font-family:var(--mono);font-size:12.5px;">${esc(d.matriculaTractora)}${(d.relevos && d.relevos.length) ? ` <span class="deca-pill-extra" title="${esc(d.relevos.map((r,i) => (i+2) + ".ª tractora: " + r.matricula).join(" · "))}">+${d.relevos.length}</span>` : ""}</td>
               <td style="color:var(--muted);font-family:var(--mono);font-size:12.5px;">${esc(d.matriculaRemolque||'—')}</td>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(d.mercanciaNaturaleza||'')}" title="${esc(d.mercanciaNaturaleza)}">${esc(truncateText(d.mercanciaNaturaleza, 22))}</td>
               <td style="white-space:nowrap;">
@@ -10888,6 +10890,7 @@ async function loadDecaDocuments(){
     mercanciaNaturaleza: d.mercancia_naturaleza, mercanciaPeso: d.mercancia_peso,
     fechaTransporte: d.fecha_transporte,
     matriculaTractora: d.matricula_tractora, matriculaRemolque: d.matricula_remolque || '', observaciones: d.observaciones || '',
+    relevos: Array.isArray(d.relevos) ? d.relevos : [],
     creacionFecha: d.creacion_fecha || '', creacionHora: d.creacion_hora ? String(d.creacion_hora).slice(0, 8) : '',
     pdfStoragePath: d.pdf_storage_path || null, pdfUrl: d.pdf_url || null,
   }));
@@ -11131,9 +11134,26 @@ async function decaBuildPdfs(fields, url){
     box(mx + w5, y, w6, r3, 6, 'Peso bruto', [{ text: pesoBruto, bold: true, size: 12.5 }]);
     box(mx + w5 + w6, y, w6, r3, 7, 'Fecha del transporte', [{ text: fecha, bold: true, size: 11 }]);
     y -= r3;
-    box(mx, y, half, r4, 8, 'Matrícula tractora', [{ text: dash(fields.matriculaTractora), bold: true, size: 15 }]);
-    box(mx + half, y, half, r4, 9, 'Matrícula remolque', [{ text: fields.matriculaRemolque && fields.matriculaRemolque.trim() ? fields.matriculaRemolque.trim() : 'No aplica', bold: true, size: 15 }]);
-    y -= r4;
+    // Relevo de tractora: el remolque es el mismo, pero la tractora (y a veces la empresa) cambia
+    // durante el transporte. Las matrículas salen numeradas (1.ª, 2.ª…) y, si el relevo lo hace otra
+    // empresa, una casilla "Transportistas sucesivos" la identifica.
+    const relevos = (fields.relevos || []).filter(r => r && r.matricula);
+    const r4x = relevos.length ? r4 + 17 * relevos.length : r4;
+    box(mx, y, half, r4x, 8, relevos.length ? 'Matrículas tractoras (con relevo)' : 'Matrícula tractora',
+      relevos.length
+        ? [{ text: `1.ª   ${dash(fields.matriculaTractora)}`, bold: true, size: 12 }, ...relevos.map((r, i) => ({ text: `${i + 2}.ª   ${r.matricula}`, bold: true, size: 12 }))]
+        : [{ text: dash(fields.matriculaTractora), bold: true, size: 15 }]);
+    box(mx + half, y, half, r4x, 9, 'Matrícula remolque', [{ text: fields.matriculaRemolque && fields.matriculaRemolque.trim() ? fields.matriculaRemolque.trim() : 'No aplica', bold: true, size: 15 }]);
+    y -= r4x;
+    const sucesivos = relevos.map((r, i) => ({ r, n: i + 2 })).filter(x => x.r.transportistaNombre);
+    if (sucesivos.length) {
+      const rSucc = 30 + 25 * sucesivos.length;
+      box(mx, y, W, rSucc, null, 'Transportistas sucesivos (relevo de tractora)', sucesivos.flatMap(x => [
+        { text: `${x.n}.ª tractora ${x.r.matricula}  ·  ${x.r.transportistaNombre}  ·  NIF: ${dash(x.r.transportistaNif)}`, bold: true, size: 9.5 },
+        { text: dash(x.r.transportistaDomicilio), size: 8.5, color: gray, gap: 3 },
+      ]), { fill: rgb(0.97, 0.97, 0.98) });
+      y -= rSucc;
+    }
     box(mx, y, half, r4b, 10, 'Fecha de creación', [{ text: creacionFecha, bold: true, size: 12.5 }]);
     box(mx + half, y, half, r4b, 11, 'Hora de creación', [{ text: creacionHora, bold: true, size: 12.5 }]);
     y -= r4b;
@@ -11141,9 +11161,10 @@ async function decaBuildPdfs(fields, url){
     // QR encima (la comprobación real, siempre con los datos vivos, más un código estable y el
     // momento exacto de creación, que dan al documento el "peso" de sellado oficial que se pide
     // para presentarlo a una autoridad) y a la derecha las observaciones (casilla 12).
-    const rLast = r5 + 50;
+    // La altura se ajusta si el relevo ha ocupado sitio arriba (mínimo para que quepa el QR).
+    const rLast = Math.max(176, Math.min(r5 + 50, y - 40));
     box(mx, y, half, rLast, null, 'Sello de verificación electrónica', [], { fill: rgb(0.94, 0.96, 0.99), borderColor: accent, borderWidth: 0.8, labelColor: accent });
-    const qrSz = 100;
+    const qrSz = Math.min(100, rLast - 100);
     page.drawRectangle({ x: mx + (half - qrSz) / 2 - 3, y: y - 24 - qrSz - 3, width: qrSz + 6, height: qrSz + 6, color: rgb(1, 1, 1) });
     page.drawImage(await pdfDoc.embedPng(qrPng), { x: mx + (half - qrSz) / 2, y: y - 24 - qrSz, width: qrSz, height: qrSz });
     const centerTxt = (txt, size, f, yy, color) => page.drawText(txt, { x: mx + (half - f.widthOfTextAtSize(txt, size)) / 2, y: yy, size, font: f, color });
@@ -11296,6 +11317,75 @@ function decaDireccionesOptionsHtml(){
 // kind: 'carga' (clase dc-carga-row/dc-carga-input, contenedor
 // dc-cargas-extra) o 'entrega' (dc-entrega-row/dc-entrega-input,
 // dc-entregas-extra).
+/* ---- Relevo de tractora: la tractora cambia durante el transporte (mismo remolque) ----
+   Cada relevo lleva la matrícula de la nueva tractora y, si lo hace otra empresa, su
+   transportista (si es la misma empresa, no se pide nada más). Salen en el PDF como 2.ª, 3.ª… tractora. */
+function decaRelevoRowHtml(r, i){
+  r = r || {};
+  const otra = !!(r.otra || r.transportistaNombre);
+  const idx = `[...document.querySelectorAll('.dc-relevo-row')].indexOf(this.closest('.dc-relevo-row'))`;
+  return `
+    <div class="dc-relevo-row">
+      <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:200px;margin-bottom:0;">
+          <label><span class="dc-relevo-n">${typeof i === "number" ? `${i + 2}.ª tractora` : "Relevo"}</span> · matrícula <span class="dc-req">*</span></label>
+          ${decaInputIcon('truck', `<input class="dc-relevo-mat" maxlength="15" placeholder="Ej. 5678-DEF" oninput="this.value = this.value.toUpperCase();" value="${esc(r.matricula||'')}" />`)}
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:8px 2px;white-space:nowrap;"><input type="checkbox" class="switch dc-relevo-otra" ${otra ? 'checked' : ''} onchange="decaRelevoToggle(this)" /> Otra empresa</label>
+        <button type="button" onclick="this.closest('.dc-relevo-row').remove(); decaRelevosRenumerar(); window.__decaFormDirty=true;" title="Quitar este relevo" style="background:none;border:none;color:var(--mutedFaint);font-size:16px;padding:8px 4px;">✕</button>
+      </div>
+      <div class="dc-relevo-emp" style="display:${otra ? 'block' : 'none'};margin-top:12px;">
+        <div class="field">
+          <label>Transportista del relevo <span class="dc-req">*</span></label>
+          ${decaCampoConCrearHtml(decaInputIcon('truck', `<input class="dc-relevo-nombre" maxlength="150" data-combo="dc-transportistas-datalist" autocomplete="off" oninput="onDecaRelevoNombreInput(this)" placeholder="Elige entre tus transportistas" value="${esc(r.transportistaNombre||'')}" />`), `decaIrACrearContacto('relevo:' + ${idx})`, 'Crear un transportista nuevo (no está en la lista)')}
+        </div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <div class="field" style="flex:1;min-width:160px;margin-bottom:0;"><label>NIF <span class="dc-req">*</span></label>${decaInputIcon('idcard', `<input class="dc-relevo-nif" maxlength="20" placeholder="Ej. A12345678" value="${esc(r.transportistaNif||'')}" />`)}</div>
+          <div class="field" style="flex:2;min-width:220px;margin-bottom:0;"><label>Domicilio</label>${decaInputIcon('pin', `<input class="dc-relevo-dom" maxlength="250" placeholder="Ej. C/ Industria 45, Barcelona" value="${esc(r.transportistaDomicilio||'')}" />`)}</div>
+        </div>
+      </div>
+    </div>`;
+}
+function decaRelevosRenumerar(){
+  document.querySelectorAll('.dc-relevo-row').forEach((row, i) => {
+    const n = row.querySelector('.dc-relevo-n');
+    if (n) n.textContent = `${i + 2}.ª tractora`;
+  });
+}
+function decaRelevoAddRow(){
+  const cont = document.getElementById('dc-relevos');
+  if (!cont) return;
+  cont.insertAdjacentHTML('beforeend', decaRelevoRowHtml({}));
+  decaRelevosRenumerar();
+  window.__decaFormDirty = true;
+  const rows = cont.querySelectorAll('.dc-relevo-mat');
+  if (rows.length) rows[rows.length - 1].focus();
+}
+function decaRelevoToggle(chk){
+  const row = chk.closest('.dc-relevo-row');
+  const emp = row.querySelector('.dc-relevo-emp');
+  emp.style.display = chk.checked ? 'block' : 'none';
+  if (chk.checked) { const n = row.querySelector('.dc-relevo-nombre'); if (n && !n.value) n.focus(); }
+}
+function onDecaRelevoNombreInput(inp){
+  const match = contactos.find(c => !c.archived && c.esTransportista && c.nombre === inp.value);
+  if (!match) return;
+  const row = inp.closest('.dc-relevo-row');
+  row.querySelector('.dc-relevo-nif').value = match.nif || '';
+  row.querySelector('.dc-relevo-dom').value = cargadorDireccionCompleta(match);
+}
+// Relevos tal como están escritos en el formulario. conVacios=true (borrador): se conservan también las filas a medias.
+function decaRelevosCollect(conVacios){
+  const out = [...document.querySelectorAll('.dc-relevo-row')].map(row => {
+    const val = c => (row.querySelector(c) || {}).value ? row.querySelector(c).value.trim() : '';
+    const otra = !!(row.querySelector('.dc-relevo-otra') || {}).checked;
+    return {
+      matricula: val('.dc-relevo-mat'), otra,
+      transportistaNombre: otra ? val('.dc-relevo-nombre') : '', transportistaNif: otra ? val('.dc-relevo-nif') : '', transportistaDomicilio: otra ? val('.dc-relevo-dom') : '',
+    };
+  });
+  return conVacios ? out : out.filter(r => r.matricula || r.transportistaNombre || r.transportistaNif);
+}
 function decaPuntoRowHtml(kind, value){
   // El "+" crea una dirección nueva y la deja puesta en ESTA fila al volver (se identifica por su posición).
   const crear = `decaIrACrearDireccion('${kind}:' + [...document.querySelectorAll('.dc-${kind}-row')].indexOf(this.closest('.dc-${kind}-row')))`;
@@ -11380,6 +11470,8 @@ function tplDecaFormFields(e){
             <div class="field" style="flex:1;min-width:150px;margin-bottom:0;"><label>Matrícula tractora ${req}</label>${decaInputIcon('truck', `<input id="dc-matricula-tractora" maxlength="15" placeholder="Ej. 1234-ABC" oninput="this.value = this.value.toUpperCase();" value="${esc(e.matriculaTractora||'')}" />`)}</div>
             <div class="field" style="flex:1;min-width:150px;margin-bottom:0;"><label>Matrícula remolque</label>${decaInputIcon('trailer', `<input id="dc-matricula-remolque" maxlength="15" placeholder="Ej. R-6872-BDG" oninput="this.value = this.value.toUpperCase();" value="${esc(e.matriculaRemolque||'')}" />`)}</div>
           </div>
+          <div id="dc-relevos">${(e.relevos || []).map((r, i) => decaRelevoRowHtml(r, i)).join('')}</div>
+          <button type="button" class="btn btn-ghost dc-relevos-add" onclick="decaRelevoAddRow()" title="Si la tractora cambia durante el transporte (el remolque sigue siendo el mismo)">+ Añadir relevo de tractora</button>
         </div>
       </div>
       <div class="card deca-card" style="grid-column:1 / -1;--dc-accent:var(--primary);">
@@ -11512,6 +11604,11 @@ function decaVolverDesdeContacto(contactoCreado){
     draft.cargadorNombre = contactoCreado.nombre;
     draft.cargadorNif = contactoCreado.nif || '';
     draft.cargadorDomicilio = cargadorDireccionCompleta(contactoCreado);
+  } else if (contactoCreado && /^relevo:[0-9]+$/.test(String(role))) {
+    const i = Number(String(role).split(':')[1]);
+    const rel = (draft.relevos || []).slice();
+    rel[i] = { ...(rel[i] || {}), otra: true, transportistaNombre: contactoCreado.nombre, transportistaNif: contactoCreado.nif || '', transportistaDomicilio: cargadorDireccionCompleta(contactoCreado) };
+    draft.relevos = rel;
   } else if (contactoCreado && role === 'transportista') {
     draft.transportistaNombre = contactoCreado.nombre;
     draft.transportistaNif = contactoCreado.nif || '';
@@ -11536,6 +11633,7 @@ function decaSnapshotFields(){
     destinosExtra: [...document.querySelectorAll('.dc-entrega-input')].map(el => el.value.trim()),
     mercanciaNaturaleza: v('dc-mercancia-naturaleza'), mercanciaPeso: v('dc-mercancia-peso'), fechaTransporte: v('dc-fecha'),
     matriculaTractora: v('dc-matricula-tractora'), matriculaRemolque: v('dc-matricula-remolque'), observaciones: v('dc-observaciones'),
+    relevos: decaRelevosCollect(true),
     creacionFecha: v('dc-creacion-fecha'), creacionHora: v('dc-creacion-hora'),
   };
 }
@@ -11616,12 +11714,17 @@ function backToDecaList(){
     fechaTransporte: document.getElementById('dc-fecha').value,
     matriculaTractora: document.getElementById('dc-matricula-tractora').value.trim(),
     matriculaRemolque: document.getElementById('dc-matricula-remolque').value.trim(),
+    relevos: decaRelevosCollect(false),
     observaciones: document.getElementById('dc-observaciones').value.trim(),
     creacionFecha: document.getElementById('dc-creacion-fecha').value,
     creacionHora: document.getElementById('dc-creacion-hora').value,
   };
   const required = ['cargadorNombre','cargadorNif','transportistaNombre','transportistaNif','origen','destino','mercanciaNaturaleza','mercanciaPeso','fechaTransporte','matriculaTractora'];
   if (required.some(k => !fields[k])) { errEl.textContent = 'Rellena todos los campos obligatorios.'; return; }
+  // Relevos de tractora: cada uno necesita su matrícula; si es de otra empresa, también su nombre y NIF.
+  if (fields.relevos.some(r => !r.matricula)) { errEl.textContent = 'Indica la matrícula de la nueva tractora en cada relevo (o quita el relevo).'; return; }
+  if (fields.relevos.some(r => r.otra && (!r.transportistaNombre || !r.transportistaNif))) { errEl.textContent = 'En los relevos de «Otra empresa» indica el nombre y el NIF del transportista (o desmarca «Otra empresa»).'; return; }
+  fields.relevos = fields.relevos.map(r => ({ matricula: r.matricula, transportistaNombre: r.transportistaNombre || '', transportistaNif: r.transportistaNif || '', transportistaDomicilio: r.transportistaDomicilio || '' }));
   btns.forEach(b => { b.disabled = true; b.innerHTML = decaSubmitInner(editId ? 'Guardando…' : 'Creando DeCA…'); });
   try {
     const editing = editId ? decaDocuments.find(d=>d.id===editId) : null;
@@ -11634,6 +11737,7 @@ function backToDecaList(){
       mercancia_naturaleza: fields.mercanciaNaturaleza, mercancia_peso: fields.mercanciaPeso,
       fecha_transporte: fields.fechaTransporte,
       matricula_tractora: fields.matriculaTractora, matricula_remolque: fields.matriculaRemolque || null, observaciones: fields.observaciones || null,
+      relevos: fields.relevos.length ? fields.relevos : null,
       creacion_fecha: fields.creacionFecha || null,
       creacion_hora: fields.creacionHora ? (fields.creacionHora.length === 5 ? fields.creacionHora + ':00' : fields.creacionHora) : null,
       pdf_storage_path: storagePath, pdf_url: url, updated_at: new Date().toISOString(),
@@ -11803,7 +11907,7 @@ function decaDetalleGridHtml(d){
             ${decaViewRow('pin', cargas.length ? `Cargas (${1 + cargas.length})` : 'Origen', puntos(d.origen, cargas), '#7C5CBF')}
             ${decaViewRow('pin', entregas.length ? `Entregas (${1 + entregas.length})` : 'Destino', puntos(d.destino, entregas), '#7C5CBF')}
             ${decaViewRow('box', 'Mercancía', `${esc(d.mercanciaNaturaleza)}<div style="color:var(--muted);font-size:12.5px;">${esc(d.mercanciaPeso)}</div>`, '#7C5CBF')}
-            ${decaViewRow('truck', 'Matrículas', `<span style="${mono}">${esc(d.matriculaTractora)}</span>${d.matriculaRemolque ? `<div style="${mono}color:var(--muted);">${esc(d.matriculaRemolque)}</div>` : ''}`, '#3F8F5F')}
+            ${decaViewRow('truck', (d.relevos && d.relevos.length) ? 'Tractoras (con relevo)' : 'Matrículas', `${(d.relevos && d.relevos.length) ? `<div style="${mono}">1.ª ${esc(d.matriculaTractora)}</div>${d.relevos.map((r, i) => `<div style="${mono}">${i + 2}.ª ${esc(r.matricula)}${r.transportistaNombre ? `<span style="font-family:var(--body);color:var(--muted);font-size:12.5px;"> · ${esc(r.transportistaNombre)}</span>` : ''}</div>`).join('')}` : `<span style="${mono}">${esc(d.matriculaTractora)}</span>`}${d.matriculaRemolque ? `<div style="${mono}color:var(--muted);">Remolque ${esc(d.matriculaRemolque)}</div>` : ''}`, '#3F8F5F')}
             ${decaViewRow('calendar', 'Fecha del transporte', esc(fmtDateY(d.fechaTransporte)), '#4A90C2')}
             ${d.creacionFecha ? decaViewRow('clock', 'Creación', `${esc(fmtDateY(d.creacionFecha))}${d.creacionHora ? `<div style="color:var(--muted);font-size:12.5px;">${esc(d.creacionHora)}</div>` : ''}`, '#4A90C2') : ''}
             ${d.observaciones ? decaViewRow('file', 'Observaciones', esc(d.observaciones), '#5C6670', true) : ''}
