@@ -1150,6 +1150,174 @@ async function deleteOperativa(id){
   renderTab();
 }
 
+/* ===================== COMERCIAL → TARIFAS ALMACÉN =====================
+   Todas las tarifas de almacenaje y las operativas de todos los clientes, agrupadas por cliente. */
+function operativaItemHtml(o, cid){
+  return `
+    <div class="op-item">
+      <div class="op-item-head">
+        <div style="min-width:0;">
+          <div class="op-item-name">${esc(o.nombre)}</div>
+          <div class="op-item-sub">Vigente desde el ${esc(fmtDateDMY(o.fecha))}</div>
+        </div>
+        <div class="op-item-total">${esc(eur2(o.total))}</div>
+      </div>
+      ${operativaDesgloseHtml(o)}
+      ${o.observaciones ? `<div class="op-item-obs">${esc(o.observaciones)}</div>` : ''}
+      <div class="op-item-actions">
+        <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px;" onclick="openOperativaModal('${cid}', null, '${o.id}')" title="Precio nuevo desde una fecha: la actual pasa a históricas">Actualizar precio</button>
+        <button class="deca-act" onclick="openOperativaModal('${cid}', '${o.id}')" title="Corregir esta operativa (errores de tecleo)">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+        <button class="deca-act danger" onclick="deleteOperativa('${o.id}')" title="Eliminar">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>
+      </div>
+    </div>`;
+}
+function talmClientesConDatos(){
+  const lineas = almacenajePeriodos(almacenajeTarifas).filter(t => t.vigente).sort(almacenajeOrdenDefecto);
+  const ops = operativaPeriodos(operativas).filter(o => o.vigente).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  const ids = [...new Set([...lineas.map(t => t.clienteId), ...ops.map(o => o.clienteId)])];
+  return { lineas, ops, clientes: ids.map(id => contactos.find(c => c.id === id)).filter(Boolean).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es')) };
+}
+function talmSeg(){ return window.__talmSeg || 'todos'; }
+function talmBodyHtml(){
+  const { lineas, ops, clientes } = talmClientesConDatos();
+  const q = (window.__talmSearch || '').trim().toLowerCase();
+  const seg = talmSeg();
+  const lista = clientes.filter(c => !q || c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q));
+  const tarjetas = lista.map(c => {
+    const l = lineas.filter(t => t.clienteId === c.id), o = ops.filter(x => x.clienteId === c.id);
+    if ((seg === 'tarifas' && !l.length) || (seg === 'operativas' && !o.length)) return '';
+    const titulo = (c.nombreComercial || '').trim() || c.nombre;
+    const acciones = `<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+      ${seg !== 'operativas' ? `${l.length ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="almacenajeIrAForm('${c.id}', true)" title="Corregir de golpe todas las líneas, quitar las que sobren o añadir otras">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar tarifa</span></button>` : ''}
+        <button class="btn btn-ghost" style="background:var(--panel);" onclick="almacenajeIrAForm('${c.id}')">+ Línea</button>` : ''}
+      ${seg !== 'tarifas' ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openOperativaModal('${c.id}')">+ Operativa</button>` : ''}
+      <button class="deca-act" onclick="talmAbrirFicha('${c.id}')" title="Abrir la ficha del cliente">${homeIcon(HOME_ICON_PATHS.chevron, 16, 'currentColor', 2.2)}</button>
+    </div>`;
+    return `
+      <div class="card deca-card" style="--dc-accent:var(--primary);margin-bottom:16px;">
+        ${decaCardHead('building', titulo, [l.length ? `${l.length} línea${l.length !== 1 ? 's' : ''} de tarifa` : '', o.length ? `${o.length} operativa${o.length !== 1 ? 's' : ''}` : ''].filter(Boolean).join(' · '), acciones)}
+        ${seg !== 'operativas' && l.length ? `
+        <div style="overflow-x:auto;">
+        <table class="tf-table">
+          <thead><tr>${thSort('Vigente desde','date')}${thSort('Actividad','text')}${thSort('Tipo','text')}${thSort('Precio','number','style="text-align:right;"')}${thSort('Observaciones','text')}</tr></thead>
+          <tbody>
+            ${l.map(t => `
+              <tr>
+                <td style="white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
+                <td data-sort-value="${esc(almacenajeCategoriaLabel(t.categoria))}">${almacenajeCategoriaBadgeHtml(t.categoria)}</td>
+                <td data-sort-value="${esc(almacenajeEtiqueta(t))}">${esc(almacenajeEtiqueta(t))}</td>
+                <td class="tf-precio" data-sort-value="${t.precio}">${almacenajePrecioCeldaHtml(t)}</td>
+                <td style="color:var(--muted);" data-sort-value="${esc(t.observaciones)}">${t.observaciones ? esc(t.observaciones) : '—'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+        </div>` : ''}
+        ${seg !== 'tarifas' && o.length ? `<div class="deca-card-body" style="${seg !== 'operativas' && l.length ? 'border-top:1px solid var(--border);' : ''}">
+          ${seg !== 'operativas' && l.length ? `<div style="font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);margin-bottom:10px;">Operativas</div>` : ''}
+          <div class="op-grid">${o.map(x => operativaItemHtml(x, c.id)).join('')}</div>
+        </div>` : ''}
+      </div>`;
+  }).filter(Boolean);
+  if (!tarjetas.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${(q || seg !== 'todos') ? 'Nada coincide con el filtro.' : 'Todavía no hay tarifas de almacén ni operativas. Crea la primera con «+ Nueva tarifa» o «+ Nueva operativa».'}</div>`;
+  return tarjetas.join('');
+}
+function refreshTalmBody(){
+  const el = document.getElementById('talm-body');
+  if (el) el.innerHTML = talmBodyHtml();
+}
+function tplTarifasAlmacenPage(){
+  const { lineas, ops, clientes } = talmClientesConDatos();
+  const seg = talmSeg();
+  const segBtn = (id, label) => `<button type="button" class="${seg === id ? 'on' : ''}" onclick="window.__talmSeg='${id}'; renderTab();">${label}</button>`;
+  return `
+    <div style="--bn-accent:var(--primary);">
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 280px;">
+        <div class="deca-banner-title">Tarifas Almacén</div>
+        <div class="deca-banner-sub">Lo que se cobra a cada cliente por almacenaje, movimientos y extras, y sus operativas con precio cerrado.</div>
+      </div>
+      <div class="deca-banner-actions">
+        <div class="deca-stat"><b>${clientes.length}</b><span>Clientes</span></div>
+        <div class="deca-stat"><b>${lineas.length}</b><span>Líneas</span></div>
+        <div class="deca-stat"><b>${ops.length}</b><span>Operativas</span></div>
+        <button class="btn btn-ghost" style="background:var(--panel);" onclick="openClientePickerModal('operativa')">+ Nueva operativa</button>
+        <button class="btn btn-primary deca-new-btn" onclick="openClientePickerModal('tarifa')">${homeIcon(HOME_ICON_PATHS.file, 17, 'currentColor', 1.8)}<span>Nueva tarifa</span></button>
+      </div>
+    </div>
+    <div class="card deca-toolbar">
+      <div class="deca-search">
+        <input placeholder="Buscar cliente por nombre o NIF…" value="${esc(window.__talmSearch || '')}" oninput="window.__talmSearch=this.value; refreshTalmBody();" />
+        <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
+      </div>
+      <div class="doc-seg">${segBtn('todos', 'Todo')}${segBtn('tarifas', 'Solo tarifas')}${segBtn('operativas', 'Solo operativas')}</div>
+    </div>
+    <div id="talm-body">${talmBodyHtml()}</div>
+    </div>`;
+}
+// Abre la pantalla de tarifa de almacenaje de un cliente (alta o edición de todas las líneas) y,
+// al guardar o cancelar, vuelve a esta lista.
+function almacenajeIrAForm(clienteId, editar){
+  window.__contactoNavContext = { label: 'Comercial', ids: [clienteId] };
+  openContactoModal(clienteId);
+  if (editar) openAlmacenajeTarifaEditar(clienteId, 'lista'); else openAlmacenajeTarifaForm(clienteId, 'lista');
+}
+function almacenajeVolverALista(){
+  window.__almacenajeFormClienteId = null;
+  window.__almacenajeFormDirty = false;
+  window.__almacenajeEditar = false;
+  window.__almacenajeOrigen = 'ficha';
+  window.__showingContactoDetail = false;
+  window.__contactoDetailId = null;
+  window.__contactoDetailEditMode = false;
+  currentTab = 'comercial';
+  window.__comercialSection = 'almacenaje';
+  window.__comercialView = 'home';
+  renderHeader(); renderTab();
+}
+function talmAbrirFicha(clienteId){
+  window.__contactoNavContext = { label: 'Comercial', ids: [clienteId] };
+  openContactoModal(clienteId);
+}
+// Pide el cliente antes de crear una tarifa de almacenaje o una operativa desde esta pantalla.
+function openClientePickerModal(que){
+  window.__pickQue = que;
+  const clientes = contactos.filter(c => !c.archived && (c.esClienteAlmacen || c.esClienteTransporte)).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:480px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.users, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;">
+            <div class="deca-banner-title" style="font-size:19px;">${que === 'operativa' ? 'Nueva operativa' : 'Nueva tarifa de almacenaje'}</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">¿Para qué cliente?</div>
+          </div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
+          <div class="field"><label>Cliente <span class="dc-req">*</span></label>
+            ${decaInputIcon('building', `<input id="pick-cliente" maxlength="150" data-combo="pick-clientes" autocomplete="off" placeholder="Elige un cliente" onkeydown="if(event.key==='Enter'){ event.preventDefault(); clientePickerContinuar(); }" />`)}
+            <datalist id="pick-clientes">${clientes.map(c => `<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('')}</datalist>
+          </div>
+          <div id="pick-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
+          <div style="display:flex;gap:10px;">
+            <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary deca-submit" onclick="clientePickerContinuar()">Continuar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const el = document.getElementById('pick-cliente'); if (el) el.focus(); }, 0);
+}
+function clientePickerContinuar(){
+  const nombre = document.getElementById('pick-cliente').value.trim().toUpperCase();
+  const c = contactos.find(x => !x.archived && (x.esClienteAlmacen || x.esClienteTransporte) && x.nombre.toUpperCase() === nombre);
+  if (!c) { document.getElementById('pick-error').textContent = 'Elige un cliente de la lista.'; return; }
+  const que = window.__pickQue;
+  closeModal();
+  if (que === 'operativa') openOperativaModal(c.id); else almacenajeIrAForm(c.id);
+}
+
 const DOCS_BUCKET = 'qualified-docs';
 async function signedUrl(path){
   if (!path) return null;
@@ -4455,14 +4623,14 @@ function openContactoModal(editId, presetRoles){
       contactoHistorialCache[editId] = list;
       if (window.__showingContactoDetail && window.__contactoDetailId === editId) {
         window.__contactoHistorial = list;
-        renderTab();
+        if (!window.__almacenajeFormClienteId) renderTab();
       }
     });
     if (editing && editing.logoStoragePath) {
       signedUrl(editing.logoStoragePath).then(url => {
         if (window.__showingContactoDetail && window.__contactoDetailId === editId) {
           window.__contactoDetailLogoUrl = url;
-          renderTab();
+          if (!window.__almacenajeFormClienteId) renderTab();
         }
       });
     }
@@ -5253,7 +5421,7 @@ function tplContactoDetailPage(){
   const historial = Array.isArray(window.__contactoHistorial) ? window.__contactoHistorial.filter(h => !(h.resumen || '').startsWith(TARIFA_LOG_PREFIX)) : window.__contactoHistorial;
   const tabContentHtml = () => {
     if (activeTab === 'almacen') return tplContactoAlmacenCard(editing, editMode) + tplAlmacenajeTarifasCard(editing) + tplAlmacenajeTarifasHistoricasCard(editing);
-    if (activeTab === 'comercial') return tplContactoPersonasCard(editing) + tplContactoTarifasCard(editing) + tplContactoOperativasCard(editing) + tplContactoTarifasHistoricasCard(editing) + tplContactoOperativasHistoricasCard(editing);
+    if (activeTab === 'comercial') return tplContactoPersonasCard(editing) + tplContactoTarifasCard(editing) + tplContactoTarifasHistoricasCard(editing);
     if (activeTab === 'transporte') return tplContactoTabTransporte(editing);
     if (activeTab === 'autonomos') return tplContactoTabAutonomos(editing);
     return editMode
@@ -8161,6 +8329,7 @@ function backToTraficoHome(){
 const COMERCIAL_SECTIONS = [
   { id: 'clientes', label: 'Clientes', desc: 'Contactos marcados como cliente.' },
   { id: 'tarifas', label: 'Tarifas Transporte', desc: 'Precios por cliente y zona, con su histórico.' },
+  { id: 'almacenaje', label: 'Tarifas Almacén', desc: 'Tarifas de almacenaje y operativas de cada cliente.' },
 ];
 function comercialSection(){
   const allowed = moduleAllowedSections('comercial');
@@ -8193,12 +8362,14 @@ function setComercialSection(id){
   window.__comercialView = 'home';
   if (id === 'clientes') resetComercialClientesState();
   if (id === 'tarifas') resetTarifasState();
+  if (id === 'almacenaje') { window.__talmSearch = ''; window.__talmSeg = 'todos'; }
   renderHeader(); renderTab();
 }
 function tplComercial(){
   if (window.__comercialView === 'tarifaForm') return tplTarifaFormPage();
   if (window.__comercialView === 'tarifaRapida') return tplTarifaRapidaPage();
-  return comercialSection() === 'tarifas' ? tplTarifasPage() : tplComercialClientesPage();
+  const sec = comercialSection();
+  return sec === 'tarifas' ? tplTarifasPage() : sec === 'almacenaje' ? tplTarifasAlmacenPage() : tplComercialClientesPage();
 }
 
 /* ---- Comercial → Clientes: los contactos marcados como cliente (de almacén o de transporte) ---- */
@@ -8765,7 +8936,8 @@ function almacenajeConfirmLeaveForm(){
   }
   return true;
 }
-function openAlmacenajeTarifaForm(clienteId){
+function openAlmacenajeTarifaForm(clienteId, origen){
+  window.__almacenajeOrigen = origen || 'ficha';
   window.__almacenajeEditar = false;
   window.__almacenajeFormClienteId = clienteId;
   window.__almacenajeFormDirty = false;
@@ -8778,6 +8950,7 @@ function backFromAlmacenajeForm(){
   if (!almacenajeConfirmLeaveForm()) return;
   window.__almacenajeFormClienteId = null;
   window.__almacenajeFormDirty = false;
+  if (window.__almacenajeOrigen === 'lista') { almacenajeVolverALista(); return; }
   renderTab();
 }
 // Pone el campo Subtipo de una fila según el producto elegido: sin subtipo → desactivado;
@@ -8861,7 +9034,8 @@ function almacenajeFilaAddRow(focus, preset){
 }
 // "Editar tarifa": la misma pantalla que al crear, con todas las líneas vigentes del cliente ya
 // escritas para corregirlas de golpe, quitar las que sobren o añadir otras debajo.
-function openAlmacenajeTarifaEditar(clienteId){
+function openAlmacenajeTarifaEditar(clienteId, origen){
+  window.__almacenajeOrigen = origen || 'ficha';
   window.__almacenajeFormClienteId = clienteId;
   window.__almacenajeFormDirty = false;
   window.__almacenajeEditar = true;
@@ -8957,7 +9131,7 @@ async function submitAlmacenajeTarifaForm(){
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const eliminar = editar ? (window.__almacenajeOrigIds || []).filter(id => !presentes.has(id) && almacenajeTarifas.some(t => t.id === id)) : [];
   if (!nuevas.length && !cambios.length && !eliminar.length) {
-    if (editar) { window.__almacenajeFormDirty = false; window.__almacenajeFormClienteId = null; window.__almacenajeEditar = false; renderTab(); return; }
+    if (editar) { window.__almacenajeFormDirty = false; window.__almacenajeFormClienteId = null; window.__almacenajeEditar = false; if (window.__almacenajeOrigen === 'lista') { almacenajeVolverALista(); return; } renderTab(); return; }
     errEl.textContent = 'Añade al menos una línea con su precio.'; return;
   }
   if (eliminar.length) {
@@ -9006,6 +9180,7 @@ async function submitAlmacenajeTarifaForm(){
   window.__almacenajeFormDirty = false;
   window.__almacenajeFormClienteId = null;
   window.__almacenajeEditar = false;
+  if (window.__almacenajeOrigen === 'lista') { almacenajeVolverALista(); return; }
   renderTab();
 }
 async function deleteAlmacenajeTarifa(id){
