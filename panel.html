@@ -1697,7 +1697,7 @@ function computeBreadcrumbSegments(){
       const tf = window.__tarifaFormId ? tarifas.find(t=>t.id===window.__tarifaFormId) : null;
       const last = {label: tf ? `Tarifa ${tf.origenZona} → ${tf.destinoZona}` : (window.__tarifaPreset && window.__tarifaFormId === null && window.__tarifaPreset.precio === '' ? 'Actualizar tarifa' : 'Nueva tarifa'), onclick:null};
       // Si todavía no se ha elegido cliente (se abre desde Tarifas Transporte), se cuelga de Tarifas.
-      if (!window.__tarifaCtxCliente) return [{label:'Tarifas Transporte', onclick:'backToTarifas()'}, last];
+      if (!window.__tarifaCtxCliente || window.__tarifaOrigen === 'lista') return [{label:'Tarifas Transporte', onclick:'backToTarifas()'}, last];
       return [{label:'Clientes', onclick:'backToComercialClientes()'}, {label: tarifaClienteNombre(window.__tarifaCtxCliente), onclick:'backToTarifas()'}, last];
     }
     if (window.__comercialView === 'tarifaRapida') {
@@ -9087,7 +9087,7 @@ function nuevaTarifaClientesOptionsHtml(){
 }
 function openTarifaNuevaGeneral(){
   window.__tarifaCtxCliente = null;
-  openTarifaForm(null, null, null);
+  openTarifaForm(null, null, null, 'lista');
 }
 function tarifaClienteBuscar(txt){
   const n = String(txt || '').trim().toUpperCase();
@@ -9109,6 +9109,7 @@ function tarifaClienteInput(){
 // quedarse viendo su ficha, se va directo a su "Nueva tarifa".
 function crearClienteParaNuevaTarifa(){
   window.__tarifaClienteReturnPending = true;
+  window.__tarifaOrigenKeep = true; // al volver de crear el cliente se sigue en el mismo origen
   openContactoModal(null, contactoPresetForNavLabel('Comercial'));
 }
 
@@ -9122,8 +9123,13 @@ function tarifaConfirmLeaveForm(){
 // editId: editar esa tarifa. cloneId: tarifa nueva con los datos de otra y la fecha de hoy
 // (así se actualiza el precio de una ruta sin volver a escribirla).
 // clienteId: la tarifa se sube desde la ficha de ese cliente (siempre se abre desde ahí).
-function openTarifaForm(editId, cloneId, clienteId){
+function openTarifaForm(editId, cloneId, clienteId, origen){
   const editing = editId ? tarifas.find(t => t.id === editId) : null;
+  // De dónde se ha abierto, para volver ahí al guardar o cancelar: 'lista' = Tarifas Transporte,
+  // 'ficha' = la ficha del cliente. "Añadir y nueva" y la vuelta de crear un cliente conservan el origen.
+  if (origen) window.__tarifaOrigen = origen;
+  else if (window.__tarifaOrigenKeep) window.__tarifaOrigenKeep = false;
+  else if (!['tarifaForm', 'tarifaRapida'].includes(window.__comercialView)) window.__tarifaOrigen = 'ficha';
   window.__tarifaCtxCliente = clienteId || (editing && editing.clienteId) || window.__tarifaCtxCliente || null;
   // Sin cliente de contexto (Tarifas Transporte → Nueva tarifa) el cliente se elige dentro del formulario.
   window.__tarifaClienteElegible = !editing && !window.__tarifaCtxCliente;
@@ -9146,6 +9152,13 @@ function openTarifaForm(editId, cloneId, clienteId){
 function tarifaReturn(){
   window.__tarifaFormDirty = false;
   window.__comercialView = 'home';
+  // Si se abrió desde Tarifas Transporte, se vuelve a esa lista (no a la ficha del cliente).
+  if (window.__tarifaOrigen === 'lista') {
+    window.__showingContactoDetail = false;
+    window.__comercialSection = 'tarifas';
+    renderHeader(); renderTab();
+    return;
+  }
   const cid = window.__tarifaCtxCliente;
   if (cid && contactos.some(c => c.id === cid)) {
     const nav = window.__contactoNavContext;
@@ -9699,6 +9712,7 @@ function tplTarifaRapidaPage(){
     </div>`;
 }
 function openTarifaRapida(clienteId){
+  window.__tarifaOrigen = 'ficha';
   window.__tarifaCtxCliente = clienteId;
   window.__showingContactoDetail = false;
   currentTab = 'comercial';
