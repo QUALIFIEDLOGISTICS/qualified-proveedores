@@ -8173,6 +8173,7 @@ async function loadAlmacenajeTarifas(){
     id: t.id, createdAt: t.created_at, clienteId: t.cliente_id, fecha: t.fecha,
     tipo: t.tipo, subtipo: t.subtipo || '', precio: Number(t.precio), observaciones: t.observaciones || '',
     categoria: t.tipo_actividad || almacenajeCategoriaDe(t.tipo),
+    importeMinimo: t.importe_minimo == null ? null : Number(t.importe_minimo),
   }));
 }
 // Catálogo de "Productos" de almacenaje (Palet, M², Bobina, Entrada, Salida,
@@ -8420,6 +8421,15 @@ function tplAlmacenajeProductoFormPage(){
 }
 function almacenajeEtiqueta(t){ return t.subtipo ? `${almacenajeTipoLabel(t.tipo)} ${t.subtipo}` : almacenajeTipoLabel(t.tipo); }
 function almacenajePrecioTxt(t){ return eur2(t.precio) + almacenajeUnidadTxt(t.tipo); }
+// "mínimo 10,00 € por albarán" (en movimientos) o "mínimo 10,00 €"; vacío si la línea no tiene importe mínimo.
+function almacenajeMinimoTxt(t){
+  if (t.importeMinimo == null || !isFinite(t.importeMinimo)) return '';
+  return `mínimo ${eur2(t.importeMinimo)}${t.categoria === 'movimiento' ? ' por albarán' : ''}`;
+}
+function almacenajePrecioCeldaHtml(t){
+  const m = almacenajeMinimoTxt(t);
+  return esc(almacenajePrecioTxt(t)) + (m ? `<div style="font-size:11px;font-weight:500;color:var(--muted);">${esc(m)}</div>` : '');
+}
 // La "línea" es la combinación tipo+subtipo: dos precios de "Palet Europeo"
 // forman histórico entre sí, pero no afectan a "Palet Americano" ni a "M²".
 function almacenajeLineaKey(t){ return [t.clienteId, t.tipo, (t.subtipo||'').trim().toUpperCase()].join('|'); }
@@ -8607,6 +8617,7 @@ function almacenajeFilaRowHtml(i, preset){
       <td id="af-${i}-actividad" style="padding:5px 4px;">${almacenajeCategoriaBadgeHtml(almacenajeCategoriaDe(preset ? preset.tipo : 'palet'))}</td>
       <td style="padding:5px 4px;min-width:160px;"><input id="af-${i}-subtipo" maxlength="60" data-combo="af-subtipos" autocomplete="off" placeholder="Ej. Europeo" oninput="window.__almacenajeFormDirty=true;" /></td>
       <td style="padding:5px 4px;min-width:110px;"><input id="af-${i}-precio" inputmode="decimal" maxlength="10" placeholder="Precio €" value="${esc(precioTxt)}" /></td>
+      <td style="padding:5px 4px;min-width:100px;"><input id="af-${i}-min" inputmode="decimal" maxlength="10" placeholder="Mínimo €" title="Importe mínimo por albarán (opcional): si precio x cantidad sale por debajo, se cobra este importe" value="${preset && preset.importeMinimo != null ? esc(String(preset.importeMinimo).replace('.', ',')) : ''}" /></td>
       <td style="padding:5px 4px;min-width:200px;"><input id="af-${i}-obs" maxlength="250" placeholder="Observaciones (opcional)" value="${preset ? esc(preset.observaciones || '') : ''}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); almacenajeFilaAddRow(true); }" /></td>
       <td style="padding:5px 0 5px 4px;"><button type="button" onclick="almacenajeFilaRemoveRow(${i})" title="Quitar fila" style="background:none;border:none;color:var(--mutedFaint);font-size:15px;">✕</button></td>
     </tr>`;
@@ -8663,8 +8674,8 @@ function tplAlmacenajeTarifaFormPage(c){
         <div class="deca-card-body">
           <datalist id="af-subtipos">${almacenajeSubtiposDatalistHtml()}</datalist>
           <div style="overflow-x:auto;">
-            <table class="qr-table" style="width:100%;min-width:840px;table-layout:fixed;">
-              <colgroup><col style="width:30px"><col style="width:135px"><col style="width:170px"><col style="width:110px"><col style="width:160px"><col style="width:110px"><col style="width:200px"><col style="width:34px"></colgroup>
+            <table class="qr-table" style="width:100%;min-width:940px;table-layout:fixed;">
+              <colgroup><col style="width:30px"><col style="width:135px"><col style="width:170px"><col style="width:110px"><col style="width:160px"><col style="width:110px"><col style="width:100px"><col style="width:200px"><col style="width:34px"></colgroup>
               <thead><tr>
                 <th style="padding:6px 4px;text-align:right;">#</th>
                 <th style="padding:6px 4px;">Vigente desde</th>
@@ -8672,6 +8683,7 @@ function tplAlmacenajeTarifaFormPage(c){
                 <th style="padding:6px 4px;">Actividad</th>
                 <th style="padding:6px 4px;">Subtipo</th>
                 <th style="padding:6px 4px;">Precio</th>
+                <th style="padding:6px 4px;" title="Importe mínimo por albarán (opcional)">Mínimo</th>
                 <th style="padding:6px 4px;">Observaciones</th>
                 <th></th>
               </tr></thead>
@@ -8704,19 +8716,21 @@ async function submitAlmacenajeTarifaForm(){
     const i = tr.dataset.i;
     const id = tr.dataset.id || '';
     const v = k => (document.getElementById(`af-${i}-${k}`) || {}).value || '';
-    const tipo = v('tipo'), subtipo = v('subtipo').trim(), fecha = v('fecha'), precioTxt = v('precio').trim(), obs = v('obs').trim();
+    const tipo = v('tipo'), subtipo = v('subtipo').trim(), fecha = v('fecha'), precioTxt = v('precio').trim(), minTxt = v('min').trim(), obs = v('obs').trim();
     if (id) presentes.add(id);
     if (!id && !precioTxt && !obs && !subtipo) return; // fila nueva vacía
     const nombreFila = `Fila ${n + 1}`;
     if (almacenajeUsaSubtipo(tipo) && !subtipo) { errores.push(`${nombreFila}: indica ${almacenajeSubtipoLabel(tipo).toLowerCase()}.`); return; }
     if (!fecha) { errores.push(`${nombreFila}: indica la fecha.`); return; }
     const precio = Number(precioTxt.replace(',', '.'));
+    const minimo = minTxt === '' ? null : Number(minTxt.replace(',', '.'));
     if (!precioTxt || !isFinite(precio) || precio < 0) { errores.push(`${nombreFila}: indica el precio.`); return; }
-    const payload = { fecha, tipo, subtipo: subtipo || null, precio, observaciones: obs || null, tipo_actividad: almacenajeCategoriaDe(tipo) };
+    if (minimo !== null && (!isFinite(minimo) || minimo < 0)) { errores.push(`${nombreFila}: el importe mínimo no es válido.`); return; }
+    const payload = { fecha, tipo, subtipo: subtipo || null, precio, importe_minimo: minimo, observaciones: obs || null, tipo_actividad: almacenajeCategoriaDe(tipo) };
     if (!id) { nuevas.push({ cliente_id: clienteId, ...payload }); return; }
     const antes = almacenajeTarifas.find(t => t.id === id);
     if (!antes) return;
-    const igual = antes.fecha === fecha && antes.tipo === tipo && (antes.subtipo || '') === subtipo && Number(antes.precio) === precio && (antes.observaciones || '') === obs;
+    const igual = antes.fecha === fecha && antes.tipo === tipo && (antes.subtipo || '') === subtipo && Number(antes.precio) === precio && (antes.importeMinimo == null ? null : Number(antes.importeMinimo)) === minimo && (antes.observaciones || '') === obs;
     if (!igual) cambios.push({ id, payload, antes });
   });
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
@@ -8739,11 +8753,12 @@ async function submitAlmacenajeTarifaForm(){
     if (error) { fallo(error.message || 'error desconocido.'); return; }
     const etiq = c.payload.subtipo ? `${almacenajeTipoLabel(c.payload.tipo)} ${c.payload.subtipo}` : almacenajeTipoLabel(c.payload.tipo);
     const dif = [];
+    if ((c.antes.importeMinimo == null ? null : Number(c.antes.importeMinimo)) !== c.payload.importe_minimo) dif.push(`importe mínimo de ${c.antes.importeMinimo == null ? 'sin mínimo' : eur2(c.antes.importeMinimo)} a ${c.payload.importe_minimo == null ? 'sin mínimo' : eur2(c.payload.importe_minimo)}`);
     if (Number(c.antes.precio) !== c.payload.precio) dif.push(`precio de ${eur2(c.antes.precio)} a ${eur2(c.payload.precio)}${almacenajeUnidadTxt(c.payload.tipo)}`);
     if (c.antes.fecha !== c.payload.fecha) dif.push(`fecha de ${fmtDateDMY(c.antes.fecha)} a ${fmtDateDMY(c.payload.fecha)}`);
     if (c.antes.tipo !== c.payload.tipo || (c.antes.subtipo || '') !== (c.payload.subtipo || '')) dif.push(`producto de ${almacenajeEtiqueta(c.antes)} a ${etiq}`);
     if ((c.antes.observaciones || '') !== (c.payload.observaciones || '')) dif.push('observaciones');
-    Object.assign(c.antes, { fecha: c.payload.fecha, tipo: c.payload.tipo, subtipo: c.payload.subtipo || '', precio: c.payload.precio, observaciones: c.payload.observaciones || '', categoria: c.payload.tipo_actividad });
+    Object.assign(c.antes, { fecha: c.payload.fecha, tipo: c.payload.tipo, subtipo: c.payload.subtipo || '', precio: c.payload.precio, observaciones: c.payload.observaciones || '', categoria: c.payload.tipo_actividad, importeMinimo: c.payload.importe_minimo });
     resumen.push(`ha corregido la línea ${etiq}: ${dif.join(', ') || 'sin cambios de precio'}.`);
   }
   // 2) Líneas quitadas
@@ -8759,11 +8774,11 @@ async function submitAlmacenajeTarifaForm(){
     if (error || !data) { fallo(error && error.message ? error.message : 'error desconocido.'); return; }
     data.forEach(row => almacenajeTarifas.push({
       id: row.id, createdAt: row.created_at, clienteId: row.cliente_id, fecha: row.fecha, tipo: row.tipo,
-      subtipo: row.subtipo || '', precio: Number(row.precio), observaciones: row.observaciones || '', categoria: row.tipo_actividad || almacenajeCategoriaDe(row.tipo),
+      subtipo: row.subtipo || '', precio: Number(row.precio), observaciones: row.observaciones || '', importeMinimo: row.importe_minimo == null ? null : Number(row.importe_minimo), categoria: row.tipo_actividad || almacenajeCategoriaDe(row.tipo),
     }));
     nuevas.forEach(f => {
       const etiqueta = f.subtipo ? `${almacenajeTipoLabel(f.tipo)} ${f.subtipo}` : almacenajeTipoLabel(f.tipo);
-      resumen.push(`ha añadido la línea ${etiqueta} a ${eur2(f.precio)}${almacenajeUnidadTxt(f.tipo)}, vigente desde el ${fmtDateDMY(f.fecha)}.`);
+      resumen.push(`ha añadido la línea ${etiqueta} a ${eur2(f.precio)}${almacenajeUnidadTxt(f.tipo)}${f.importe_minimo != null ? ` (mínimo ${eur2(f.importe_minimo)})` : ''}, vigente desde el ${fmtDateDMY(f.fecha)}.`);
     });
   }
   await logAlmacenajeHistorial(clienteId, resumen.join('\n'));
@@ -8800,7 +8815,7 @@ function tplAlmacenajeTarifasCard(c){
               <td style="white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
               <td data-sort-value="${esc(almacenajeCategoriaLabel(t.categoria))}">${almacenajeCategoriaBadgeHtml(t.categoria)}</td>
               <td data-sort-value="${esc(almacenajeEtiqueta(t))}">${esc(almacenajeEtiqueta(t))}</td>
-              <td class="tf-precio" data-sort-value="${t.precio}">${esc(almacenajePrecioTxt(t))}</td>
+              <td class="tf-precio" data-sort-value="${t.precio}">${almacenajePrecioCeldaHtml(t)}</td>
               <td style="color:var(--muted);" data-sort-value="${esc(t.observaciones)}">${t.observaciones ? esc(t.observaciones) : '—'}</td>
             </tr>`).join('')}
         </tbody>
@@ -8824,7 +8839,7 @@ function tplAlmacenajeTarifasHistoricasCard(c){
               <td style="white-space:nowrap;" data-sort-value="${esc(t.hasta)}">${fmtDateDMY(t.hasta)}</td>
               <td data-sort-value="${esc(almacenajeCategoriaLabel(t.categoria))}">${almacenajeCategoriaBadgeHtml(t.categoria)}</td>
               <td data-sort-value="${esc(almacenajeEtiqueta(t))}">${esc(almacenajeEtiqueta(t))}</td>
-              <td class="tf-precio" data-sort-value="${t.precio}">${esc(almacenajePrecioTxt(t))}</td>
+              <td class="tf-precio" data-sort-value="${t.precio}">${almacenajePrecioCeldaHtml(t)}</td>
             </tr>`).join('')}
         </tbody>
       </table>
