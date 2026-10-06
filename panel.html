@@ -239,6 +239,23 @@
   .ph-aud-row{display:flex;align-items:center;gap:12px;padding:9px 12px;border:1px solid var(--border);border-radius:10px;background:var(--panel);}
   .dc-relevo-row{border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-top:10px;background:var(--panel2);}
   .dc-relevos-add{margin-top:10px;}
+  .op-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;}
+  .op-item{border:1px solid var(--border);border-radius:14px;padding:14px 16px;background:var(--panel);display:flex;flex-direction:column;gap:10px;}
+  .op-item-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;}
+  .op-item-name{font-family:var(--display);font-size:15px;font-weight:700;line-height:1.3;overflow-wrap:anywhere;}
+  .op-item-sub{font-size:11.5px;color:var(--mutedFaint);margin-top:2px;}
+  .op-item-total{font-family:var(--display);font-size:20px;font-weight:700;color:var(--primary);white-space:nowrap;}
+  .op-lines{display:flex;flex-direction:column;gap:5px;padding:10px 12px;border-radius:10px;background:var(--panel2);}
+  .op-line{display:flex;align-items:baseline;gap:8px;font-size:13px;color:var(--muted);}
+  .op-line b{color:var(--text);font-weight:600;white-space:nowrap;}
+  .op-dots{flex:1;border-bottom:1px dotted var(--border);transform:translateY(-3px);}
+  .op-item-obs{font-size:12px;color:var(--muted);line-height:1.4;}
+  .op-item-actions{display:flex;gap:6px;align-items:center;justify-content:flex-end;margin-top:auto;}
+  .op-row{display:flex;gap:8px;align-items:flex-end;margin-bottom:8px;}
+  .op-x{background:none;border:none;color:var(--mutedFaint);font-size:16px;padding:8px 4px;cursor:pointer;}
+  .op-total-box{display:flex;justify-content:space-between;align-items:baseline;margin-top:14px;padding:12px 16px;border-radius:12px;background:color-mix(in srgb,var(--primary) 8%,var(--panel));border:1px solid color-mix(in srgb,var(--primary) 22%,var(--border));}
+  .op-total-box span{font-size:13px;font-weight:600;color:var(--muted);}
+  .op-total-box b{font-family:var(--display);font-size:22px;color:var(--primary);}
   input.af-locked,.deca-form input.af-locked{background:var(--panel2) !important;color:var(--text);cursor:not-allowed;font-weight:600;}
   .doc-seg button .cl-n{margin-left:4px;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--panel);color:var(--muted);}
   .doc-seg button.on .cl-n{background:rgba(255,255,255,.22);color:#fff;}
@@ -929,6 +946,210 @@ function phoneAbrirRevisar(tabla, id){
     setTimeout(() => openTransportistaContactoModal(p.contactoId, id), 200);
   }
 }
+/* ===================== OPERATIVAS =====================
+   Un paquete de servicios con precio cerrado para un cliente (p. ej. «Acarreo puerto +
+   Manipulación mercancía + Transporte final»), desglosado por apartados. El precio total es la
+   suma de los apartados. Cada operativa tiene su fecha de vigencia: si cambia el precio se añade
+   una nueva con el mismo nombre y la anterior pasa sola al histórico (igual que las tarifas). */
+let operativas = [];
+async function loadOperativas(){
+  const { data } = await supabaseClient.from('operativas').select('*').order('fecha', { ascending: false });
+  operativas = (data || []).map(o => ({
+    id: o.id, createdAt: o.created_at, clienteId: o.cliente_id, nombre: o.nombre, fecha: o.fecha,
+    apartados: Array.isArray(o.apartados) ? o.apartados : [], total: Number(o.precio_total), observaciones: o.observaciones || '',
+  }));
+}
+const OPERATIVA_CONCEPTOS_HABITUALES = ['Acarreo puerto', 'Manipulación mercancía', 'Transporte final', 'Carga', 'Descarga', 'Transporte', 'Palets', 'Film'];
+function operativaClave(o){ return `${o.clienteId}|${String(o.nombre).trim().toLowerCase()}`; }
+// Cada operativa (cliente + nombre) con su historial: la más reciente es la vigente; las demás, históricas.
+function operativaPeriodos(lista){
+  const grupos = {};
+  lista.slice().sort((a, b) => b.fecha.localeCompare(a.fecha) || String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).forEach(o => {
+    (grupos[operativaClave(o)] = grupos[operativaClave(o)] || []).push(o);
+  });
+  const out = [];
+  Object.values(grupos).forEach(g => g.forEach((o, i) => {
+    const nueva = i > 0 ? g[i - 1] : null;
+    let hasta = null;
+    if (nueva) { hasta = tarifaDiaAnterior(nueva.fecha); if (hasta < o.fecha) hasta = o.fecha; }
+    out.push({ ...o, vigente: !nueva, hasta });
+  }));
+  return out.sort((a, b) => b.fecha.localeCompare(a.fecha) || a.nombre.localeCompare(b.nombre, 'es'));
+}
+function operativaDesgloseHtml(o){
+  return `<div class="op-lines">${o.apartados.map(a => `<div class="op-line"><span>${esc(a.concepto)}</span><span class="op-dots"></span><b>${esc(eur2(a.importe))}</b></div>`).join('')}</div>`;
+}
+function tplContactoOperativasCard(c){
+  const vigentes = operativaPeriodos(operativas.filter(o => o.clienteId === c.id)).filter(o => o.vigente).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  return `
+    <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:20px;">
+      ${decaCardHead('box', `Operativas (${vigentes.length})`, 'Paquetes con precio cerrado, desglosados por apartado', `<button class="btn btn-primary" onclick="openOperativaModal('${c.id}')">+ Nueva operativa</button>`)}
+      <div class="deca-card-body">
+        ${vigentes.length ? `<div class="op-grid">${vigentes.map(o => `
+          <div class="op-item">
+            <div class="op-item-head">
+              <div style="min-width:0;">
+                <div class="op-item-name">${esc(o.nombre)}</div>
+                <div class="op-item-sub">Vigente desde el ${esc(fmtDateDMY(o.fecha))}</div>
+              </div>
+              <div class="op-item-total">${esc(eur2(o.total))}</div>
+            </div>
+            ${operativaDesgloseHtml(o)}
+            ${o.observaciones ? `<div class="op-item-obs">${esc(o.observaciones)}</div>` : ''}
+            <div class="op-item-actions">
+              <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px;" onclick="openOperativaModal('${c.id}', null, '${o.id}')" title="Precio nuevo desde una fecha: la actual pasa a históricas">Actualizar precio</button>
+              <button class="deca-act" onclick="openOperativaModal('${c.id}', '${o.id}')" title="Corregir esta operativa (errores de tecleo)">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+              <button class="deca-act danger" onclick="deleteOperativa('${o.id}')" title="Eliminar">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>
+            </div>
+          </div>`).join('')}</div>` : `<div style="color:var(--mutedFaint);font-size:12.5px;">Este cliente todavía no tiene operativas. Crea la primera con «+ Nueva operativa».</div>`}
+      </div>
+    </div>`;
+}
+function tplContactoOperativasHistoricasCard(c){
+  const hist = operativaPeriodos(operativas.filter(o => o.clienteId === c.id)).filter(o => !o.vigente);
+  if (!hist.length) return '';
+  return `
+    <div class="card deca-card" style="--dc-accent:#5C6670;margin-top:20px;">
+      ${decaCardHead('clock', `Operativas históricas (${hist.length})`, 'Las que ya cambiaron de precio, con las fechas en que estuvieron vigentes')}
+      <div style="overflow-x:auto;">
+      <table class="tf-table tf-hist">
+        <thead><tr>${thSort('Vigente del','date')}${thSort('Hasta','date')}${thSort('Operativa','text')}${thSort('Desglose','text')}${thSort('Total','number','style="text-align:right;"')}</tr></thead>
+        <tbody>
+          ${hist.map(o => `
+            <tr>
+              <td style="white-space:nowrap;" data-sort-value="${esc(o.fecha)}">${fmtDateDMY(o.fecha)}</td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(o.hasta)}">${fmtDateDMY(o.hasta)}</td>
+              <td data-sort-value="${esc(o.nombre)}"><b>${esc(o.nombre)}</b></td>
+              <td style="color:var(--muted);font-size:12.5px;" data-sort-value="${esc(o.apartados.map(a => a.concepto).join(','))}">${o.apartados.map(a => `${esc(a.concepto)} ${esc(eur2(a.importe))}`).join(' · ')}</td>
+              <td class="tf-precio" data-sort-value="${o.total}">${esc(eur2(o.total))}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+      </div>
+    </div>`;
+}
+/* ---- Alta / corrección / actualización de precio ---- */
+function operativaApartadoRowHtml(a){
+  a = a || {};
+  return `
+    <div class="op-row">
+      <div class="field" style="flex:1;min-width:150px;margin-bottom:0;">${decaInputIcon('list', `<input class="op-concepto" maxlength="80" data-combo="op-conceptos" autocomplete="off" placeholder="Apartado (p. ej. Transporte final)" value="${esc(a.concepto || '')}" />`)}</div>
+      <div class="field" style="width:150px;margin-bottom:0;">${decaInputIcon('file', `<input class="op-importe" inputmode="decimal" maxlength="12" placeholder="Importe" value="${a.importe != null ? esc(String(a.importe).replace('.', ',')) : ''}" oninput="operativaTotalActualizar()" />`, '€')}</div>
+      <button type="button" class="op-x" onclick="this.closest('.op-row').remove(); operativaTotalActualizar();" title="Quitar este apartado">✕</button>
+    </div>`;
+}
+function operativaTotalActualizar(){
+  const el = document.getElementById('op-total');
+  if (!el) return;
+  const suma = [...document.querySelectorAll('.op-importe')].reduce((s, i) => { const n = Number(i.value.replace(',', '.')); return s + (isFinite(n) ? n : 0); }, 0);
+  el.textContent = eur2(Math.round(suma * 100) / 100);
+}
+function operativaApartadoAdd(){
+  const cont = document.getElementById('op-apartados');
+  if (!cont) return;
+  cont.insertAdjacentHTML('beforeend', operativaApartadoRowHtml({}));
+  const inputs = cont.querySelectorAll('.op-concepto');
+  if (inputs.length) inputs[inputs.length - 1].focus();
+}
+// editId: corregir esa operativa en su sitio · desdeId: operativa nueva a partir de otra (precio nuevo desde una fecha)
+function openOperativaModal(clienteId, editId, desdeId){
+  const base = editId ? operativas.find(o => o.id === editId) : desdeId ? operativas.find(o => o.id === desdeId) : null;
+  const usados = [...new Set(operativas.flatMap(o => o.apartados.map(a => a.concepto)))];
+  const conceptos = [...new Set([...OPERATIVA_CONCEPTOS_HABITUALES, ...usados])];
+  const apartados = base ? base.apartados : [{ concepto: 'Acarreo puerto' }, { concepto: 'Manipulación mercancía' }, { concepto: 'Transporte final' }];
+  const cliente = contactos.find(c => c.id === clienteId);
+  const titulo = editId ? 'Corregir operativa' : desdeId ? 'Actualizar precio de la operativa' : 'Nueva operativa';
+  window.__operativaForm = { clienteId, editId: editId || null };
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:600px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;">
+            <div class="deca-banner-title" style="font-size:19px;">${titulo}</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">${cliente ? esc(cliente.nombre) + ' · ' : ''}precio cerrado, desglosado por apartado</div>
+          </div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);max-height:72vh;overflow-y:auto;overflow-x:hidden;">
+          ${desdeId ? `<div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;">Se guarda como una operativa nueva desde la fecha que indiques; la actual pasa a históricas con sus fechas.</div>` : editId ? `<div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;">Corrige esta operativa. Para un precio nuevo desde una fecha, usa «Actualizar precio».</div>` : ''}
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <div class="field" style="flex:2;min-width:240px;"><label>Nombre de la operativa <span class="dc-req">*</span></label>${decaInputIcon('box', `<input id="op-nombre" maxlength="120" placeholder="Ej. Contenedor puerto Barcelona" value="${esc(base ? base.nombre : '')}" ${editId ? '' : ''} />`)}</div>
+            <div class="field" style="flex:1;min-width:160px;"><label>Vigente desde <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="op-fecha" type="date" value="${esc(editId && base ? base.fecha : today())}" />`)}</div>
+          </div>
+          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Apartados e importe de cada uno <span class="dc-req">*</span></label>
+          <datalist id="op-conceptos">${conceptos.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+          <div id="op-apartados">${apartados.map(operativaApartadoRowHtml).join('')}</div>
+          <button type="button" class="btn btn-ghost" style="margin-top:8px;" onclick="operativaApartadoAdd()">+ Añadir apartado</button>
+          <div class="op-total-box"><span>Precio total de la operativa</span><b id="op-total">0,00 €</b></div>
+          <div class="field" style="margin-top:14px;"><label>Observaciones (opcional)</label>${decaInputIcon('file', `<input id="op-obs" maxlength="250" value="${esc(base ? base.observaciones : '')}" />`)}</div>
+          <div id="op-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
+          <div style="display:flex;gap:10px;">
+            <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary deca-submit op-save-btn" onclick="submitOperativa()">${editId ? 'Guardar cambios' : 'Guardar operativa'}</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  operativaTotalActualizar();
+  setTimeout(() => { const el = document.getElementById(base ? 'op-fecha' : 'op-nombre'); if (el) el.focus(); }, 0);
+}
+async function submitOperativa(){
+  const f = window.__operativaForm || {};
+  const errEl = document.getElementById('op-error');
+  errEl.textContent = '';
+  const nombre = document.getElementById('op-nombre').value.trim();
+  const fecha = document.getElementById('op-fecha').value;
+  const obs = document.getElementById('op-obs').value.trim();
+  if (!nombre) { errEl.textContent = 'Ponle un nombre a la operativa.'; return; }
+  if (!fecha) { errEl.textContent = 'Indica la fecha desde la que vale.'; return; }
+  const apartados = [];
+  for (const row of document.querySelectorAll('.op-row')) {
+    const concepto = row.querySelector('.op-concepto').value.trim();
+    const txt = row.querySelector('.op-importe').value.trim();
+    if (!concepto && !txt) continue; // fila vacía
+    const importe = Number(txt.replace(',', '.'));
+    if (!concepto) { errEl.textContent = 'Hay un apartado con importe pero sin nombre.'; return; }
+    if (txt === '' || !isFinite(importe) || importe < 0) { errEl.textContent = `Indica el importe de «${concepto}».`; return; }
+    apartados.push({ concepto, importe: Math.round(importe * 100) / 100 });
+  }
+  if (!apartados.length) { errEl.textContent = 'Añade al menos un apartado con su importe.'; return; }
+  const total = Math.round(apartados.reduce((s, a) => s + a.importe, 0) * 100) / 100;
+  const payload = { nombre, fecha, apartados, precio_total: total, observaciones: obs || null };
+  const btn = document.querySelector('.op-save-btn');
+  if (btn) btn.disabled = true;
+  const desglose = apartados.map(a => `${a.concepto} ${eur2(a.importe)}`).join(' + ');
+  try {
+    if (f.editId) {
+      const { error } = await supabaseClient.from('operativas').update(payload).eq('id', f.editId);
+      if (error) throw error;
+      Object.assign(operativas.find(o => o.id === f.editId), { nombre, fecha, apartados, total, observaciones: obs });
+      await logTarifaHistorial(f.clienteId, `ha corregido la operativa ${nombre}: ${eur2(total)} (${desglose}).`);
+    } else {
+      const { data, error } = await supabaseClient.from('operativas').insert({ ...payload, cliente_id: f.clienteId, created_by: currentUserEmail() }).select().single();
+      if (error || !data) throw (error || new Error('sin datos'));
+      operativas.push({ id: data.id, createdAt: data.created_at, clienteId: f.clienteId, nombre, fecha, apartados, total, observaciones: obs });
+      const previa = operativaPeriodos(operativas.filter(o => o.clienteId === f.clienteId)).find(o => !o.vigente && operativaClave(o) === operativaClave({ clienteId: f.clienteId, nombre }));
+      await logTarifaHistorial(f.clienteId, `ha ${previa ? 'actualizado' : 'añadido'} la operativa ${nombre} a ${eur2(total)} (${desglose}), vigente desde el ${fmtDateDMY(fecha)}.`);
+    }
+    closeModal();
+    renderTab();
+  } catch (err) {
+    errEl.textContent = 'No se pudo guardar: ' + (err && err.message ? err.message : 'error desconocido.');
+    if (btn) btn.disabled = false;
+  }
+}
+async function deleteOperativa(id){
+  const o = operativas.find(x => x.id === id);
+  if (!o) return;
+  if (!(await appConfirm({ title: 'Eliminar operativa', name: `${o.nombre} · ${eur2(o.total)}`, message: 'Se eliminará esta operativa. Esta acción no se puede deshacer.', confirmLabel: 'Eliminar', tone: 'danger', icon: 'trash' }))) return;
+  const { error } = await supabaseClient.from('operativas').delete().eq('id', id);
+  if (error) { appToast('No se pudo eliminar: ' + error.message); return; }
+  operativas = operativas.filter(x => x.id !== id);
+  await logTarifaHistorial(o.clienteId, `ha eliminado la operativa ${o.nombre} (${eur2(o.total)}).`);
+  renderTab();
+}
+
 const DOCS_BUCKET = 'qualified-docs';
 async function signedUrl(path){
   if (!path) return null;
@@ -5032,7 +5253,7 @@ function tplContactoDetailPage(){
   const historial = Array.isArray(window.__contactoHistorial) ? window.__contactoHistorial.filter(h => !(h.resumen || '').startsWith(TARIFA_LOG_PREFIX)) : window.__contactoHistorial;
   const tabContentHtml = () => {
     if (activeTab === 'almacen') return tplContactoAlmacenCard(editing, editMode) + tplAlmacenajeTarifasCard(editing) + tplAlmacenajeTarifasHistoricasCard(editing);
-    if (activeTab === 'comercial') return tplContactoPersonasCard(editing) + tplContactoTarifasCard(editing) + tplContactoTarifasHistoricasCard(editing);
+    if (activeTab === 'comercial') return tplContactoPersonasCard(editing) + tplContactoTarifasCard(editing) + tplContactoOperativasCard(editing) + tplContactoTarifasHistoricasCard(editing) + tplContactoOperativasHistoricasCard(editing);
     if (activeTab === 'transporte') return tplContactoTabTransporte(editing);
     if (activeTab === 'autonomos') return tplContactoTabAutonomos(editing);
     return editMode
@@ -14360,7 +14581,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   }
 
   await loadWarehouses();
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadTransportistaRutas(), loadTransportistaContactos(), loadAlmacenajeTarifas(), loadAlmacenajeProductos()]);
+  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadOperativas(), loadTransportistaRutas(), loadTransportistaContactos(), loadAlmacenajeTarifas(), loadAlmacenajeProductos()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
