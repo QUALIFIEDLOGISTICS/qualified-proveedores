@@ -8811,12 +8811,24 @@ async function loadAlmacenajeTarifas(){
 // lo decide quien gestione el catálogo. Un producto archivado sigue
 // resolviéndose bien en las tarifas ya guardadas, solo deja de ofrecerse
 // para tarifas nuevas.
+// Cuándo cobra el SGA cada producto por sí solo, y con qué unidad se suele contar (se sugiere al elegirlo).const ALMACENAJE_DISPARADORES = {  entrada:   { label: 'Entrada de mercancía (por palet o unidad)',        corto: 'Entrada',            unidad: 'movimiento' },  salida:    { label: 'Salida de mercancía (por palet o unidad)',         corto: 'Salida',             unidad: 'movimiento' },  descarga:  { label: 'Descarga por albarán (contenedor, trailer…)',      corto: 'Descarga · albarán', unidad: 'albaran' },  carga:     { label: 'Carga por albarán (trailer…)',                      corto: 'Carga · albarán',    unidad: 'albaran' },  stock_dia: { label: 'Stock almacenado: cada día',                        corto: 'Stock · cada día',   unidad: 'dia' },  stock_mes: { label: 'Stock almacenado: cada mes (m²)',                   corto: 'Stock · cada mes',   unidad: 'mes' },  manual:    { label: 'Manual: lo anota el operario',                      corto: 'Manual',             unidad: null },};const ALMACENAJE_FAMILIAS = { palet: 'Palet', palet_especial: 'Palet especial', bobina: 'Bobina', caja: 'Caja' };
+const ALMACENAJE_DISPARADORES = {
+  entrada:   { label: 'Entrada de mercancía (por palet o unidad)',   corto: 'Entrada',            unidad: 'movimiento' },
+  salida:    { label: 'Salida de mercancía (por palet o unidad)',    corto: 'Salida',             unidad: 'movimiento' },
+  descarga:  { label: 'Descarga por albarán (contenedor, trailer…)', corto: 'Descarga · albarán', unidad: 'albaran' },
+  carga:     { label: 'Carga por albarán (trailer…)',                corto: 'Carga · albarán',    unidad: 'albaran' },
+  stock_dia: { label: 'Stock almacenado: cada día',                  corto: 'Stock · cada día',   unidad: 'dia' },
+  stock_mes: { label: 'Stock almacenado: cada mes (m²)',             corto: 'Stock · cada mes',   unidad: 'mes' },
+  manual:    { label: 'Manual: lo anota el operario',                corto: 'Manual',             unidad: null },
+};
+const ALMACENAJE_FAMILIAS = { palet: 'Palet', palet_especial: 'Palet especial', bobina: 'Bobina', caja: 'Caja' };
 let almacenajeProductos = [];
 async function loadAlmacenajeProductos(){
   const { data } = await supabaseClient.from('almacenaje_productos').select('*').order('nombre', { ascending: true });
   almacenajeProductos = (data||[]).map(p => ({
     id: p.id, createdAt: p.created_at, nombre: p.nombre, categoria: p.categoria, unidad: p.unidad === 'contenedor' ? 'albaran' : p.unidad,
     usaSubtipo: !!p.usa_subtipo, subtipoLabel: p.subtipo_label || '', subtipoValor: p.subtipo_valor || '', archived: !!p.archived,
+    disparador: p.disparador || '', familia: p.familia || '',
   }));
 }
 function almacenajeProducto(tipo){ return almacenajeProductos.find(p=>p.id===tipo); }
@@ -8918,20 +8930,29 @@ function backToAlmacenajeProductos(){
   window.__apFormDirty = false;
   renderTab();
 }
+// Al elegir «Se cobra al…», se sugiere la unidad de cobro que le corresponde (se puede cambiar después).
+function almacenajeDisparadorCambio(){
+  const d = ALMACENAJE_DISPARADORES[document.getElementById('ap-disparador').value];
+  const sel = document.getElementById('ap-unidad');
+  if (d && d.unidad && sel) sel.value = d.unidad;
+}
 async function submitAlmacenajeProducto(editId){
   const nombre = (document.getElementById('ap-nombre').value || '').trim();
   const categoria = document.getElementById('ap-categoria').value;
   const unidad = document.getElementById('ap-unidad').value;
+  const disparador = document.getElementById('ap-disparador').value;
+  const familia = document.getElementById('ap-familia').value;
   const subtipoValor = (document.getElementById('ap-subtipolabel').value || '').trim();
   const usaSubtipo = !!subtipoValor; // lleva subtipo si se ha escrito
   if (!nombre) { appToast('Ponle un nombre al producto.'); return; }
+  if (!disparador) { appToast('Indica cuándo se cobra este producto («Se cobra al…»).'); return; }
   // Dos productos no pueden llamarse igual y tener el mismo subtipo (saldrían idénticos al elegirlos en una tarifa).
   const clave = (n, s) => `${n.trim().toLowerCase()}|${(s || '').trim().toLowerCase()}`;
   const repetido = almacenajeProductos.find(p => p.id !== editId && clave(p.nombre, p.subtipoValor) === clave(nombre, subtipoValor));
   if (repetido) { appToast(`Ya existe «${almacenajeProductoTexto(repetido)}»${repetido.archived ? ' (archivado)' : ''}. Cambia el nombre o el subtipo para distinguirlos.`); return; }
   const editing = editId ? almacenajeProducto(editId) : null;
   // El subtipo del producto es su valor fijo; también se guarda como etiqueta para los textos que la usan.
-  const row = { nombre, categoria, unidad, usa_subtipo: usaSubtipo, subtipo_label: usaSubtipo ? subtipoValor : null, subtipo_valor: usaSubtipo ? subtipoValor : null };
+  const row = { nombre, categoria, unidad, usa_subtipo: usaSubtipo, subtipo_label: usaSubtipo ? subtipoValor : null, subtipo_valor: usaSubtipo ? subtipoValor : null, disparador, familia: familia || null };
   if (editing) {
     const { error } = await supabaseClient.from('almacenaje_productos').update(row).eq('id', editing.id);
     if (error) { appToast('No se pudo guardar: ' + error.message); return; }
@@ -8948,12 +8969,12 @@ async function submitAlmacenajeProducto(editId){
         if (cambiosLineas.subtipo) t.subtipo = cambiosLineas.subtipo;
       });
     }
-    Object.assign(editing, { nombre, categoria, unidad, usaSubtipo, subtipoLabel: row.subtipo_label || '', subtipoValor: row.subtipo_valor || '' });
+    Object.assign(editing, { nombre, categoria, unidad, usaSubtipo, subtipoLabel: row.subtipo_label || '', subtipoValor: row.subtipo_valor || '', disparador, familia });
   } else {
     const id = almacenajeProductoSlug(nombre);
     const { data, error } = await supabaseClient.from('almacenaje_productos').insert({ id, ...row }).select().single();
     if (error) { appToast('No se pudo crear: ' + error.message); return; }
-    almacenajeProductos.push({ id: data.id, createdAt: data.created_at, nombre, categoria, unidad, usaSubtipo, subtipoLabel: row.subtipo_label || '', subtipoValor: row.subtipo_valor || '', archived: false });
+    almacenajeProductos.push({ id: data.id, createdAt: data.created_at, nombre, categoria, unidad, usaSubtipo, subtipoLabel: row.subtipo_label || '', subtipoValor: row.subtipo_valor || '', archived: false, disparador, familia });
   }
   backToAlmacenajeProductos();
 }
@@ -8986,7 +9007,7 @@ function tplAlmacenajeProductosPage(){
     ${list.length ? `
     <div class="card" style="padding:0;overflow-x:auto;">
     <table class="tf-table">
-      <thead><tr>${thSort('Actividad','text')}${thSort('Nombre','text')}${thSort('Subtipo','text')}${thSort('Unidad','text')}${thSort('Estado','text')}<th>Acciones</th></tr></thead>
+      <thead><tr>${thSort('Actividad','text')}${thSort('Nombre','text')}${thSort('Subtipo','text')}${thSort('Unidad','text')}${thSort('Se cobra al…','text')}${thSort('Familia','text')}${thSort('Estado','text')}<th>Acciones</th></tr></thead>
       <tbody>
         ${list.map(p => `
           <tr style="${p.archived?'opacity:0.6;':''}">
@@ -8994,6 +9015,8 @@ function tplAlmacenajeProductosPage(){
             <td data-sort-value="${esc(p.nombre)}"><b>${esc(p.nombre)}</b></td>
             <td style="color:var(--muted);" data-sort-value="${esc(p.subtipoValor || p.subtipoLabel)}">${p.usaSubtipo ? (p.subtipoValor ? esc(p.subtipoValor) : '<span style="color:var(--mutedFaint);" title="Sin subtipo definido: en las tarifas se escribe a mano">Sin definir</span>') : '—'}</td>
             <td data-sort-value="${esc(ALMACENAJE_UNIDAD_LABELS[p.unidad]||'')}">${esc(ALMACENAJE_UNIDAD_LABELS[p.unidad]||'—')}</td>
+            <td data-sort-value="${esc(p.disparador||'')}">${p.disparador && ALMACENAJE_DISPARADORES[p.disparador] ? esc(ALMACENAJE_DISPARADORES[p.disparador].corto) : '<span style="color:var(--danger);">Sin definir</span>'}</td>
+            <td data-sort-value="${esc(p.familia||'')}" style="color:var(--muted);">${p.familia && ALMACENAJE_FAMILIAS[p.familia] ? esc(ALMACENAJE_FAMILIAS[p.familia]) : '—'}</td>
             <td data-sort-value="${p.archived?'Archivado':'Activo'}">${p.archived ? '<span style="color:var(--mutedFaint);">Archivado</span>' : '<span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--success);"></span>Activo</span>'}</td>
             <td style="white-space:nowrap;">
               <button class="deca-act" onclick="openAlmacenajeProductoForm('${p.id}')" title="Editar">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
@@ -9048,6 +9071,23 @@ function tplAlmacenajeProductoFormPage(){
               <select id="ap-unidad">${Object.keys(ALMACENAJE_UNIDAD_LABELS).map(u => `<option value="${u}" ${p.unidad===u?'selected':''}>${esc(ALMACENAJE_UNIDAD_LABELS[u])}</option>`).join('')}</select>
             </div>
           </div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;">
+            <div class="field" style="flex:2;min-width:240px;margin-bottom:0;">
+              <label>Se cobra al… <span class="dc-req">*</span></label>
+              <select id="ap-disparador" onchange="almacenajeDisparadorCambio()">
+                <option value="">Elige cuándo se cobra</option>
+                ${Object.keys(ALMACENAJE_DISPARADORES).map(k => `<option value="${k}" ${p.disparador===k?'selected':''}>${esc(ALMACENAJE_DISPARADORES[k].label)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="field" style="flex:1;min-width:180px;margin-bottom:0;">
+              <label>Familia de carga</label>
+              <select id="ap-familia">
+                <option value="">— Ninguna —</option>
+                ${Object.keys(ALMACENAJE_FAMILIAS).map(k => `<option value="${k}" ${p.familia===k?'selected':''}>${esc(ALMACENAJE_FAMILIAS[k])}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">Es lo que permite al SGA cobrarlo solo. «Familia» agrupa los tipos de carga que se cobran igual al entrar o salir: un Palet Europeo, Americano o Medio Palet cuentan como «Palet», y las bobinas de cualquier diámetro como «Bobina».</div>
         </div>
       </div>
     </div>
