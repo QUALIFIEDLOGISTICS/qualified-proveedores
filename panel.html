@@ -262,6 +262,9 @@
   .op-chips{display:flex;flex-wrap:wrap;gap:6px;}
   .op-chip{border:1px dashed var(--border);background:var(--panel);color:var(--muted);border-radius:999px;padding:5px 12px;font-size:12.5px;cursor:pointer;font-family:var(--body);}
   .op-chip:hover{border-color:var(--primary);color:var(--primary);background:color-mix(in srgb,var(--primary) 6%,var(--panel));}
+  .op-sec{margin-top:18px;padding-top:14px;border-top:1px dashed var(--border);}
+  .op-extras{margin-top:2px;padding:10px 12px;border-radius:10px;border:1px dashed var(--border);display:flex;flex-direction:column;gap:5px;}
+  .op-extras-t{font-size:10.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);margin-bottom:2px;}
   .modal-overlay.op-full-ov{padding:0;align-items:stretch;background:var(--bg);}
   .op-full{width:100%;height:100%;display:flex;flex-direction:column;background:var(--bg);}
   .op-full .deca-view-head{border-radius:0;padding:16px 28px;flex-shrink:0;}
@@ -1019,7 +1022,7 @@ async function loadOperativas(){
     apartados: Array.isArray(o.apartados) ? o.apartados : [], total: Number(o.precio_total), observaciones: o.observaciones || '',
   }));
 }
-const OPERATIVA_CONCEPTOS_HABITUALES = ['Acarreo puerto', 'Manipulación mercancía', 'Transporte final', 'Carga', 'Descarga', 'Transporte', 'Palets', 'Film'];
+const OPERATIVA_CONCEPTOS_HABITUALES = ['Acarreo puerto', 'Manipulación mercancía', 'Transporte final', 'Carga', 'Descarga', 'Transporte'];
 function operativaClave(o){ return `${o.clienteId}|${String(o.nombre).trim().toLowerCase()}`; }
 // Cada operativa (cliente + nombre) con su historial: la más reciente es la vigente; las demás, históricas.
 function operativaPeriodos(lista){
@@ -1036,8 +1039,26 @@ function operativaPeriodos(lista){
   }));
   return out.sort((a, b) => b.fecha.localeCompare(a.fecha) || a.nombre.localeCompare(b.nombre, 'es'));
 }
+// Apartados FIJOS (suman al total: acarreo, manipulación, transporte…) y EXTRAS por cantidad (palet extra, filmado…:
+// se facturan aparte según los palets o unidades y NO suman al total). Los extras llevan extra:true y su unidad.
+const OPERATIVA_EXTRAS_HABITUALES = ['Palet extra', 'Filmado'];
+const OPERATIVA_EXTRA_UNIDADES = { palet: 'por palet', unidad: 'por unidad', hora: 'por hora' };
+function operativaFijos(o){ return (o.apartados || []).filter(a => !a.extra); }
+function operativaExtras(o){ return (o.apartados || []).filter(a => a.extra); }
+function operativaExtraTxt(a){ return `${eurPrecio(a.importe)} ${OPERATIVA_EXTRA_UNIDADES[a.unidad] || OPERATIVA_EXTRA_UNIDADES.palet}`; }
+// «Acarreo 120,00 € · Transporte 200,00 € · Extras: Palet extra 5,00 € por palet», para tablas y registros.
+function operativaResumenTxt(o){
+  const f = operativaFijos(o).map(a => `${a.concepto} ${eur2(a.importe)}`).join(' · ');
+  const e = operativaExtras(o).map(a => `${a.concepto} ${operativaExtraTxt(a)}`).join(' · ');
+  return f + (e ? `${f ? ' · ' : ''}Extras: ${e}` : '');
+}
 function operativaDesgloseHtml(o){
-  return `<div class="op-lines">${o.apartados.map(a => `<div class="op-line"><span>${esc(a.concepto)}</span><span class="op-dots"></span><b>${esc(eur2(a.importe))}</b></div>`).join('')}</div>`;
+  return `<div class="op-lines">${operativaFijos(o).map(a => `<div class="op-line"><span>${esc(a.concepto)}</span><span class="op-dots"></span><b>${esc(eur2(a.importe))}</b></div>`).join('')}</div>`;
+}
+function operativaExtrasHtml(o){
+  const ex = operativaExtras(o);
+  if (!ex.length) return '';
+  return `<div class="op-extras"><div class="op-extras-t">Extras según cantidad · no suman al total</div>${ex.map(a => `<div class="op-line"><span>${esc(a.concepto)}</span><span class="op-dots"></span><b>${esc(operativaExtraTxt(a))}</b></div>`).join('')}</div>`;
 }
 /* ---- Alta / corrección / actualización de precio ---- */
 function operativaApartadoRowHtml(a){
@@ -1049,26 +1070,48 @@ function operativaApartadoRowHtml(a){
       <button type="button" class="op-x" onclick="this.closest('.op-row').remove(); operativaTotalActualizar();" title="Quitar este apartado">✕</button>
     </div>`;
 }
-// Botones de un clic con los apartados habituales que todavía no están en la operativa.
+function operativaExtraRowHtml(a){
+  a = a || {};
+  return `
+    <div class="op-row">
+      <div class="field" style="flex:1;min-width:130px;margin-bottom:0;">${decaInputIcon('list', `<input class="opx-concepto" maxlength="80" data-combo="op-extras-conceptos" autocomplete="off" placeholder="Extra" value="${esc(a.concepto || '')}" />`)}</div>
+      <div class="field" style="width:120px;margin-bottom:0;">${decaInputIcon('file', `<input class="opx-importe" inputmode="decimal" maxlength="12" placeholder="Importe" value="${a.importe != null ? esc(String(a.importe).replace('.', ',')) : ''}" />`, '€')}</div>
+      <div class="field" style="width:122px;margin-bottom:0;"><select class="opx-unidad">${Object.keys(OPERATIVA_EXTRA_UNIDADES).map(u => `<option value="${u}" ${(a.unidad || 'palet') === u ? 'selected' : ''}>${OPERATIVA_EXTRA_UNIDADES[u]}</option>`).join('')}</select></div>
+      <button type="button" class="op-x" onclick="this.closest('.op-row').remove(); operativaTotalActualizar();" title="Quitar este extra">✕</button>
+    </div>`;
+}
+// Botones de un clic con los apartados / extras habituales que todavía no están en la operativa.
 function operativaChipsHtml(){
   const usados = new Set([...document.querySelectorAll('.op-concepto')].map(i => i.value.trim().toLowerCase()));
   const libres = OPERATIVA_CONCEPTOS_HABITUALES.filter(c => !usados.has(c.toLowerCase()));
   return libres.map(c => `<button type="button" class="op-chip" data-c="${esc(c)}" onclick="operativaApartadoAdd(this.dataset.c)">+ ${esc(c)}</button>`).join('')
     + `<button type="button" class="op-chip otro" onclick="operativaApartadoAdd('')">+ Otro</button>`;
 }
-// Refresca el ticket de vista previa (con el total en vivo) y los botones de apartados.
+function operativaExtraChipsHtml(){
+  const usados = new Set([...document.querySelectorAll('.opx-concepto')].map(i => i.value.trim().toLowerCase()));
+  const libres = OPERATIVA_EXTRAS_HABITUALES.filter(c => !usados.has(c.toLowerCase()));
+  return libres.map(c => `<button type="button" class="op-chip" data-c="${esc(c)}" onclick="operativaExtraAdd(this.dataset.c)">+ ${esc(c)}</button>`).join('')
+    + `<button type="button" class="op-chip otro" onclick="operativaExtraAdd('')">+ Otro extra</button>`;
+}
+// Refresca el ticket de vista previa (con el total en vivo, solo de los apartados fijos) y los botones.
 function operativaTotalActualizar(){
   const chips = document.getElementById('op-chips');
   if (chips) chips.innerHTML = operativaChipsHtml();
+  const xchips = document.getElementById('op-extra-chips');
+  if (xchips) xchips.innerHTML = operativaExtraChipsHtml();
   const prev = document.getElementById('op-preview');
   if (!prev) return;
   const val = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
-  const apartados = [...document.querySelectorAll('.op-row')].map(r => {
-    const n = Number(r.querySelector('.op-importe').value.replace(',', '.'));
-    return { concepto: r.querySelector('.op-concepto').value.trim(), importe: isFinite(n) && n > 0 ? n : 0, vacio: !r.querySelector('.op-importe').value.trim() };
-  }).filter(a => a.concepto || !a.vacio);
-  const total = Math.round(apartados.reduce((s, a) => s + a.importe, 0) * 100) / 100;
-  prev.innerHTML = operativaTicketHtml({ nombre: val('op-nombre') || 'Nombre de la operativa', fecha: val('op-fecha'), apartados, total, observaciones: val('op-obs') }, null, true);
+  const num = t => { const n = Number(String(t).replace(',', '.')); return isFinite(n) && n > 0 ? n : 0; };
+  const fijos = [...document.querySelectorAll('#op-apartados .op-row')].map(r => ({
+    concepto: r.querySelector('.op-concepto').value.trim(), importe: num(r.querySelector('.op-importe').value), vacio: !r.querySelector('.op-importe').value.trim(),
+  })).filter(a => a.concepto || !a.vacio);
+  const extras = [...document.querySelectorAll('#op-extras .op-row')].map(r => ({
+    concepto: r.querySelector('.opx-concepto').value.trim(), importe: num(r.querySelector('.opx-importe').value), vacio: !r.querySelector('.opx-importe').value.trim(),
+    extra: true, unidad: r.querySelector('.opx-unidad').value,
+  })).filter(a => a.concepto || !a.vacio);
+  const total = Math.round(fijos.reduce((s, a) => s + a.importe, 0) * 100) / 100;
+  prev.innerHTML = operativaTicketHtml({ nombre: val('op-nombre') || 'Nombre de la operativa', fecha: val('op-fecha'), apartados: [...fijos, ...extras], total, observaciones: val('op-obs') }, null, true);
 }
 // Sin concepto: apartado en blanco. Con concepto: lo rellena (aprovechando una fila vacía si la hay) y salta al importe.
 function operativaApartadoAdd(concepto){
@@ -1080,12 +1123,24 @@ function operativaApartadoAdd(concepto){
   operativaTotalActualizar();
   row.querySelector(concepto ? '.op-importe' : '.op-concepto').focus();
 }
+function operativaExtraAdd(concepto){
+  const cont = document.getElementById('op-extras');
+  if (!cont) return;
+  let row = [...cont.querySelectorAll('.op-row')].find(r => !r.querySelector('.opx-concepto').value.trim() && !r.querySelector('.opx-importe').value.trim());
+  if (!row) { cont.insertAdjacentHTML('beforeend', operativaExtraRowHtml({})); row = cont.lastElementChild; }
+  if (concepto) row.querySelector('.opx-concepto').value = concepto;
+  operativaTotalActualizar();
+  row.querySelector(concepto ? '.opx-importe' : '.opx-concepto').focus();
+}
 // editId: corregir esa operativa en su sitio · desdeId: operativa nueva a partir de otra (precio nuevo desde una fecha)
 function openOperativaModal(clienteId, editId, desdeId){
   const base = editId ? operativas.find(o => o.id === editId) : desdeId ? operativas.find(o => o.id === desdeId) : null;
-  const usados = [...new Set(operativas.flatMap(o => o.apartados.map(a => a.concepto)))];
+  const usados = [...new Set(operativas.flatMap(o => operativaFijos(o).map(a => a.concepto)))];
   const conceptos = [...new Set([...OPERATIVA_CONCEPTOS_HABITUALES, ...usados])];
-  const apartados = base ? base.apartados : [{ concepto: 'Acarreo puerto' }, { concepto: 'Manipulación mercancía' }, { concepto: 'Transporte final' }];
+  const usadosExtra = [...new Set(operativas.flatMap(o => operativaExtras(o).map(a => a.concepto)))];
+  const conceptosExtra = [...new Set([...OPERATIVA_EXTRAS_HABITUALES, ...usadosExtra])];
+  const apartados = base ? operativaFijos(base) : [{ concepto: 'Acarreo puerto' }, { concepto: 'Manipulación mercancía' }, { concepto: 'Transporte final' }];
+  const extras = base ? operativaExtras(base) : [];
   const cliente = contactos.find(c => c.id === clienteId);
   const titulo = editId ? 'Corregir operativa' : desdeId ? 'Actualizar precio de la operativa' : 'Nueva operativa';
   window.__operativaForm = { clienteId, editId: editId || null };
@@ -1111,11 +1166,18 @@ function openOperativaModal(clienteId, editId, desdeId){
                     <div class="field" style="flex:2;min-width:200px;"><label>Nombre de la operativa <span class="dc-req">*</span></label>${decaInputIcon('box', `<input id="op-nombre" maxlength="120" placeholder="Ej. Contenedor puerto Barcelona" value="${esc(base ? base.nombre : '')}" />`)}</div>
                     <div class="field" style="flex:1;min-width:150px;"><label>Vigente desde <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="op-fecha" type="date" value="${esc(editId && base ? base.fecha : today())}" />`)}</div>
                   </div>
-                  <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Apartados e importe de cada uno <span class="dc-req">*</span></label>
+                  <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Apartados fijos · suman al total <span class="dc-req">*</span></label>
                   <datalist id="op-conceptos">${conceptos.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
                   <div id="op-apartados">${apartados.map(operativaApartadoRowHtml).join('')}</div>
                   <div class="op-chips-label">Añadir con un clic</div>
                   <div id="op-chips" class="op-chips"></div>
+                  <div class="op-sec">
+                    <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:2px;">Extras según cantidad · <b>no suman al total</b></label>
+                    <div style="font-size:11.5px;color:var(--mutedFaint);margin-bottom:8px;">Lo que depende de los palets o unidades (palet extra, filmado…): se factura aparte, según la cantidad de cada caso.</div>
+                    <datalist id="op-extras-conceptos">${conceptosExtra.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+                    <div id="op-extras">${extras.map(operativaExtraRowHtml).join('')}</div>
+                    <div id="op-extra-chips" class="op-chips" style="margin-top:6px;"></div>
+                  </div>
                   <div class="field" style="margin-top:16px;"><label>Observaciones (opcional)</label>${decaInputIcon('file', `<input id="op-obs" maxlength="250" value="${esc(base ? base.observaciones : '')}" />`)}</div>
                   <div id="op-error" style="color:var(--danger);font-size:12.5px;white-space:pre-line;"></div>
                 </div>
@@ -1148,7 +1210,7 @@ async function submitOperativa(){
   if (!nombre) { errEl.textContent = 'Ponle un nombre a la operativa.'; return; }
   if (!fecha) { errEl.textContent = 'Indica la fecha desde la que vale.'; return; }
   const apartados = [];
-  for (const row of document.querySelectorAll('.op-row')) {
+  for (const row of document.querySelectorAll('#op-apartados .op-row')) {
     const concepto = row.querySelector('.op-concepto').value.trim();
     const txt = row.querySelector('.op-importe').value.trim();
     if (!concepto && !txt) continue; // fila vacía
@@ -1157,12 +1219,22 @@ async function submitOperativa(){
     if (txt === '' || !isFinite(importe) || importe < 0) { errEl.textContent = `Indica el importe de «${concepto}».`; return; }
     apartados.push({ concepto, importe: Math.round(importe * 100) / 100 });
   }
-  if (!apartados.length) { errEl.textContent = 'Añade al menos un apartado con su importe.'; return; }
   const total = Math.round(apartados.reduce((s, a) => s + a.importe, 0) * 100) / 100;
+  // Extras por cantidad (palet extra, filmado…): se guardan con extra:true y NO entran en el total.
+  for (const row of document.querySelectorAll('#op-extras .op-row')) {
+    const concepto = row.querySelector('.opx-concepto').value.trim();
+    const txt = row.querySelector('.opx-importe').value.trim();
+    if (!concepto && !txt) continue;
+    const importe = Number(txt.replace(',', '.'));
+    if (!concepto) { errEl.textContent = 'Hay un extra con importe pero sin nombre.'; return; }
+    if (txt === '' || !isFinite(importe) || importe < 0) { errEl.textContent = `Indica el importe del extra «${concepto}».`; return; }
+    apartados.push({ concepto, importe: Math.round(importe * 10000) / 10000, extra: true, unidad: row.querySelector('.opx-unidad').value });
+  }
+  if (!apartados.length) { errEl.textContent = 'Añade al menos un apartado con su importe.'; return; }
   const payload = { nombre, fecha, apartados, precio_total: total, observaciones: obs || null };
   const btn = document.querySelector('.op-save-btn');
   if (btn) btn.disabled = true;
-  const desglose = apartados.map(a => `${a.concepto} ${eur2(a.importe)}`).join(' + ');
+  const desglose = operativaResumenTxt({ apartados }).replace(/ · /g, ' + ');
   try {
     if (f.editId) {
       const { error } = await supabaseClient.from('operativas').update(payload).eq('id', f.editId);
@@ -1207,8 +1279,9 @@ function operativaTicketHtml(o, cid, preview){
           <div class="op-item-sub">${o.fecha ? 'Vigente desde el ' + esc(fmtDateDMY(o.fecha)) : 'Sin fecha de vigencia'}</div>
         </div>
       </div>
-      ${o.apartados.length ? operativaDesgloseHtml(o) : `<div class="op-lines" style="color:var(--mutedFaint);font-size:12.5px;">Añade apartados para ver el desglose.</div>`}
+      ${operativaFijos(o).length ? operativaDesgloseHtml(o) : (operativaExtras(o).length ? "" : `<div class="op-lines" style="color:var(--mutedFaint);font-size:12.5px;">Añade apartados para ver el desglose.</div>`)}
       <div class="op-total-row"><span>Total</span><b${preview ? ' id="op-total"' : ''}>${esc(eur2(o.total))}</b></div>
+      ${operativaExtrasHtml(o)}
       ${o.observaciones ? `<div class="op-item-obs">${esc(o.observaciones)}</div>` : ''}
       ${preview ? '' : `<div class="op-item-actions">
         <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px;" onclick="openOperativaModal('${cid}', null, '${o.id}')" title="Precio nuevo desde una fecha: la actual pasa a históricas">Actualizar precio</button>
@@ -1242,7 +1315,7 @@ function tplContactoOperativasHistoricasCard(c){
             <td style="white-space:nowrap;" data-sort-value="${esc(o.fecha)}">${fmtDateDMY(o.fecha)}</td>
             <td style="white-space:nowrap;" data-sort-value="${esc(o.hasta)}">${fmtDateDMY(o.hasta)}</td>
             <td data-sort-value="${esc(o.nombre)}"><b>${esc(o.nombre)}</b></td>
-            <td style="color:var(--muted);font-size:12.5px;" data-sort-value="${esc(o.apartados.map(a => a.concepto).join(','))}">${o.apartados.map(a => `${esc(a.concepto)} ${esc(eur2(a.importe))}`).join(' · ')}</td>
+            <td style="color:var(--muted);font-size:12.5px;" data-sort-value="${esc(o.apartados.map(a => a.concepto).join(','))}">${esc(operativaResumenTxt(o))}</td>
             <td class="tf-precio" data-sort-value="${o.total}">${esc(eur2(o.total))}</td>
             <td style="text-align:right;white-space:nowrap;"><button class="deca-act danger" onclick="deleteOperativa('${o.id}')" title="Eliminar esta operativa del histórico">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button></td>
           </tr>`).join('')}</tbody>
@@ -1323,7 +1396,7 @@ function talmDetalleOperativasHtml(c, o, hist){
             <td style="white-space:nowrap;" data-sort-value="${esc(x.fecha)}">${fmtDateDMY(x.fecha)}</td>
             <td style="white-space:nowrap;" data-sort-value="${esc(x.hasta)}">${fmtDateDMY(x.hasta)}</td>
             <td data-sort-value="${esc(x.nombre)}"><b>${esc(x.nombre)}</b></td>
-            <td style="color:var(--muted);font-size:12.5px;" data-sort-value="${esc(x.apartados.map(a => a.concepto).join(','))}">${x.apartados.map(a => `${esc(a.concepto)} ${esc(eur2(a.importe))}`).join(' · ')}</td>
+            <td style="color:var(--muted);font-size:12.5px;" data-sort-value="${esc(x.apartados.map(a => a.concepto).join(','))}">${esc(operativaResumenTxt(x))}</td>
             <td class="tf-precio" data-sort-value="${x.total}">${esc(eur2(x.total))}</td>
             <td style="text-align:right;white-space:nowrap;"><button class="deca-act danger" onclick="deleteOperativa('${x.id}')" title="Eliminar esta operativa del histórico">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button></td>
           </tr>`).join('')}</tbody>
