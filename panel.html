@@ -2642,10 +2642,13 @@ function tplWarehousesPage(){
 let sgaZonas = [];
 let sgaUbicaciones = [];
 async function loadSgaConfig(){
-  const [z, u] = await Promise.all([
+  const [z, u, cl] = await Promise.all([
     supabaseClient.from('sga_zonas').select('*').order('orden', { ascending: true }).order('nombre', { ascending: true }),
     supabaseClient.from('sga_ubicaciones').select('*').order('codigo', { ascending: true }),
+    supabaseClient.from('sga_clientes').select('*'),
   ]);
+  sgaClientes = {};
+  (cl.data || []).forEach(r => { sgaClientes[r.cliente_id] = { activoDesde: r.activo_desde || '', codigosUnicos: !!r.codigos_unicos, campos: Object.assign({ referencia: 'opcional', descripcion: 'opcional', lote: 'no' }, r.campos || {}), observaciones: r.observaciones || '' }; });
   sgaZonas = (z.data || []).map(r => ({ id: r.id, warehouseId: r.warehouse_id, nave: r.nave || '', nombre: r.nombre, tipo: r.tipo, orden: r.orden, archived: !!r.archived }));
   sgaUbicaciones = (u.data || []).map(r => ({ id: r.id, zonaId: r.zona_id, codigo: r.codigo, archived: !!r.archived }));
 }
@@ -2855,6 +2858,99 @@ async function setSgaUbicacionArchivada(id, archivar){
   u.archived = archivar;
   const lista = document.getElementById('sgaub-lista');
   if (lista) lista.innerHTML = sgaUbicacionesListaHtml(u.zonaId);
+}
+
+/* ---- SGA · Ajustes por cliente (ficha del cliente → pestaña Almacén) ----
+   Desde cuándo el SGA le cobra (hasta entonces sigue en el Excel), si sus palets llevan código único, y qué campos
+   de la mercancía usa (referencia, descripción, lote). */
+let sgaClientes = {};
+const SGA_CAMPOS = [
+  { id: 'referencia', label: 'Referencia' },
+  { id: 'descripcion', label: 'Descripción' },
+  { id: 'lote', label: 'Lote' },
+];
+const SGA_CAMPO_NIVELES = { no: 'No se usa', opcional: 'Opcional', obligatorio: 'Obligatorio' };
+function sgaClienteCfg(id){
+  return sgaClientes[id] || { activoDesde: '', codigosUnicos: false, campos: { referencia: 'opcional', descripcion: 'opcional', lote: 'no' }, observaciones: '' };
+}
+function sgaPuedeConfigurar(){ return !!(PROFILE.isAdmin || PROFILE.allowedTabs.includes('almacenconfig')); }
+function tplSgaClienteCard(c){
+  const cfg = sgaClienteCfg(c.id);
+  const activo = !!cfg.activoDesde;
+  const hoyActivo = activo && cfg.activoDesde <= today();
+  const estado = !activo
+    ? '<span style="color:var(--muted);">Sin activar · sigue en el Excel</span>'
+    : hoyActivo ? `<b>Activo</b> <span style="color:var(--muted);">desde el ${esc(fmtDateDMY(cfg.activoDesde))}</span>` : `<b>Se activará</b> <span style="color:var(--muted);">el ${esc(fmtDateDMY(cfg.activoDesde))}</span>`;
+  const campos = SGA_CAMPOS.map(f => `${f.label}: ${(SGA_CAMPO_NIVELES[cfg.campos[f.id]] || 'No se usa').toLowerCase()}`).join(' · ');
+  return `
+    <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:20px;">
+      ${decaCardHead('box', 'Gestión de stock (SGA)', 'Cómo se lleva el stock y el cobro automático de este cliente', sgaPuedeConfigurar() ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaClienteModal('${c.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>` : '')}
+      <div class="deca-card-body">
+        <div class="deca-view-grid">
+          ${decaViewRow('clock', 'Estado del SGA', estado)}
+          ${decaViewRow('tag', 'Códigos únicos por palet', cfg.codigosUnicos ? 'Sí: cada palet lleva su código' : 'No: partidas de palets iguales')}
+          ${decaViewRow('list', 'Datos de la mercancía', esc(campos), '', true)}
+          ${cfg.observaciones ? decaViewRow('file', 'Observaciones', esc(cfg.observaciones), '', true) : ''}
+        </div>
+      </div>
+    </div>`;
+}
+function openSgaClienteModal(clienteId){
+  const c = contactos.find(x => x.id === clienteId);
+  if (!c) return;
+  const cfg = sgaClienteCfg(clienteId);
+  window.__sgaClienteId = clienteId;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:560px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;">
+            <div class="deca-banner-title" style="font-size:19px;">Gestión de stock (SGA)</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">${esc((c.nombreComercial || '').trim() || c.nombre)}</div>
+          </div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);max-height:72vh;overflow-y:auto;">
+          <div class="field"><label>Activo desde</label>${decaInputIcon('calendar', `<input id="sgac-desde" type="date" value="${esc(cfg.activoDesde || '')}" />`)}
+            <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">El SGA solo cobra a este cliente desde esta fecha. Déjalo vacío mientras siga en el Excel.</div></div>
+          <label style="display:flex;align-items:flex-start;gap:10px;font-size:13.5px;cursor:pointer;margin-bottom:16px;"><input type="checkbox" class="switch" id="sgac-codigos" ${cfg.codigosUnicos ? 'checked' : ''} style="margin-top:2px;" />
+            <span><b>Códigos únicos por palet</b><br><span style="font-size:12px;color:var(--muted);">Si lo activas, cada palet se da de entrada con su propio código. Si no, se anotan palets iguales de golpe («26 europeos»).</span></span></label>
+          <div class="op-chips-label" style="margin-top:0;">Datos de la mercancía</div>
+          ${SGA_CAMPOS.map(f => `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;"><span style="font-size:13.5px;">${f.label}</span>
+            <select id="sgac-${f.id}" style="width:170px;">${Object.keys(SGA_CAMPO_NIVELES).map(k => `<option value="${k}" ${cfg.campos[f.id] === k ? 'selected' : ''}>${SGA_CAMPO_NIVELES[k]}</option>`).join('')}</select></div>`).join('')}
+          <div class="field" style="margin-top:14px;"><label>Observaciones (opcional)</label>${decaInputIcon('file', `<input id="sgac-obs" maxlength="250" value="${esc(cfg.observaciones || '')}" />`)}</div>
+          <div id="sgac-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
+          <div style="display:flex;gap:10px;">
+            <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary deca-submit sgac-save" onclick="submitSgaCliente()">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+async function submitSgaCliente(){
+  const id = window.__sgaClienteId;
+  const errEl = document.getElementById('sgac-error');
+  errEl.textContent = '';
+  const previa = sgaClienteCfg(id);
+  const activoDesde = document.getElementById('sgac-desde').value || '';
+  const codigosUnicos = document.getElementById('sgac-codigos').checked;
+  const campos = {};
+  SGA_CAMPOS.forEach(f => { campos[f.id] = document.getElementById(`sgac-${f.id}`).value; });
+  const observaciones = document.getElementById('sgac-obs').value.trim();
+  const btn = document.querySelector('.sgac-save');
+  if (btn) btn.disabled = true;
+  const { error } = await supabaseClient.from('sga_clientes').upsert({ cliente_id: id, activo_desde: activoDesde || null, codigos_unicos: codigosUnicos, campos, observaciones: observaciones || null, updated_at: new Date().toISOString() });
+  if (error) { errEl.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido.'); if (btn) btn.disabled = false; return; }
+  sgaClientes[id] = { activoDesde, codigosUnicos, campos, observaciones };
+  const dif = [];
+  if (previa.activoDesde !== activoDesde) dif.push(activoDesde ? `activación desde el ${fmtDateDMY(activoDesde)}` : 'desactivado');
+  if (previa.codigosUnicos !== codigosUnicos) dif.push(`códigos únicos ${codigosUnicos ? 'sí' : 'no'}`);
+  if (SGA_CAMPOS.some(f => previa.campos[f.id] !== campos[f.id])) dif.push('datos de la mercancía');
+  if (dif.length) await logContactoHistorial(id, `SGA · ha cambiado ${dif.join(', ')}.`);
+  closeModal();
+  renderTab();
 }
 
 /* ---- Almacenes: historial de cambios (quién cambió qué y cuándo) ---- */
@@ -5889,7 +5985,7 @@ function tplContactoDetailPage(){
   const inComercial = activeTab === 'comercial';
   const historial = Array.isArray(window.__contactoHistorial) ? window.__contactoHistorial.filter(h => !(h.resumen || '').startsWith(TARIFA_LOG_PREFIX)) : window.__contactoHistorial;
   const tabContentHtml = () => {
-    if (activeTab === 'almacen') return tplContactoAlmacenCard(editing, editMode) + tplAlmacenajeTarifasCard(editing) + tplAlmacenajeTarifasHistoricasCard(editing) + tplContactoOperativasCard(editing) + tplContactoOperativasHistoricasCard(editing);
+    if (activeTab === 'almacen') return tplContactoAlmacenCard(editing, editMode) + tplSgaClienteCard(editing) + tplAlmacenajeTarifasCard(editing) + tplAlmacenajeTarifasHistoricasCard(editing) + tplContactoOperativasCard(editing) + tplContactoOperativasHistoricasCard(editing);
     if (activeTab === 'comercial') return tplContactoPersonasCard(editing) + tplContactoTarifasCard(editing) + tplContactoTarifasHistoricasCard(editing);
     if (activeTab === 'transporte') return tplContactoTabTransporte(editing);
     if (activeTab === 'autonomos') return tplContactoTabAutonomos(editing);
