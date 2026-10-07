@@ -8935,6 +8935,19 @@ async function submitAlmacenajeProducto(editId){
   if (editing) {
     const { error } = await supabaseClient.from('almacenaje_productos').update(row).eq('id', editing.id);
     if (error) { appToast('No se pudo guardar: ' + error.message); return; }
+    // Cada línea de tarifa guarda su propia actividad y su subtipo: si el producto cambia, se actualizan también las líneas
+    // que ya lo usan (la unidad no hace falta: las tarifas la leen siempre del producto).
+    const cambiosLineas = {};
+    if (editing.categoria !== categoria) cambiosLineas.tipo_actividad = categoria;
+    if (usaSubtipo && (editing.subtipoValor || '') !== subtipoValor) cambiosLineas.subtipo = subtipoValor;
+    if (Object.keys(cambiosLineas).length && almacenajeTarifas.some(t => t.tipo === editing.id)) {
+      const { error: errLineas } = await supabaseClient.from('almacenaje_tarifas').update(cambiosLineas).eq('tipo', editing.id);
+      if (errLineas) { appToast('El producto se guardó, pero no se pudieron actualizar sus tarifas: ' + errLineas.message); }
+      else almacenajeTarifas.filter(t => t.tipo === editing.id).forEach(t => {
+        if (cambiosLineas.tipo_actividad) t.categoria = cambiosLineas.tipo_actividad;
+        if (cambiosLineas.subtipo) t.subtipo = cambiosLineas.subtipo;
+      });
+    }
     Object.assign(editing, { nombre, categoria, unidad, usaSubtipo, subtipoLabel: row.subtipo_label || '', subtipoValor: row.subtipo_valor || '' });
   } else {
     const id = almacenajeProductoSlug(nombre);
