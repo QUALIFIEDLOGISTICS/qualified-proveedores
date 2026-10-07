@@ -9456,7 +9456,10 @@ function tplAlmacenajeTarifaFormPage(c){
               <tbody id="af-rows"></tbody>
             </table>
           </div>
-          <button type="button" class="btn btn-ghost" style="margin-top:12px;" onclick="almacenajeFilaAddRow(true)">+ Añadir fila</button>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px;">
+            <button type="button" class="btn btn-ghost" onclick="almacenajeFilaAddRow(true)">+ Añadir fila</button>
+            ${window.__almacenajeEditar ? `<button type="button" class="btn btn-ghost" style="margin-left:auto;color:var(--danger);" onclick="deleteAlmacenajeTarifaCompleta()" title="Borra todas las líneas de este cliente, también el histórico">${homeIcon(HOME_ICON_PATHS.trash, 15, "currentColor", 2)}<span>Eliminar toda la tarifa</span></button>` : ""}
+          </div>
         </div>
       </div>
     </div>
@@ -9635,6 +9638,32 @@ async function submitAlmacenajeCambioPrecio(){
   });
   await logAlmacenajeHistorial(t.clienteId, `ha cambiado el precio de ${almacenajeEtiqueta(t)} de ${eurPrecio(t.precio)} a ${eurPrecio(precio)}${almacenajeUnidadTxt(t.tipo, t.base)}, vigente desde el ${fmtDateDMY(fecha)}.`);
   closeModal();
+  renderTab();
+}
+// Borra TODA la tarifa de almacenaje de un cliente: líneas vigentes y su histórico. (Si solo se quitaran las vigentes, la
+// última línea del histórico volvería a quedar como vigente.)
+async function deleteAlmacenajeTarifaCompleta(){
+  const clienteId = window.__almacenajeFormClienteId;
+  const todas = almacenajeTarifas.filter(t => t.clienteId === clienteId);
+  if (!clienteId || !todas.length) { appToast('Este cliente no tiene ninguna línea de tarifa que eliminar.', 'info'); return; }
+  const vigentes = almacenajePeriodos(todas).filter(t => t.vigente).length;
+  const historicas = todas.length - vigentes;
+  const c = contactos.find(x => x.id === clienteId);
+  if (!(await appConfirm({
+    title: 'Eliminar toda la tarifa',
+    name: c ? ((c.nombreComercial || '').trim() || c.nombre) : '',
+    message: `Se eliminarán las ${vigentes} línea${vigentes !== 1 ? 's' : ''} vigente${vigentes !== 1 ? 's' : ''}${historicas ? ` y ${historicas} del histórico` : ''} de la tarifa de almacenaje de este cliente. Esta acción no se puede deshacer.`,
+    confirmLabel: 'Eliminar toda la tarifa', tone: 'danger', icon: 'trash',
+  }))) return;
+  const { error } = await supabaseClient.from('almacenaje_tarifas').delete().eq('cliente_id', clienteId);
+  if (error) { appToast('No se pudo eliminar: ' + error.message, 'error'); return; }
+  almacenajeTarifas = almacenajeTarifas.filter(t => t.clienteId !== clienteId);
+  await logAlmacenajeHistorial(clienteId, `ha eliminado toda la tarifa de almacenaje (${vigentes} línea${vigentes !== 1 ? 's' : ''}${historicas ? ` y ${historicas} del histórico` : ''}).`);
+  window.__almacenajeFormDirty = false;
+  window.__almacenajeFormClienteId = null;
+  window.__almacenajeEditar = false;
+  appToast('Tarifa eliminada.', 'ok');
+  if (window.__almacenajeOrigen === 'lista') { almacenajeVolverALista(); return; }
   renderTab();
 }
 async function deleteAlmacenajeTarifa(id){
