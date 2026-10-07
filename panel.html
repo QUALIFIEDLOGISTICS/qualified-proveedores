@@ -1342,7 +1342,7 @@ function talmPillHtml(t){
   return `
     <div class="tl-pill">
       <div class="tl-name">${esc(almacenajeEtiqueta(t))}</div>
-      <div class="tl-price">${esc(eurPrecio(t.precio))}<small> ${esc(almacenajeUnidadTxt(t.tipo))}</small></div>
+      <div class="tl-price">${esc(eurPrecio(t.precio))}<small> ${esc(almacenajeUnidadTxt(t.tipo, t.base))}</small></div>
       ${min ? `<div class="tl-min">${esc(min)}</div>` : ''}
       ${t.observaciones ? `<div class="tl-obs">${esc(t.observaciones)}</div>` : ''}
       <div class="tl-since">desde el ${esc(fmtDateDMY(t.fecha))}</div>
@@ -8800,7 +8800,7 @@ async function loadAlmacenajeTarifas(){
     id: t.id, createdAt: t.created_at, clienteId: t.cliente_id, fecha: t.fecha,
     tipo: t.tipo, subtipo: t.subtipo || '', precio: Number(t.precio), observaciones: t.observaciones || '',
     categoria: t.tipo_actividad || almacenajeCategoriaDe(t.tipo),
-    importeMinimo: t.importe_minimo == null ? null : Number(t.importe_minimo),
+    importeMinimo: t.importe_minimo == null ? null : Number(t.importe_minimo), base: t.base_cobro || 'dia',
   }));
 }
 // Catálogo de "Productos" de almacenaje (Palet, M², Bobina, Entrada, Salida,
@@ -8883,7 +8883,8 @@ function almacenajeUsaSubtipo(tipo){ const p = almacenajeProducto(tipo); return 
 function almacenajeSubtipoLabel(tipo){ const p = almacenajeProducto(tipo); return (p && p.subtipoLabel) || 'Subtipo'; }
 // Subtipo ya definido en el producto: si lo tiene, se rellena solo en las tarifas y no se puede cambiar.
 function almacenajeSubtipoFijo(tipo){ const p = almacenajeProducto(tipo); return (p && p.usaSubtipo && p.subtipoValor) ? p.subtipoValor : ''; }
-function almacenajeUnidadTxt(tipo){ const p = almacenajeProducto(tipo); return ALMACENAJE_UNIDADES[p ? p.unidad : 'dia'] || '/día'; }
+// base='mes_max': el cliente paga el stock máximo del mes (por palet y mes) en vez de cada día.
+function almacenajeUnidadTxt(tipo, base){ if (base === 'mes_max') return '/mes (máx.)'; const p = almacenajeProducto(tipo); return ALMACENAJE_UNIDADES[p ? p.unidad : 'dia'] || '/día'; }
 
 /* ---- Almacén → Configuración → Productos (catálogo, CRUD) ---- */
 const ALMACENAJE_UNIDAD_LABELS = { dia: 'Por día', mes: 'Por mes', movimiento: 'Por movimiento (cada palet o unidad)', albaran: 'Por albarán (precio fijo)', hora: 'Por hora' };
@@ -9100,7 +9101,7 @@ function tplAlmacenajeProductoFormPage(){
     </div>`;
 }
 function almacenajeEtiqueta(t){ return t.subtipo ? `${almacenajeTipoLabel(t.tipo)} ${t.subtipo}` : almacenajeTipoLabel(t.tipo); }
-function almacenajePrecioTxt(t){ return eurPrecio(t.precio) + almacenajeUnidadTxt(t.tipo); }
+function almacenajePrecioTxt(t){ return eurPrecio(t.precio) + almacenajeUnidadTxt(t.tipo, t.base); }
 // "mínimo 10,00 € por albarán" (en movimientos) o "mínimo 10,00 €"; vacío si la línea no tiene importe mínimo.
 function almacenajeMinimoTxt(t){
   if (t.importeMinimo == null || !isFinite(t.importeMinimo)) return '';
@@ -9307,6 +9308,15 @@ function almacenajeFilaTipoChange(i){
   almacenajeSubtipoAplicar(document.getElementById(`af-${i}-subtipo`), tipo, 'af-subtipos');
   const actividadEl = document.getElementById(`af-${i}-actividad`);
   if (actividadEl) actividadEl.innerHTML = almacenajeCategoriaBadgeHtml(almacenajeCategoriaDe(tipo));
+  // «Cobro» (por día / máximo del mes) solo tiene sentido en los productos de stock diario.
+  const baseEl = document.getElementById(`af-${i}-base`);
+  if (baseEl) {
+    const prod = almacenajeProducto(tipo);
+    const aplica = !!prod && prod.disparador === 'stock_dia';
+    baseEl.disabled = !aplica;
+    baseEl.style.visibility = aplica ? 'visible' : 'hidden';
+    if (!aplica) baseEl.value = 'dia';
+  }
   almacenajeActualizarOpciones();
   window.__almacenajeFormDirty = true;
 }
@@ -9343,6 +9353,7 @@ function almacenajeFilaRowHtml(i, preset){
       <td style="padding:5px 4px;min-width:170px;"><select id="af-${i}-tipo" onchange="almacenajeFilaTipoChange(${i})">${almacenajeTipoOptionsHtml(preset ? preset.tipo : 'palet')}</select></td>
       <td id="af-${i}-actividad" style="padding:5px 4px;">${almacenajeCategoriaBadgeHtml(almacenajeCategoriaDe(preset ? preset.tipo : 'palet'))}</td>
       <td style="padding:5px 4px;min-width:160px;"><input id="af-${i}-subtipo" maxlength="60" data-combo="af-subtipos" autocomplete="off" placeholder="Ej. Europeo" oninput="window.__almacenajeFormDirty=true;" /></td>
+      <td style="padding:5px 4px;min-width:130px;"><select id="af-${i}-base" onchange="window.__almacenajeFormDirty=true;"><option value="dia">Por día</option><option value="mes_max">Máx. del mes</option></select></td>
       <td style="padding:5px 4px;min-width:110px;"><input id="af-${i}-precio" inputmode="decimal" maxlength="10" placeholder="Precio €" value="${esc(precioTxt)}" /></td>
       <td style="padding:5px 4px;min-width:100px;"><input id="af-${i}-min" inputmode="decimal" maxlength="10" placeholder="Mínimo €" title="Importe mínimo por albarán (opcional): si precio x cantidad sale por debajo, se cobra este importe" value="${preset && preset.importeMinimo != null ? esc(String(preset.importeMinimo).replace('.', ',')) : ''}" /></td>
       <td style="padding:5px 4px;min-width:200px;"><input id="af-${i}-obs" maxlength="250" placeholder="Observaciones (opcional)" value="${preset ? esc(preset.observaciones || '') : ''}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); almacenajeFilaAddRow(true); }" /></td>
@@ -9361,6 +9372,8 @@ function almacenajeFilaAddRow(focus, preset){
     almacenajeFilaTipoChange(i);
     const sub = document.getElementById(`af-${i}-subtipo`);
     if (!sub.readOnly && !sub.disabled) sub.value = preset.subtipo || '';
+    const baseEl = document.getElementById(`af-${i}-base`);
+    if (baseEl && !baseEl.disabled) baseEl.value = preset.base === 'mes_max' ? 'mes_max' : 'dia';
     almacenajeActualizarOpciones();
   } else { almacenajeElegirLibre(i); almacenajeFilaTipoChange(i); }
   window.__almacenajeFormDirty = dirtyAntes;
@@ -9411,6 +9424,7 @@ function tplAlmacenajeTarifaFormPage(c){
                 <th style="padding:6px 4px;">Tipo</th>
                 <th style="padding:6px 4px;">Actividad</th>
                 <th style="padding:6px 4px;">Subtipo</th>
+                <th style="padding:6px 4px;" title="Solo en productos de stock: por día (cada noche) o por el máximo del mes">Cobro</th>
                 <th style="padding:6px 4px;">Precio</th>
                 <th style="padding:6px 4px;" title="Importe mínimo por albarán (opcional)">Mínimo</th>
                 <th style="padding:6px 4px;">Observaciones</th>
@@ -9455,6 +9469,7 @@ async function submitAlmacenajeTarifaForm(){
     if (!fecha) { errores.push(`${nombreFila}: indica la fecha.`); return; }
     const precio = Number(precioTxt.replace(',', '.'));
     const minimo = minTxt === '' ? null : Number(minTxt.replace(',', '.'));
+    const base = v('base') === 'mes_max' ? 'mes_max' : 'dia';
     if (!precioTxt || !isFinite(precio) || precio < 0) { errores.push(`${nombreFila}: indica el precio.`); return; }
     if (minimo !== null && (!isFinite(minimo) || minimo < 0)) { errores.push(`${nombreFila}: el importe mínimo no es válido.`); return; }
     const clave = almacenajeClaveLinea(tipo, subtipo);
@@ -9462,11 +9477,11 @@ async function submitAlmacenajeTarifaForm(){
     if (clavesFilas.has(clave)) { errores.push(`${nombreFila}: «${etiquetaFila}» está repetido en la tarifa (ya está en la fila ${clavesFilas.get(clave)}).`); return; }
     if (!editar && clavesVigentes.has(clave)) { errores.push(`${nombreFila}: «${etiquetaFila}» ya está en la tarifa de este cliente. Para cambiar su precio usa «Editar tarifa».`); return; }
     clavesFilas.set(clave, n + 1);
-    const payload = { fecha, tipo, subtipo: subtipo || null, precio, importe_minimo: minimo, observaciones: obs || null, tipo_actividad: almacenajeCategoriaDe(tipo) };
+    const payload = { fecha, tipo, subtipo: subtipo || null, precio, importe_minimo: minimo, observaciones: obs || null, tipo_actividad: almacenajeCategoriaDe(tipo), base_cobro: base };
     if (!id) { nuevas.push({ cliente_id: clienteId, ...payload }); return; }
     const antes = almacenajeTarifas.find(t => t.id === id);
     if (!antes) return;
-    const igual = antes.fecha === fecha && antes.tipo === tipo && (antes.subtipo || '') === subtipo && Number(antes.precio) === precio && (antes.importeMinimo == null ? null : Number(antes.importeMinimo)) === minimo && (antes.observaciones || '') === obs;
+    const igual = antes.fecha === fecha && antes.tipo === tipo && (antes.subtipo || '') === subtipo && Number(antes.precio) === precio && (antes.importeMinimo == null ? null : Number(antes.importeMinimo)) === minimo && (antes.observaciones || '') === obs && (antes.base || 'dia') === base;
     if (!igual) cambios.push({ id, payload, antes });
   });
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
@@ -9490,11 +9505,12 @@ async function submitAlmacenajeTarifaForm(){
     const etiq = c.payload.subtipo ? `${almacenajeTipoLabel(c.payload.tipo)} ${c.payload.subtipo}` : almacenajeTipoLabel(c.payload.tipo);
     const dif = [];
     if ((c.antes.importeMinimo == null ? null : Number(c.antes.importeMinimo)) !== c.payload.importe_minimo) dif.push(`importe mínimo de ${c.antes.importeMinimo == null ? 'sin mínimo' : eur2(c.antes.importeMinimo)} a ${c.payload.importe_minimo == null ? 'sin mínimo' : eur2(c.payload.importe_minimo)}`);
-    if (Number(c.antes.precio) !== c.payload.precio) dif.push(`precio de ${eurPrecio(c.antes.precio)} a ${eurPrecio(c.payload.precio)}${almacenajeUnidadTxt(c.payload.tipo)}`);
+    if (Number(c.antes.precio) !== c.payload.precio) dif.push(`precio de ${eurPrecio(c.antes.precio)} a ${eurPrecio(c.payload.precio)}${almacenajeUnidadTxt(c.payload.tipo, c.payload.base_cobro)}`);
     if (c.antes.fecha !== c.payload.fecha) dif.push(`fecha de ${fmtDateDMY(c.antes.fecha)} a ${fmtDateDMY(c.payload.fecha)}`);
+    if ((c.antes.base || 'dia') !== c.payload.base_cobro) dif.push(`cobro de ${c.antes.base === 'mes_max' ? 'máximo del mes' : 'por día'} a ${c.payload.base_cobro === 'mes_max' ? 'máximo del mes' : 'por día'}`);
     if (c.antes.tipo !== c.payload.tipo || (c.antes.subtipo || '') !== (c.payload.subtipo || '')) dif.push(`producto de ${almacenajeEtiqueta(c.antes)} a ${etiq}`);
     if ((c.antes.observaciones || '') !== (c.payload.observaciones || '')) dif.push('observaciones');
-    Object.assign(c.antes, { fecha: c.payload.fecha, tipo: c.payload.tipo, subtipo: c.payload.subtipo || '', precio: c.payload.precio, observaciones: c.payload.observaciones || '', categoria: c.payload.tipo_actividad, importeMinimo: c.payload.importe_minimo });
+    Object.assign(c.antes, { fecha: c.payload.fecha, tipo: c.payload.tipo, subtipo: c.payload.subtipo || '', precio: c.payload.precio, observaciones: c.payload.observaciones || '', categoria: c.payload.tipo_actividad, importeMinimo: c.payload.importe_minimo, base: c.payload.base_cobro });
     resumen.push(`ha corregido la línea ${etiq}: ${dif.join(', ') || 'sin cambios de precio'}.`);
   }
   // 2) Líneas quitadas
@@ -9510,11 +9526,11 @@ async function submitAlmacenajeTarifaForm(){
     if (error || !data) { fallo(error && error.message ? error.message : 'error desconocido.'); return; }
     data.forEach(row => almacenajeTarifas.push({
       id: row.id, createdAt: row.created_at, clienteId: row.cliente_id, fecha: row.fecha, tipo: row.tipo,
-      subtipo: row.subtipo || '', precio: Number(row.precio), observaciones: row.observaciones || '', importeMinimo: row.importe_minimo == null ? null : Number(row.importe_minimo), categoria: row.tipo_actividad || almacenajeCategoriaDe(row.tipo),
+      subtipo: row.subtipo || '', precio: Number(row.precio), observaciones: row.observaciones || '', importeMinimo: row.importe_minimo == null ? null : Number(row.importe_minimo), base: row.base_cobro || 'dia', categoria: row.tipo_actividad || almacenajeCategoriaDe(row.tipo),
     }));
     nuevas.forEach(f => {
       const etiqueta = f.subtipo ? `${almacenajeTipoLabel(f.tipo)} ${f.subtipo}` : almacenajeTipoLabel(f.tipo);
-      resumen.push(`ha añadido la línea ${etiqueta} a ${eurPrecio(f.precio)}${almacenajeUnidadTxt(f.tipo)}${f.importe_minimo != null ? ` (mínimo ${eurPrecio(f.importe_minimo)})` : ''}, vigente desde el ${fmtDateDMY(f.fecha)}.`);
+      resumen.push(`ha añadido la línea ${etiqueta} a ${eurPrecio(f.precio)}${almacenajeUnidadTxt(f.tipo, f.base_cobro)}${f.importe_minimo != null ? ` (mínimo ${eurPrecio(f.importe_minimo)})` : ''}, vigente desde el ${fmtDateDMY(f.fecha)}.`);
     });
   }
   await logAlmacenajeHistorial(clienteId, resumen.join('\n'));
