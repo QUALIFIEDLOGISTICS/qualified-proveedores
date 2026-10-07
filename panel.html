@@ -300,6 +300,8 @@
   .tl-price small{font-size:12px;font-weight:500;color:var(--muted);font-family:var(--body);}
   .tl-min,.tl-obs{font-size:11.5px;color:var(--muted);}
   .tl-since{font-size:11px;color:var(--mutedFaint);margin-top:3px;}
+  .tl-chg{align-self:flex-start;margin-top:6px;padding:0;border:none;background:none;color:var(--primary);font-size:11.5px;font-weight:600;cursor:pointer;font-family:var(--body);}
+  .tl-chg:hover{text-decoration:underline;}
   .wk-chip{display:inline-block;min-width:34px;text-align:center;margin-right:8px;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:.2px;color:var(--muted);background:var(--panel2);border:1px solid var(--border);font-variant-numeric:tabular-nums;cursor:help;}
   .wk-chip.odd{background:color-mix(in srgb,var(--primary) 14%,var(--panel));color:var(--primary);border-color:color-mix(in srgb,var(--primary) 35%,var(--border));}
   .tc-hist{margin-top:18px;}
@@ -1346,6 +1348,7 @@ function talmPillHtml(t){
       ${min ? `<div class="tl-min">${esc(min)}</div>` : ''}
       ${t.observaciones ? `<div class="tl-obs">${esc(t.observaciones)}</div>` : ''}
       <div class="tl-since">desde el ${esc(fmtDateDMY(t.fecha))}</div>
+      <button type="button" class="tl-chg" onclick="openAlmacenajeCambioPrecio('${t.id}')" title="El precio nuevo vale desde una fecha; el actual pasa al histórico">Cambiar precio</button>
     </div>`;
 }
 function talmDetalleTarifasHtml(c, l, hist){
@@ -9561,6 +9564,79 @@ async function submitAlmacenajeTarifaForm(){
   if (window.__almacenajeOrigen === 'lista') { almacenajeVolverALista(); return; }
   renderTab();
 }
+/* ---- Cambio de precio desde una fecha ----
+   Añade una línea nueva del mismo producto con el precio y la fecha nuevos; la anterior pasa sola al histórico
+   (con sus fechas), así se conserva lo que se cobró hasta entonces. Para corregir un error de tecleo se usa «Editar tarifa». */
+function openAlmacenajeCambioPrecio(id){
+  const t = almacenajeTarifas.find(x => x.id === id);
+  if (!t) return;
+  const cliente = contactos.find(c => c.id === t.clienteId);
+  const minVisible = t.categoria === 'movimiento' || t.importeMinimo != null;
+  window.__cambioPrecioId = id;
+  const sig = new Date(t.fecha + 'T00:00:00'); sig.setDate(sig.getDate() + 1);
+  const desde = toDateStr(sig);
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:520px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.tag, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;">
+            <div class="deca-banner-title" style="font-size:19px;">Cambio de precio</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">${cliente ? esc((cliente.nombreComercial || '').trim() || cliente.nombre) + ' · ' : ''}${esc(almacenajeEtiqueta(t))}</div>
+          </div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
+          <div style="padding:10px 14px;border-radius:10px;background:var(--panel2);border:1px solid var(--border);margin-bottom:16px;font-size:13px;">
+            Precio actual: <b>${esc(almacenajePrecioTxt(t))}</b> <span style="color:var(--muted);">· vigente desde el ${esc(fmtDateDMY(t.fecha))}</span>
+          </div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <div class="field" style="flex:1;min-width:160px;"><label>Nuevo precio (€${esc(almacenajeUnidadTxt(t.tipo, t.base))}) <span class="dc-req">*</span></label>${decaInputIcon('tag', `<input id="cp-precio" inputmode="decimal" maxlength="10" placeholder="Ej. 0,50" />`, '€')}</div>
+            <div class="field" style="flex:1;min-width:160px;"><label>Vigente desde <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="cp-fecha" type="date" min="${esc(desde)}" value="${esc(today() > t.fecha ? today() : desde)}" />`)}</div>
+          </div>
+          ${minVisible ? `<div class="field"><label>Importe mínimo por albarán (€, opcional)</label>${decaInputIcon('file', `<input id="cp-min" inputmode="decimal" maxlength="10" value="${t.importeMinimo != null ? esc(String(t.importeMinimo).replace('.', ',')) : ''}" />`, '€')}</div>` : ''}
+          <div class="field"><label>Observaciones (opcional)</label>${decaInputIcon('file', `<input id="cp-obs" maxlength="250" value="${esc(t.observaciones || '')}" />`)}</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">El precio actual pasa al histórico con sus fechas. Si solo quieres corregir un error de tecleo, usa «Editar tarifa».</div>
+          <div id="cp-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
+          <div style="display:flex;gap:10px;">
+            <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary deca-submit cp-save" onclick="submitAlmacenajeCambioPrecio()">Guardar el cambio</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const el = document.getElementById('cp-precio'); if (el) el.focus(); }, 0);
+}
+async function submitAlmacenajeCambioPrecio(){
+  const t = almacenajeTarifas.find(x => x.id === window.__cambioPrecioId);
+  const errEl = document.getElementById('cp-error');
+  if (!t || !errEl) return;
+  errEl.textContent = '';
+  const precioTxt = document.getElementById('cp-precio').value.trim();
+  const fecha = document.getElementById('cp-fecha').value;
+  const minEl = document.getElementById('cp-min');
+  const minTxt = minEl ? minEl.value.trim() : (t.importeMinimo != null ? String(t.importeMinimo) : '');
+  const obs = document.getElementById('cp-obs').value.trim();
+  const precio = Number(precioTxt.replace(',', '.'));
+  const minimo = minTxt === '' ? null : Number(minTxt.replace(',', '.'));
+  if (!precioTxt || !isFinite(precio) || precio < 0) { errEl.textContent = 'Indica el nuevo precio.'; return; }
+  if (precio === Number(t.precio)) { errEl.textContent = 'Es el mismo precio que ya tiene. Si no cambia, no hace falta ningún cambio.'; return; }
+  if (!fecha) { errEl.textContent = 'Indica desde qué fecha vale el precio nuevo.'; return; }
+  if (fecha <= t.fecha) { errEl.textContent = `La fecha tiene que ser posterior a la del precio actual (${fmtDateDMY(t.fecha)}).`; return; }
+  if (minimo !== null && (!isFinite(minimo) || minimo < 0)) { errEl.textContent = 'El importe mínimo no es válido.'; return; }
+  const btn = document.querySelector('.cp-save');
+  if (btn) btn.disabled = true;
+  const row = { cliente_id: t.clienteId, fecha, tipo: t.tipo, subtipo: t.subtipo || null, precio, importe_minimo: minimo, observaciones: obs || null, tipo_actividad: t.categoria, base_cobro: t.base || 'dia', created_by: currentUserEmail() };
+  const { data, error } = await supabaseClient.from('almacenaje_tarifas').insert(row).select().single();
+  if (error || !data) { errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'error desconocido.'); if (btn) btn.disabled = false; return; }
+  almacenajeTarifas.push({
+    id: data.id, createdAt: data.created_at, clienteId: t.clienteId, fecha, tipo: t.tipo, subtipo: t.subtipo || '', precio,
+    observaciones: obs, importeMinimo: minimo, base: t.base || 'dia', categoria: t.categoria,
+  });
+  await logAlmacenajeHistorial(t.clienteId, `ha cambiado el precio de ${almacenajeEtiqueta(t)} de ${eurPrecio(t.precio)} a ${eurPrecio(precio)}${almacenajeUnidadTxt(t.tipo, t.base)}, vigente desde el ${fmtDateDMY(fecha)}.`);
+  closeModal();
+  renderTab();
+}
 async function deleteAlmacenajeTarifa(id){
   const t = almacenajeTarifas.find(x=>x.id===id);
   if (!t) return;
@@ -9582,7 +9658,7 @@ function tplAlmacenajeTarifasCard(c){
       ${vigentes.length ? `
       <div style="overflow-x:auto;">
       <table class="tf-table">
-        <thead><tr>${thSort('Vigente desde','date')}${thSort('Actividad','text')}${thSort('Tipo','text')}${thSort('Precio','number','style="text-align:right;"')}${thSort('Observaciones','text')}</tr></thead>
+        <thead><tr>${thSort('Vigente desde','date')}${thSort('Actividad','text')}${thSort('Tipo','text')}${thSort('Precio','number','style="text-align:right;"')}${thSort('Observaciones','text')}<th style="width:120px;"></th></tr></thead>
         <tbody>
           ${vigentes.map(t => `
             <tr>
@@ -9591,6 +9667,7 @@ function tplAlmacenajeTarifasCard(c){
               <td data-sort-value="${esc(almacenajeEtiqueta(t))}">${esc(almacenajeEtiqueta(t))}</td>
               <td class="tf-precio" data-sort-value="${t.precio}">${almacenajePrecioCeldaHtml(t)}</td>
               <td style="color:var(--muted);" data-sort-value="${esc(t.observaciones)}">${t.observaciones ? esc(t.observaciones) : '—'}</td>
+              <td style="text-align:right;white-space:nowrap;"><button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="openAlmacenajeCambioPrecio('${t.id}')" title="El precio nuevo vale desde una fecha; el actual pasa al histórico">Cambiar precio</button></td>
             </tr>`).join('')}
         </tbody>
       </table>
