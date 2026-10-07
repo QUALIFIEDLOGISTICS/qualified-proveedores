@@ -2587,13 +2587,13 @@ function setAlmacenConfigSection(id){
 function tplAlmacenConfigTabsHtml(){
   const section = almacenConfigSection();
   const btn = (id, label) => `<button type="button" class="${section === id ? 'on' : ''}" onclick="setAlmacenConfigSection('${id}')">${label}</button>`;
-  return `<div class="doc-seg" style="margin-bottom:16px;">${btn('almacenes', 'Almacenes')}${btn('productos', 'Productos')}${btn('zonas', 'Zonas')}</div>`;
+  return `<div class="doc-seg" style="margin-bottom:16px;">${btn('almacenes', 'Almacenes')}${btn('productos', 'Productos')}</div>`;
 }
 function tplAlmacenConfig(){
   if (window.__whView === 'form') return tplWarehouseFormPage();
   if (window.__apView === 'form') return tplAlmacenajeProductoFormPage();
   const sec = almacenConfigSection();
-  return tplAlmacenConfigTabsHtml() + (sec === 'productos' ? tplAlmacenajeProductosPage() : sec === 'zonas' ? tplSgaZonasPage() : tplWarehousesPage());
+  return tplAlmacenConfigTabsHtml() + (sec === 'productos' ? tplAlmacenajeProductosPage() : tplWarehousesPage());
 }
 function tplWarehousesPage(){
   const archivedView = (window.__whListView || 'activos') === 'archivados';
@@ -2669,34 +2669,22 @@ function sgaZonaCardHtml(z){
       </div>
     </div>`;
 }
-function tplSgaZonasPage(){
+// Tarjeta «Zonas y ubicaciones» dentro de la ficha de cada almacén (Configuración → Almacenes).
+function whZonasViewCardHtml(w){
   const verArch = !!window.__sgaZonasArch;
-  const almacenes = allWarehouses.filter(w => !w.archived);
-  const activas = sgaZonas.filter(z => !z.archived);
+  const todas = sgaZonas.filter(z => z.warehouseId === w.id);
+  const activas = todas.filter(z => !z.archived);
+  const archivadas = todas.length - activas.length;
+  const zs = (verArch ? todas.filter(z => z.archived) : activas).sort((a, b) => (a.orden - b.orden) || sgaZonaNombre(a).localeCompare(sgaZonaNombre(b), 'es'));
   const nUbic = sgaUbicaciones.filter(u => !u.archived && activas.some(z => z.id === u.zonaId)).length;
-  const bloques = almacenes.map(w => {
-    const zs = sgaZonas.filter(z => z.warehouseId === w.id && !!z.archived === verArch).sort((a, b) => (a.orden - b.orden) || sgaZonaNombre(a).localeCompare(sgaZonaNombre(b), 'es'));
-    return `
-      <div class="card deca-card" style="--dc-accent:${w.color || 'var(--primary)'};margin-bottom:16px;">
-        ${decaCardHead('home', w.name, zs.length ? `${zs.length} zona${zs.length !== 1 ? 's' : ''}` : (verArch ? 'Sin zonas archivadas' : 'Todavía sin zonas'), verArch ? '' : `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaZonaModal(null, '${w.id}')">+ Zona</button>`)}
-        ${zs.length ? `<div class="deca-card-body" style="display:flex;flex-direction:column;gap:8px;">${zs.map(sgaZonaCardHtml).join('')}</div>` : ''}
-      </div>`;
-  }).join('');
+  const sub = activas.length ? `${activas.length === 1 ? '1 zona' : activas.length + ' zonas'}${nUbic ? ` · ${nUbic === 1 ? '1 ubicación' : nUbic + ' ubicaciones'}` : ''}` : 'Dónde se guarda la mercancía en este almacén';
   return `
-    <div style="--bn-accent:var(--primary);">
-    <div class="deca-banner">
-      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.pin, 26, '#fff', 1.8)}</span>
-      <div style="min-width:0;flex:1 1 280px;">
-        <div class="deca-banner-title">Zonas y ubicaciones</div>
-        <div class="deca-banner-sub">Dónde se guarda la mercancía en cada almacén. Las zonas son de suelo o de estantería; las estanterías tienen sus ubicaciones.</div>
+    <div class="card deca-card" style="margin-top:16px;--dc-accent:var(--primary);">
+      ${decaCardHead('pin', 'Zonas y ubicaciones', sub, `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaZonaModal(null, '${w.id}')">+ Zona</button>`)}
+      <div class="deca-card-body" style="display:flex;flex-direction:column;gap:8px;">
+        ${zs.length ? zs.map(sgaZonaCardHtml).join('') : `<div style="color:var(--mutedFaint);font-size:12.5px;">${verArch ? 'No hay zonas archivadas.' : 'Todavía no hay zonas. Crea la primera con «+ Zona»: de suelo, o de estantería si tiene ubicaciones con código.'}</div>`}
+        ${archivadas || verArch ? `<button type="button" class="tl-chg" style="margin-top:4px;" onclick="window.__sgaZonasArch=${!verArch}; renderTab();">${verArch ? 'Ver las activas' : `Ver archivadas (${archivadas})`}</button>` : ''}
       </div>
-      <div class="deca-banner-actions">
-        <div class="deca-stat"><b>${activas.length}</b><span>Zonas</span></div>
-        <div class="deca-stat"><b>${nUbic}</b><span>Ubicaciones</span></div>
-        <button class="btn btn-ghost" style="background:var(--panel);" onclick="window.__sgaZonasArch=${!verArch}; renderTab();">${verArch ? 'Ver activas' : 'Ver archivadas'}</button>
-      </div>
-    </div>
-    ${bloques || '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">No hay almacenes.</div>'}
     </div>`;
 }
 function openSgaZonaModal(id, warehouseId){
@@ -3167,6 +3155,7 @@ function tplWarehouseFormPage(){
       ${tplWarehouseViewCard(w)}
       ${whDireccionViewCardHtml(w)}
       ${whSchedViewCardHtml(w.id)}
+      ${whZonasViewCardHtml(w)}
       ${whClientesViewCardHtml(w)}
       <div id="wh-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
     ` : `
