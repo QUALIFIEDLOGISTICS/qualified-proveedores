@@ -13236,6 +13236,7 @@ function tplDriverDetail(){
 
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Tabla resumen liquidación de ${month==='todos' ? year : MONTH_NAMES[month].charAt(0).toUpperCase()+MONTH_NAMES[month].slice(1)+' '+year}</div>
+<div style="flex:1;"></div>      <button class="btn btn-ghost" onclick="printResumenLiquidacion('${d.id}')" title="Imprimir esta tabla o guardarla como PDF para facturar">${homeIcon(HOME_ICON_PATHS.file, 16, 'currentColor', 1.8)}<span>Imprimir / PDF</span></button>
     </div>
 
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
@@ -13356,6 +13357,68 @@ function tplDriverDetail(){
         && (month==='todos' || Number(n.date.slice(5,7))-1===Number(month))
         && (weekFilter==='todas' || getISOWeek(n.date).week===Number(weekFilter))
       ), readOnly)}`;
+}
+// Imprime (o guarda como PDF desde el diálogo de impresión) la tabla resumen de liquidación tal como se ve en pantalla:
+// mismo periodo, mismas filas y mismos totales, con cabecera de conductor/empresa/periodo, en A4 apaisado y sin colores de pantalla.
+function printResumenLiquidacion(driverId){
+  const d = drivers.find(x => x.id === driverId);
+  const tbl = document.querySelector('table.fin-table');
+  if (!d || !tbl) { appToast('No hay ninguna tabla que imprimir.', 'error'); return; }
+  const co = companies.find(c => c.id === d.companyId);
+  const year = window.__autonomosYear;
+  const month = window.__autonomosMonth === undefined ? 'todos' : window.__autonomosMonth;
+  const week = window.__autonomosWeek === undefined ? 'todas' : window.__autonomosWeek;
+  const mes = month === 'todos' ? '' : MONTH_NAMES[month].charAt(0).toUpperCase() + MONTH_NAMES[month].slice(1);
+  const periodo = (month === 'todos' ? `Año ${year}` : `${mes} ${year}`) + (week !== 'todas' ? ` · semana ${week}` : '');
+  const clone = tbl.cloneNode(true);
+  clone.querySelectorAll('.th-sort-arrow').forEach(el => el.remove());
+  clone.querySelectorAll('[onclick]').forEach(el => el.removeAttribute('onclick'));
+  clone.querySelectorAll('[title]').forEach(el => el.removeAttribute('title'));
+  clone.querySelectorAll('[style]').forEach(el => { el.style.textDecoration = 'none'; el.style.cursor = 'auto'; });
+  const css = `
+    :root{--text:#1C2430;--muted:#5C6670;--mutedFaint:#8C96A0;--primary:#1B3A6B;--danger:#C1443D;--success:#3F8F5F;--border:#D7DDE4;}
+    @page{size:A4 landscape;margin:12mm;}
+    *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    body{font-family:Arial,Helvetica,sans-serif;color:var(--text);margin:0;font-size:11px;}
+    .head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid var(--primary);padding-bottom:8px;margin-bottom:12px;}
+    h1{font-size:19px;margin:0;color:var(--primary);}
+    .head .gen{font-size:10px;color:var(--muted);}
+    .meta{display:flex;gap:34px;margin-bottom:14px;flex-wrap:wrap;}
+    .meta div{font-size:13px;font-weight:600;}
+    .meta b{display:block;font-size:9px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);font-weight:700;margin-bottom:2px;}
+    table{width:100%;border-collapse:collapse;font-size:9.5px;}
+    th,td{padding:5px 4px;border-bottom:1px solid var(--border);white-space:nowrap;}
+    thead .fin-group-row th{background:#EEF1F5;text-align:center;font-size:8.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);border-bottom:1px solid #C9D1DA;}
+    thead .fin-col-row th{font-size:9px;text-align:right;color:#333;font-weight:700;border-bottom:1.5px solid var(--text);}
+    .fin-num{text-align:right;}
+    .fin-center{text-align:center !important;}
+    .fin-g-start{border-left:1px solid #C9D1DA;}
+    td.fin-neto{font-weight:700;font-size:10.5px !important;}
+    tfoot td{font-weight:700;border-top:1.5px solid var(--text);border-bottom:none;background:#F4F6F8;}
+    tr{page-break-inside:avoid;}
+    .fin-pill{padding:1px 6px;border-radius:99px;font-weight:600;}
+    .foot{margin-top:14px;font-size:9px;color:var(--muted);}
+  `;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Liquidación ${esc(d.name)} · ${esc(periodo)}</title><style>${css}</style></head><body>
+    <div class="head"><h1>Resumen de liquidación</h1><div class="gen">Generado el ${esc(fmtDateDMY(today()))}</div></div>
+    <div class="meta">
+      <div><b>Conductor</b>${esc(d.name)}</div>
+      ${co ? `<div><b>Empresa</b>${esc(co.name)}</div>` : ''}
+      <div><b>Periodo</b>${esc(periodo)}</div>
+    </div>
+    ${clone.outerHTML}
+    <div class="foot">Importes en euros. Neto = Ingreso − Descuentos + Indexación. Las semanas que cruzan de mes se reparten entre ambos meses.</div>
+  </body></html>`;
+  const f = document.createElement('iframe');
+  f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+  document.body.appendChild(f);
+  const doc = f.contentWindow.document;
+  doc.open(); doc.write(html); doc.close();
+  setTimeout(() => {
+    f.contentWindow.focus();
+    f.contentWindow.print();
+    setTimeout(() => f.remove(), 3000);
+  }, 300);
 }
 function tplAnotacionesSection(driverId, filteredNotes, readOnly){
   return `
