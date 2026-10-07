@@ -8869,15 +8869,19 @@ function almacenajeProductoTexto(p){
   const repetido = almacenajeProductos.some(x => x.id !== p.id && x.nombre.trim().toLowerCase() === p.nombre.trim().toLowerCase());
   return repetido ? `${p.nombre} · sin subtipo definido` : p.nombre;
 }
-function almacenajeTipoOptionsHtml(selected){
+// cat (opcional): solo los productos de esa actividad, en una lista plana. Sin cat, todos agrupados por actividad.
+function almacenajeTipoOptionsHtml(selected, cat){
   const activos = almacenajeProductos.filter(p => !p.archived || p.id === selected);
-  const placeholder = selected ? '' : '<option value="" selected>Elige un producto…</option>';
-  return placeholder + Object.keys(ALMACENAJE_CATEGORIAS).map(cat => {
-    const deEstaCategoria = activos.filter(p=>p.categoria===cat).sort((a, b) => almacenajeProductoTexto(a).localeCompare(almacenajeProductoTexto(b), 'es'));
+  const orden = (a, b) => almacenajeProductoTexto(a).localeCompare(almacenajeProductoTexto(b), 'es');
+  const opcion = p => `<option value="${p.id}" ${p.id===selected?'selected':''}>${esc(almacenajeProductoTexto(p))}</option>`;
+  if (cat !== undefined) {
+    if (!cat) return '<option value="" selected>Primero elige la actividad</option>';
+    return (selected ? '' : '<option value="" selected>Elige el producto…</option>') + activos.filter(p => p.categoria === cat).sort(orden).map(opcion).join('');
+  }
+  return Object.keys(ALMACENAJE_CATEGORIAS).map(c => {
+    const deEstaCategoria = activos.filter(p => p.categoria === c).sort(orden);
     if (!deEstaCategoria.length) return '';
-    return `<optgroup label="${esc(ALMACENAJE_CATEGORIAS[cat])}">
-      ${deEstaCategoria.map(p=>`<option value="${p.id}" ${p.id===selected?'selected':''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}
-    </optgroup>`;
+    return `<optgroup label="${esc(ALMACENAJE_CATEGORIAS[c])}">${deEstaCategoria.map(opcion).join('')}</optgroup>`;
   }).join('');
 }
 function almacenajeUsaSubtipo(tipo){ const p = almacenajeProducto(tipo); return !!(p && p.usaSubtipo); }
@@ -9150,7 +9154,6 @@ function tplAlmacenajeTarifaRowFieldsToggle(){
   }
   document.getElementById('at-precio-label').textContent = `Precio (€${almacenajeUnidadTxt(tipo)})`;
   const actividadEl = document.getElementById('at-actividad');
-  if (actividadEl) actividadEl.innerHTML = tipo ? almacenajeCategoriaBadgeHtml(almacenajeCategoriaDe(tipo)) : '';
 }
 // Corrige una línea ya existente (p. ej. un error de tecleo). Para un precio
 // nuevo desde una fecha, o para dar de alta varias líneas de golpe, se usa
@@ -9304,11 +9307,26 @@ function almacenajeElegirLibre(i){
   const libre = [...sel.options].find(op => { const p = almacenajeProducto(op.value); const c = p && almacenajeClaveProducto(p); return !c || !usadas.has(c); });
   if (libre) sel.value = libre.value;
 }
+// Paso 1: al elegir la actividad, el desplegable de producto solo ofrece los de esa actividad.
+function almacenajeFilaActividadChange(i){
+  const cat = document.getElementById(`af-${i}-actividad`).value;
+  const sel = document.getElementById(`af-${i}-tipo`);
+  sel.innerHTML = almacenajeTipoOptionsHtml('', cat);
+  sel.disabled = !cat;
+  almacenajeFilaTipoChange(i);
+  if (cat) sel.focus();
+}
+// Paso 2: al elegir el producto, el cursor salta al siguiente campo que hay que rellenar.
+function almacenajeFilaTipoElegido(i){
+  almacenajeFilaTipoChange(i);
+  if (!document.getElementById(`af-${i}-tipo`).value) return;
+  const sub = document.getElementById(`af-${i}-subtipo`);
+  const siguiente = (sub && !sub.disabled && !sub.readOnly) ? sub : document.getElementById(`af-${i}-precio`);
+  if (siguiente) siguiente.focus();
+}
 function almacenajeFilaTipoChange(i){
   const tipo = document.getElementById(`af-${i}-tipo`).value;
   almacenajeSubtipoAplicar(document.getElementById(`af-${i}-subtipo`), tipo, 'af-subtipos');
-  const actividadEl = document.getElementById(`af-${i}-actividad`);
-  if (actividadEl) actividadEl.innerHTML = tipo ? almacenajeCategoriaBadgeHtml(almacenajeCategoriaDe(tipo)) : '';
   // «Cobro» (por día / máximo del mes) solo tiene sentido en los productos de stock diario.
   const baseEl = document.getElementById(`af-${i}-base`);
   if (baseEl) {
@@ -9347,12 +9365,13 @@ function almacenajeFilaFechaChange(i){
 }
 function almacenajeFilaRowHtml(i, preset){
   const precioTxt = preset ? String(preset.precio).replace('.', ',') : '';
+  const cat = preset ? almacenajeCategoriaDe(preset.tipo) : '';
   return `
     <tr class="af-row" data-i="${i}"${preset ? ` data-id="${esc(preset.id)}"` : ''}>
       <td style="padding:5px 4px;color:var(--mutedFaint);font-size:12px;text-align:right;width:26px;">${i+1}</td>
       <td style="padding:5px 4px;min-width:135px;"><input id="af-${i}-fecha" type="date" value="${preset ? esc(preset.fecha) : almacenajeFechaFilaPrevia()}" onchange="almacenajeFilaFechaChange(${i})" /></td>
-      <td style="padding:5px 4px;min-width:170px;"><select id="af-${i}-tipo" onchange="almacenajeFilaTipoChange(${i})">${almacenajeTipoOptionsHtml(preset ? preset.tipo : '')}</select></td>
-      <td id="af-${i}-actividad" style="padding:5px 4px;">${preset ? almacenajeCategoriaBadgeHtml(almacenajeCategoriaDe(preset.tipo)) : ""}</td>
+      <td style="padding:5px 4px;min-width:140px;"><select id="af-${i}-actividad" style="min-width:130px;" onchange="almacenajeFilaActividadChange(${i})"><option value=""${cat ? '' : ' selected'}>Elige actividad…</option>${Object.keys(ALMACENAJE_CATEGORIAS).map(k => `<option value="${k}"${k === cat ? ' selected' : ''}>${esc(ALMACENAJE_CATEGORIAS[k])}</option>`).join('')}</select></td>
+      <td style="padding:5px 4px;min-width:200px;"><select id="af-${i}-tipo" style="min-width:190px;" onchange="almacenajeFilaTipoElegido(${i})"${cat ? '' : ' disabled'}>${almacenajeTipoOptionsHtml(preset ? preset.tipo : '', cat)}</select></td>
       <td style="padding:5px 4px;min-width:160px;"><input id="af-${i}-subtipo" maxlength="60" data-combo="af-subtipos" autocomplete="off" placeholder="Ej. Europeo" oninput="window.__almacenajeFormDirty=true;" /></td>
       <td style="padding:5px 4px;min-width:130px;"><select id="af-${i}-base" onchange="window.__almacenajeFormDirty=true;"><option value="dia">Por día</option><option value="mes_max">Máx. del mes</option></select></td>
       <td style="padding:5px 4px;min-width:110px;"><input id="af-${i}-precio" inputmode="decimal" maxlength="10" placeholder="Precio €" value="${esc(precioTxt)}" /></td>
@@ -9378,7 +9397,7 @@ function almacenajeFilaAddRow(focus, preset){
     almacenajeActualizarOpciones();
   } else almacenajeFilaTipoChange(i);
   window.__almacenajeFormDirty = dirtyAntes;
-  if (focus) document.getElementById(`af-${i}-tipo`).focus();
+  if (focus) document.getElementById(`af-${i}-actividad`).focus();
 }
 // "Editar tarifa": la misma pantalla que al crear, con todas las líneas vigentes del cliente ya
 // escritas para corregirlas de golpe, quitar las que sobren o añadir otras debajo.
@@ -9413,7 +9432,7 @@ function tplAlmacenajeTarifaFormPage(c){
     </div>
     <div class="deca-form" oninput="window.__almacenajeFormDirty=true;" onchange="window.__almacenajeFormDirty=true;" style="--dc-accent:var(--primary);">
       <div class="card deca-card">
-        ${decaCardHead('list', window.__almacenajeEditar ? 'Líneas vigentes' : 'Líneas de tarifa', window.__almacenajeEditar ? 'Para un precio nuevo desde una fecha, añade una fila nueva del mismo producto con su fecha: la anterior pasa sola al histórico' : 'Se pueden apuntar varias de golpe; se guardan todas juntas')}
+        ${decaCardHead('list', window.__almacenajeEditar ? 'Líneas vigentes' : 'Líneas de tarifa', window.__almacenajeEditar ? 'Corrige los precios, quita las líneas que sobren o añade otras debajo' : 'Se pueden apuntar varias de golpe; se guardan todas juntas')}
         <div class="deca-card-body">
           <datalist id="af-subtipos">${almacenajeSubtiposDatalistHtml()}</datalist>
           <div style="overflow-x:auto;">
@@ -9422,8 +9441,8 @@ function tplAlmacenajeTarifaFormPage(c){
               <thead><tr>
                 <th style="padding:6px 4px;text-align:right;">#</th>
                 <th style="padding:6px 4px;">Vigente desde</th>
-                <th style="padding:6px 4px;">Tipo</th>
-                <th style="padding:6px 4px;">Actividad</th>
+                <th style="padding:6px 4px;">1 · Actividad</th>
+                <th style="padding:6px 4px;">2 · Producto</th>
                 <th style="padding:6px 4px;">Subtipo</th>
                 <th style="padding:6px 4px;" title="Solo en productos de stock: por día (cada noche) o por el máximo del mes">Cobro</th>
                 <th style="padding:6px 4px;">Precio</th>
