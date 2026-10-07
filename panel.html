@@ -302,6 +302,16 @@
   .tl-since{font-size:11px;color:var(--mutedFaint);margin-top:3px;}
   .tl-chg{align-self:flex-start;margin-top:6px;padding:0;border:none;background:none;color:var(--primary);font-size:11.5px;font-weight:600;cursor:pointer;font-family:var(--body);}
   .tl-chg:hover{text-decoration:underline;}
+  .sga-zona{display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--border);border-radius:12px;background:var(--panel);}
+  .sga-zona.arch{opacity:.6;}
+  .sga-zona-n{font-size:14px;font-weight:600;overflow-wrap:anywhere;}
+  .sga-zona-s{font-size:12px;color:var(--muted);margin-top:1px;}
+  .sga-tipo{font-size:10.5px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;padding:3px 10px;border-radius:999px;background:var(--panel2);color:var(--muted);border:1px solid var(--border);white-space:nowrap;}
+  .sga-tipo.est{background:color-mix(in srgb,var(--primary) 10%,var(--panel));color:var(--primary);border-color:color-mix(in srgb,var(--primary) 30%,var(--border));}
+  .sga-ubs{display:flex;flex-wrap:wrap;gap:6px;max-height:150px;overflow-y:auto;}
+  .sga-ub{display:inline-flex;align-items:center;gap:6px;padding:3px 6px 3px 10px;border-radius:999px;background:var(--panel2);border:1px solid var(--border);font-family:var(--mono);font-size:12px;}
+  .sga-ub.arch{opacity:.5;text-decoration:line-through;}
+  .sga-ub button{border:none;background:none;color:var(--mutedFaint);cursor:pointer;font-size:12px;padding:0 2px;}
   .wk-chip{display:inline-block;min-width:34px;text-align:center;margin-right:8px;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:.2px;color:var(--muted);background:var(--panel2);border:1px solid var(--border);font-variant-numeric:tabular-nums;cursor:help;}
   .wk-chip.odd{background:color-mix(in srgb,var(--primary) 14%,var(--panel));color:var(--primary);border-color:color-mix(in srgb,var(--primary) 35%,var(--border));}
   .tc-hist{margin-top:18px;}
@@ -2577,12 +2587,13 @@ function setAlmacenConfigSection(id){
 function tplAlmacenConfigTabsHtml(){
   const section = almacenConfigSection();
   const btn = (id, label) => `<button type="button" class="${section === id ? 'on' : ''}" onclick="setAlmacenConfigSection('${id}')">${label}</button>`;
-  return `<div class="doc-seg" style="margin-bottom:16px;">${btn('almacenes', 'Almacenes')}${btn('productos', 'Productos')}</div>`;
+  return `<div class="doc-seg" style="margin-bottom:16px;">${btn('almacenes', 'Almacenes')}${btn('productos', 'Productos')}${btn('zonas', 'Zonas')}</div>`;
 }
 function tplAlmacenConfig(){
   if (window.__whView === 'form') return tplWarehouseFormPage();
   if (window.__apView === 'form') return tplAlmacenajeProductoFormPage();
-  return tplAlmacenConfigTabsHtml() + (almacenConfigSection() === 'productos' ? tplAlmacenajeProductosPage() : tplWarehousesPage());
+  const sec = almacenConfigSection();
+  return tplAlmacenConfigTabsHtml() + (sec === 'productos' ? tplAlmacenajeProductosPage() : sec === 'zonas' ? tplSgaZonasPage() : tplWarehousesPage());
 }
 function tplWarehousesPage(){
   const archivedView = (window.__whListView || 'activos') === 'archivados';
@@ -2623,6 +2634,239 @@ function tplWarehousesPage(){
     </div>
     <div id="wh-list-body">${warehousesListBodyHtml()}</div>
     </div>`;
+}
+
+/* ---- SGA · Zonas y ubicaciones (Almacén → Configuración → Zonas) ----
+   Dónde se guarda la mercancía: almacén → (nave) → zona → ubicación. La zona es de suelo o de estantería; solo las
+   estanterías tienen ubicaciones (un hueco por palet, con su código: pasillo-columna-nivel). */
+let sgaZonas = [];
+let sgaUbicaciones = [];
+async function loadSgaConfig(){
+  const [z, u] = await Promise.all([
+    supabaseClient.from('sga_zonas').select('*').order('orden', { ascending: true }).order('nombre', { ascending: true }),
+    supabaseClient.from('sga_ubicaciones').select('*').order('codigo', { ascending: true }),
+  ]);
+  sgaZonas = (z.data || []).map(r => ({ id: r.id, warehouseId: r.warehouse_id, nave: r.nave || '', nombre: r.nombre, tipo: r.tipo, orden: r.orden, archived: !!r.archived }));
+  sgaUbicaciones = (u.data || []).map(r => ({ id: r.id, zonaId: r.zona_id, codigo: r.codigo, archived: !!r.archived }));
+}
+const SGA_ZONA_TIPOS = { suelo: 'Suelo', estanteria: 'Estantería' };
+function sgaZonaNombre(z){ return z.nave ? `${z.nave} · ${z.nombre}` : z.nombre; }
+function sgaUbicacionesDe(zonaId, conArchivadas){ return sgaUbicaciones.filter(u => u.zonaId === zonaId && (conArchivadas || !u.archived)); }
+function sgaZonaCardHtml(z){
+  const n = sgaUbicacionesDe(z.id).length;
+  const esEst = z.tipo === 'estanteria';
+  return `
+    <div class="sga-zona${z.archived ? ' arch' : ''}">
+      <div style="min-width:0;flex:1;">
+        <div class="sga-zona-n">${esc(z.nombre)}${z.archived ? '<span class="dir-card-arch">archivada</span>' : ''}</div>
+        <div class="sga-zona-s">${z.nave ? esc(z.nave) + ' · ' : ''}${esEst ? `${n === 1 ? '1 ubicación' : n + ' ubicaciones'}` : 'Sin ubicaciones (a suelo)'}</div>
+      </div>
+      <span class="sga-tipo ${esEst ? 'est' : ''}">${esc(SGA_ZONA_TIPOS[z.tipo] || z.tipo)}</span>
+      <div style="display:flex;gap:2px;flex-shrink:0;">
+        ${esEst && !z.archived ? `<button class="btn btn-ghost" style="padding:5px 10px;font-size:12px;" onclick="openSgaUbicacionesModal('${z.id}')">Ubicaciones</button>` : ''}
+        <button class="deca-act" onclick="openSgaZonaModal('${z.id}')" title="Editar la zona">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+        <button class="btn btn-ghost" style="padding:5px 10px;font-size:12px;" onclick="setSgaZonaArchivada('${z.id}', ${!z.archived})">${z.archived ? 'Restaurar' : 'Archivar'}</button>
+      </div>
+    </div>`;
+}
+function tplSgaZonasPage(){
+  const verArch = !!window.__sgaZonasArch;
+  const almacenes = allWarehouses.filter(w => !w.archived);
+  const activas = sgaZonas.filter(z => !z.archived);
+  const nUbic = sgaUbicaciones.filter(u => !u.archived && activas.some(z => z.id === u.zonaId)).length;
+  const bloques = almacenes.map(w => {
+    const zs = sgaZonas.filter(z => z.warehouseId === w.id && !!z.archived === verArch).sort((a, b) => (a.orden - b.orden) || sgaZonaNombre(a).localeCompare(sgaZonaNombre(b), 'es'));
+    return `
+      <div class="card deca-card" style="--dc-accent:${w.color || 'var(--primary)'};margin-bottom:16px;">
+        ${decaCardHead('home', w.name, zs.length ? `${zs.length} zona${zs.length !== 1 ? 's' : ''}` : (verArch ? 'Sin zonas archivadas' : 'Todavía sin zonas'), verArch ? '' : `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaZonaModal(null, '${w.id}')">+ Zona</button>`)}
+        ${zs.length ? `<div class="deca-card-body" style="display:flex;flex-direction:column;gap:8px;">${zs.map(sgaZonaCardHtml).join('')}</div>` : ''}
+      </div>`;
+  }).join('');
+  return `
+    <div style="--bn-accent:var(--primary);">
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.pin, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 280px;">
+        <div class="deca-banner-title">Zonas y ubicaciones</div>
+        <div class="deca-banner-sub">Dónde se guarda la mercancía en cada almacén. Las zonas son de suelo o de estantería; las estanterías tienen sus ubicaciones.</div>
+      </div>
+      <div class="deca-banner-actions">
+        <div class="deca-stat"><b>${activas.length}</b><span>Zonas</span></div>
+        <div class="deca-stat"><b>${nUbic}</b><span>Ubicaciones</span></div>
+        <button class="btn btn-ghost" style="background:var(--panel);" onclick="window.__sgaZonasArch=${!verArch}; renderTab();">${verArch ? 'Ver activas' : 'Ver archivadas'}</button>
+      </div>
+    </div>
+    ${bloques || '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">No hay almacenes.</div>'}
+    </div>`;
+}
+function openSgaZonaModal(id, warehouseId){
+  const z = id ? sgaZonas.find(x => x.id === id) : null;
+  const wid = z ? z.warehouseId : (warehouseId || (allWarehouses.find(w => !w.archived) || {}).id);
+  window.__sgaZonaId = id || null;
+  window.__sgaZonaTipo = z ? z.tipo : 'suelo';
+  const segBtn = k => `<button type="button" data-k="${k}" class="${window.__sgaZonaTipo === k ? 'on' : ''}" onclick="window.__sgaZonaTipo='${k}'; document.querySelectorAll('#sgaz-tipo button').forEach(b => b.classList.toggle('on', b.dataset.k === '${k}'));">${SGA_ZONA_TIPOS[k]}</button>`;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:480px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.pin, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;">
+            <div class="deca-banner-title" style="font-size:19px;">${z ? 'Editar zona' : 'Nueva zona'}</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">Un sitio donde se guarda mercancía</div>
+          </div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
+          <div class="field"><label>Almacén <span class="dc-req">*</span></label><select id="sgaz-wh">${allWarehouses.filter(w => !w.archived || w.id === wid).map(w => `<option value="${w.id}" ${w.id === wid ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select></div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <div class="field" style="flex:1;min-width:150px;"><label>Nave <span style="color:var(--mutedFaint);">(opcional)</span></label>${decaInputIcon('home', `<input id="sgaz-nave" maxlength="60" placeholder="Ej. Nave 2" value="${esc(z ? z.nave : '')}" />`)}</div>
+            <div class="field" style="flex:1;min-width:150px;"><label>Nombre de la zona <span class="dc-req">*</span></label>${decaInputIcon('pin', `<input id="sgaz-nombre" maxlength="60" placeholder="Ej. Zona A" value="${esc(z ? z.nombre : '')}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); submitSgaZona(); }" />`)}</div>
+          </div>
+          <div class="field"><label>¿Cómo se guarda aquí?</label><div class="doc-seg" id="sgaz-tipo">${segBtn('suelo')}${segBtn('estanteria')}</div>
+            <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">Estantería: cada palet va en una ubicación con su código. Suelo: solo se anota la zona.</div></div>
+          <div id="sgaz-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
+          <div style="display:flex;gap:10px;">
+            <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary deca-submit sgaz-save" onclick="submitSgaZona()">${z ? 'Guardar cambios' : 'Crear zona'}</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const el = document.getElementById('sgaz-nombre'); if (el) el.focus(); }, 0);
+}
+async function submitSgaZona(){
+  const errEl = document.getElementById('sgaz-error');
+  errEl.textContent = '';
+  const id = window.__sgaZonaId;
+  const warehouse_id = document.getElementById('sgaz-wh').value;
+  const nave = document.getElementById('sgaz-nave').value.trim();
+  const nombre = document.getElementById('sgaz-nombre').value.trim();
+  const tipo = window.__sgaZonaTipo === 'estanteria' ? 'estanteria' : 'suelo';
+  if (!nombre) { errEl.textContent = 'Ponle un nombre a la zona.'; return; }
+  const clave = z => `${z.warehouseId}|${(z.nave || '').toLowerCase()}|${z.nombre.toLowerCase()}`;
+  if (sgaZonas.some(z => z.id !== id && clave(z) === clave({ warehouseId: warehouse_id, nave, nombre }))) { errEl.textContent = 'Ya existe una zona con ese nombre en este almacén.'; return; }
+  const previa = id ? sgaZonas.find(z => z.id === id) : null;
+  if (previa && previa.tipo === 'estanteria' && tipo === 'suelo' && sgaUbicacionesDe(id).length) { errEl.textContent = 'Esta zona tiene ubicaciones. Archívalas antes de pasarla a suelo.'; return; }
+  const btn = document.querySelector('.sgaz-save');
+  if (btn) btn.disabled = true;
+  const row = { warehouse_id, nave: nave || null, nombre, tipo };
+  try {
+    if (id) {
+      const { error } = await supabaseClient.from('sga_zonas').update(row).eq('id', id);
+      if (error) throw error;
+      Object.assign(previa, { warehouseId: warehouse_id, nave, nombre, tipo });
+      await logWarehouseHistorial(warehouse_id, `ha modificado la zona ${sgaZonaNombre(previa)} (${SGA_ZONA_TIPOS[tipo].toLowerCase()}).`);
+    } else {
+      const { data, error } = await supabaseClient.from('sga_zonas').insert(row).select().single();
+      if (error || !data) throw (error || new Error('sin datos'));
+      sgaZonas.push({ id: data.id, warehouseId: warehouse_id, nave, nombre, tipo, orden: data.orden || 0, archived: false });
+      await logWarehouseHistorial(warehouse_id, `ha creado la zona ${sgaZonaNombre({ nave, nombre })} (${SGA_ZONA_TIPOS[tipo].toLowerCase()}).`);
+    }
+    closeModal();
+    renderTab();
+  } catch (err) {
+    errEl.textContent = 'No se pudo guardar: ' + (err && err.message ? err.message : 'error desconocido.');
+    if (btn) btn.disabled = false;
+  }
+}
+async function setSgaZonaArchivada(id, archivar){
+  const z = sgaZonas.find(x => x.id === id);
+  if (!z) return;
+  if (archivar && !(await appConfirm({ title: 'Archivar zona', name: sgaZonaNombre(z), message: 'Dejará de ofrecerse al dar entradas. La mercancía que ya esté en ella sigue donde está.', confirmLabel: 'Archivar', tone: 'warn', icon: 'warn' }))) return;
+  const { error } = await supabaseClient.from('sga_zonas').update({ archived: archivar }).eq('id', id);
+  if (error) { appToast('No se pudo guardar: ' + error.message, 'error'); return; }
+  z.archived = archivar;
+  await logWarehouseHistorial(z.warehouseId, `ha ${archivar ? 'archivado' : 'restaurado'} la zona ${sgaZonaNombre(z)}.`);
+  renderTab();
+}
+/* ---- Ubicaciones de una zona de estantería ---- */
+function sgaUbicacionesListaHtml(zonaId){
+  const lista = sgaUbicacionesDe(zonaId, true);
+  if (!lista.length) return '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay ubicaciones. Añádelas debajo.</div>';
+  return lista.map(u => `<span class="sga-ub${u.archived ? ' arch' : ''}">${esc(u.codigo)}<button type="button" title="${u.archived ? 'Restaurar' : 'Archivar esta ubicación'}" onclick="setSgaUbicacionArchivada('${u.id}', ${!u.archived})">${u.archived ? '↺' : '✕'}</button></span>`).join('');
+}
+function openSgaUbicacionesModal(zonaId){
+  const z = sgaZonas.find(x => x.id === zonaId);
+  if (!z) return;
+  window.__sgaUbZona = zonaId;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:600px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.pin, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;">
+            <div class="deca-banner-title" style="font-size:19px;">Ubicaciones</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">${esc((allWarehouses.find(w => w.id === z.warehouseId) || {}).name || '')} · ${esc(sgaZonaNombre(z))}</div>
+          </div>
+          <button class="close-x" onclick="closeModal(); renderTab();" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);max-height:72vh;overflow-y:auto;">
+          <div class="op-chips-label" style="margin-top:0;">Las que ya hay</div>
+          <div id="sgaub-lista" class="sga-ubs">${sgaUbicacionesListaHtml(zonaId)}</div>
+          <div class="op-sec">
+            <div class="op-chips-label" style="margin-top:0;">Generar de golpe</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+              <div class="field" style="width:90px;margin-bottom:0;"><label>Pasillo</label><input id="sgaub-pas" maxlength="6" placeholder="A" /></div>
+              <div class="field" style="width:130px;margin-bottom:0;"><label>Columnas</label><div style="display:flex;gap:6px;align-items:center;"><input id="sgaub-c1" type="number" min="1" value="1" /><span>a</span><input id="sgaub-c2" type="number" min="1" value="10" /></div></div>
+              <div class="field" style="width:130px;margin-bottom:0;"><label>Niveles</label><div style="display:flex;gap:6px;align-items:center;"><input id="sgaub-n1" type="number" min="1" value="1" /><span>a</span><input id="sgaub-n2" type="number" min="1" value="4" /></div></div>
+              <button type="button" class="btn btn-ghost" onclick="sgaUbicacionesGenerar()">Generar</button>
+            </div>
+            <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">Ejemplo: pasillo A, columnas 1 a 10, niveles 1 a 4 → A-01-1, A-01-2… A-10-4.</div>
+          </div>
+          <div class="field" style="margin-top:14px;"><label>Códigos a añadir <span style="color:var(--mutedFaint);">(uno por línea; puedes escribirlos o pegarlos)</span></label>
+            <textarea id="sgaub-texto" rows="5" placeholder="A-01-1&#10;A-01-2" style="width:100%;font-family:var(--mono);font-size:12.5px;"></textarea></div>
+          <div id="sgaub-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
+          <div style="display:flex;gap:10px;">
+            <button class="btn btn-ghost deca-cancel" onclick="closeModal(); renderTab();">Cerrar</button>
+            <button class="btn btn-primary deca-submit sgaub-save" onclick="submitSgaUbicaciones()">Añadir ubicaciones</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+function sgaUbicacionesGenerar(){
+  const pas = document.getElementById('sgaub-pas').value.trim().toUpperCase();
+  const c1 = parseInt(document.getElementById('sgaub-c1').value, 10), c2 = parseInt(document.getElementById('sgaub-c2').value, 10);
+  const n1 = parseInt(document.getElementById('sgaub-n1').value, 10), n2 = parseInt(document.getElementById('sgaub-n2').value, 10);
+  const err = document.getElementById('sgaub-error');
+  err.textContent = '';
+  if (!pas) { err.textContent = 'Escribe el pasillo (por ejemplo A).'; return; }
+  if (![c1, c2, n1, n2].every(n => isFinite(n) && n >= 1) || c2 < c1 || n2 < n1) { err.textContent = 'Revisa los rangos de columnas y niveles.'; return; }
+  if ((c2 - c1 + 1) * (n2 - n1 + 1) > 1000) { err.textContent = 'Son demasiadas de golpe (máximo 1000). Genera el pasillo por partes.'; return; }
+  const out = [];
+  for (let c = c1; c <= c2; c++) for (let n = n1; n <= n2; n++) out.push(`${pas}-${String(c).padStart(2, '0')}-${n}`);
+  const t = document.getElementById('sgaub-texto');
+  t.value = (t.value.trim() ? t.value.trim() + '\n' : '') + out.join('\n');
+}
+async function submitSgaUbicaciones(){
+  const zonaId = window.__sgaUbZona;
+  const err = document.getElementById('sgaub-error');
+  err.textContent = '';
+  const codigos = [...new Set(document.getElementById('sgaub-texto').value.split('\n').map(s => s.trim()).filter(Boolean))];
+  if (!codigos.length) { err.textContent = 'Escribe o genera al menos un código.'; return; }
+  const ya = new Set(sgaUbicacionesDe(zonaId, true).map(u => u.codigo.toLowerCase()));
+  const nuevos = codigos.filter(c => !ya.has(c.toLowerCase()));
+  if (!nuevos.length) { err.textContent = 'Todos esos códigos ya existen en esta zona.'; return; }
+  const btn = document.querySelector('.sgaub-save');
+  if (btn) btn.disabled = true;
+  const { data, error } = await supabaseClient.from('sga_ubicaciones').insert(nuevos.map(codigo => ({ zona_id: zonaId, codigo }))).select();
+  if (error || !data) { err.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'error desconocido.'); if (btn) btn.disabled = false; return; }
+  data.forEach(r => sgaUbicaciones.push({ id: r.id, zonaId: r.zona_id, codigo: r.codigo, archived: false }));
+  const z = sgaZonas.find(x => x.id === zonaId);
+  if (z) await logWarehouseHistorial(z.warehouseId, `ha añadido ${nuevos.length === 1 ? '1 ubicación' : nuevos.length + ' ubicaciones'} a la zona ${sgaZonaNombre(z)}.`);
+  document.getElementById('sgaub-texto').value = '';
+  document.getElementById('sgaub-lista').innerHTML = sgaUbicacionesListaHtml(zonaId);
+  appToast(`${nuevos.length === 1 ? '1 ubicación añadida' : nuevos.length + ' ubicaciones añadidas'}.`, 'ok');
+  if (btn) btn.disabled = false;
+}
+async function setSgaUbicacionArchivada(id, archivar){
+  const u = sgaUbicaciones.find(x => x.id === id);
+  if (!u) return;
+  const { error } = await supabaseClient.from('sga_ubicaciones').update({ archived: archivar }).eq('id', id);
+  if (error) { appToast('No se pudo guardar: ' + error.message, 'error'); return; }
+  u.archived = archivar;
+  const lista = document.getElementById('sgaub-lista');
+  if (lista) lista.innerHTML = sgaUbicacionesListaHtml(u.zonaId);
 }
 
 /* ---- Almacenes: historial de cambios (quién cambió qué y cuándo) ---- */
@@ -15308,7 +15552,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   }
 
   await loadWarehouses();
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadOperativas(), loadTransportistaRutas(), loadTransportistaContactos(), loadAlmacenajeTarifas(), loadAlmacenajeProductos()]);
+  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadOperativas(), loadSgaConfig(), loadTransportistaRutas(), loadTransportistaContactos(), loadAlmacenajeTarifas(), loadAlmacenajeProductos()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
