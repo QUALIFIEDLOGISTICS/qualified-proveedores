@@ -1516,6 +1516,7 @@ function almacenajeVolverALista(){
   window.__almacenajeFormClienteId = null;
   window.__sgaClienteFormId = null;
   window.__sgaArtForm = null;
+  window.__sgaArtRapida = null;
   window.__almacenajeFormDirty = false;
   window.__almacenajeEditar = false;
   window.__almacenajeOrigen = 'ficha';
@@ -2335,6 +2336,7 @@ function computeBreadcrumbSegments(){
     }[label] || [];
     const editId = window.__contactoDetailId;
     const editing = editId ? contactos.find(c=>c.id===editId) : null;
+    if (editing && window.__sgaArtRapida && window.__sgaArtRapida.clienteId === editId) return [...ancestors, {label, onclick:'closeContactoDetail()'}, {label: editing.nombre, onclick:'sgaArtRapidaCerrar()'}, {label:'Alta rápida de artículos', onclick:null}];
     if (editing && window.__sgaArtForm && window.__sgaArtForm.clienteId === editId) return [...ancestors, {label, onclick:'closeContactoDetail()'}, {label: editing.nombre, onclick:'sgaArticuloCerrar()'}, {label: window.__sgaArtForm.id ? 'Artículo' : 'Nuevo artículo', onclick:null}];
     if (editing && window.__sgaClienteFormId === editId) return [...ancestors, {label, onclick:'closeContactoDetail()'}, {label: editing.nombre, onclick:'sgaClienteCerrar()'}, {label:'Gestión de stock (SGA)', onclick:null}];
     return [...ancestors, {label, onclick:'closeContactoDetail()'}, {label: editing ? editing.nombre : 'Nuevo contacto', onclick:null}];
@@ -2980,6 +2982,7 @@ function tplSgaClienteCard(c){
 function sgaClienteCerrar(){
   window.__sgaClienteFormId = null;
   window.__sgaArtForm = null;
+  window.__sgaArtRapida = null;
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
 }
@@ -3997,7 +4000,7 @@ function tplSgaArticulosCard(c){
   const puede = sgaPuedeEditarStock();
   return `
     <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:20px;">
-      ${decaCardHead('list', `Artículos (${n})`, 'El catálogo de este cliente: lo que se elige al dar una entrada o una salida', puede ? `<button class="btn btn-primary" style="padding:10px 18px;font-size:13.5px;" onclick="openSgaArticuloForm('${c.id}')">+ Artículo</button>` : '')}
+      ${decaCardHead('list', `Artículos (${n})`, 'El catálogo de este cliente: lo que se elige al dar una entrada o una salida', puede ? `<div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-ghost" style="background:var(--panel);padding:10px 18px;font-size:13.5px;" onclick="openSgaArtRapida('${c.id}')" title="Pega varios artículos de golpe desde tu Excel">Alta rápida (Excel)</button><button class="btn btn-primary" style="padding:10px 18px;font-size:13.5px;" onclick="openSgaArticuloForm('${c.id}')">+ Artículo</button></div>` : '')}
       <div class="deca-card-body">
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
           <div class="deca-search" style="flex:1;min-width:220px;"><input placeholder="Buscar por producto o referencia…" value="${esc(window.__sgaArtSearch || '')}" oninput="window.__sgaArtSearch=this.value; sgaArticulosRefrescar('${c.id}');" /><span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span></div>
@@ -4009,6 +4012,7 @@ function tplSgaArticulosCard(c){
 }
 function sgaArticuloCerrar(){
   window.__sgaArtForm = null;
+  window.__sgaArtRapida = null;
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
 }
@@ -4123,6 +4127,208 @@ async function setSgaArticuloArchivado(id, archivar){
   a.archived = archivar;
   await logContactoHistorial(a.clienteId, `SGA · ha ${archivar ? 'archivado' : 'restaurado'} el artículo ${sgaArticuloTxt(a)}.`);
   renderTab();
+}
+
+/* ---- SGA · Alta rápida de artículos (pegando desde el Excel) ----
+   Se copian en el Excel las columnas de la hoja «BASE DE DATOS» (Producto, Referencia, Bultos, Metros lineales, Peso, Nave,
+   Información, Finalidad), se pegan en un cuadro y el SGA enseña lo que va a crear antes de guardar nada. */
+function openSgaArtRapida(clienteId){
+  window.__sgaArtRapida = { clienteId };
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
+  setTimeout(() => { const el = document.getElementById('sgar-txt'); if (el) el.focus(); }, 0);
+}
+function sgaArtRapidaCerrar(){
+  window.__sgaArtRapida = null;
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
+}
+// Lector de texto pegado desde Excel: columnas separadas por tabulador, filas por salto de línea, y celdas entre comillas
+// que pueden llevar saltos de línea dentro (como la columna «Información»).
+function sgaParseTsv(texto){
+  const filas = [];
+  let fila = [], celda = '', dentro = false;
+  for (let i = 0; i < texto.length; i++) {
+    const ch = texto[i];
+    if (dentro) {
+      if (ch === '"') { if (texto[i + 1] === '"') { celda += '"'; i++; } else dentro = false; }
+      else celda += ch;
+    } else if (ch === '"' && celda === '') dentro = true;
+    else if (ch === '\t') { fila.push(celda); celda = ''; }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && texto[i + 1] === '\n') i++;
+      fila.push(celda); celda = '';
+      if (fila.some(c => c.trim() !== '')) filas.push(fila);
+      fila = [];
+    } else celda += ch;
+  }
+  fila.push(celda);
+  if (fila.some(c => c.trim() !== '')) filas.push(fila);
+  return filas;
+}
+const SGA_ART_COLS = [
+  { id: 'nombre', re: /^producto|^nombre|^art[ií]culo/ },
+  { id: 'referencia', re: /^referencia|^modelo|^ref\b/ },
+  { id: 'bultos', re: /bultos|cajas|palets/ },
+  { id: 'ml', re: /metros|lineal/ },
+  { id: 'peso', re: /^peso/ },
+  { id: 'nave', re: /^nave|^zona|^almac/ },
+  { id: 'medidas', re: /informaci|medidas|largo/ },
+  { id: 'finalidad', re: /^finalidad/ },
+];
+function sgaArtMapaColumnas(cabecera){
+  const mapa = {};
+  cabecera.forEach((c, i) => {
+    const t = c.trim().toLowerCase();
+    const col = SGA_ART_COLS.find(x => x.re.test(t) && mapa[x.id] === undefined);
+    if (col) mapa[col.id] = i;
+  });
+  return mapa;
+}
+function sgaNumPegado(t){
+  let s = String(t || '').trim().replace(/\s|kg/gi, '');
+  if (s === '' || s === '-') return null;
+  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');       // 1.234,5 → 1234.5
+  else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');       // 5.464 → 5464
+  const n = Number(s.replace(/[^0-9.\-]/g, ''));
+  return isFinite(n) ? n : NaN;
+}
+function sgaNormaSitio(s){ return String(s || '').trim().toLowerCase(); }
+function sgaZonaPorTexto(texto){
+  const t = sgaNormaSitio(texto);
+  if (!t) return null;
+  return sgaZonas.find(z => !z.archived && (sgaNormaSitio(z.nombre) === t || sgaNormaSitio(z.nave) === t || sgaNormaSitio(sgaZonaNombre(z)) === t)) || null;
+}
+// Convierte lo pegado en filas revisadas, con su estado (nueva / ya existe / error).
+function sgaArtRapidaAnalizar(texto, clienteId, zonaDefecto){
+  const filas = sgaParseTsv(texto);
+  if (!filas.length) return { items: [], mapa: null };
+  let mapa = sgaArtMapaColumnas(filas[0]);
+  let datos = filas;
+  if (mapa.nombre !== undefined) datos = filas.slice(1);
+  else mapa = { nombre: 0, referencia: 1, bultos: 2, ml: 3, peso: 4, nave: 5, medidas: 6, finalidad: 7 };
+  const celda = (f, id) => { const v = mapa[id] !== undefined && f[mapa[id]] !== undefined ? String(f[mapa[id]]).trim() : ''; return v === '-' ? '' : v; };
+  const existentes = new Set(sgaArticulosDe(clienteId, true).map(a => (a.referencia || a.nombre).toLowerCase()));
+  const vistas = new Set();
+  const items = datos.map((f, n) => {
+    const nombre = celda(f, 'nombre'), referencia = celda(f, 'referencia');
+    const bTxt = celda(f, 'bultos');
+    const bultos = bTxt === '' ? 1 : sgaNumPegado(bTxt);
+    const ml = sgaNumPegado(celda(f, 'ml')), peso = sgaNumPegado(celda(f, 'peso'));
+    const naveTxt = celda(f, 'nave');
+    const zona = sgaZonaPorTexto(naveTxt) || (zonaDefecto ? sgaZonaDe(zonaDefecto) : null);
+    const item = { n: n + 1, nombre, referencia, bultos, ml, peso, medidas: celda(f, 'medidas'), finalidad: celda(f, 'finalidad'), naveTxt, zona, estado: 'nuevo', aviso: '' };
+    if (!nombre) { item.estado = 'error'; item.aviso = 'Falta el producto.'; return item; }
+    if (!isFinite(bultos) || bultos <= 0) { item.estado = 'error'; item.aviso = 'Los bultos tienen que ser un número mayor que 0.'; return item; }
+    if (Number.isNaN(ml) || Number.isNaN(peso)) { item.estado = 'error'; item.aviso = 'Metros lineales o peso no son un número.'; return item; }
+    const clave = (referencia || nombre).toLowerCase();
+    if (existentes.has(clave)) { item.estado = 'existe'; item.aviso = 'Ya está en el catálogo.'; return item; }
+    if (vistas.has(clave)) { item.estado = 'existe'; item.aviso = 'Repetido en lo que has pegado.'; return item; }
+    vistas.add(clave);
+    if (naveTxt && !sgaZonaPorTexto(naveTxt)) item.aviso = `«${naveTxt}» no coincide con ninguna zona${zonaDefecto ? ': se usa la zona por defecto' : ': se queda sin zona'}.`;
+    return item;
+  });
+  return { items, mapa };
+}
+function sgaArtRapidaItems(){
+  const pg = window.__sgaArtRapida || {};
+  const txt = (document.getElementById('sgar-txt') || {}).value || '';
+  const zdef = (document.getElementById('sgar-zona') || {}).value || '';
+  return sgaArtRapidaAnalizar(txt, pg.clienteId, zdef);
+}
+function sgaArtRapidaRevisar(){
+  const { items } = sgaArtRapidaItems();
+  const nuevos = items.filter(i => i.estado === 'nuevo').length;
+  const prev = document.getElementById('sgar-prev');
+  const btn = document.querySelector('.sgar-save');
+  if (btn) { btn.disabled = !nuevos; btn.textContent = nuevos ? `Crear ${nuevos} artículo${nuevos !== 1 ? 's' : ''}` : 'Crear artículos'; }
+  if (!prev) return;
+  if (!items.length) { prev.innerHTML = '<div style="color:var(--mutedFaint);font-size:12.5px;">Pega las filas de tu Excel en el cuadro de arriba y aquí verás lo que se va a crear.</div>'; return; }
+  const ya = items.filter(i => i.estado === 'existe').length, err = items.filter(i => i.estado === 'error').length;
+  const etiqueta = i => i.estado === 'nuevo' ? '<span style="color:var(--success);font-weight:600;">Nuevo</span>' : i.estado === 'existe' ? '<span style="color:var(--muted);">Se salta</span>' : '<span style="color:var(--danger);font-weight:600;">Error</span>';
+  prev.innerHTML = `
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px;font-size:13px;">
+      <span><b>${nuevos}</b> nuevo${nuevos !== 1 ? 's' : ''}</span><span style="color:var(--muted);"><b>${ya}</b> ya existen o repetidos</span>${err ? `<span style="color:var(--danger);"><b>${err}</b> con error</span>` : ''}
+    </div>
+    <div class="tc-hist-box" style="max-height:420px;"><table class="tf-table" style="min-width:760px;">
+      <thead><tr><th>#</th><th>Producto</th><th>Referencia</th><th style="text-align:right;">Bultos</th><th style="text-align:right;">M. lin.</th><th style="text-align:right;">Peso</th><th>Zona</th><th>Estado</th></tr></thead>
+      <tbody>${items.map(i => `
+        <tr${i.estado !== 'nuevo' ? ' style="opacity:.65;"' : ''}>
+          <td style="color:var(--mutedFaint);">${i.n}</td>
+          <td><b>${esc(i.nombre) || '—'}</b>${i.finalidad ? `<div style="font-size:11.5px;color:var(--muted);">${esc(i.finalidad)}</div>` : ''}</td>
+          <td>${esc(i.referencia) || '—'}</td>
+          <td class="tf-precio">${isFinite(i.bultos) ? sgaNumTxt(i.bultos) : '—'}</td>
+          <td class="tf-precio">${sgaNumTxt(i.ml)}</td>
+          <td class="tf-precio">${sgaNumTxt(i.peso)}</td>
+          <td>${i.zona ? esc(sgaZonaNombre(i.zona)) : '—'}</td>
+          <td>${etiqueta(i)}${i.aviso ? `<div style="font-size:11.5px;color:var(--muted);">${esc(i.aviso)}</div>` : ''}</td>
+        </tr>`).join('')}</tbody>
+    </table></div>`;
+}
+function tplSgaArtRapidaPage(c){
+  const nombreCliente = (c.nombreComercial || '').trim() || c.nombre;
+  const prods = sgaProductosStock();
+  const zonas = sgaZonas.filter(z => !z.archived);
+  return `
+    <div style="--bn-accent:var(--primary);">
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.list, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 260px;">
+        <div class="deca-banner-title">Alta rápida de artículos</div>
+        <div class="deca-banner-sub">${esc(nombreCliente)} · pega tus artículos desde el Excel y revísalos antes de crearlos.</div>
+      </div>
+    </div>
+    <div class="deca-form" style="max-width:980px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
+      <div class="card deca-card">
+        ${decaCardHead('file', '1 · Pega desde el Excel', 'Copia las filas de la hoja «BASE DE DATOS» con la fila de títulos y pégalas aquí')}
+        <div class="deca-card-body">
+          <textarea id="sgar-txt" rows="8" oninput="sgaArtRapidaRevisar()" placeholder="Producto&#9;Referencia&#9;Bultos/Cajas&#9;Metros Lineales&#9;Peso&#9;Nave&#9;Información&#9;Finalidad&#10;CARPA 20x20&#9;LS-6565&#9;13&#9;7&#9;5464&#9;N&#9;…" style="width:100%;font-family:var(--mono);font-size:12px;white-space:pre;"></textarea>
+          <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">Las columnas se reconocen por su título (Producto, Referencia, Bultos/Cajas, Metros Lineales, Peso, Nave, Información, Finalidad); no importa el orden ni que haya columnas de más. Si pegas sin títulos, se toma ese mismo orden.</div>
+        </div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('box', '2 · Valores para todos', 'Opcional: lo que se aplica a todos los artículos pegados')}
+        <div class="deca-card-body">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <div class="field" style="flex:1;min-width:220px;margin-bottom:0;"><label>Tipo de carga</label>
+              <select id="sgar-prod" onchange="sgaArtRapidaRevisar()"><option value="">— Sin definir —</option>${prods.map(p => `<option value="${p.id}">${esc(almacenajeProductoTexto(p))}${almacenajeTarifas.some(t => t.clienteId === c.id && t.tipo === p.id) ? '' : ' · sin tarifa'}</option>`).join('')}</select></div>
+            <div class="field" style="flex:1;min-width:220px;margin-bottom:0;"><label>Zona por defecto</label>
+              <select id="sgar-zona" onchange="sgaArtRapidaRevisar()"><option value="">— Sin definir —</option>${zonas.map(z => `<option value="${z.id}">${esc(((allWarehouses.find(w => w.id === z.warehouseId) || {}).name || '') + ' · ' + sgaZonaNombre(z))}</option>`).join('')}</select></div>
+          </div>
+          <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">La columna «Nave» se asigna sola a la zona que se llame igual. Si no coincide, se usa la zona por defecto.</div>
+        </div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('list', '3 · Revisión', 'Nada se guarda hasta que pulses «Crear»')}
+        <div class="deca-card-body"><div id="sgar-prev"><div style="color:var(--mutedFaint);font-size:12.5px;">Pega las filas de tu Excel en el cuadro de arriba y aquí verás lo que se va a crear.</div></div></div>
+      </div>
+    </div>
+    <div class="deca-actions" style="max-width:980px;">
+      <div id="sgar-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
+      <div class="deca-actions-row">
+        <button class="btn btn-ghost deca-cancel" onclick="sgaArtRapidaCerrar()">Cancelar</button>
+        <button class="btn btn-primary deca-submit sgar-save" onclick="sgaArtRapidaCrear()" disabled>Crear artículos</button>
+      </div>
+    </div>
+    </div>`;
+}
+async function sgaArtRapidaCrear(){
+  const pg = window.__sgaArtRapida || {};
+  const errEl = document.getElementById('sgar-error');
+  errEl.textContent = '';
+  const { items } = sgaArtRapidaItems();
+  const nuevos = items.filter(i => i.estado === 'nuevo');
+  if (!nuevos.length) { errEl.textContent = 'No hay artículos nuevos que crear.'; return; }
+  const productoId = (document.getElementById('sgar-prod') || {}).value || null;
+  const btn = document.querySelector('.sgar-save');
+  if (btn) btn.disabled = true;
+  const filas = nuevos.map(i => ({ cliente_id: pg.clienteId, nombre: i.nombre, referencia: i.referencia || null, producto_id: productoId, zona_id: i.zona ? i.zona.id : null, bultos_por_unidad: i.bultos, metros_lineales: i.ml, peso: i.peso, medidas: i.medidas || null, finalidad: i.finalidad || null }));
+  const { data, error } = await supabaseClient.from('sga_articulos').insert(filas).select();
+  if (error || !data) { errEl.textContent = 'No se pudo guardar (no se ha creado ninguno): ' + (error && error.message ? error.message : 'error desconocido.'); if (btn) btn.disabled = false; return; }
+  data.forEach(r => sgaArticulos.push({ id: r.id, clienteId: r.cliente_id, nombre: r.nombre, referencia: r.referencia || '', productoId: r.producto_id || '', zonaId: r.zona_id || '', bultos: Number(r.bultos_por_unidad), metrosLineales: r.metros_lineales == null ? null : Number(r.metros_lineales), peso: r.peso == null ? null : Number(r.peso), medidas: r.medidas || '', finalidad: r.finalidad || '', archived: false }));
+  await logContactoHistorial(pg.clienteId, `SGA · ha añadido ${data.length} artículo${data.length !== 1 ? 's' : ''} pegando desde Excel.`);
+  appToast(`${data.length} artículo${data.length !== 1 ? 's creados' : ' creado'}.`, 'ok');
+  sgaArtRapidaCerrar();
 }
 
 /* ---- Almacenes: historial de cambios (quién cambió qué y cuándo) ---- */
@@ -6342,6 +6548,7 @@ function openContactoModal(editId, presetRoles){
   window.__almacenajeFormClienteId = null;
   window.__sgaClienteFormId = null;
   window.__sgaArtForm = null;
+  window.__sgaArtRapida = null;
   window.__almacenajeFormDirty = false;
   // El módulo desde el que se abrió la ficha se recuerda para volver a él al cerrarla,
   // aunque por dentro (p. ej. "+ Nueva tarifa") se pase brevemente por otro currentTab.
@@ -6432,6 +6639,7 @@ function closeContactoDetail(){
   window.__almacenajeFormClienteId = null;
   window.__sgaClienteFormId = null;
   window.__sgaArtForm = null;
+  window.__sgaArtRapida = null;
   window.__almacenajeFormDirty = false;
   if (window.__contactoDetailHomeTab !== undefined) { currentTab = window.__contactoDetailHomeTab; window.__contactoDetailHomeTab = undefined; }
   window.__showingContactoDetail = false;
@@ -7153,6 +7361,7 @@ function tplContactoDetailPage(){
   if (window.__almacenajeFormClienteId === editId) return tplAlmacenajeTarifaFormPage(editing);
   if (window.__sgaClienteFormId === editId && editing) return tplSgaClientePage(editing);
   if (window.__sgaArtForm && window.__sgaArtForm.clienteId === editId && editing) return tplSgaArticuloPage(editing);
+  if (window.__sgaArtRapida && window.__sgaArtRapida.clienteId === editId && editing) return tplSgaArtRapidaPage(editing);
 
   // Contacto existente: cabecera fija (identidad) + pestañas según su tipo.
   // Desde Clientes o Comercial la ficha va a lo suyo: sin Acción (archivar) ni datos generales editables.
@@ -10755,6 +10964,7 @@ function backFromAlmacenajeForm(){
   window.__almacenajeFormClienteId = null;
   window.__sgaClienteFormId = null;
   window.__sgaArtForm = null;
+  window.__sgaArtRapida = null;
   window.__almacenajeFormDirty = false;
   if (window.__almacenajeOrigen === 'lista') { almacenajeVolverALista(); return; }
   renderTab();
@@ -11075,6 +11285,7 @@ async function submitAlmacenajeTarifaForm(){
   window.__almacenajeFormClienteId = null;
   window.__sgaClienteFormId = null;
   window.__sgaArtForm = null;
+  window.__sgaArtRapida = null;
   window.__almacenajeEditar = false;
   if (window.__almacenajeOrigen === 'lista') { almacenajeVolverALista(); return; }
   renderTab();
@@ -11175,6 +11386,7 @@ async function deleteAlmacenajeTarifaCompleta(){
   window.__almacenajeFormClienteId = null;
   window.__sgaClienteFormId = null;
   window.__sgaArtForm = null;
+  window.__sgaArtRapida = null;
   window.__almacenajeEditar = false;
   appToast('Tarifa eliminada.', 'ok');
   if (window.__almacenajeOrigen === 'lista') { almacenajeVolverALista(); return; }
