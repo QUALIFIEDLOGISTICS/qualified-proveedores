@@ -196,6 +196,8 @@
   .sgac-px{font-style:normal;font-size:12px;padding:3px 9px;border-radius:999px;background:var(--panel);border:1px solid var(--border);font-family:var(--mono);color:var(--text);}
   .sgac-px.b{background:var(--primary);border-color:var(--primary);color:var(--primary-text);font-weight:700;}
   .sgac-px.m{background:none;border:none;color:var(--muted);padding:3px 2px;font-family:var(--body);}
+  .sgac-est{display:flex;align-items:flex-start;gap:10px;margin-top:14px;padding:11px 14px;border-radius:12px;background:var(--panel2);font-size:13px;line-height:1.45;color:var(--text);}
+  .sgac-est-i{flex-shrink:0;width:10px;height:10px;border-radius:50%;margin-top:5px;}
   @media (max-width:760px){ .sgac-tiles{grid-template-columns:1fr;} }
   /* Ficha SGA del cliente: albaranes de salida (letras + explicación) */
   .sgaalb-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.08fr);gap:20px;align-items:start;}
@@ -3441,7 +3443,33 @@ function sgacTileHtml(grupo, valor, activo, titulo, texto, ejemplo){
     <span class="sgac-tile-b"><b>${titulo}</b><span>${texto}</span><span class="sgac-ej">${ejemplo}</span></span>
   </button>`;
 }
+// Qué pasa con la fecha elegida (se enseña debajo y se actualiza al cambiarla)
+function sgacActEstadoHtml(f, conTile){
+  if (!f) return conTile
+    ? '<span class="sgac-est-i" style="background:var(--danger);"></span><span><b>Falta la fecha.</b> Elige el primer día en el SGA; si no, se guardará como «sin activar».</span>'
+    : '<span class="sgac-est-i" style="background:var(--mutedFaint);"></span><span><b>Sin activar.</b> El SGA no cobra nada a este cliente y no sale al dar entradas ni salidas.</span>';
+  return f <= today()
+    ? `<span class="sgac-est-i" style="background:var(--success);"></span><span><b>Activo</b> desde el ${esc(fmtDateDMY(f))}. Ya se le pueden dar entradas y salidas, y se le cobra desde ese día.</span>`
+    : `<span class="sgac-est-i" style="background:#C98A2E;"></span><span><b>Se activará</b> el ${esc(fmtDateDMY(f))}. Hasta entonces no sale al dar entradas ni salidas y no se le cobra.</span>`;
+}
+function sgacActVista(){
+  const inp = document.getElementById('sgac-desde');
+  const f = inp ? inp.value : '';
+  const ej = document.getElementById('sgac-act-ej'); if (ej) ej.textContent = f ? fmtDateDMY(f) : 'una fecha';
+  const est = document.getElementById('sgac-act-estado');
+  const fila = document.getElementById('sgac-act-fecha');
+  if (est) est.innerHTML = sgacActEstadoHtml(f, !!fila && fila.style.display !== 'none');
+}
+function sgacActivacion(v){
+  const inp = document.getElementById('sgac-desde');
+  const fila = document.getElementById('sgac-act-fecha');
+  document.querySelectorAll('.sgac-tile[data-g="act"]').forEach(t => t.classList.toggle('on', (t.dataset.v === '1') === !!v));
+  if (fila) fila.style.display = v ? '' : 'none';
+  if (inp) { if (!v) inp.value = ''; else if (!inp.value) inp.value = today(); }
+  sgacActVista();
+}
 function sgacTile(grupo, valor){
+  if (grupo === 'act') return sgacActivacion(valor);
   const cb = document.getElementById(grupo === 'codigos' ? 'sgac-codigos' : 'sgac-bultos');
   if (cb) cb.checked = !!valor;
   document.querySelectorAll(`.sgac-tile[data-g="${grupo}"]`).forEach(t => t.classList.toggle('on', (t.dataset.v === '1') === !!valor));
@@ -3488,8 +3516,16 @@ function tplSgaClientePage(c){
       <div class="card deca-card">
         ${decaCardHead('clock', 'Activación', 'Desde cuándo el SGA le cobra')}
         <div class="deca-card-body">
-          <div class="field" style="margin-bottom:0;"><label>Activo desde</label>${decaInputIcon('calendar', `<input id="sgac-desde" type="date" value="${esc(cfg.activoDesde || '')}" />`)}
-            <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">El SGA solo cobra a este cliente desde esta fecha. Déjalo vacío mientras siga en el Excel.</div></div>
+          <div class="sgac-q">¿Desde cuándo lleva el SGA el stock de este cliente?</div>
+          <div class="sgac-tiles">
+            ${sgacTileHtml('act', 0, !cfg.activoDesde, 'Todavía no, sigue en el Excel', 'No sale al dar entradas ni salidas y no se le cobra nada. Úsalo mientras lo sigas llevando en tu Excel.', '<i class="sgac-px">Excel</i><i class="sgac-px m">→</i><i class="sgac-px">SGA apagado</i>')}
+            ${sgacTileHtml('act', 1, !!cfg.activoDesde, 'Sí, desde una fecha', 'Desde ese día se le dan entradas y salidas y se le cobra: las entradas, las salidas y el almacenaje de cada día.', `<i class="sgac-px">Excel</i><i class="sgac-px m">→</i><i class="sgac-px b" id="sgac-act-ej">${cfg.activoDesde ? esc(fmtDateDMY(cfg.activoDesde)) : 'una fecha'}</i><i class="sgac-px m">→</i><i class="sgac-px">SGA cobra</i>`)}
+          </div>
+          <div id="sgac-act-fecha" style="display:${cfg.activoDesde ? '' : 'none'};margin-top:14px;max-width:300px;">
+            <div class="field" style="margin-bottom:0;"><label>Primer día en el SGA</label>${decaInputIcon('calendar', `<input id="sgac-desde" type="date" value="${esc(cfg.activoDesde || '')}" oninput="sgacActVista()" />`)}</div>
+          </div>
+          <div id="sgac-act-estado" class="sgac-est">${sgacActEstadoHtml(cfg.activoDesde || '', !!cfg.activoDesde)}</div>
+          <div class="sgaalb-tip"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg><span><b>Consejo:</b> pon el primer día que ya no lo apuntas en el Excel. Lo anterior a esa fecha no se cobra, y desde ella el cliente ya sale al dar entradas y salidas.</span></div>
         </div>
       </div>
       <div class="card deca-card">
