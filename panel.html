@@ -2351,6 +2351,7 @@ function computeBreadcrumbSegments(){
     return [{label: comercialSection() === 'tarifas' ? 'Tarifas Transporte' : 'Clientes', onclick:null}];
   }
   if (currentTab === 'stock' && window.__stockView === 'entrada') return [{label:'Stock', onclick:'sgaEntradaCancelar()'}, {label:'Nueva entrada', onclick:null}];
+  if (currentTab === 'stock' && window.__stockView === 'salida') return [{label:'Stock', onclick:'sgaSalidaCancelar()'}, {label:'Nueva salida', onclick:null}];
   if (currentTab === ALMACEN_CONFIG_TAB) {
     if (window.__sgaPage) {
       const pg = window.__sgaPage;
@@ -2508,7 +2509,7 @@ function tplAlmacenBar(){
    y un historial de quién cambió qué y cuándo. */
 const WAREHOUSE_COLORS = ['#2E6F95', '#C98A2E', '#8A4A35', '#3F8F5F', '#7C5CBF', '#C1443D', '#2C9A93', '#D9A72C', '#5C6670', '#1B3A6B'];
 const WAREHOUSES_PAGE_SIZE = 80;
-function almacenIsSubpage(){ return (currentTab === ALMACEN_CONFIG_TAB && (window.__whView === "form" || window.__apView === "form" || !!window.__sgaPage)) || (currentTab === "stock" && window.__stockView === "entrada"); }
+function almacenIsSubpage(){ return (currentTab === ALMACEN_CONFIG_TAB && (window.__whView === "form" || window.__apView === "form" || !!window.__sgaPage)) || (currentTab === "stock" && (window.__stockView === "entrada" || window.__stockView === "salida")); }
 function warehouseConfirmLeaveForm(){
   if (currentTab === ALMACEN_CONFIG_TAB && window.__whView === 'form' && window.__whEditMode && window.__whFormDirty) {
     return leaveGuard();
@@ -3094,7 +3095,7 @@ function sgaSitioTxt(p){
   const z = sgaZonaDe(p.zonaId), u = sgaUbicDe(p.ubicacionId);
   return z ? sgaZonaNombre(z) + (u ? ' · ' + u.codigo : '') : '—';
 }
-function stockSeg(){ return window.__stockSeg === 'entradas' ? 'entradas' : 'stock'; }
+function stockSeg(){ return window.__stockSeg === 'entradas' ? 'entradas' : window.__stockSeg === 'salidas' ? 'salidas' : 'stock'; }
 
 /* ---- Pantalla principal: stock por cliente y entradas ---- */
 function stockClienteRowHtml(c, ps){
@@ -3133,9 +3134,10 @@ function stockBodyHtml(){
   const q = (window.__stockSearch || '').trim().toLowerCase();
   const wid = currentWarehouseId;
   const okCli = c => !q || c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q);
-  if (stockSeg() === 'entradas') {
-    const lista = sgaAlbaranes.filter(a => a.warehouseId === wid).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && okCli(c); });
-    if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q ? 'Ninguna entrada coincide con la búsqueda.' : 'Todavía no hay entradas en este almacén. Crea la primera con «+ Nueva entrada».'}</div>`;
+  if (stockSeg() !== 'stock') {
+    const esSal = stockSeg() === 'salidas';
+    const lista = sgaAlbaranes.filter(a => a.warehouseId === wid && (esSal ? a.tipo === 'salida' : a.tipo !== 'salida')).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && okCli(c); });
+    if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q ? 'Ningún albarán coincide con la búsqueda.' : esSal ? 'Todavía no hay salidas en este almacén. Crea la primera con «Nueva salida».' : 'Todavía no hay entradas en este almacén. Crea la primera con «+ Nueva entrada».'}</div>`;
     return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
       <thead><tr>${thSort('Nº','number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Referencia','text')}${thSort('Modalidad','text')}${thSort('Palets','number','style="text-align:right;"')}${thSort('Estado','text')}</tr></thead>
       <tbody>${lista.map(a => { const c = contactos.find(x => x.id === a.clienteId); return `
@@ -3145,7 +3147,7 @@ function stockBodyHtml(){
           <td data-sort-value="${esc(c ? c.nombre : '')}">${esc(c ? ((c.nombreComercial || '').trim() || c.nombre) : '—')}</td>
           <td data-sort-value="${esc(a.referencia)}">${esc(a.referencia) || '—'}</td>
           <td data-sort-value="${esc(a.modalidad)}">${esc(SGA_MODALIDADES[a.modalidad] || a.modalidad)}</td>
-          <td class="tf-precio" data-sort-value="${sgaMovsAlbaran[a.id] || 0}">${sgaMovsAlbaran[a.id] != null ? sgaMovsAlbaran[a.id] : '—'}</td>
+          <td class="tf-precio" data-sort-value="${Math.abs(sgaMovsAlbaran[a.id] || 0)}">${sgaMovsAlbaran[a.id] != null ? Math.abs(sgaMovsAlbaran[a.id]) : '—'}</td>
           <td data-sort-value="${esc(a.estado)}">${a.estado === 'confirmado' ? 'Confirmada' : a.estado === 'anulado' ? 'Anulada' : 'Borrador'}</td>
         </tr>`; }).join('')}</tbody></table></div>`;
   }
@@ -3164,6 +3166,7 @@ function stockToggle(id){
 }
 function tplStock(){
   if (window.__stockView === 'entrada') return tplStockEntradaPage();
+  if (window.__stockView === 'salida') return tplStockSalidaPage();
   const wid = currentWarehouseId;
   const ps = sgaPartidas.filter(p => p.warehouseId === wid && p.actual > 0);
   const palets = ps.reduce((s, p) => s + p.actual, 0);
@@ -3182,7 +3185,8 @@ function tplStock(){
       <div class="deca-banner-actions">
         <div class="deca-stat"><b>${nCli}</b><span>Clientes</span></div>
         <div class="deca-stat"><b>${palets}</b><span>Palets</span></div>
-        <div class="deca-stat"><b>${hoy}</b><span>Entradas hoy</span></div>
+        <div class="deca-stat"><b>${hoy}</b><span>Albaranes hoy</span></div>
+        <button class="btn btn-ghost" style="background:var(--panel);" onclick="sgaSalidaAbrir()">Nueva salida</button>
         <button class="btn btn-primary deca-new-btn" onclick="sgaEntradaAbrir()">${homeIcon(HOME_ICON_PATHS.box, 17, 'currentColor', 1.8)}<span>Nueva entrada</span></button>
       </div>
     </div>
@@ -3191,7 +3195,7 @@ function tplStock(){
         <input placeholder="Buscar cliente por nombre o NIF…" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      <div class="doc-seg">${segBtn('stock', 'Stock')}${segBtn('entradas', 'Entradas')}</div>
+      <div class="doc-seg">${segBtn('stock', 'Stock')}${segBtn('entradas', 'Entradas')}${segBtn('salidas', 'Salidas')}</div>
     </div>
     <div id="stock-body">${stockBodyHtml()}</div>
     </div>`;
@@ -3209,8 +3213,9 @@ function sgaTarifaEn(clienteId, productoId, fecha){
     .sort((a, b) => b.fecha.localeCompare(a.fecha) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
   return l[0] || null;
 }
-function sgaProductoDescarga(modalidad){
-  const ps = almacenajeProductos.filter(p => !p.archived && p.disparador === 'descarga');
+// Producto de cobro «por albarán» de una modalidad: descarga (entradas) o carga (salidas).
+function sgaProductoAlbaran(modalidad, disparador){
+  const ps = almacenajeProductos.filter(p => !p.archived && p.disparador === (disparador || 'descarga'));
   const n = s => String(s || '').toLowerCase();
   if (modalidad === 'contenedor_20') return ps.find(p => /contenedor/.test(n(p.nombre)) && /20/.test(n(p.subtipoValor)));
   if (modalidad === 'contenedor_40') return ps.find(p => /contenedor/.test(n(p.nombre)) && /40/.test(n(p.subtipoValor)));
@@ -3218,32 +3223,35 @@ function sgaProductoDescarga(modalidad){
   return null;
 }
 const sgaR2 = n => Math.round(n * 100) / 100;
-// d: { clienteId, fecha, modalidad, partidas:[{productoId, cantidad}], servicios:[{productoId, cantidad}] }
+// d: { tipo:'entrada'|'salida', clienteId, fecha, modalidad, partidas:[{productoId, cantidad}], servicios:[{productoId, cantidad}] }
+// Con una modalidad por albarán (contenedor, trailer) y tarifa del cliente para ella, se cobra eso por albarán; si no, por palet.
 function sgaCalcularEntrada(d){
+  const salida = d.tipo === 'salida';
+  const palabra = salida ? 'salida' : 'entrada';
   const res = { cobros: [], avisos: [], activo: true };
   const cfg = sgaClienteCfg(d.clienteId);
   if (!cfg.activoDesde || cfg.activoDesde > d.fecha) { res.activo = false; return res; }
   let porAlbaran = false;
   if (d.modalidad !== 'palet') {
-    const prod = sgaProductoDescarga(d.modalidad);
+    const prod = sgaProductoAlbaran(d.modalidad, salida ? 'carga' : 'descarga');
     const t = prod ? sgaTarifaEn(d.clienteId, prod.id, d.fecha) : null;
     if (t) {
       res.cobros.push({ origen: 'movimiento', producto_id: prod.id, subtipo: t.subtipo || null, cantidad: 1, precio: t.precio, importe: sgaR2(t.precio), tarifa_id: t.id, nota: 'Por albarán' });
       porAlbaran = true;
-    } else res.avisos.push(`Este cliente no tiene tarifa de descarga para «${SGA_MODALIDADES[d.modalidad]}»: se cobra la entrada por palet.`);
+    } else res.avisos.push(`Este cliente no tiene tarifa de ${salida ? 'carga' : 'descarga'} para «${SGA_MODALIDADES[d.modalidad]}»: se cobra la ${palabra} por palet.`);
   }
   if (!porAlbaran) {
     const grupos = {};
     d.partidas.forEach(p => {
       const ps = almacenajeProducto(p.productoId);
       const fam = ps && ps.familia;
-      const pe = fam ? almacenajeProductos.find(x => !x.archived && x.disparador === 'entrada' && x.familia === fam) : null;
-      if (!pe) { res.avisos.push(`«${sgaProdTxt(p.productoId)}» no tiene un producto de entrada asociado (familia de carga): no se puede cobrar su entrada.`); return; }
+      const pe = fam ? almacenajeProductos.find(x => !x.archived && x.disparador === palabra && x.familia === fam) : null;
+      if (!pe) { res.avisos.push(`«${sgaProdTxt(p.productoId)}» no tiene un producto de ${palabra} asociado (familia de carga): no se puede cobrar su ${palabra}.`); return; }
       grupos[pe.id] = (grupos[pe.id] || 0) + p.cantidad;
     });
     Object.keys(grupos).forEach(id => {
       const t = sgaTarifaEn(d.clienteId, id, d.fecha);
-      if (!t) { res.avisos.push(`Sin tarifa de «${sgaProdTxt(id)}» para este cliente: esa entrada no se cobra.`); return; }
+      if (!t) { res.avisos.push(`Sin tarifa de «${sgaProdTxt(id)}» para este cliente: esa ${palabra} no se cobra.`); return; }
       let imp = grupos[id] * t.precio, nota = '';
       if (t.importeMinimo != null && imp < t.importeMinimo) { imp = t.importeMinimo; nota = 'Importe mínimo por albarán'; }
       res.cobros.push({ origen: 'movimiento', producto_id: id, subtipo: t.subtipo || null, cantidad: grupos[id], precio: t.precio, importe: sgaR2(imp), tarifa_id: t.id, nota });
@@ -3598,6 +3606,261 @@ async function sgaEntradaConfirmar(){
   await logContactoHistorial(d.clienteId, `SGA · ha registrado una entrada de ${total} palet${total !== 1 ? 's' : ''} (${SGA_MODALIDADES[d.modalidad]}) el ${fmtDateDMY(d.fecha)}${d.referencia ? ', ref. ' + d.referencia : ''}.`);
   appToast(`Entrada registrada: ${total} palet${total !== 1 ? 's' : ''}.`, 'ok');
   window.__stockSeg = 'entradas';
+  stockVolver();
+}
+
+/* ---- Pantalla «Nueva salida» ----
+   Se elige el cliente y se ve su stock (lo más antiguo primero). Lo que sale se escribe en cada partida, o se pide por
+   cantidad y se reparte solo siguiendo el FIFO. Si se salta el FIFO, avisa y queda marcado. */
+const SGA_MODALIDADES_SALIDA = ['palet', 'trailer'];
+function sgaStockCliente(clienteId){
+  return sgaPartidas.filter(p => p.clienteId === clienteId && p.warehouseId === currentWarehouseId && p.actual > 0)
+    .sort((a, b) => a.fechaEntrada.localeCompare(b.fechaEntrada) || String(a.createdAt).localeCompare(String(b.createdAt)));
+}
+function sgaClientesParaSalida(){ return sgaClientesAlmacenLista().filter(c => sgaStockCliente(c.id).length); }
+function sgaSalidaClienteId(){ const el = document.getElementById('sl-cliente'); return el ? el.value : ''; }
+function sgaSalidaAbrir(){
+  window.__stockView = 'salida';
+  window.__stockDirty = false;
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
+}
+async function sgaSalidaCancelar(){
+  if (window.__stockDirty && !(await appConfirm({ title: 'Descartar la salida', message: 'Has empezado a rellenar esta salida. Si sales, se pierde lo escrito.', confirmLabel: 'Descartar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
+  stockVolver();
+}
+function sgaSalidaStockHtml(clienteId){
+  const cfg = sgaClienteCfg(clienteId);
+  const ps = sgaStockCliente(clienteId);
+  const tipos = [...new Set(ps.map(p => p.productoId))].sort((a, b) => sgaProdTxt(a).localeCompare(sgaProdTxt(b), 'es'));
+  return `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;padding:12px 14px;border:1px dashed var(--border);border-radius:12px;margin-bottom:14px;">
+      <div class="field" style="flex:1;min-width:190px;margin-bottom:0;"><label>Pedir por cantidad</label><select id="sl-q-tipo" onchange="sgaSalidaTipoCambio()">${tipos.map(t => `<option value="${t}">${esc(sgaProdTxt(t))}</option>`).join('')}</select></div>
+      <div class="field" style="flex:1;min-width:150px;margin-bottom:0;"><label>Referencia</label><select id="sl-q-ref"></select></div>
+      <div class="field" style="width:110px;margin-bottom:0;"><label>Cantidad</label><input id="sl-q-cant" inputmode="numeric" maxlength="6" placeholder="Nº" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaSalidaRepartir(); }" /></div>
+      <button type="button" class="btn btn-ghost" onclick="sgaSalidaRepartir()" title="Reparte la cantidad entre las partidas más antiguas">Repartir (más antiguo primero)</button>
+      <button type="button" class="btn btn-ghost" onclick="sgaSalidaLimpiar()">Limpiar</button>
+    </div>
+    <div class="tc-hist-box" style="max-height:420px;">
+    <table class="tf-table" style="min-width:640px;">
+      <thead><tr>${thSort('Entrada','date')}${thSort('Tipo de carga','text')}${thSort('Referencia','text')}${cfg.codigosUnicos ? thSort('Código','text') : ''}${thSort('Sitio','text')}${thSort('Hay','number','style="text-align:right;"')}<th style="text-align:right;">Sale</th></tr></thead>
+      <tbody>${ps.map(p => `
+        <tr data-pid="${p.id}">
+          <td style="white-space:nowrap;" data-sort-value="${esc(p.fechaEntrada)}">${fmtDateDMY(p.fechaEntrada)}</td>
+          <td data-sort-value="${esc(sgaProdTxt(p.productoId))}">${esc(sgaProdTxt(p.productoId))}</td>
+          <td data-sort-value="${esc(p.referencia)}">${esc(p.referencia) || '—'}</td>
+          ${cfg.codigosUnicos ? `<td style="font-family:var(--mono);font-size:12px;" data-sort-value="${esc(p.codigo)}">${esc(p.codigo) || '—'}</td>` : ''}
+          <td data-sort-value="${esc(sgaSitioTxt(p))}">${esc(sgaSitioTxt(p))}</td>
+          <td class="tf-precio" data-sort-value="${p.actual}">${p.actual}</td>
+          <td style="text-align:right;width:110px;">${p.actual === 1 && cfg.codigosUnicos
+            ? `<input type="checkbox" class="switch sl-in" id="sl-in-${p.id}" data-pid="${p.id}" onchange="sgaSalidaRefrescar()" />`
+            : `<input class="sl-in" id="sl-in-${p.id}" data-pid="${p.id}" inputmode="numeric" maxlength="6" placeholder="0" style="width:80px;text-align:right;" />`}</td>
+        </tr>`).join('')}</tbody>
+    </table></div>
+    <div id="sl-total" style="margin-top:10px;font-size:13px;color:var(--muted);"></div>`;
+}
+function sgaSalidaTipoCambio(){
+  const t = document.getElementById('sl-q-tipo');
+  const r = document.getElementById('sl-q-ref');
+  if (!t || !r) return;
+  const refs = [...new Set(sgaStockCliente(sgaSalidaClienteId()).filter(p => p.productoId === t.value).map(p => p.referencia))].sort();
+  r.innerHTML = `<option value="">Cualquiera</option>${refs.filter(Boolean).map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}${refs.includes('') && refs.length > 1 ? '<option value="__sin">Sin referencia</option>' : ''}`;
+}
+function sgaSalidaClienteCambio(){
+  const clienteId = sgaSalidaClienteId();
+  const cont = document.getElementById('sl-stock');
+  cont.innerHTML = clienteId ? sgaSalidaStockHtml(clienteId) : '<div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div>';
+  if (clienteId) sgaSalidaTipoCambio();
+  window.__stockDirty = true;
+  sgaSalidaRefrescar();
+}
+function sgaSalidaModalidad(m){
+  document.getElementById('sl-modalidad').value = m;
+  document.querySelectorAll('#sl-mod button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
+  window.__stockDirty = true;
+  sgaSalidaRefrescar();
+}
+function sgaSalidaPonerCantidad(pid, n){
+  const el = document.getElementById(`sl-in-${pid}`);
+  if (!el) return;
+  if (el.type === 'checkbox') el.checked = n > 0; else el.value = n > 0 ? String(n) : '';
+}
+function sgaSalidaLimpiar(){
+  document.querySelectorAll('.sl-in').forEach(el => sgaSalidaPonerCantidad(el.dataset.pid, 0));
+  sgaSalidaRefrescar();
+}
+function sgaSalidaRepartir(){
+  const clienteId = sgaSalidaClienteId();
+  const tipo = document.getElementById('sl-q-tipo').value;
+  const ref = document.getElementById('sl-q-ref').value;
+  const quiere = parseInt(document.getElementById('sl-q-cant').value, 10);
+  if (!(quiere > 0)) { appToast('Escribe cuántos salen.', 'error'); return; }
+  const cand = sgaStockCliente(clienteId).filter(p => p.productoId === tipo && (ref === '' || (ref === '__sin' ? !p.referencia : p.referencia === ref)));
+  const hay = cand.reduce((s, p) => s + p.actual, 0);
+  if (quiere > hay) { appToast(`Solo hay ${hay} de eso en el almacén.`, 'error'); return; }
+  cand.forEach(p => sgaSalidaPonerCantidad(p.id, 0));
+  let resto = quiere;
+  cand.forEach(p => { const n = Math.min(resto, p.actual); if (n > 0) sgaSalidaPonerCantidad(p.id, n); resto -= n; });
+  document.getElementById('sl-q-cant').value = '';
+  window.__stockDirty = true;
+  sgaSalidaRefrescar();
+}
+function sgaServiciosLeer(){
+  const val = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  return [...document.querySelectorAll('.se-srow')].map(r => ({ productoId: val(`ss-${r.dataset.j}-prod`), cantidadTxt: val(`ss-${r.dataset.j}-cant`), nota: val(`ss-${r.dataset.j}-nota`) }));
+}
+function sgaSalidaLeer(){
+  const val = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const items = [...document.querySelectorAll('.sl-in')].map(el => {
+    const p = sgaPartidas.find(x => x.id === el.dataset.pid);
+    const n = el.type === 'checkbox' ? (el.checked ? 1 : 0) : el.value.trim();
+    return { p, txt: n, n: typeof n === 'number' ? n : (n === '' ? 0 : Number(n)) };
+  }).filter(x => x.p);
+  return { clienteId: val('sl-cliente'), fecha: val('sl-fecha'), referencia: val('sl-ref'), modalidad: val('sl-modalidad') || 'palet', transportista: val('sl-transp'), matricula: val('sl-matr'), observaciones: val('sl-obs'), items, servicios: sgaServiciosLeer() };
+}
+// FIFO dentro de cada tipo de carga + referencia: no se puede sacar de una partida más nueva si hay otra más antigua sin vaciar.
+function sgaSalidaFifo(clienteId, items){
+  const toma = new Map(items.map(x => [x.p.id, x.n > 0 ? x.n : 0]));
+  const saltados = new Set(), avisos = [];
+  const grupos = {};
+  sgaStockCliente(clienteId).forEach(p => { (grupos[p.productoId + '|' + p.referencia] = grupos[p.productoId + '|' + p.referencia] || []).push(p); });
+  Object.keys(grupos).forEach(k => {
+    let incompleta = false, viola = false;
+    grupos[k].forEach(p => {
+      const n = toma.get(p.id) || 0;
+      if (incompleta && n > 0) { saltados.add(p.id); viola = true; }
+      if (n < p.actual) incompleta = true;
+    });
+    if (viola) { const p0 = grupos[k][0]; avisos.push(`No sigues el FIFO en «${sgaProdTxt(p0.productoId)}${p0.referencia ? ' · ref. ' + p0.referencia : ''}»: hay mercancía más antigua sin sacar.`); }
+  });
+  return { saltados, avisos };
+}
+function sgaSalidaResumenHtml(d){
+  if (!d.clienteId) return '<div style="color:var(--mutedFaint);font-size:12.5px;">Elige el cliente para ver lo que se le cobrará.</div>';
+  const sale = d.items.filter(x => x.n > 0 && isFinite(x.n));
+  const cfg = sgaClienteCfg(d.clienteId);
+  const calc = sgaCalcularEntrada({ tipo: 'salida', clienteId: d.clienteId, fecha: d.fecha, modalidad: d.modalidad, partidas: sale.map(x => ({ productoId: x.p.productoId, cantidad: x.n })), servicios: d.servicios.filter(s => s.productoId && sgaNumero(s.cantidadTxt) > 0).map(s => ({ productoId: s.productoId, cantidad: sgaNumero(s.cantidadTxt) })) });
+  const fifo = sgaSalidaFifo(d.clienteId, d.items);
+  const avisosFifo = fifo.avisos.map(a => `<div class="se-aviso">⚠ ${esc(a)}</div>`).join('');
+  if (!calc.activo) return `<div style="font-size:13px;color:var(--muted);">Este cliente no está activo en el SGA a esa fecha: la salida <b>no se cobra</b>.</div>${avisosFifo}`;
+  const total = sgaR2(calc.cobros.reduce((s, c) => s + c.importe, 0));
+  return `
+    ${calc.cobros.length ? `<div class="op-lines">${calc.cobros.map(c => `<div class="op-line"><span>${esc(sgaProdTxt(c.producto_id))}${c.cantidad !== 1 ? ` × ${esc(String(c.cantidad))}` : ''} <small style="color:var(--mutedFaint);">${esc(eurPrecio(c.precio))}${c.nota ? ' · ' + esc(c.nota) : ''}</small></span><span class="op-dots"></span><b>${esc(eur2(c.importe))}</b></div>`).join('')}</div>
+    <div class="op-total-row" style="margin-top:10px;"><span>Total de la salida</span><b>${esc(eur2(total))}</b></div>` : '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay nada que cobrar.</div>'}
+    ${calc.avisos.map(a => `<div class="se-aviso">⚠ ${esc(a)}</div>`).join('')}${avisosFifo}`;
+}
+function sgaSalidaRefrescar(){
+  const d = sgaSalidaLeer();
+  const el = document.getElementById('sl-resumen');
+  if (el) el.innerHTML = sgaSalidaResumenHtml(d);
+  const tot = d.items.reduce((s, x) => s + (x.n > 0 && isFinite(x.n) ? x.n : 0), 0);
+  const t = document.getElementById('sl-total');
+  if (t) t.innerHTML = tot ? `Salen <b>${tot}</b> palet${tot !== 1 ? 's' : ''}.` : 'Todavía no has marcado nada.';
+  document.querySelectorAll('#sl-stock tbody tr').forEach(tr => {
+    const x = d.items.find(i => i.p.id === tr.dataset.pid);
+    tr.style.background = x && x.n > 0 ? 'color-mix(in srgb,var(--primary) 8%,var(--panel))' : '';
+  });
+}
+function tplStockSalidaPage(){
+  const clientes = sgaClientesParaSalida();
+  const wh = currentWh() || {};
+  return `
+    <div style="--bn-accent:var(--primary);">
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 260px;">
+        <div class="deca-banner-title">Nueva salida</div>
+        <div class="deca-banner-sub">${esc(wh.name || '')} · la mercancía que sale del almacén.</div>
+      </div>
+    </div>
+    <div class="deca-form" oninput="window.__stockDirty=true; sgaSalidaRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
+      <div class="card deca-card">
+        ${decaCardHead('file', 'Datos de la salida', 'Para quién y cuándo')}
+        <div class="deca-card-body">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <div class="field" style="flex:2;min-width:240px;"><label>Cliente <span class="dc-req">*</span></label>
+              <select id="sl-cliente" onchange="sgaSalidaClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos con stock'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
+            <div class="field" style="flex:1;min-width:150px;"><label>Fecha de salida <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="sl-fecha" type="date" value="${today()}" />`)}</div>
+            <div class="field" style="flex:1;min-width:180px;"><label>Referencia / nº de albarán</label>${decaInputIcon('file', `<input id="sl-ref" maxlength="60" placeholder="Opcional" />`)}</div>
+          </div>
+          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Cómo sale</label>
+          <input type="hidden" id="sl-modalidad" value="palet" />
+          <div class="doc-seg" id="sl-mod">${SGA_MODALIDADES_SALIDA.map(m => `<button type="button" data-m="${m}" class="${m === 'palet' ? 'on' : ''}" onclick="sgaSalidaModalidad('${m}')">${esc(SGA_MODALIDADES[m])}</button>`).join('')}</div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;">
+            <div class="field" style="flex:1;min-width:200px;"><label>Transportista</label>${decaInputIcon('truck', `<input id="sl-transp" maxlength="120" placeholder="Opcional" />`)}</div>
+            <div class="field" style="flex:1;min-width:150px;"><label>Matrícula</label>${decaInputIcon('truck', `<input id="sl-matr" maxlength="15" placeholder="Opcional" oninput="this.value=this.value.toUpperCase();" />`)}</div>
+            <div class="field" style="flex:2;min-width:220px;"><label>Observaciones</label>${decaInputIcon('file', `<input id="sl-obs" maxlength="250" placeholder="Opcional" />`)}</div>
+          </div>
+        </div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('box', 'Qué sale', 'Pide por cantidad (sale lo más antiguo) o marca partida a partida')}
+        <div class="deca-card-body"><div id="sl-stock"><div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div></div></div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('clock', 'Servicios', 'Horas y extras de esta salida (opcional)', `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="sgaServicioAdd()">+ Servicio</button>`)}
+        <div class="deca-card-body"><div id="se-servicios"></div></div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('tag', 'Lo que se cobrará', 'Calculado con la tarifa del cliente a la fecha de la salida')}
+        <div class="deca-card-body"><div id="sl-resumen">${sgaSalidaResumenHtml({ clienteId: '', items: [], servicios: [] })}</div></div>
+      </div>
+    </div>
+    <div class="deca-actions" style="max-width:1180px;">
+      <div id="sl-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
+      <div class="deca-actions-row">
+        <button class="btn btn-ghost deca-cancel" onclick="sgaSalidaCancelar()">Cancelar</button>
+        <button class="btn btn-primary deca-submit sl-save" onclick="sgaSalidaConfirmar()">Confirmar salida</button>
+      </div>
+    </div>
+    </div>`;
+}
+async function sgaSalidaConfirmar(){
+  const errEl = document.getElementById('sl-error');
+  errEl.textContent = '';
+  const d = sgaSalidaLeer();
+  const errores = [];
+  if (!d.clienteId) errores.push('Elige el cliente.');
+  if (!d.fecha) errores.push('Indica la fecha de salida.');
+  if (errores.length) { errEl.textContent = errores.join('\n'); return; }
+  const cfg = sgaClienteCfg(d.clienteId);
+  const sale = [];
+  d.items.forEach(x => {
+    if (x.txt === '' || x.n === 0) return;
+    const nombre = `${sgaProdTxt(x.p.productoId)}${x.p.referencia ? ' · ref. ' + x.p.referencia : ''}${x.p.codigo ? ' · ' + x.p.codigo : ''}`;
+    if (!isFinite(x.n) || x.n < 0 || Math.floor(x.n) !== x.n) { errores.push(`${nombre}: la cantidad tiene que ser un número entero.`); return; }
+    if (x.n > x.p.actual) { errores.push(`${nombre}: solo hay ${x.p.actual}.`); return; }
+    sale.push(x);
+  });
+  if (!sale.length && !errores.length) errores.push('Marca qué sale: pide una cantidad o escribe cuántos de cada partida.');
+  d.servicios.forEach((s, n) => {
+    if (!s.productoId && !s.cantidadTxt) return;
+    if (!s.productoId || !(sgaNumero(s.cantidadTxt) > 0)) errores.push(`Servicio ${n + 1}: elige el servicio y una cantidad mayor que 0.`);
+  });
+  if (errores.length) { errEl.textContent = errores.join('\n'); return; }
+  const servicios = d.servicios.filter(s => s.productoId).map(s => ({ producto_id: s.productoId, cantidad: sgaNumero(s.cantidadTxt), nota: s.nota }));
+  const fifo = sgaSalidaFifo(d.clienteId, d.items);
+  const calc = sgaCalcularEntrada({ tipo: 'salida', clienteId: d.clienteId, fecha: d.fecha, modalidad: d.modalidad, partidas: sale.map(x => ({ productoId: x.p.productoId, cantidad: x.n })), servicios: servicios.map(s => ({ productoId: s.producto_id, cantidad: s.cantidad })) });
+  if (fifo.saltados.size && !(await appConfirm({ title: 'No se sigue el FIFO', message: fifo.avisos.join('\n') + '\nLa salida se guardará marcada como «FIFO saltado». ¿Continuar?', confirmLabel: 'Continuar igualmente', cancelLabel: 'Revisar', tone: 'warn', icon: 'warn' }))) return;
+  const btn = document.querySelector('.sl-save');
+  if (btn) btn.disabled = true;
+  const payload = {
+    albaran: { created_by: currentUserEmail(), cliente_id: d.clienteId, warehouse_id: currentWarehouseId, fecha: d.fecha, referencia: d.referencia, modalidad: d.modalidad, transportista: d.transportista, matricula: d.matricula, observaciones: d.observaciones },
+    salidas: sale.map(x => ({ partida_id: x.p.id, cantidad: x.n, fifo_saltado: fifo.saltados.has(x.p.id) })),
+    servicios, cobros: calc.activo ? calc.cobros : [],
+  };
+  const { error } = await supabaseClient.rpc('sga_confirmar_salida', { p: payload });
+  if (error) {
+    const m = error.message || 'error desconocido.';
+    errEl.textContent = 'No se pudo guardar: ' + (/function .*sga_confirmar_salida|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL de «confirmar salida» en Supabase.' : m);
+    if (btn) btn.disabled = false;
+    return;
+  }
+  await loadSgaStock();
+  const total = sale.reduce((s, x) => s + x.n, 0);
+  await logContactoHistorial(d.clienteId, `SGA · ha registrado una salida de ${total} palet${total !== 1 ? 's' : ''} el ${fmtDateDMY(d.fecha)}${d.referencia ? ', ref. ' + d.referencia : ''}${fifo.saltados.size ? ' (FIFO saltado)' : ''}.`);
+  appToast(`Salida registrada: ${total} palet${total !== 1 ? 's' : ''}.`, 'ok');
+  window.__stockSeg = 'salidas';
   stockVolver();
 }
 
