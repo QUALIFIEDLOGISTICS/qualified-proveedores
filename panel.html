@@ -211,9 +211,18 @@
   .sgac-seg button.on.ob{background:var(--danger);}
   .sgac-x{background:none;border:none;color:var(--mutedFaint);font-size:14px;cursor:pointer;padding:4px 6px;border-radius:6px;}
   .sgac-x:hover{color:var(--danger);background:color-mix(in srgb,var(--danger) 10%,transparent);}
-  .sgac-chips{display:flex;flex-wrap:wrap;gap:6px;}
-  .sgac-chip{background:var(--panel2);border:1px dashed var(--border);border-radius:999px;padding:5px 12px;font-size:12.5px;color:var(--muted);cursor:pointer;font-family:var(--body);}
-  .sgac-chip:hover{border-color:var(--primary);color:var(--primary);background:color-mix(in srgb,var(--primary) 6%,var(--panel));}
+  .sgac-add{margin-top:14px;}
+  .sgac-add-btn small{font-weight:400;color:var(--muted);margin-left:4px;}
+  .sgac-pick{border:1px solid var(--border);border-radius:12px;background:var(--panel);overflow:hidden;}
+  .sgac-pick-h{display:flex;gap:10px;align-items:center;padding:10px;border-bottom:1px solid var(--border);background:var(--panel2);}
+  .sgac-pick-l{max-height:250px;overflow-y:auto;}
+  .sgac-pick-g{padding:9px 14px 4px;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);}
+  .sgac-op{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:9px 14px;background:none;border:none;border-top:1px solid color-mix(in srgb,var(--border) 60%,transparent);cursor:pointer;font-family:var(--body);color:var(--text);}
+  .sgac-op:hover{background:color-mix(in srgb,var(--primary) 6%,var(--panel));}
+  .sgac-op-n{flex:1;min-width:0;font-size:13.5px;font-weight:600;}
+  .sgac-op-n small{display:block;font-weight:400;font-size:11.5px;color:var(--mutedFaint);margin-top:1px;}
+  .sgac-op-a{flex-shrink:0;font-size:12px;font-weight:600;color:var(--primary);border:1px solid color-mix(in srgb,var(--primary) 35%,var(--border));border-radius:999px;padding:3px 11px;}
+  .sgac-op:hover .sgac-op-a{background:var(--primary);color:var(--primary-text);}
   .doc-table td{vertical-align:middle;}
   .doc-row{cursor:pointer;}
   .doc-row.drop td{background:color-mix(in srgb,var(--primary) 9%,var(--panel)) !important;}
@@ -3339,7 +3348,7 @@ function tplSgaClienteCard(c){
 // Pantalla completa dentro de la ficha del cliente (como el alta de tarifas): sin cabecera ni pestañas de la ficha.
 function sgaClienteCerrar(){
   window.__sgaClienteFormId = null;
-  window.__sgacFor = null; window.__sgacCampos = null;
+  window.__sgacFor = null; window.__sgacCampos = null; window.__sgacPicker = false; window.__sgacBuscar = "";
   window.__sgaArtForm = null;
   window.__sgaArtRapida = null;
   renderHeader(); renderTab();
@@ -3372,7 +3381,41 @@ function sgacCamposHtml(){
   return `
     ${act.length ? grupo('Al recibir la mercancía', act.filter(f => f.ambito !== 'articulo')) + grupo('En el catálogo del cliente', act.filter(f => f.ambito === 'articulo'))
       : '<div style="color:var(--mutedFaint);font-size:12.5px;">Este cliente no usa ningún dato extra de la mercancía.</div>'}
-    ${libres.length ? `<div class="sgac-tit">Añadir un dato</div><div class="sgac-chips">${libres.map(f => `<button type="button" class="sgac-chip" title="${f.ambito === 'articulo' ? 'Del artículo (catálogo)' : 'De la entrada'}" onclick="sgacNivel('${f.id}', 'opcional')">+ ${esc(f.label)}</button>`).join('')}</div>` : ''}`;
+    <div class="sgac-add">
+      ${window.__sgacPicker
+        ? `<div class="sgac-pick">
+            <div class="sgac-pick-h">
+              <div class="deca-search" style="flex:1;"><input id="sgac-buscar" placeholder="Buscar un dato…" value="${esc(window.__sgacBuscar || '')}" oninput="sgacBuscar(this.value)" autocomplete="off" /><span class="ico">${homeIcon(HOME_ICON_PATHS.search, 16, 'currentColor', 1.8)}</span></div>
+              <button type="button" class="btn btn-ghost" style="padding:7px 14px;" onclick="sgacPicker(false)">Cerrar</button>
+            </div>
+            <div id="sgac-pick-lista" class="sgac-pick-l">${sgacPickerListaHtml()}</div>
+          </div>`
+        : `<button type="button" class="btn btn-ghost sgac-add-btn" ${libres.length ? '' : 'disabled'} onclick="sgacPicker(true)">${libres.length ? `+ Añadir un dato <small>(${libres.length} disponible${libres.length !== 1 ? 's' : ''})</small>` : 'Ya usa todos los datos disponibles'}</button>`}
+    </div>`;
+}
+// Lista de datos que el cliente todavía no usa (con buscador), agrupados por dónde se piden.
+function sgacPickerListaHtml(){
+  const est = window.__sgacCampos || {};
+  const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const q = norm(window.__sgacBuscar);
+  const libres = sgaCamposCliente().filter(f => (est[f.id] || 'no') === 'no' && (!q || norm(f.label).includes(q)));
+  if (!libres.length) return `<div style="padding:14px;color:var(--mutedFaint);font-size:12.5px;">${q ? 'Ningún dato coincide con la búsqueda.' : 'Este cliente ya usa todos los datos.'}</div>`;
+  const tipoTxt = f => (SGA_CAMPO_TIPOS[f.tipo] || f.tipo) + (f.tipo === 'lista' ? ` · ${f.opciones.length} opciones` : f.tipo === 'numero' && f.unidad ? ` · ${f.unidad}` : '');
+  const fila = f => `<button type="button" class="sgac-op" onclick="sgacNivel('${f.id}', 'opcional')"><span class="sgac-op-n">${esc(f.nombre)}<small>${esc(tipoTxt(f))}</small></span><span class="sgac-op-a">+ Añadir</span></button>`;
+  const grupo = (t, l) => l.length ? `<div class="sgac-pick-g">${t}</div>${l.map(fila).join('')}` : '';
+  return grupo('Al recibir la mercancía', libres.filter(f => f.ambito !== 'articulo')) + grupo('En el catálogo del cliente', libres.filter(f => f.ambito === 'articulo'));
+}
+function sgacPicker(abrir){
+  window.__sgacPicker = !!abrir;
+  if (!abrir) window.__sgacBuscar = '';
+  const el = document.getElementById('sgac-campos');
+  if (el) el.innerHTML = sgacCamposHtml();
+  if (abrir) setTimeout(() => { const b = document.getElementById('sgac-buscar'); if (b) b.focus(); }, 0);
+}
+function sgacBuscar(v){
+  window.__sgacBuscar = v;
+  const l = document.getElementById('sgac-pick-lista');
+  if (l) l.innerHTML = sgacPickerListaHtml();
 }
 // Letras del albarán por defecto: las 3 primeras letras del nombre del cliente (igual que al confirmar la salida).
 function sgaPrefijoPorDefecto(c){
