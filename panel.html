@@ -2790,7 +2790,7 @@ function tplSgaCampoFormPage(){
       <div class="card deca-card">
         ${decaCardHead('tag', 'Cómo es', 'Nombre y tipo de dato')}
         <div class="deca-card-body">
-          <div class="field"><label>Nombre <span class="dc-req">*</span></label>${decaInputIcon('tag', `<input id="sgacp-nombre" maxlength="60" placeholder="Ej. Fecha de caducidad" value="${esc(f ? f.nombre : '')}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); submitSgaCampo(); }" />`)}</div>
+          <div class="field"><label>Nombre <span class="dc-req">*</span></label>${decaInputIcon('tag', `<input id="sgacp-nombre" data-mayus maxlength="60" placeholder="Ej. Fecha de caducidad" value="${esc(f ? f.nombre : '')}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); submitSgaCampo(); }" />`)}</div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
             <div class="field" style="flex:1;min-width:200px;"><label>Tipo de dato</label>
               <select id="sgacp-tipo" onchange="sgaCampoFormCambio()" ${bloq ? 'disabled' : ''}>${Object.keys(SGA_CAMPO_TIPOS).map(k => `<option value="${k}" ${k === tipo ? 'selected' : ''}>${SGA_CAMPO_TIPOS[k]}</option>`).join('')}</select></div>
@@ -2995,8 +2995,8 @@ function tplSgaZonaFormPage(){
         <div class="deca-card-body">
           <div class="field"><label>Almacén <span class="dc-req">*</span></label><select id="sgaz-wh">${allWarehouses.filter(w => !w.archived || w.id === pg.warehouseId).map(w => `<option value="${w.id}" ${w.id === pg.warehouseId ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select></div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><label>Nave</label>${decaInputIcon('home', `<input id="sgaz-nave" maxlength="60" placeholder="Ej. Nave 2" value="${esc(z ? z.nave : '')}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); submitSgaZona(); }" />`)}</div>
-            <div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><label>Zona</label>${decaInputIcon('pin', `<input id="sgaz-nombre" maxlength="60" placeholder="Ej. Zona A" value="${esc(z ? z.nombre : '')}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); submitSgaZona(); }" />`)}</div>
+            <div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><label>Nave</label>${decaInputIcon('home', `<input id="sgaz-nave" data-mayus maxlength="60" placeholder="Ej. Nave 2" value="${esc(z ? z.nave : '')}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); submitSgaZona(); }" />`)}</div>
+            <div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><label>Zona</label>${decaInputIcon('pin', `<input id="sgaz-nombre" data-mayus maxlength="60" placeholder="Ej. Zona A" value="${esc(z ? z.nombre : '')}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); submitSgaZona(); }" />`)}</div>
           </div>
           <div style="font-size:12px;color:var(--mutedFaint);margin-top:10px;">Si solo tienes naves, deja la zona vacía: la nave será el sitio. Si el almacén no tiene naves, escribe solo la zona.</div>
         </div>
@@ -3214,6 +3214,28 @@ function sgaCamposCompletar(filas){
 }
 // Campos «del artículo» que usa este cliente (los que no marcó como «No se usa»).
 function sgaCamposArticulo(clienteId){ return sgaCamposPropios('articulo').map(sgaCampoDef).filter(f => (sgaClienteCfg(clienteId).campos[f.id] || 'no') !== 'no'); }
+/* ---- Mayúscula solo en la primera letra de cada palabra ----
+   Los campos que llevan data-mayus (nombres, transportista, destinatario…) escriben solos «Carpa Green 20x20»: la primera
+   letra de cada palabra en mayúscula y el resto en minúscula. Una palabra con números (códigos como «306515RG») solo
+   cambia su primera letra. Los códigos y referencias no llevan data-mayus y se quedan como se escriben. */
+function sgaMayus(t){
+  return String(t == null ? '' : t).replace(/\S+/g, w => {
+    if (/^[\d.,]+(x[\d.,]+)+$/i.test(w)) return w.toLowerCase();   // medidas: «20x20», «9.15x20x4.5»
+    if (/^\d/.test(w)) return w;                                    // códigos que empiezan por número: se dejan como están
+    const m = /^([^\p{L}]*)(\p{L})(.*)$/su.exec(w);
+    if (!m) return w;
+    return m[1] + m[2].toUpperCase() + (/\d/.test(w) ? m[3] : m[3].toLowerCase());
+  });
+}
+document.addEventListener('input', ev => {
+  const el = ev.target;
+  if (!el || !el.dataset || el.dataset.mayus === undefined || typeof el.value !== 'string') return;
+  const nuevo = sgaMayus(el.value);
+  if (nuevo === el.value) return;
+  const s = el.selectionStart, e = el.selectionEnd;
+  el.value = nuevo;                                   // mismo largo: el cursor se queda donde estaba
+  try { el.setSelectionRange(s, e); } catch (x) { /* campos sin cursor */ }
+}, true);
 function sgaCampoControl(f, valor, attrs){
   const v = valor == null ? '' : String(valor);
   const opt = o => `<option value="${esc(o)}" ${o === v ? 'selected' : ''}>${esc(o)}</option>`;
@@ -3221,7 +3243,7 @@ function sgaCampoControl(f, valor, attrs){
   if (f.tipo === 'si_no') return `<select ${attrs}><option value="">—</option>${['Sí', 'No'].map(opt).join('')}</select>`;
   if (f.tipo === 'fecha') return `<input type="date" ${attrs} value="${esc(v)}" />`;
   if (f.tipo === 'numero') return `<input inputmode="decimal" maxlength="14" ${attrs} value="${esc(v.replace('.', ','))}" />`;
-  return `<input maxlength="120" ${attrs} value="${esc(v)}" />`;
+  return `<input maxlength="120" ${attrs}${['proveedor', 'descripcion'].includes(f.id) ? ' data-mayus' : ''} value="${esc(v)}" />`;
 }
 // Texto escrito → valor que se guarda ({ valor } o { error }). Vacío = sin valor.
 function sgaCampoParsear(f, txt){
@@ -3576,7 +3598,7 @@ function catFilaHtml(a, cols, conCliente){
   return `
     <tr class="cg-row${a.archived ? ' arch' : ''}" data-id="${a.id}">
       ${conCliente ? `<td class="cg-cli">${esc(cl ? ((cl.nombreComercial || '').trim() || cl.nombre) : '—')}</td>` : ''}
-      <td>${catCeldaInput(a, 'nombre', a.nombre, 'style="min-width:200px;"')}</td>
+      <td>${catCeldaInput(a, 'nombre', a.nombre, 'data-mayus style="min-width:200px;"')}</td>
       ${cols.referencia ? `<td>${catCeldaInput(a, 'referencia', a.referencia, 'style="min-width:140px;"')}</td>` : ''}
       <td><select class="cg-in" ${dis} data-id="${a.id}" data-f="productoId" onchange="catGuardarCelda(this)"><option value="">—</option>${prods.map(p => `<option value="${p.id}" ${a.productoId === p.id ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></td>
       ${cols.bultos ? `<td>${catCeldaInput(a, 'bultos', num(a.bultos), 'inputmode="decimal" style="width:70px;text-align:right;"')}</td>` : ''}
@@ -3597,7 +3619,7 @@ function catFilaNuevaHtml(cols){
   const k = 'onkeydown="catNuevaTecla(event)"';
   return `
     <tr class="cg-nuevo">
-      <td><input id="cg-n-nombre" ${k} placeholder="+ Producto nuevo" style="min-width:200px;" /></td>
+      <td><input id="cg-n-nombre" data-mayus ${k} placeholder="+ Producto nuevo" style="min-width:200px;" /></td>
       ${cols.referencia ? `<td><input id="cg-n-ref" ${k} placeholder="Referencia" style="min-width:140px;" /></td>` : ''}
       <td><select id="cg-n-prod"><option value="">Tipo de carga…</option>${prods.map(p => `<option value="${p.id}">${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></td>
       ${cols.bultos ? `<td><input id="cg-n-bultos" ${k} inputmode="decimal" placeholder="Bultos" value="1" style="width:70px;text-align:right;" /></td>` : ''}
@@ -4047,7 +4069,7 @@ function sgaArtNuevoRapido(i){
         </div>
         <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <div class="field" style="flex:2;min-width:220px;"><label>Producto <span class="dc-req">*</span></label>${decaInputIcon('tag', `<input id="na-nombre" maxlength="150" placeholder="Ej. CARPA 20x20" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaArtNuevoGuardar(); }" />`)}</div>
+            <div class="field" style="flex:2;min-width:220px;"><label>Producto <span class="dc-req">*</span></label>${decaInputIcon('tag', `<input id="na-nombre" data-mayus maxlength="150" placeholder="Ej. CARPA 20x20" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaArtNuevoGuardar(); }" />`)}</div>
             <div class="field" style="flex:1;min-width:150px;"><label>Referencia</label>${decaInputIcon('file', `<input id="na-ref" maxlength="80" placeholder="Ej. LS-6565" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaArtNuevoGuardar(); }" />`)}</div>
           </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
@@ -4229,7 +4251,7 @@ function tplStockEntradaPage(){
           <input type="hidden" id="se-modalidad" value="${mod}" />
           <div class="doc-seg" id="se-mod">${Object.keys(SGA_MODALIDADES).map(m => `<button type="button" data-m="${m}" class="${m === mod ? 'on' : ''}" onclick="sgaEntradaModalidad('${m}')">${esc(SGA_MODALIDADES[m])}</button>`).join('')}</div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;">
-            <div class="field" style="flex:1;min-width:200px;"><label>Transportista</label>${decaInputIcon('truck', `<input id="se-transp" maxlength="120" placeholder="Opcional" />`)}</div>
+            <div class="field" style="flex:1;min-width:200px;"><label>Transportista</label>${decaInputIcon('truck', `<input id="se-transp" data-mayus maxlength="120" placeholder="Opcional" />`)}</div>
             <div class="field" style="flex:1;min-width:150px;"><label>Matrícula</label>${decaInputIcon('truck', `<input id="se-matr" maxlength="15" placeholder="Opcional" oninput="this.value=this.value.toUpperCase();" />`)}</div>
             <div class="field" style="flex:2;min-width:220px;"><label>Observaciones</label>${decaInputIcon('file', `<input id="se-obs" maxlength="250" placeholder="Opcional" />`)}</div>
           </div>
@@ -4548,11 +4570,11 @@ function tplStockSalidaPage(){
           <input type="hidden" id="sl-modalidad" value="palet" />
           <div class="doc-seg" id="sl-mod">${SGA_MODALIDADES_SALIDA.map(m => `<button type="button" data-m="${m}" class="${m === 'palet' ? 'on' : ''}" onclick="sgaSalidaModalidad('${m}')">${esc(SGA_MODALIDADES[m])}</button>`).join('')}</div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;">
-            <div class="field" style="flex:1;min-width:240px;"><label>Para (destinatario)</label>${decaInputIcon('users', `<input id="sl-dest" maxlength="150" placeholder="Quién recibe la mercancía (sale en el albarán)" />`)}</div>
-            <div class="field" style="flex:2;min-width:260px;"><label>Dirección del destinatario</label>${decaInputIcon('pin', `<input id="sl-destdir" maxlength="250" placeholder="Calle, código postal, ciudad" />`)}</div>
+            <div class="field" style="flex:1;min-width:240px;"><label>Para (destinatario)</label>${decaInputIcon('users', `<input id="sl-dest" data-mayus maxlength="150" placeholder="Quién recibe la mercancía (sale en el albarán)" />`)}</div>
+            <div class="field" style="flex:2;min-width:260px;"><label>Dirección del destinatario</label>${decaInputIcon('pin', `<input id="sl-destdir" data-mayus maxlength="250" placeholder="Calle, código postal, ciudad" />`)}</div>
           </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:0;">
-            <div class="field" style="flex:1;min-width:200px;"><label>Transportista</label>${decaInputIcon('truck', `<input id="sl-transp" maxlength="120" placeholder="Opcional" />`)}</div>
+            <div class="field" style="flex:1;min-width:200px;"><label>Transportista</label>${decaInputIcon('truck', `<input id="sl-transp" data-mayus maxlength="120" placeholder="Opcional" />`)}</div>
             <div class="field" style="flex:1;min-width:150px;"><label>Matrícula</label>${decaInputIcon('truck', `<input id="sl-matr" maxlength="15" placeholder="Opcional" oninput="this.value=this.value.toUpperCase();" />`)}</div>
             <div class="field" style="flex:2;min-width:220px;"><label>Observaciones</label>${decaInputIcon('file', `<input id="sl-obs" maxlength="250" placeholder="Opcional" />`)}</div>
           </div>
@@ -4716,10 +4738,10 @@ function tplSgaArticuloPage(c){
         ${decaCardHead('tag', 'Identificación', 'Cómo se llama y cómo se reconoce')}
         <div class="deca-card-body">
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <div class="field" style="flex:2;min-width:240px;"><label>Producto <span class="dc-req">*</span></label>${decaInputIcon('tag', `<input id="sgaa-nombre" maxlength="150" placeholder="Ej. CARPA GREEN 9.15x20x4.5" value="${esc(a ? a.nombre : '')}" />`)}</div>
+            <div class="field" style="flex:2;min-width:240px;"><label>Producto <span class="dc-req">*</span></label>${decaInputIcon('tag', `<input id="sgaa-nombre" data-mayus maxlength="150" placeholder="Ej. CARPA GREEN 9.15x20x4.5" value="${esc(a ? a.nombre : '')}" />`)}</div>
             <div class="field" style="flex:1;min-width:180px;"><label>Referencia / modelo</label>${decaInputIcon('file', `<input id="sgaa-ref" maxlength="80" placeholder="Ej. MODELO 306515RG" value="${esc(a ? a.referencia : '')}" />`)}</div>
           </div>
-          <div class="field" style="margin-bottom:0;"><label>Finalidad</label>${decaInputIcon('list', `<input id="sgaa-fin" maxlength="80" placeholder="Opcional (ej. Agrícola)" value="${esc(a ? a.finalidad : '')}" />`)}</div>
+          <div class="field" style="margin-bottom:0;"><label>Finalidad</label>${decaInputIcon('list', `<input id="sgaa-fin" data-mayus maxlength="80" placeholder="Opcional (ej. Agrícola)" value="${esc(a ? a.finalidad : '')}" />`)}</div>
         </div>
       </div>
       <div class="card deca-card">
@@ -4903,13 +4925,13 @@ function sgaArtRapidaAnalizar(texto, clienteId, zonaDefecto){
   const existentes = new Set(sgaArticulosDe(clienteId, true).map(a => (a.referencia || a.nombre).toLowerCase()));
   const vistas = new Set();
   const items = datos.map((f, n) => {
-    const nombre = celda(f, 'nombre'), referencia = celda(f, 'referencia');
+    const nombre = sgaMayus(celda(f, 'nombre')), referencia = celda(f, 'referencia');
     const bTxt = celda(f, 'bultos');
     const bultos = bTxt === '' ? 1 : sgaNumPegado(bTxt);
     const ml = sgaNumPegado(celda(f, 'ml')), peso = sgaNumPegado(celda(f, 'peso'));
     const naveTxt = celda(f, 'nave');
     const zona = sgaZonaPorTexto(naveTxt) || (zonaDefecto ? sgaZonaDe(zonaDefecto) : null);
-    const item = { n: n + 1, nombre, referencia, bultos, ml, peso, medidas: celda(f, 'medidas'), finalidad: celda(f, 'finalidad'), naveTxt, zona, estado: 'nuevo', aviso: '' };
+    const item = { n: n + 1, nombre, referencia, bultos, ml, peso, medidas: celda(f, 'medidas'), finalidad: sgaMayus(celda(f, 'finalidad')), naveTxt, zona, estado: 'nuevo', aviso: '' };
     if (!nombre) { item.estado = 'error'; item.aviso = 'Falta el producto.'; return item; }
     if (!isFinite(bultos) || bultos <= 0) { item.estado = 'error'; item.aviso = 'Los bultos tienen que ser un número mayor que 0.'; return item; }
     if (Number.isNaN(ml) || Number.isNaN(peso)) { item.estado = 'error'; item.aviso = 'Metros lineales o peso no son un número.'; return item; }
