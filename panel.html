@@ -195,6 +195,24 @@
   .sgac-ejn{font-size:13px;color:var(--muted);}
   .sgac-ejn b{font-family:var(--mono);font-size:13.5px;color:var(--primary);letter-spacing:.3px;}
   .sgac-est-i{flex-shrink:0;width:8px;height:8px;border-radius:50%;}
+  /* Ficha del cliente → tarjeta «Gestión de stock (SGA)» en vista */
+  .sgv-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:10px;}
+  .sgv-t{display:flex;align-items:center;gap:12px;padding:13px 14px;border:1px solid var(--border);border-radius:12px;background:var(--panel);}
+  .sgv-ico{flex-shrink:0;width:38px;height:38px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--c) 13%,var(--panel));color:var(--c);}
+  .sgv-l{font-size:10.5px;text-transform:uppercase;letter-spacing:.45px;color:var(--muted);font-weight:600;}
+  .sgv-v{font-size:14.5px;font-weight:700;color:var(--text);margin-top:2px;line-height:1.25;}
+  .sgv-s{font-size:12px;color:var(--muted);margin-top:1px;}
+  .sgv-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 11px 2px 9px;border-radius:999px;font-size:13px;font-weight:700;background:color-mix(in srgb,var(--c) 14%,var(--panel));color:var(--c);}
+  .sgv-pill i{width:8px;height:8px;border-radius:50%;background:var(--c);}
+  .sgv-sec{margin-top:16px;padding-top:14px;border-top:1px solid var(--border);}
+  .sgv-sec-h{display:flex;align-items:center;gap:7px;margin-bottom:10px;font-size:11.5px;font-weight:700;letter-spacing:.45px;text-transform:uppercase;color:var(--muted);}
+  .sgv-leg{margin-left:auto;font-weight:500;text-transform:none;letter-spacing:0;font-size:12px;}
+  .sgv-leg b,.sgv-chip b{color:var(--danger);margin-left:3px;}
+  .sgv-g{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:8px;}
+  .sgv-gt{flex:0 0 150px;font-size:12px;color:var(--mutedFaint);}
+  .sgv-chip{display:inline-flex;align-items:center;padding:5px 13px;border-radius:999px;font-size:13px;background:var(--panel2);border:1px solid var(--border);color:var(--text);}
+  .sgv-chip.ob{background:color-mix(in srgb,var(--danger) 7%,var(--panel));border-color:color-mix(in srgb,var(--danger) 28%,var(--border));}
+  @media (max-width:640px){ .sgv-gt{flex-basis:100%;} }
   /* Ficha SGA del cliente: datos de la mercancía compactos (los que usa, y botones para añadir el resto) */
   .sgac-tit{font-size:11.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);margin:14px 0 8px;}
   .sgac-tit:first-child{margin-top:0;}
@@ -3322,21 +3340,36 @@ function tplSgaClienteCard(c){
   const cfg = sgaClienteCfg(c.id);
   const activo = !!cfg.activoDesde;
   const hoyActivo = activo && cfg.activoDesde <= today();
-  const estado = !activo
-    ? '<span style="color:var(--muted);">Sin activar · sigue en el Excel</span>'
-    : hoyActivo ? `<b>Activo</b> <span style="color:var(--muted);">desde el ${esc(fmtDateDMY(cfg.activoDesde))}</span>` : `<b>Se activará</b> <span style="color:var(--muted);">el ${esc(fmtDateDMY(cfg.activoDesde))}</span>`;
-  const campos = sgaCamposCliente().filter(f => (cfg.campos[f.id] || 'no') !== 'no').map(f => `<span class="tc-chip" style="margin:2px 4px 2px 0;" title="${esc(SGA_CAMPO_NIVELES[cfg.campos[f.id]])}">${esc(f.label)}${cfg.campos[f.id] === 'obligatorio' ? ' <b style="color:var(--danger);">*</b>' : ''}</span>`).join('') || '<span style="color:var(--mutedFaint);">Ninguno</span>';
+  const est = !activo
+    ? { c: 'var(--mutedFaint)', t: 'Sin activar', s: 'Sigue en el Excel' }
+    : hoyActivo ? { c: 'var(--success)', t: 'Activo', s: `desde el ${fmtDateDMY(cfg.activoDesde)}` } : { c: '#C98A2E', t: 'Se activará', s: `el ${fmtDateDMY(cfg.activoDesde)}` };
+  const conBultos = sgaClienteConBultos(c.id);
+  const pref = (cfg.prefijo || sgaPrefijoPorDefecto(c)).toUpperCase();
+  const tile = (icono, color, etiqueta, valor, sub) => `
+    <div class="sgv-t" style="--c:${color};">
+      <span class="sgv-ico">${homeIcon(HOME_ICON_PATHS[icono], 18, 'currentColor', 1.9)}</span>
+      <div style="min-width:0;"><div class="sgv-l">${etiqueta}</div><div class="sgv-v">${valor}</div>${sub ? `<div class="sgv-s">${sub}</div>` : ''}</div>
+    </div>`;
+  // Datos de la mercancía que usa, agrupados por dónde se piden (los obligatorios, resaltados)
+  const usados = sgaCamposCliente().filter(f => (cfg.campos[f.id] || 'no') !== 'no');
+  const chip = f => `<span class="sgv-chip${cfg.campos[f.id] === 'obligatorio' ? ' ob' : ''}" title="${esc(SGA_CAMPO_NIVELES[cfg.campos[f.id]])}">${esc(f.label)}${cfg.campos[f.id] === 'obligatorio' ? '<b>*</b>' : ''}</span>`;
+  const grupo = (titulo, lista) => lista.length ? `<div class="sgv-g"><span class="sgv-gt">${titulo}</span>${lista.map(chip).join('')}</div>` : '';
+  const hayOb = usados.some(f => cfg.campos[f.id] === 'obligatorio');
   return `
     <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:20px;">
       ${decaCardHead('box', 'Gestión de stock (SGA)', 'Cómo se lleva el stock y el cobro automático de este cliente', sgaPuedeConfigurar() ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaClienteModal('${c.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>` : '')}
       <div class="deca-card-body">
-        <div class="deca-view-grid">
-          ${decaViewRow('clock', 'Estado del SGA', estado)}
-          ${decaViewRow('tag', 'Códigos únicos por palet', cfg.codigosUnicos ? 'Sí: cada palet lleva su código' : 'No: partidas de palets iguales')}
-          ${decaViewRow('box', 'Bultos por palet', sgaClienteConBultos(c.id) ? 'Sí: sus palets llevan varios bultos' : 'No: 1 palet = 1 bulto')}
-          ${decaViewRow('list', 'Datos de la mercancía', campos, '', true)}
-          ${cfg.observaciones ? decaViewRow('file', 'Observaciones', esc(cfg.observaciones), '', true) : ''}
+        <div class="sgv-tiles">
+          ${tile('clock', est.c, 'Estado del SGA', `<span class="sgv-pill"><i></i>${est.t}</span>`, est.s)}
+          ${tile('tag', 'var(--primary)', 'Palets', cfg.codigosUnicos ? 'Con código propio' : 'Todos iguales', cfg.codigosUnicos ? 'Cada palet se controla uno a uno' : 'Se anotan de golpe')}
+          ${tile('box', '#B8731B', 'Bultos', conBultos ? 'Varios por palet' : '1 palet = 1 bulto', conBultos ? 'Se cobra por bulto' : 'Se cobra por palet')}
+          ${tile('file', '#7C5CBF', 'Albaranes de salida', `<span style="font-family:var(--mono);letter-spacing:.3px;">${esc(pref)}</span><span style="color:var(--muted);font-weight:500;">·fecha-orden</span>`, `Ej. ${esc(sgaAlbaranEjemplo(pref))}`)}
         </div>
+        <div class="sgv-sec">
+          <div class="sgv-sec-h">${homeIcon(HOME_ICON_PATHS.list, 14, 'currentColor', 2)}<span>Datos de la mercancía</span>${hayOb ? '<span class="sgv-leg"><b>*</b> obligatorio</span>' : ''}</div>
+          ${usados.length ? grupo('Al recibir la mercancía', usados.filter(f => f.ambito !== 'articulo')) + grupo('En el catálogo', usados.filter(f => f.ambito === 'articulo')) : '<div style="color:var(--mutedFaint);font-size:13px;">Este cliente no usa ningún dato extra.</div>'}
+        </div>
+        ${cfg.observaciones ? `<div class="sgv-sec"><div class="sgv-sec-h">${homeIcon(HOME_ICON_PATHS.file, 14, 'currentColor', 2)}<span>Observaciones</span></div><div style="font-size:13.5px;line-height:1.5;">${esc(cfg.observaciones)}</div></div>` : ''}
       </div>
     </div>`;
 }
