@@ -3641,7 +3641,7 @@ function catFilaHtml(a, cols, conCliente){
   const st = catStockArticulo(a);
   const cl = conCliente ? contactos.find(c => c.id === a.clienteId) : null;
   const num = v => (v == null ? '' : String(v).replace('.', ','));
-  const prods = sgaProductosStock();
+  const prods = sgaProductosCliente(a.clienteId, a.productoId);
   const dis = puede ? '' : 'disabled';
   return `
     <tr class="cg-row${a.archived ? ' arch' : ''}" data-id="${a.id}">
@@ -3653,7 +3653,6 @@ function catFilaHtml(a, cols, conCliente){
       ${cols.ml ? `<td>${catCeldaInput(a, 'metrosLineales', num(a.metrosLineales), 'inputmode="decimal" style="width:70px;text-align:right;"')}</td>` : ''}
       ${cols.peso ? `<td>${catCeldaInput(a, 'peso', num(a.peso), 'inputmode="decimal" style="width:80px;text-align:right;"')}</td>` : ''}
       ${cols.x.map(f => catCeldaCampo(a, f)).join('')}
-      <td><select class="cg-in" ${dis} data-id="${a.id}" data-f="zonaId" onchange="catGuardarCelda(this)"><option value="">—</option>${sgaZonas.filter(z => !z.archived).map(z => `<option value="${z.id}" ${a.zonaId === z.id ? 'selected' : ''}>${esc(((allWarehouses.find(w => w.id === z.warehouseId) || {}).name || '') + ' · ' + sgaZonaNombre(z))}</option>`).join('')}</select></td>
       <td class="cg-stock" ${st.almacenes ? `title="${esc(st.almacenes)}"` : ''}>${st.mod ? `<b>${st.mod}</b> palet${st.mod === 1 ? '' : 's'}${cols.bultos && (a.bultos !== 1 || st.bul !== st.mod) ? ` <small>· ${sgaNumTxt(st.bul)} bultos</small>` : ''}` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
       <td class="cg-acc">${puede ? `
         <button class="deca-act" title="Abrir el formulario completo (medidas, datos adicionales…)" onclick="openSgaArticuloForm('${a.clienteId}', '${a.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
@@ -3662,7 +3661,7 @@ function catFilaHtml(a, cols, conCliente){
     </tr>`;
 }
 function catFilaNuevaHtml(cols){
-  const prods = sgaProductosStock();
+  const prods = sgaProductosCliente(catClienteSel());
   const zonas = sgaZonas.filter(z => !z.archived);
   const k = 'onkeydown="catNuevaTecla(event)"';
   return `
@@ -3674,7 +3673,6 @@ function catFilaNuevaHtml(cols){
       ${cols.ml ? `<td><input id="cg-n-ml" ${k} inputmode="decimal" placeholder="M.L." style="width:70px;text-align:right;" /></td>` : ''}
       ${cols.peso ? `<td><input id="cg-n-peso" ${k} inputmode="decimal" placeholder="Peso" style="width:80px;text-align:right;" /></td>` : ''}
       ${cols.x.map(f => `<td>${sgaCampoControl(f, '', `id="cg-n-x-${f.id}" ${k} placeholder="${esc(f.nombre)}" style="min-width:${f.tipo === 'fecha' ? 130 : 100}px;"`)}</td>`).join('')}
-      <td><select id="cg-n-zona"><option value="">Zona…</option>${zonas.map(z => `<option value="${z.id}">${esc(((allWarehouses.find(w => w.id === z.warehouseId) || {}).name || '') + ' · ' + sgaZonaNombre(z))}</option>`).join('')}</select></td>
       <td></td>
       <td class="cg-acc"><button class="btn btn-primary" style="padding:6px 12px;font-size:12px;" onclick="catCrearNuevo()" title="Crear el artículo (Intro)">Crear</button></td>
     </tr>`;
@@ -3700,7 +3698,7 @@ function stockCatalogoBodyHtml(){
     <div class="card" style="padding:0;">
       <div class="tc-hist-box" style="max-height:640px;border:none;border-radius:10px;">
         <table class="tf-table cg-tabla">
-          <thead><tr>${conCliente ? thc('Cliente') : ''}${thc('Producto')}${cols.referencia ? thc('Referencia') : ''}${thc('Tipo de carga')}${cols.bultos ? thc('Bultos / palet') : ''}${cols.ml ? thc('M. lineales') : ''}${cols.peso ? thc('Peso (kg)') : ''}${cols.x.map(f => thc(esc(f.label))).join('')}${thc('Zona')}${thc('Stock actual')}<th style="width:112px;"></th></tr></thead>
+          <thead><tr>${conCliente ? thc('Cliente') : ''}${thc('Producto')}${cols.referencia ? thc('Referencia') : ''}${thc('Tipo de carga')}${cols.bultos ? thc('Bultos / palet') : ''}${cols.ml ? thc('M. lineales') : ''}${cols.peso ? thc('Peso (kg)') : ''}${cols.x.map(f => thc(esc(f.label))).join('')}${thc('Stock actual')}<th style="width:112px;"></th></tr></thead>
           <tbody>
             ${cid && puede && filtro !== 'arch' ? catFilaNuevaHtml(cols) : ''}
             ${lista.map(a => catFilaHtml(a, cols, conCliente)).join('')}
@@ -3782,16 +3780,16 @@ async function catCrearNuevo(){
     if (r.valor == null) { if (sgaClienteCfg(cid).campos[f.id] === 'obligatorio') { appToast(`Falta «${f.label}».`, 'error'); return; } }
     else atributos[f.id] = r.valor;
   }
-  const row = { cliente_id: cid, nombre, referencia: referencia || null, producto_id: val('cg-n-prod') || null, zona_id: val('cg-n-zona') || null, bultos_por_unidad: bultos, metros_lineales: ml, peso };
+  const row = { cliente_id: cid, nombre, referencia: referencia || null, producto_id: val('cg-n-prod') || null, bultos_por_unidad: bultos, metros_lineales: ml, peso };
   if (Object.keys(atributos).length) row.atributos = atributos;
   const { data, error } = await supabaseClient.from('sga_articulos').insert(row).select().single();
   if (error || !data) { appToast('No se pudo crear: ' + (error && error.message ? error.message : 'error desconocido.'), 'error'); return; }
   sgaArticulos.push({ id: data.id, clienteId: cid, nombre, referencia, productoId: row.producto_id || '', zonaId: row.zona_id || '', bultos, metrosLineales: ml, peso, medidas: '', finalidad: '', atributos, archived: false });
   await logContactoHistorial(cid, `SGA · ha añadido el artículo ${sgaArticuloTxt({ nombre, referencia })}.`);
-  const keep = { prod: row.producto_id || '', zona: row.zona_id || '' };
+  const keep = { prod: row.producto_id || '' };
   refreshStockBody();
-  const p = document.getElementById('cg-n-prod'), z = document.getElementById('cg-n-zona');
-  if (p) p.value = keep.prod; if (z) z.value = keep.zona;     // la fila de alta conserva tipo y zona para el siguiente
+  const p = document.getElementById('cg-n-prod');
+  if (p) p.value = keep.prod;     // la fila de alta conserva el tipo de carga para el siguiente
   const n = document.getElementById('cg-n-nombre'); if (n) n.focus();
 }
 async function catDuplicar(id){
@@ -3946,6 +3944,11 @@ function sgaAlmacenOptionsHtml(clienteId, sel){
 function sgaSalidaWh(){ const el = document.getElementById('sl-almacen'); return el && el.value ? el.value : ''; }
 function sgaZonasActivas(wid){ return sgaZonas.filter(z => z.warehouseId === (wid || sgaEntradaWh()) && !z.archived).sort((a, b) => (a.orden - b.orden) || sgaZonaNombre(a).localeCompare(sgaZonaNombre(b), 'es')); }
 function sgaProductosStock(){ return almacenajeProductos.filter(p => !p.archived && p.disparador === 'stock_dia').sort((a, b) => almacenajeProductoTexto(a).localeCompare(almacenajeProductoTexto(b), 'es')); }
+// Tipos de carga de stock que ese cliente tiene creados en su tarifa (más el que ya tuviera elegido, para no perderlo al editar).
+// Sin cliente, ninguno.
+function sgaProductosCliente(clienteId, incluir){
+  return sgaProductosStock().filter(p => p.id === incluir || (clienteId && almacenajeTarifas.some(t => t.clienteId === clienteId && t.tipo === p.id)));
+}
 function sgaEntradaClienteId(){ const el = document.getElementById('se-cliente'); return el ? el.value : ''; }
 // Solo los tipos de carga que este cliente tiene en su tarifa (un tipo sin tarifa no se podría cobrar).
 function sgaProdOptionsHtml(clienteId, sel){
@@ -4104,7 +4107,7 @@ function sgaArtNuevoRapido(i){
   const c = contactos.find(x => x.id === clienteId);
   window.__nuevoArt = { clienteId, i };
   const fila = i >= 0 ? { prod: (document.getElementById(`se-${i}-prod`) || {}).value || '', zona: (document.getElementById(`se-${i}-zona`) || {}).value || '' } : { prod: '', zona: '' };
-  const prods = sgaProductosStock();
+  const prods = sgaProductosCliente(clienteId, fila.prod);
   const zonas = sgaZonas.filter(z => !z.archived);
   document.getElementById('modal-slot').innerHTML = `
     <div class="modal-overlay">
@@ -4124,9 +4127,8 @@ function sgaArtNuevoRapido(i){
             ${sgaClienteConBultos(clienteId)
               ? `<div class="field" style="width:150px;"><label>Bultos por palet <span class="dc-req">*</span></label>${decaInputIcon('box', `<input id="na-bultos" inputmode="decimal" maxlength="8" value="1" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaArtNuevoGuardar(); }" />`)}</div>`
               : `<input type="hidden" id="na-bultos" value="1" />`}
-            <div class="field" style="flex:1;min-width:180px;"><label>Tipo de carga</label><select id="na-prod"><option value="">— Sin definir —</option>${prods.map(p => `<option value="${p.id}" ${fila.prod === p.id ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}${almacenajeTarifas.some(t => t.clienteId === clienteId && t.tipo === p.id) ? '' : ' · sin tarifa'}</option>`).join('')}</select></div>
+            <div class="field" style="flex:1;min-width:180px;"><label>Tipo de carga</label><select id="na-prod"><option value="">— Sin definir —</option>${prods.map(p => `<option value="${p.id}" ${fila.prod === p.id ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></div>
           </div>
-          <div class="field"><label>Zona o nave habitual</label><select id="na-zona"><option value="">— Sin definir —</option>${zonas.map(z => `<option value="${z.id}" ${fila.zona === z.id ? 'selected' : ''}>${esc(((allWarehouses.find(w => w.id === z.warehouseId) || {}).name || '') + ' · ' + sgaZonaNombre(z))}</option>`).join('')}</select></div>
           <div style="font-size:12px;color:var(--mutedFaint);margin-bottom:10px;">Lo demás (peso, medidas…) se completa luego en Stock → Catálogo.</div>
           <div id="na-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
           <div style="display:flex;gap:10px;">
@@ -4150,11 +4152,11 @@ async function sgaArtNuevoGuardar(){
   if (sgaArticulos.some(x => x.clienteId === clienteId && (x.referencia || x.nombre).toLowerCase() === (referencia || nombre).toLowerCase())) { errEl.textContent = 'Este cliente ya tiene un artículo con esa referencia (o ese nombre, si no tiene referencia).'; return; }
   const btn = document.querySelector('.na-save');
   if (btn) btn.disabled = true;
-  const row = { cliente_id: clienteId, nombre, referencia: referencia || null, producto_id: val('na-prod') || null, zona_id: val('na-zona') || null, bultos_por_unidad: bultos };
+  const row = { cliente_id: clienteId, nombre, referencia: referencia || null, producto_id: val('na-prod') || null, bultos_por_unidad: bultos };
   const { data, error } = await supabaseClient.from('sga_articulos').insert(row).select().single();
   if (error || !data) { errEl.textContent = 'No se pudo crear: ' + (error && error.message ? error.message : 'error desconocido.'); if (btn) btn.disabled = false; return; }
   const yaTenia = sgaArticulosDe(clienteId).length > 0;
-  sgaArticulos.push({ id: data.id, clienteId, nombre, referencia, productoId: row.producto_id || '', zonaId: row.zona_id || '', bultos, metrosLineales: null, peso: null, medidas: '', finalidad: '', archived: false });
+  sgaArticulos.push({ id: data.id, clienteId, nombre, referencia, productoId: row.producto_id || '', zonaId: '', bultos, metrosLineales: null, peso: null, medidas: '', archived: false });
   await logContactoHistorial(clienteId, `SGA · ha añadido el artículo ${sgaArticuloTxt({ nombre, referencia })} (desde una entrada).`);
   closeModal();
   if (!yaTenia || i < 0) {
@@ -4798,7 +4800,7 @@ function tplSgaArticuloPage(c){
   const pg = window.__sgaArtForm || {};
   const a = pg.id ? sgaArticulos.find(x => x.id === pg.id) : null;
   const nombreCliente = (c.nombreComercial || '').trim() || c.nombre;
-  const prods = sgaProductosStock();
+  const prods = sgaProductosCliente(c.id, a ? a.productoId : "");
   const zonas = sgaZonas.filter(z => z.warehouseId && !z.archived);
   const num = v => (v == null ? '' : String(v).replace('.', ','));
   const camposArt = sgaCamposArticulo(c.id), c0 = sgaClienteCfg(c.id);
@@ -4824,12 +4826,10 @@ function tplSgaArticuloPage(c){
       <div class="card deca-card">
         ${decaCardHead('box', 'Cómo se guarda', 'Se rellena solo al elegir este artículo en una entrada')}
         <div class="deca-card-body">
-          <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <div class="field" style="flex:1;min-width:220px;margin-bottom:0;"><label>Tipo de carga</label>
-              <select id="sgaa-prod"><option value="">— Sin definir —</option>${prods.map(p => `<option value="${p.id}" ${a && a.productoId === p.id ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}${almacenajeTarifas.some(t => t.clienteId === c.id && t.tipo === p.id) ? '' : ' · sin tarifa'}</option>`).join('')}</select></div>
-            <div class="field" style="flex:1;min-width:220px;margin-bottom:0;"><label>Zona o nave habitual</label>
-              <select id="sgaa-zona"><option value="">— Sin definir —</option>${zonas.map(z => `<option value="${z.id}" ${a && a.zonaId === z.id ? 'selected' : ''}>${esc(((allWarehouses.find(w => w.id === z.warehouseId) || {}).name || '') + ' · ' + sgaZonaNombre(z))}</option>`).join('')}</select></div>
-          </div>
+          <div class="field" style="max-width:360px;margin-bottom:0;"><label>Tipo de carga</label>
+            <select id="sgaa-prod"><option value="">— Sin definir —</option>${prods.map(p => `<option value="${p.id}" ${a && a.productoId === p.id ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select>
+            <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">${prods.length ? 'Solo salen los tipos de carga que este cliente tiene en su tarifa.' : 'Este cliente no tiene ningún tipo de carga en su tarifa: añádeselo en Comercial → Tarifas Almacén.'} La nave o zona se elige al dar la entrada.</div></div>
+          <input type="hidden" id="sgaa-zona" value="${esc(a ? a.zonaId : '')}" />
         </div>
       </div>
       <div class="card deca-card">
@@ -5007,7 +5007,7 @@ function sgaArtRapidaAnalizar(texto, clienteId, zonaDefecto){
     const bultos = bTxt === '' ? 1 : sgaNumPegado(bTxt);
     const ml = sgaNumPegado(celda(f, 'ml')), peso = sgaNumPegado(celda(f, 'peso'));
     const naveTxt = celda(f, 'nave');
-    const zona = sgaZonaPorTexto(naveTxt) || (zonaDefecto ? sgaZonaDe(zonaDefecto) : null);
+    const zona = null;   // la nave o zona se elige al dar la entrada, no en el catálogo
     const item = { n: n + 1, nombre, referencia, bultos, ml, peso, medidas: celda(f, 'medidas'), finalidad: sgaMayus(celda(f, 'finalidad')), naveTxt, zona, estado: 'nuevo', aviso: '' };
     if (!nombre) { item.estado = 'error'; item.aviso = 'Falta el producto.'; return item; }
     if (!isFinite(bultos) || bultos <= 0) { item.estado = 'error'; item.aviso = 'Los bultos tienen que ser un número mayor que 0.'; return item; }
@@ -5016,7 +5016,6 @@ function sgaArtRapidaAnalizar(texto, clienteId, zonaDefecto){
     if (existentes.has(clave)) { item.estado = 'existe'; item.aviso = 'Ya está en el catálogo.'; return item; }
     if (vistas.has(clave)) { item.estado = 'existe'; item.aviso = 'Repetido en lo que has pegado.'; return item; }
     vistas.add(clave);
-    if (naveTxt && !sgaZonaPorTexto(naveTxt)) item.aviso = `«${naveTxt}» no coincide con ninguna zona${zonaDefecto ? ': se usa la zona por defecto' : ': se queda sin zona'}.`;
     return item;
   });
   return { items, mapa };
@@ -5042,7 +5041,7 @@ function sgaArtRapidaRevisar(){
       <span><b>${nuevos}</b> nuevo${nuevos !== 1 ? 's' : ''}</span><span style="color:var(--muted);"><b>${ya}</b> ya existen o repetidos</span>${err ? `<span style="color:var(--danger);"><b>${err}</b> con error</span>` : ''}
     </div>
     <div class="tc-hist-box" style="max-height:420px;"><table class="tf-table" style="min-width:760px;">
-      <thead><tr><th>#</th><th>Producto</th><th>Referencia</th><th style="text-align:right;">Bultos</th><th style="text-align:right;">M. lin.</th><th style="text-align:right;">Peso</th><th>Zona</th><th>Estado</th></tr></thead>
+      <thead><tr><th>#</th><th>Producto</th><th>Referencia</th><th style="text-align:right;">Bultos</th><th style="text-align:right;">M. lin.</th><th style="text-align:right;">Peso</th><th>Estado</th></tr></thead>
       <tbody>${items.map(i => `
         <tr${i.estado !== 'nuevo' ? ' style="opacity:.65;"' : ''}>
           <td style="color:var(--mutedFaint);">${i.n}</td>
@@ -5051,14 +5050,13 @@ function sgaArtRapidaRevisar(){
           <td class="tf-precio">${isFinite(i.bultos) ? sgaNumTxt(i.bultos) : '—'}</td>
           <td class="tf-precio">${sgaNumTxt(i.ml)}</td>
           <td class="tf-precio">${sgaNumTxt(i.peso)}</td>
-          <td>${i.zona ? esc(sgaZonaNombre(i.zona)) : '—'}</td>
           <td>${etiqueta(i)}${i.aviso ? `<div style="font-size:11.5px;color:var(--muted);">${esc(i.aviso)}</div>` : ''}</td>
         </tr>`).join('')}</tbody>
     </table></div>`;
 }
 function tplSgaArtRapidaPage(c){
   const nombreCliente = (c.nombreComercial || '').trim() || c.nombre;
-  const prods = sgaProductosStock();
+  const prods = sgaProductosCliente(c.id);
   const zonas = sgaZonas.filter(z => !z.archived);
   return `
     <div style="--bn-accent:var(--primary);">
@@ -5082,11 +5080,8 @@ function tplSgaArtRapidaPage(c){
         <div class="deca-card-body">
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
             <div class="field" style="flex:1;min-width:220px;margin-bottom:0;"><label>Tipo de carga</label>
-              <select id="sgar-prod" onchange="sgaArtRapidaRevisar()"><option value="">— Sin definir —</option>${prods.map(p => `<option value="${p.id}">${esc(almacenajeProductoTexto(p))}${almacenajeTarifas.some(t => t.clienteId === c.id && t.tipo === p.id) ? '' : ' · sin tarifa'}</option>`).join('')}</select></div>
-            <div class="field" style="flex:1;min-width:220px;margin-bottom:0;"><label>Zona por defecto</label>
-              <select id="sgar-zona" onchange="sgaArtRapidaRevisar()"><option value="">— Sin definir —</option>${zonas.map(z => `<option value="${z.id}">${esc(((allWarehouses.find(w => w.id === z.warehouseId) || {}).name || '') + ' · ' + sgaZonaNombre(z))}</option>`).join('')}</select></div>
+              <select id="sgar-prod" onchange="sgaArtRapidaRevisar()"><option value="">— Sin definir —</option>${prods.map(p => `<option value="${p.id}">${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></div>
           </div>
-          <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">La columna «Nave» se asigna sola a la zona que se llame igual. Si no coincide, se usa la zona por defecto.</div>
         </div>
       </div>
       <div class="card deca-card">
@@ -5113,7 +5108,7 @@ async function sgaArtRapidaCrear(){
   const productoId = (document.getElementById('sgar-prod') || {}).value || null;
   const btn = document.querySelector('.sgar-save');
   if (btn) btn.disabled = true;
-  const filas = nuevos.map(i => ({ cliente_id: pg.clienteId, nombre: i.nombre, referencia: i.referencia || null, producto_id: productoId, zona_id: i.zona ? i.zona.id : null, bultos_por_unidad: i.bultos, metros_lineales: i.ml, peso: i.peso, medidas: i.medidas || null, ...(i.finalidad ? { atributos: { finalidad: i.finalidad } } : {}) }));
+  const filas = nuevos.map(i => ({ cliente_id: pg.clienteId, nombre: i.nombre, referencia: i.referencia || null, producto_id: productoId, zona_id: null, bultos_por_unidad: i.bultos, metros_lineales: i.ml, peso: i.peso, medidas: i.medidas || null, ...(i.finalidad ? { atributos: { finalidad: i.finalidad } } : {}) }));
   const { data, error } = await supabaseClient.from('sga_articulos').insert(filas).select();
   if (error || !data) { errEl.textContent = 'No se pudo guardar (no se ha creado ninguno): ' + (error && error.message ? error.message : 'error desconocido.'); if (btn) btn.disabled = false; return; }
   data.forEach(r => sgaArticulos.push(sgaArticuloDeFila(r)));
