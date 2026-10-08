@@ -4128,6 +4128,7 @@ function sgaEntradaClienteCambio(){
   const cfg = sgaClienteCfg(clienteId);
   const alm = document.getElementById('se-almacen');
   if (alm) alm.innerHTML = sgaAlmacenOptionsHtml(clienteId, alm.value);   // solo los almacenes de este cliente
+  sgaModalidadesRefrescar('entrada', clienteId);                          // y solo cómo llega según su tarifa
   const cont = document.getElementById('se-lineas');
   cont.innerHTML = clienteId ? sgaEntradaLineasHtml(cfg) : '<div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div>';
   const pegar = document.getElementById('se-pegar');
@@ -4137,6 +4138,29 @@ function sgaEntradaClienteCambio(){
   if (clienteId) sgaEntradaAddFila({});
   window.__stockDirty = true;
   sgaEntradaRefrescar();
+}
+// Cómo llega / sale la mercancía: «Palets» siempre; contenedor o tráiler solo si el cliente tiene en su tarifa el producto de
+// descarga (entradas) o de carga (salidas) correspondiente. Con solo «Palets» no hay nada que elegir y el bloque se esconde.
+function sgaModalidadesCliente(clienteId, tipo){
+  const lista = tipo === 'salida' ? SGA_MODALIDADES_SALIDA : Object.keys(SGA_MODALIDADES);
+  const disp = tipo === 'salida' ? 'carga' : 'descarga';
+  return lista.filter(m => {
+    if (m === 'palet') return true;
+    const p = clienteId ? sgaProductoAlbaran(m, disp) : null;
+    return !!p && almacenajeTarifas.some(t => t.clienteId === clienteId && t.tipo === p.id);
+  });
+}
+function sgaModalidadesRefrescar(tipo, clienteId){
+  const pre = tipo === 'salida' ? 'sl' : 'se';
+  const fn = tipo === 'salida' ? sgaSalidaModalidad : sgaEntradaModalidad;
+  const ids = sgaModalidadesCliente(clienteId, tipo);
+  const hid = document.getElementById(pre + '-modalidad');
+  const actual = hid && ids.includes(hid.value) ? hid.value : 'palet';
+  const seg = document.getElementById(pre + '-mod');
+  if (seg) seg.innerHTML = ids.map(m => `<button type="button" data-m="${m}" class="${m === actual ? 'on' : ''}" onclick="${tipo === 'salida' ? 'sgaSalidaModalidad' : 'sgaEntradaModalidad'}('${m}')">${esc(SGA_MODALIDADES[m])}</button>`).join('');
+  const wrap = document.getElementById(pre + '-mod-wrap');
+  if (wrap) wrap.style.display = ids.length > 1 ? '' : 'none';
+  if (hid && hid.value !== actual) fn(actual);
 }
 function sgaEntradaModalidad(m){
   document.getElementById('se-modalidad').value = m;
@@ -4247,9 +4271,11 @@ function tplStockEntradaPage(){
             <div class="field" style="flex:1;min-width:150px;"><label>Fecha de entrada <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="se-fecha" type="date" value="${today()}" />`)}</div>
             <div class="field" style="flex:1;min-width:180px;"><label>Referencia / nº de albarán <span class="dc-req">*</span></label>${decaInputIcon('file', `<input id="se-ref" maxlength="20" placeholder="Obligatorio (máx. 20 caracteres)" />`)}</div>
           </div>
-          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Cómo llega</label>
           <input type="hidden" id="se-modalidad" value="${mod}" />
-          <div class="doc-seg" id="se-mod">${Object.keys(SGA_MODALIDADES).map(m => `<button type="button" data-m="${m}" class="${m === mod ? 'on' : ''}" onclick="sgaEntradaModalidad('${m}')">${esc(SGA_MODALIDADES[m])}</button>`).join('')}</div>
+          <div id="se-mod-wrap" style="display:none;">
+            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Cómo llega</label>
+            <div class="doc-seg" id="se-mod">${sgaModalidadesCliente('', 'entrada').map(m => `<button type="button" data-m="${m}" class="${m === mod ? 'on' : ''}" onclick="sgaEntradaModalidad('${m}')">${esc(SGA_MODALIDADES[m])}</button>`).join('')}</div>
+          </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;">
             <div class="field" style="flex:1;min-width:200px;"><label>Transportista</label>${decaInputIcon('truck', `<input id="se-transp" data-mayus maxlength="120" placeholder="Opcional" />`)}</div>
             <div class="field" style="flex:1;min-width:150px;"><label>Matrícula</label>${decaInputIcon('truck', `<input id="se-matr" maxlength="15" placeholder="Opcional" oninput="this.value=this.value.toUpperCase();" />`)}</div>
@@ -4437,6 +4463,7 @@ function sgaSalidaTipoCambio(){
 // Almacenes donde el cliente tiene stock: si es uno, se elige solo; si son varios, se escoge de cuál sale la mercancía.
 function sgaSalidaClienteCambio(){
   const clienteId = sgaSalidaClienteId();
+  sgaModalidadesRefrescar('salida', clienteId);   // solo cómo sale según su tarifa
   const alm = document.getElementById('sl-almacen');
   if (alm) {
     const ids = [...new Set(sgaStockCliente(clienteId).map(p => p.warehouseId))];
@@ -4567,9 +4594,11 @@ function tplStockSalidaPage(){
             <div class="field" style="flex:1;min-width:150px;"><label>Fecha de salida <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="sl-fecha" type="date" value="${today()}" />`)}</div>
             <div class="field" style="flex:1;min-width:180px;"><label>Referencia / nº de albarán</label>${decaInputIcon('file', `<input id="sl-ref" maxlength="60" placeholder="Opcional" />`)}</div>
           </div>
-          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Cómo sale</label>
           <input type="hidden" id="sl-modalidad" value="palet" />
-          <div class="doc-seg" id="sl-mod">${SGA_MODALIDADES_SALIDA.map(m => `<button type="button" data-m="${m}" class="${m === 'palet' ? 'on' : ''}" onclick="sgaSalidaModalidad('${m}')">${esc(SGA_MODALIDADES[m])}</button>`).join('')}</div>
+          <div id="sl-mod-wrap" style="display:none;">
+            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Cómo sale</label>
+            <div class="doc-seg" id="sl-mod">${sgaModalidadesCliente('', 'salida').map(m => `<button type="button" data-m="${m}" class="${m === 'palet' ? 'on' : ''}" onclick="sgaSalidaModalidad('${m}')">${esc(SGA_MODALIDADES[m])}</button>`).join('')}</div>
+          </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;">
             <div class="field" style="flex:1;min-width:240px;"><label>Para (destinatario)</label>${decaInputIcon('users', `<input id="sl-dest" data-mayus maxlength="150" placeholder="Quién recibe la mercancía (sale en el albarán)" />`)}</div>
             <div class="field" style="flex:2;min-width:260px;"><label>Dirección del destinatario</label>${decaInputIcon('pin', `<input id="sl-destdir" data-mayus maxlength="250" placeholder="Calle, código postal, ciudad" />`)}</div>
