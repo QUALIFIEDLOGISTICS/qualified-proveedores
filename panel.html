@@ -3239,6 +3239,15 @@ function sgaCampoMostrar(f, v){
 function sgaClienteCfg(id){
   return sgaClientes[id] || { activoDesde: '', codigosUnicos: false, campos: { referencia: 'opcional', descripcion: 'opcional', lote: 'no', peso: 'no', unidades: 'no', proveedor: 'no', serie: 'no', medidas: 'no' }, observaciones: '', prefijo: '' };
 }
+// ¿Los palets de este cliente llevan varios bultos (y se cobra por bulto)? Es el caso de, por ejemplo, una carpa de 3 cajas:
+// en el stock cuenta 1 palet y se cobran 3 bultos. Lo normal es que no: 1 palet = 1 bulto y no se pide nada más.
+// Si no se ha decidido en la ficha del cliente, se activa solo cuando algún artículo suyo lleva más de 1 bulto.
+function sgaClienteConBultos(clienteId){
+  const v = (sgaClienteCfg(clienteId).campos || {}).__bultos;
+  if (v === 'si') return true;
+  if (v === 'no') return false;
+  return sgaArticulos.some(a => a.clienteId === clienteId && !a.archived && a.bultos !== 1);
+}
 function sgaPuedeConfigurar(){ return !!(PROFILE.isAdmin || PROFILE.allowedTabs.includes('almacenconfig')); }
 function tplSgaClienteCard(c){
   const cfg = sgaClienteCfg(c.id);
@@ -3255,6 +3264,7 @@ function tplSgaClienteCard(c){
         <div class="deca-view-grid">
           ${decaViewRow('clock', 'Estado del SGA', estado)}
           ${decaViewRow('tag', 'Códigos únicos por palet', cfg.codigosUnicos ? 'Sí: cada palet lleva su código' : 'No: partidas de palets iguales')}
+          ${decaViewRow('box', 'Bultos por palet', sgaClienteConBultos(c.id) ? 'Sí: sus palets llevan varios bultos' : 'No: 1 palet = 1 bulto')}
           ${decaViewRow('list', 'Datos de la mercancía', esc(campos), '', true)}
           ${cfg.observaciones ? decaViewRow('file', 'Observaciones', esc(cfg.observaciones), '', true) : ''}
         </div>
@@ -3308,6 +3318,13 @@ function tplSgaClientePage(c){
         </div>
       </div>
       <div class="card deca-card">
+        ${decaCardHead('box', 'Bultos por palet', 'Solo para clientes a los que se cobra por bulto')}
+        <div class="deca-card-body">
+          <label style="display:flex;align-items:flex-start;gap:10px;font-size:13.5px;cursor:pointer;"><input type="checkbox" class="switch" id="sgac-bultos" ${sgaClienteConBultos(c.id) ? 'checked' : ''} style="margin-top:2px;" />
+            <span><b>Sus palets llevan varios bultos</b><br><span style="font-size:12px;color:var(--muted);">Normalmente 1 palet = 1 bulto y no hace falta activarlo. Actívalo si un palet o modelo lleva varias cajas y se cobra por caja: p. ej. una carpa de 3 cajas cuenta como 1 palet en el stock y se cobran 3 bultos. Entonces el catálogo guarda cuántos bultos lleva cada artículo y la entrada los calcula sola.</span></span></label>
+        </div>
+      </div>
+      <div class="card deca-card">
         ${decaCardHead('list', 'Datos de la mercancía', 'Qué datos usa este cliente: en cada entrada y en su catálogo')}
         <div class="deca-card-body" style="padding-top:6px;">${sgaCamposCliente().map(campoFila).join('')}
           <div style="font-size:12px;color:var(--mutedFaint);margin-top:10px;">Aquí aparecen los datos de serie y los que se crean en Configuración → Datos de mercancía.</div></div>
@@ -3338,10 +3355,12 @@ async function submitSgaCliente(){
   const errEl = document.getElementById('sgac-error');
   errEl.textContent = '';
   const previa = sgaClienteCfg(id);
+  const bultosAntes = sgaClienteConBultos(id);
   const activoDesde = document.getElementById('sgac-desde').value || '';
   const codigosUnicos = document.getElementById('sgac-codigos').checked;
   const campos = Object.assign({}, previa.campos);   // se conservan los niveles de los campos archivados
   sgaCamposCliente().forEach(f => { campos[f.id] = document.getElementById(`sgac-${f.id}`).value; });
+  campos.__bultos = document.getElementById('sgac-bultos').checked ? 'si' : 'no';
   const observaciones = document.getElementById('sgac-obs').value.trim();
   const prefijo = ((document.getElementById('sgac-prefijo') || {}).value || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
   const btn = document.querySelector('.sgac-save');
@@ -3353,6 +3372,7 @@ async function submitSgaCliente(){
   if (previa.activoDesde !== activoDesde) dif.push(activoDesde ? `activación desde el ${fmtDateDMY(activoDesde)}` : 'desactivado');
   if (previa.codigosUnicos !== codigosUnicos) dif.push(`códigos únicos ${codigosUnicos ? 'sí' : 'no'}`);
   if (sgaCamposCliente().some(f => (previa.campos[f.id] || 'no') !== campos[f.id])) dif.push('datos de la mercancía');
+  if (bultosAntes !== (campos.__bultos === 'si')) dif.push(`bultos por palet ${campos.__bultos === 'si' ? 'sí' : 'no'}`);
   if (dif.length) await logContactoHistorial(id, `SGA · ha cambiado ${dif.join(', ')}.`);
   sgaClienteCerrar();
 }
@@ -3413,7 +3433,7 @@ function sgaCamposStockCols(clienteId, ps){
 function stockClienteRowHtml(c, ps){
   const cx = sgaCamposStockCols(c.id, ps);
   const total = ps.reduce((s, p) => s + p.actual, 0);
-  const conBultos = ps.some(p => p.bultos != null);
+  const conBultos = sgaClienteConBultos(c.id) && ps.some(p => p.bultos != null);
   const bultosDe = p => (p.bultos != null ? sgaBultosSalida(p, p.actual) : p.actual);
   const bultosTotal = Math.round(ps.reduce((s, p) => s + bultosDe(p), 0) * 100) / 100;
   const abierto = !!(window.__stockOpen || {})[c.id];
@@ -3425,7 +3445,7 @@ function stockClienteRowHtml(c, ps){
       <div class="tc-head" onclick="stockToggle('${c.id}')">
         <span class="tc-ico">${contactoLogoThumbHtml(c)}</span>
         <div style="min-width:0;"><div class="tc-name">${esc((c.nombreComercial || '').trim() || c.nombre)}</div><div class="tc-sub">${ps.length} partida${ps.length !== 1 ? 's' : ''}</div></div>
-        <div class="tc-chips"><span class="tc-chip" style="background:color-mix(in srgb,var(--primary) 10%,var(--panel));color:var(--primary);border-color:color-mix(in srgb,var(--primary) 30%,var(--border));">${conBultos ? `<b>${total}</b> módulo${total === 1 ? '' : 's'} · <b>${sgaNumTxt(bultosTotal)}</b> bultos` : `<b>${total}</b> palet${total === 1 ? '' : 's'}`}</span></div>
+        <div class="tc-chips"><span class="tc-chip" style="background:color-mix(in srgb,var(--primary) 10%,var(--panel));color:var(--primary);border-color:color-mix(in srgb,var(--primary) 30%,var(--border));">${conBultos ? `<b>${total}</b> palet${total === 1 ? '' : 's'} · <b>${sgaNumTxt(bultosTotal)}</b> bultos` : `<b>${total}</b> palet${total === 1 ? '' : 's'}`}</span></div>
         <span class="tc-chev">${homeIcon(HOME_ICON_PATHS.chevron, 18, 'currentColor', 2.2)}</span>
       </div>
       ${abierto ? `<div class="tc-body">
@@ -3438,7 +3458,7 @@ function stockClienteRowHtml(c, ps){
               <td style="white-space:nowrap;" data-sort-value="${esc(p.fechaEntrada)}">${fmtDateDMY(p.fechaEntrada)}</td>
               ${ps.some(x => x.descripcion) ? `<td data-sort-value="${esc(p.descripcion)}">${esc(p.descripcion) || '—'}</td>` : ''}
               <td data-sort-value="${esc(sgaProdTxt(p.productoId))}">${esc(sgaProdTxt(p.productoId))}</td>
-              <td class="tf-precio" data-sort-value="${p.actual}">${p.actual}${p.actual !== p.inicial ? `<small> de ${p.inicial}</small>` : ''}${p.bultos != null ? `<small> · ${sgaNumTxt(sgaBultosSalida(p, p.actual))} bultos</small>` : ''}</td>
+              <td class="tf-precio" data-sort-value="${p.actual}">${p.actual}${p.actual !== p.inicial ? `<small> de ${p.inicial}</small>` : ''}${conBultos && p.bultos != null ? `<small> · ${sgaNumTxt(sgaBultosSalida(p, p.actual))} bultos</small>` : ''}</td>
               <td data-sort-value="${esc(p.referencia)}">${esc(p.referencia) || '—'}</td>
               <td style="font-family:var(--mono);font-size:12px;" data-sort-value="${esc(p.codigo)}">${esc(p.codigo) || '—'}</td>
               ${cx.map(f => { const v = sgaValorCampo(f, p); return `<td data-sort-value="${esc(v == null ? '' : v)}"${f.tipo === 'numero' ? ' class="tf-precio"' : ''}>${esc(sgaCampoMostrar(f, v))}</td>`; }).join('')}
@@ -3520,6 +3540,7 @@ function catColumnas(clienteId){
     ml: arts.some(a => a.metrosLineales != null),
     peso: !cfg || cfg.campos.peso !== 'no' || arts.some(a => a.peso != null),
     x: clienteId ? sgaCamposArticulo(clienteId) : [],   // campos propios del artículo que usa este cliente
+    bultos: clienteId ? sgaClienteConBultos(clienteId) : arts.some(a => a.bultos !== 1),   // solo si sus palets llevan varios bultos
   };
 }
 // Celda editable de un campo propio del artículo (se guarda al salir de la celda)
@@ -3558,12 +3579,12 @@ function catFilaHtml(a, cols, conCliente){
       <td>${catCeldaInput(a, 'nombre', a.nombre, 'style="min-width:200px;"')}</td>
       ${cols.referencia ? `<td>${catCeldaInput(a, 'referencia', a.referencia, 'style="min-width:140px;"')}</td>` : ''}
       <td><select class="cg-in" ${dis} data-id="${a.id}" data-f="productoId" onchange="catGuardarCelda(this)"><option value="">—</option>${prods.map(p => `<option value="${p.id}" ${a.productoId === p.id ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></td>
-      <td>${catCeldaInput(a, 'bultos', num(a.bultos), 'inputmode="decimal" style="width:70px;text-align:right;"')}</td>
+      ${cols.bultos ? `<td>${catCeldaInput(a, 'bultos', num(a.bultos), 'inputmode="decimal" style="width:70px;text-align:right;"')}</td>` : ''}
       ${cols.ml ? `<td>${catCeldaInput(a, 'metrosLineales', num(a.metrosLineales), 'inputmode="decimal" style="width:70px;text-align:right;"')}</td>` : ''}
       ${cols.peso ? `<td>${catCeldaInput(a, 'peso', num(a.peso), 'inputmode="decimal" style="width:80px;text-align:right;"')}</td>` : ''}
       ${cols.x.map(f => catCeldaCampo(a, f)).join('')}
       <td><select class="cg-in" ${dis} data-id="${a.id}" data-f="zonaId" onchange="catGuardarCelda(this)"><option value="">—</option>${sgaZonas.filter(z => !z.archived).map(z => `<option value="${z.id}" ${a.zonaId === z.id ? 'selected' : ''}>${esc(((allWarehouses.find(w => w.id === z.warehouseId) || {}).name || '') + ' · ' + sgaZonaNombre(z))}</option>`).join('')}</select></td>
-      <td class="cg-stock" ${st.almacenes ? `title="${esc(st.almacenes)}"` : ''}>${st.mod ? `<b>${st.mod}</b> mód.${a.bultos !== 1 || st.bul !== st.mod ? ` <small>· ${sgaNumTxt(st.bul)} bultos</small>` : ''}` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+      <td class="cg-stock" ${st.almacenes ? `title="${esc(st.almacenes)}"` : ''}>${st.mod ? `<b>${st.mod}</b> palet${st.mod === 1 ? '' : 's'}${cols.bultos && (a.bultos !== 1 || st.bul !== st.mod) ? ` <small>· ${sgaNumTxt(st.bul)} bultos</small>` : ''}` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
       <td class="cg-acc">${puede ? `
         <button class="deca-act" title="Abrir el formulario completo (medidas, finalidad…)" onclick="openSgaArticuloForm('${a.clienteId}', '${a.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
         <button class="deca-act" title="Duplicar este artículo" onclick="catDuplicar('${a.id}')">${homeIcon(HOME_ICON_PATHS.copy, 15, 'currentColor', 2)}</button>
@@ -3579,7 +3600,7 @@ function catFilaNuevaHtml(cols){
       <td><input id="cg-n-nombre" ${k} placeholder="+ Producto nuevo" style="min-width:200px;" /></td>
       ${cols.referencia ? `<td><input id="cg-n-ref" ${k} placeholder="Referencia" style="min-width:140px;" /></td>` : ''}
       <td><select id="cg-n-prod"><option value="">Tipo de carga…</option>${prods.map(p => `<option value="${p.id}">${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></td>
-      <td><input id="cg-n-bultos" ${k} inputmode="decimal" placeholder="Bultos" value="1" style="width:70px;text-align:right;" /></td>
+      ${cols.bultos ? `<td><input id="cg-n-bultos" ${k} inputmode="decimal" placeholder="Bultos" value="1" style="width:70px;text-align:right;" /></td>` : ''}
       ${cols.ml ? `<td><input id="cg-n-ml" ${k} inputmode="decimal" placeholder="M.L." style="width:70px;text-align:right;" /></td>` : ''}
       ${cols.peso ? `<td><input id="cg-n-peso" ${k} inputmode="decimal" placeholder="Peso" style="width:80px;text-align:right;" /></td>` : ''}
       ${cols.x.map(f => `<td>${sgaCampoControl(f, '', `id="cg-n-x-${f.id}" ${k} placeholder="${esc(f.nombre)}" style="min-width:${f.tipo === 'fecha' ? 130 : 100}px;"`)}</td>`).join('')}
@@ -3608,7 +3629,7 @@ function stockCatalogoBodyHtml(){
     <div class="card" style="padding:0;">
       <div class="tc-hist-box" style="max-height:640px;border:none;border-radius:10px;">
         <table class="tf-table cg-tabla">
-          <thead><tr>${conCliente ? thc('Cliente') : ''}${thc('Producto')}${cols.referencia ? thc('Referencia') : ''}${thc('Tipo de carga')}${thc('Bultos / módulo')}${cols.ml ? thc('M. lineales') : ''}${cols.peso ? thc('Peso (kg)') : ''}${cols.x.map(f => thc(esc(f.label))).join('')}${thc('Zona')}${thc('Stock actual')}<th style="width:112px;"></th></tr></thead>
+          <thead><tr>${conCliente ? thc('Cliente') : ''}${thc('Producto')}${cols.referencia ? thc('Referencia') : ''}${thc('Tipo de carga')}${cols.bultos ? thc('Bultos / palet') : ''}${cols.ml ? thc('M. lineales') : ''}${cols.peso ? thc('Peso (kg)') : ''}${cols.x.map(f => thc(esc(f.label))).join('')}${thc('Zona')}${thc('Stock actual')}<th style="width:112px;"></th></tr></thead>
           <tbody>
             ${cid && puede && filtro !== 'arch' ? catFilaNuevaHtml(cols) : ''}
             ${lista.map(a => catFilaHtml(a, cols, conCliente)).join('')}
@@ -3642,10 +3663,10 @@ async function catGuardarCelda(el){
   let valor = v;
   if (f === 'nombre' && !v) return volver('El producto no puede quedar vacío.');
   if (['bultos', 'metrosLineales', 'peso'].includes(f)) {
-    if (v === '' && f === 'bultos') return volver('Los bultos por módulo tienen que ser un número mayor que 0.');
+    if (v === '' && f === 'bultos') return volver('Los bultos por palet tienen que ser un número mayor que 0.');
     valor = v === '' ? null : Number(v.replace(',', '.'));
     if (valor !== null && !isFinite(valor)) return volver('Escribe un número.');
-    if (f === 'bultos' && !(valor > 0)) return volver('Los bultos por módulo tienen que ser un número mayor que 0.');
+    if (f === 'bultos' && !(valor > 0)) return volver('Los bultos por palet tienen que ser un número mayor que 0.');
   }
   if (f === 'nombre' || f === 'referencia') {
     const n = f === 'nombre' ? v : a.nombre, r = f === 'referencia' ? v : a.referencia;
@@ -3669,7 +3690,7 @@ async function catCrearNuevo(){
   const num = id => { const t = val(id); return t === '' ? null : Number(t.replace(',', '.')); };
   const bultos = num('cg-n-bultos') == null ? 1 : num('cg-n-bultos');
   if (!nombre) { appToast('Escribe el producto.', 'error'); document.getElementById('cg-n-nombre').focus(); return; }
-  if (!isFinite(bultos) || bultos <= 0) { appToast('Los bultos por módulo tienen que ser un número mayor que 0.', 'error'); return; }
+  if (!isFinite(bultos) || bultos <= 0) { appToast('Los bultos por palet tienen que ser un número mayor que 0.', 'error'); return; }
   const ml = num('cg-n-ml'), peso = num('cg-n-peso');
   if ((ml != null && !isFinite(ml)) || (peso != null && !isFinite(peso))) { appToast('Escribe un número en metros lineales y peso.', 'error'); return; }
   if (sgaArticulos.some(x => x.clienteId === cid && (x.referencia || x.nombre).toLowerCase() === (referencia || nombre).toLowerCase())) { appToast('Este cliente ya tiene un artículo con esa referencia (o ese nombre, si no tiene referencia).', 'error'); return; }
@@ -3892,8 +3913,8 @@ function sgaEntradaFilaHtml(i, cfg, pre){
       ${cell(`<select id="se-${i}-prod">${sgaProdOptionsHtml(clienteId, pre.prod || '')}</select>`, 190)}
       ${cfg.codigosUnicos
         ? cell(`<input id="se-${i}-codigo" maxlength="60" placeholder="Código del palet" value="${esc(pre.codigo || '')}" />`, 150)
-        : cell(`<input id="se-${i}-cant" inputmode="numeric" maxlength="6" placeholder="Nº módulos" oninput="sgaEntradaBultosAuto(${i})" value="${esc(pre.cant || '')}" />`, 90)}
-      ${conArt ? cell(`<input id="se-${i}-bultos" inputmode="decimal" maxlength="8" placeholder="Bultos" oninput="this.dataset.manual='1'" value="${esc(pre.bultos || '')}" />`, 90) : ''}
+        : cell(`<input id="se-${i}-cant" inputmode="numeric" maxlength="6" placeholder="Nº de palets" oninput="sgaEntradaBultosAuto(${i})" value="${esc(pre.cant || '')}" />`, 90)}
+      ${conArt && sgaClienteConBultos(clienteId) ? cell(`<input id="se-${i}-bultos" inputmode="decimal" maxlength="8" placeholder="Bultos" oninput="this.dataset.manual='1'" value="${esc(pre.bultos || '')}" />`, 90) : ''}
       ${cell(`<select id="se-${i}-zona" onchange="sgaEntradaZonaCambio(${i})">${sgaZonaOptionsHtml(pre.zona || '')}</select>`, 170)}
       ${cell(`<select id="se-${i}-ubic" onchange="sgaEntradaUbicCambio()">${sgaUbicOptionsHtml(pre.zona || "", pre.ubic || "", i)}</select>`, 120)}
       ${campos.map(campoInput).join('')}
@@ -3917,7 +3938,7 @@ function sgaEntradaArticuloCambio(i){
   window.__stockDirty = true;
   sgaEntradaRefrescar();
 }
-// Bultos = módulos × bultos por módulo del artículo (mientras no se hayan escrito a mano).
+// Bultos = palets × bultos por palet del artículo (mientras no se hayan escrito a mano).
 function sgaEntradaBultosAuto(i){
   const b = document.getElementById(`se-${i}-bultos`);
   const a = document.getElementById(`se-${i}-art`);
@@ -3939,8 +3960,8 @@ function sgaEntradaLineasHtml(cfg, pre){
         <th style="padding:6px 4px;text-align:right;">#</th>
         ${conArt ? '<th style="padding:6px 4px;">Artículo</th>' : ''}
         <th style="padding:6px 4px;">Tipo de carga</th>
-        <th style="padding:6px 4px;">${cfg.codigosUnicos ? 'Código' : 'Módulos'}</th>
-        ${conArt ? '<th style="padding:6px 4px;">Bultos</th>' : ''}
+        <th style="padding:6px 4px;">${cfg.codigosUnicos ? 'Código' : 'Palets'}</th>
+        ${conArt && sgaClienteConBultos(sgaEntradaClienteId()) ? '<th style="padding:6px 4px;">Bultos</th>' : ''}
         <th style="padding:6px 4px;">Zona</th>
         <th style="padding:6px 4px;">Ubicación</th>
         ${campos.map(f => `<th style="padding:6px 4px;">${esc(f.label)}${cfg.campos[f.id] === 'obligatorio' ? ' <span class="dc-req">*</span>' : ''}</th>`).join('')}
@@ -4018,7 +4039,9 @@ function sgaArtNuevoRapido(i){
             <div class="field" style="flex:1;min-width:150px;"><label>Referencia</label>${decaInputIcon('file', `<input id="na-ref" maxlength="80" placeholder="Ej. LS-6565" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaArtNuevoGuardar(); }" />`)}</div>
           </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <div class="field" style="width:150px;"><label>Bultos por módulo <span class="dc-req">*</span></label>${decaInputIcon('box', `<input id="na-bultos" inputmode="decimal" maxlength="8" value="1" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaArtNuevoGuardar(); }" />`)}</div>
+            ${sgaClienteConBultos(clienteId)
+              ? `<div class="field" style="width:150px;"><label>Bultos por palet <span class="dc-req">*</span></label>${decaInputIcon('box', `<input id="na-bultos" inputmode="decimal" maxlength="8" value="1" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaArtNuevoGuardar(); }" />`)}</div>`
+              : `<input type="hidden" id="na-bultos" value="1" />`}
             <div class="field" style="flex:1;min-width:180px;"><label>Tipo de carga</label><select id="na-prod"><option value="">— Sin definir —</option>${prods.map(p => `<option value="${p.id}" ${fila.prod === p.id ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}${almacenajeTarifas.some(t => t.clienteId === clienteId && t.tipo === p.id) ? '' : ' · sin tarifa'}</option>`).join('')}</select></div>
           </div>
           <div class="field"><label>Zona o nave habitual</label><select id="na-zona"><option value="">— Sin definir —</option>${zonas.map(z => `<option value="${z.id}" ${fila.zona === z.id ? 'selected' : ''}>${esc(((allWarehouses.find(w => w.id === z.warehouseId) || {}).name || '') + ' · ' + sgaZonaNombre(z))}</option>`).join('')}</select></div>
@@ -4041,7 +4064,7 @@ async function sgaArtNuevoGuardar(){
   const nombre = val('na-nombre'), referencia = val('na-ref');
   const bultos = Number(val('na-bultos').replace(',', '.'));
   if (!nombre) { errEl.textContent = 'Escribe el producto.'; return; }
-  if (!isFinite(bultos) || bultos <= 0) { errEl.textContent = 'Los bultos por módulo tienen que ser un número mayor que 0.'; return; }
+  if (!isFinite(bultos) || bultos <= 0) { errEl.textContent = 'Los bultos por palet tienen que ser un número mayor que 0.'; return; }
   if (sgaArticulos.some(x => x.clienteId === clienteId && (x.referencia || x.nombre).toLowerCase() === (referencia || nombre).toLowerCase())) { errEl.textContent = 'Este cliente ya tiene un artículo con esa referencia (o ese nombre, si no tiene referencia).'; return; }
   const btn = document.querySelector('.na-save');
   if (btn) btn.disabled = true;
@@ -4282,7 +4305,7 @@ async function sgaEntradaConfirmar(){
     sgaCamposActivos(cfg).filter(c => !SGA_CAMPOS_COLUMNA.includes(c.id)).forEach(c => { if (l[c.id]) atributos[c.id] = c.tipo === 'numero' ? sgaNumero(l[c.id]) : l[c.id]; });
     const art = sgaArticulos.find(x => x.id === l.articuloId);
     const bTxt = sgaNumero(l.bultosTxt);
-    const bultos = isFinite(bTxt) && bTxt > 0 ? bTxt : (art ? Math.round(cantidad * art.bultos * 100) / 100 : null);
+    const bultos = isFinite(bTxt) && bTxt > 0 ? bTxt : (art && sgaClienteConBultos(d.clienteId) ? Math.round(cantidad * art.bultos * 100) / 100 : null);
     partidas.push({ producto_id: l.productoId, zona_id: l.zonaId || '', ubicacion_id: l.ubicacionId || '', referencia: art ? art.referencia : (l.referencia || ''), descripcion: art ? art.nombre : (l.descripcion || ''), lote: l.lote || '', codigo: cfg.codigosUnicos ? l.codigo : '', cantidad, atributos, articulo_id: art ? art.id : '', bultos });
   });
   const servicios = [];
@@ -4361,7 +4384,7 @@ function sgaSalidaStockHtml(clienteId){
           <td data-sort-value="${esc(p.referencia)}">${esc(p.referencia) || '—'}</td>
           ${cfg.codigosUnicos ? `<td style="font-family:var(--mono);font-size:12px;" data-sort-value="${esc(p.codigo)}">${esc(p.codigo) || '—'}</td>` : ''}
           <td data-sort-value="${esc(sgaSitioTxt(p))}">${esc(sgaSitioTxt(p))}</td>
-          <td class="tf-precio" data-sort-value="${p.actual}">${p.actual}${p.bultos != null ? `<small> (${sgaNumTxt(sgaBultosSalida(p, p.actual))} bultos)</small>` : ''}</td>
+          <td class="tf-precio" data-sort-value="${p.actual}">${p.actual}${sgaClienteConBultos(p.clienteId) && p.bultos != null ? `<small> (${sgaNumTxt(sgaBultosSalida(p, p.actual))} bultos)</small>` : ''}</td>
           <td style="text-align:right;width:110px;">${p.actual === 1 && cfg.codigosUnicos
             ? `<input type="checkbox" class="switch sl-in" id="sl-in-${p.id}" data-pid="${p.id}" onchange="sgaSalidaRefrescar()" />`
             : `<input class="sl-in" id="sl-in-${p.id}" data-pid="${p.id}" inputmode="numeric" maxlength="6" placeholder="0" style="width:80px;text-align:right;" />`}</td>
@@ -4598,8 +4621,8 @@ async function sgaSalidaConfirmar(){
 }
 
 /* ---- SGA · Catálogo de artículos por cliente (la «BASE DE DATOS» del Excel) ----
-   Cada cliente tiene sus artículos: producto, referencia, bultos por módulo, metros lineales, peso, medidas… Las entradas y
-   las salidas se hacen eligiendo el artículo; los módulos se cuentan para el stock y los bultos para cobrar «por bulto». */
+   Cada cliente tiene sus artículos: producto, referencia, bultos por palet, metros lineales, peso, medidas… Las entradas y
+   las salidas se hacen eligiendo el artículo; los palets se cuentan para el stock y los bultos para cobrar «por bulto». */
 let sgaArticulos = [];
 function sgaArticulosDe(clienteId, conArchivados){ return sgaArticulos.filter(a => a.clienteId === clienteId && (conArchivados || !a.archived)); }
 function sgaArticuloTxt(a){ return a.referencia ? `${a.referencia} · ${a.nombre}` : a.nombre; }
@@ -4612,7 +4635,7 @@ function sgaArticulosFilasHtml(c){
     .sort((a, b) => sgaArticuloTxt(a).localeCompare(sgaArticuloTxt(b), 'es'));
   if (!lista.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;padding:6px 2px;">${q ? 'Ningún artículo coincide con la búsqueda.' : verArch ? 'No hay artículos archivados.' : 'Este cliente todavía no tiene artículos. Crea el primero con «+ Artículo».'}</div>`;
   return `<div class="tc-hist-box" style="max-height:380px;"><table class="tf-table">
-    <thead><tr>${thSort('Producto','text')}${thSort('Referencia','text')}${thSort('Tipo de carga','text')}${thSort('Bultos / módulo','number','style="text-align:right;"')}${thSort('M. lineales','number','style="text-align:right;"')}${thSort('Peso (kg)','number','style="text-align:right;"')}${thSort('Zona','text')}<th style="width:120px;"></th></tr></thead>
+    <thead><tr>${thSort('Producto','text')}${thSort('Referencia','text')}${thSort('Tipo de carga','text')}${thSort('Bultos / palet','number','style="text-align:right;"')}${thSort('M. lineales','number','style="text-align:right;"')}${thSort('Peso (kg)','number','style="text-align:right;"')}${thSort('Zona','text')}<th style="width:120px;"></th></tr></thead>
     <tbody>${lista.map(a => { const z = sgaZonaDe(a.zonaId); return `
       <tr${a.archived ? ' style="opacity:.6;"' : ''}>
         <td data-sort-value="${esc(a.nombre)}"><b>${esc(a.nombre)}</b>${a.finalidad ? `<div style="font-size:11.5px;color:var(--muted);">${esc(a.finalidad)}</div>` : ''}</td>
@@ -4699,10 +4722,12 @@ function tplSgaArticuloPage(c){
         </div>
       </div>
       <div class="card deca-card">
-        ${decaCardHead('file', 'Bultos, peso y medidas', 'Con los bultos por módulo se calculan solos los bultos de cada entrada. Si cada bulto va en su palet (p. ej. palets especiales), son los palets de cada modelo')}
+        ${sgaClienteConBultos(c.id) ? decaCardHead('file', 'Bultos, peso y medidas', 'Con los bultos por palet se calculan solos los bultos de cada entrada (es lo que se cobra «por bulto»)') : decaCardHead('file', 'Peso y medidas', 'Datos del artículo, todos opcionales')}
         <div class="deca-card-body">
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <div class="field" style="flex:1;min-width:150px;"><label>Bultos por módulo <span class="dc-req">*</span></label>${decaInputIcon('box', `<input id="sgaa-bultos" inputmode="decimal" maxlength="8" value="${esc(a ? num(a.bultos) : '1')}" />`)}</div>
+            ${sgaClienteConBultos(c.id)
+              ? `<div class="field" style="flex:1;min-width:150px;"><label>Bultos por palet <span class="dc-req">*</span></label>${decaInputIcon('box', `<input id="sgaa-bultos" inputmode="decimal" maxlength="8" value="${esc(a ? num(a.bultos) : '1')}" />`)}</div>`
+              : `<input type="hidden" id="sgaa-bultos" value="${esc(a ? num(a.bultos) : '1')}" />`}
             <div class="field" style="flex:1;min-width:150px;"><label>Metros lineales</label>${decaInputIcon('list', `<input id="sgaa-ml" inputmode="decimal" maxlength="8" placeholder="Opcional" value="${esc(a ? num(a.metrosLineales) : '')}" />`)}</div>
             <div class="field" style="flex:1;min-width:150px;"><label>Peso (kg)</label>${decaInputIcon('list', `<input id="sgaa-peso" inputmode="decimal" maxlength="10" placeholder="Opcional" value="${esc(a ? num(a.peso) : '')}" />`)}</div>
           </div>
@@ -4734,7 +4759,7 @@ async function submitSgaArticulo(){
   const numero = id => { const t = val(id); return t === '' ? null : Number(t.replace(',', '.')); };
   const bultos = numero('sgaa-bultos'), ml = numero('sgaa-ml'), peso = numero('sgaa-peso');
   if (!nombre) { errEl.textContent = 'Escribe el nombre del producto.'; return; }
-  if (bultos == null || !isFinite(bultos) || bultos <= 0) { errEl.textContent = 'Indica cuántos bultos lleva cada módulo (un número mayor que 0).'; return; }
+  if (bultos == null || !isFinite(bultos) || bultos <= 0) { errEl.textContent = 'Indica cuántos bultos lleva cada palet (un número mayor que 0).'; return; }
   if ((ml != null && !isFinite(ml)) || (peso != null && !isFinite(peso))) { errEl.textContent = 'Los metros lineales y el peso tienen que ser números.'; return; }
   const clave = (r, n) => (r || n).toLowerCase();
   if (sgaArticulos.some(x => x.clienteId === pg.clienteId && x.id !== pg.id && clave(x.referencia, x.nombre) === clave(referencia, nombre))) { errEl.textContent = 'Este cliente ya tiene un artículo con esa referencia (o ese nombre, si no tiene referencia).'; return; }
