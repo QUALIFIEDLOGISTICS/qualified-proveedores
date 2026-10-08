@@ -2018,7 +2018,7 @@ function clientName(cid){ return (clients.find(c=>c.id===cid)||{}).name || '—'
 
 function switchWarehouse(id){
   currentWarehouseId = id; window.__clientesPage = 0;
-  if (currentTab === 'stock') { window.__stockView = 'home'; window.__stockDirty = false; }
+
   saveLastTab();
   renderHeader(); renderTab();
 }
@@ -2486,7 +2486,7 @@ function moduleTabBtnHtml(onclick, label, on){
 }
 function tplAlmacenBar(){
   const sections = almacenVisibleSections();
-  const inConfig = currentTab === ALMACEN_CONFIG_TAB || currentTab === 'clientes';
+  const inConfig = currentTab === ALMACEN_CONFIG_TAB || currentTab === 'clientes' || currentTab === 'stock';
   const tabBtn = (id, label) => moduleTabBtnHtml(`setTab('${id}')`, label, id === currentTab);
   // El selector de almacén va a la derecha: así las pestañas no se mueven al entrar en
   // Configuración (donde el selector no hace falta y se oculta).
@@ -3103,6 +3103,7 @@ function sgaSitioTxt(p){
 function stockSeg(){ return window.__stockSeg === 'entradas' ? 'entradas' : window.__stockSeg === 'salidas' ? 'salidas' : 'stock'; }
 
 /* ---- Pantalla principal: stock por cliente y entradas ---- */
+function whNombre(id){ const w = allWarehouses.find(x => x.id === id); return w ? w.name : '—'; }
 function stockClienteRowHtml(c, ps){
   const total = ps.reduce((s, p) => s + p.actual, 0);
   const conBultos = ps.some(p => p.bultos != null);
@@ -3124,7 +3125,7 @@ function stockClienteRowHtml(c, ps){
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">${pastillas}</div>
         <div class="tc-hist-box" style="max-height:340px;">
         <table class="tf-table">
-          <thead><tr>${thSort('Entrada','date')}${ps.some(x => x.descripcion) ? thSort('Artículo','text') : ''}${thSort('Tipo de carga','text')}${thSort('Cantidad','number','style="text-align:right;"')}${thSort('Referencia','text')}${thSort('Código','text')}${thSort('Sitio','text')}</tr></thead>
+          <thead><tr>${thSort('Entrada','date')}${ps.some(x => x.descripcion) ? thSort('Artículo','text') : ''}${thSort('Tipo de carga','text')}${thSort('Cantidad','number','style="text-align:right;"')}${thSort('Referencia','text')}${thSort('Código','text')}${thSort('Almacén','text')}${thSort('Sitio','text')}</tr></thead>
           <tbody>${ps.slice().sort((a, b) => a.fechaEntrada.localeCompare(b.fechaEntrada) || String(a.createdAt).localeCompare(String(b.createdAt))).map(p => `
             <tr>
               <td style="white-space:nowrap;" data-sort-value="${esc(p.fechaEntrada)}">${fmtDateDMY(p.fechaEntrada)}</td>
@@ -3133,6 +3134,7 @@ function stockClienteRowHtml(c, ps){
               <td class="tf-precio" data-sort-value="${p.actual}">${p.actual}${p.actual !== p.inicial ? `<small> de ${p.inicial}</small>` : ''}${p.bultos != null ? `<small> · ${sgaNumTxt(sgaBultosSalida(p, p.actual))} bultos</small>` : ''}</td>
               <td data-sort-value="${esc(p.referencia)}">${esc(p.referencia) || '—'}</td>
               <td style="font-family:var(--mono);font-size:12px;" data-sort-value="${esc(p.codigo)}">${esc(p.codigo) || '—'}</td>
+              <td data-sort-value="${esc(whNombre(p.warehouseId))}">${esc(whNombre(p.warehouseId))}</td>
               <td data-sort-value="${esc(sgaSitioTxt(p))}">${esc(sgaSitioTxt(p))}</td>
             </tr>`).join('')}</tbody>
         </table></div>
@@ -3141,19 +3143,20 @@ function stockClienteRowHtml(c, ps){
 }
 function stockBodyHtml(){
   const q = (window.__stockSearch || '').trim().toLowerCase();
-  const wid = currentWarehouseId;
+  const wid = window.__stockAlm || '';
   const okCli = c => !q || c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q);
   if (stockSeg() !== 'stock') {
     const esSal = stockSeg() === 'salidas';
-    const lista = sgaAlbaranes.filter(a => a.warehouseId === wid && (esSal ? a.tipo === 'salida' : a.tipo !== 'salida')).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && okCli(c); });
-    if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q ? 'Ningún albarán coincide con la búsqueda.' : esSal ? 'Todavía no hay salidas en este almacén. Crea la primera con «Nueva salida».' : 'Todavía no hay entradas en este almacén. Crea la primera con «+ Nueva entrada».'}</div>`;
+    const lista = sgaAlbaranes.filter(a => (!wid || a.warehouseId === wid) && (esSal ? a.tipo === 'salida' : a.tipo !== 'salida')).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && okCli(c); });
+    if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q ? 'Ningún albarán coincide con la búsqueda.' : esSal ? 'Todavía no hay salidas. Crea la primera con «Nueva salida».' : 'Todavía no hay entradas. Crea la primera con «+ Nueva entrada».'}</div>`;
     return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
-      <thead><tr>${thSort('Nº','number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Referencia','text')}${thSort('Modalidad','text')}${thSort('Palets','number','style="text-align:right;"')}${thSort('Estado','text')}</tr></thead>
+      <thead><tr>${thSort('Nº','number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Almacén','text')}${thSort('Referencia','text')}${thSort('Modalidad','text')}${thSort('Palets','number','style="text-align:right;"')}${thSort('Estado','text')}</tr></thead>
       <tbody>${lista.map(a => { const c = contactos.find(x => x.id === a.clienteId); return `
         <tr>
           <td data-sort-value="${a.numero}"><b>${a.numero}</b></td>
           <td style="white-space:nowrap;" data-sort-value="${esc(a.fecha)}">${fmtDateDMY(a.fecha)}</td>
           <td data-sort-value="${esc(c ? c.nombre : '')}">${esc(c ? ((c.nombreComercial || '').trim() || c.nombre) : '—')}</td>
+          <td data-sort-value="${esc(whNombre(a.warehouseId))}">${esc(whNombre(a.warehouseId))}</td>
           <td data-sort-value="${esc(a.referencia)}">${esc(a.referencia) || '—'}</td>
           <td data-sort-value="${esc(a.modalidad)}">${esc(SGA_MODALIDADES[a.modalidad] || a.modalidad)}</td>
           <td class="tf-precio" data-sort-value="${Math.abs(sgaMovsAlbaran[a.id] || 0)}">${sgaMovsAlbaran[a.id] != null ? Math.abs(sgaMovsAlbaran[a.id]) : '—'}</td>
@@ -3161,10 +3164,10 @@ function stockBodyHtml(){
         </tr>`; }).join('')}</tbody></table></div>`;
   }
   const porCliente = {};
-  sgaPartidas.filter(p => p.warehouseId === wid && p.actual > 0).forEach(p => { (porCliente[p.clienteId] = porCliente[p.clienteId] || []).push(p); });
+  sgaPartidas.filter(p => (!wid || p.warehouseId === wid) && p.actual > 0).forEach(p => { (porCliente[p.clienteId] = porCliente[p.clienteId] || []).push(p); });
   const filas = Object.keys(porCliente).map(id => contactos.find(c => c.id === id)).filter(c => c && okCli(c))
     .sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es'));
-  if (!filas.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q ? 'Ningún cliente coincide con la búsqueda.' : 'Todavía no hay stock en este almacén. Da de alta la primera mercancía con «+ Nueva entrada».'}</div>`;
+  if (!filas.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q ? 'Ningún cliente coincide con la búsqueda.' : 'Todavía no hay stock. Da de alta la primera mercancía con «+ Nueva entrada».'}</div>`;
   return filas.map(c => stockClienteRowHtml(c, porCliente[c.id])).join('');
 }
 function refreshStockBody(){ const el = document.getElementById('stock-body'); if (el) el.innerHTML = stockBodyHtml(); }
@@ -3176,8 +3179,8 @@ function stockToggle(id){
 function tplStock(){
   if (window.__stockView === 'entrada') return tplStockEntradaPage();
   if (window.__stockView === 'salida') return tplStockSalidaPage();
-  const wid = currentWarehouseId;
-  const ps = sgaPartidas.filter(p => p.warehouseId === wid && p.actual > 0);
+  const wid = window.__stockAlm || '';
+  const ps = sgaPartidas.filter(p => (!wid || p.warehouseId === wid) && p.actual > 0);
   const palets = ps.reduce((s, p) => s + p.actual, 0);
   const nCli = new Set(ps.map(p => p.clienteId)).size;
   const hoy = sgaAlbaranes.filter(a => a.warehouseId === wid && a.fecha === today() && a.estado === 'confirmado').length;
@@ -3189,7 +3192,7 @@ function tplStock(){
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 280px;">
         <div class="deca-banner-title">Stock</div>
-        <div class="deca-banner-sub">${esc((currentWh() || {}).name || '')} · lo que hay almacenado de cada cliente y sus entradas.</div>
+        <div class="deca-banner-sub">Lo que hay almacenado de cada cliente, en el almacén donde lo tiene, y sus entradas y salidas.</div>
       </div>
       <div class="deca-banner-actions">
         <div class="deca-stat"><b>${nCli}</b><span>Clientes</span></div>
@@ -3204,6 +3207,7 @@ function tplStock(){
         <input placeholder="Buscar cliente por nombre o NIF…" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
+      <select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${allWarehouses.filter(w => !w.archived).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>
       <div class="doc-seg">${segBtn('stock', 'Stock')}${segBtn('entradas', 'Entradas')}${segBtn('salidas', 'Salidas')}</div>
     </div>
     <div id="stock-body">${stockBodyHtml()}</div>
@@ -3278,11 +3282,13 @@ function sgaCalcularEntrada(d){
 function sgaClientesAlmacenLista(){
   // Solo los clientes activos en el SGA (con «Activo desde» ya llegado): el resto sigue en el Excel.
   const base = contactos.filter(c => c.esClienteAlmacen && !c.archived && sgaClienteCfg(c.id).activoDesde && sgaClienteCfg(c.id).activoDesde <= today());
-  const delAlmacen = base.filter(c => (c.warehouseIds || []).includes(currentWarehouseId));
-  return (delAlmacen.length ? delAlmacen : base).slice().sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es'));
+
+  return base.slice().sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es'));
 }
 function sgaCamposActivos(cfg){ return SGA_CAMPOS.filter(f => (cfg.campos[f.id] || 'no') !== 'no'); }
-function sgaZonasActivas(){ return sgaZonas.filter(z => z.warehouseId === currentWarehouseId && !z.archived).sort((a, b) => (a.orden - b.orden) || sgaZonaNombre(a).localeCompare(sgaZonaNombre(b), 'es')); }
+function sgaEntradaWh(){ const el = document.getElementById('se-almacen'); return el && el.value ? el.value : currentWarehouseId; }
+function sgaSalidaWh(){ const el = document.getElementById('sl-almacen'); return el && el.value ? el.value : ''; }
+function sgaZonasActivas(wid){ return sgaZonas.filter(z => z.warehouseId === (wid || sgaEntradaWh()) && !z.archived).sort((a, b) => (a.orden - b.orden) || sgaZonaNombre(a).localeCompare(sgaZonaNombre(b), 'es')); }
 function sgaProductosStock(){ return almacenajeProductos.filter(p => !p.archived && p.disparador === 'stock_dia').sort((a, b) => almacenajeProductoTexto(a).localeCompare(almacenajeProductoTexto(b), 'es')); }
 function sgaEntradaClienteId(){ const el = document.getElementById('se-cliente'); return el ? el.value : ''; }
 // Solo los tipos de carga que este cliente tiene en su tarifa (un tipo sin tarifa no se podría cobrar).
@@ -3421,6 +3427,17 @@ function sgaEntradaUbicCambio(){
     if (u && z) u.innerHTML = sgaUbicOptionsHtml(z.value, u.value, i);
   });
 }
+// Al cambiar de almacén se rehacen las zonas y ubicaciones de cada línea (cada almacén tiene las suyas).
+function sgaEntradaAlmacenCambio(){
+  document.querySelectorAll('.se-row').forEach(tr => {
+    const i = tr.dataset.i;
+    const z = document.getElementById(`se-${i}-zona`), u = document.getElementById(`se-${i}-ubic`);
+    if (z) z.innerHTML = sgaZonaOptionsHtml('');
+    if (u) u.innerHTML = '<option value="">—</option>';
+  });
+  window.__stockDirty = true;
+  sgaEntradaRefrescar();
+}
 function sgaEntradaClienteCambio(){
   const clienteId = sgaEntradaClienteId();
   const cfg = sgaClienteCfg(clienteId);
@@ -3529,7 +3546,7 @@ function tplStockEntradaPage(){
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
         <div class="deca-banner-title">Nueva entrada</div>
-        <div class="deca-banner-sub">${esc(wh.name || '')} · la mercancía que llega al almacén.</div>
+        <div class="deca-banner-sub">La mercancía que llega a un cliente; tú eliges en qué almacén se queda.</div>
       </div>
     </div>
     <div class="deca-form" oninput="window.__stockDirty=true; sgaEntradaRefrescar();" onchange="sgaEntradaRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
@@ -3539,6 +3556,7 @@ function tplStockEntradaPage(){
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
             <div class="field" style="flex:2;min-width:240px;"><label>Cliente <span class="dc-req">*</span></label>
               <select id="se-cliente" onchange="sgaEntradaClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos en el SGA'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
+            <div class="field" style="flex:1;min-width:190px;"><label>Almacén <span class="dc-req">*</span></label><select id="se-almacen" onchange="sgaEntradaAlmacenCambio()">${allWarehouses.filter(w => !w.archived).map(w => `<option value="${w.id}" ${w.id === currentWarehouseId ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select></div>
             <div class="field" style="flex:1;min-width:150px;"><label>Fecha de entrada <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="se-fecha" type="date" value="${today()}" />`)}</div>
             <div class="field" style="flex:1;min-width:180px;"><label>Referencia / nº de albarán</label>${decaInputIcon('file', `<input id="se-ref" maxlength="60" placeholder="Opcional" />`)}</div>
           </div>
@@ -3647,7 +3665,7 @@ async function sgaEntradaConfirmar(){
   const btn = document.querySelector('.se-save');
   if (btn) btn.disabled = true;
   const payload = {
-    albaran: { created_by: currentUserEmail(), tipo: 'entrada', cliente_id: d.clienteId, warehouse_id: currentWarehouseId, fecha: d.fecha, referencia: d.referencia, modalidad: d.modalidad, transportista: d.transportista, matricula: d.matricula, observaciones: d.observaciones },
+    albaran: { created_by: currentUserEmail(), tipo: 'entrada', cliente_id: d.clienteId, warehouse_id: sgaEntradaWh(), fecha: d.fecha, referencia: d.referencia, modalidad: d.modalidad, transportista: d.transportista, matricula: d.matricula, observaciones: d.observaciones },
     partidas, servicios, cobros: calc.activo ? calc.cobros : [],
   };
   const { data, error } = await supabaseClient.rpc('sga_confirmar_entrada', { p: payload });
@@ -3671,8 +3689,8 @@ async function sgaEntradaConfirmar(){
 const SGA_MODALIDADES_SALIDA = ['palet', 'trailer'];
 // Bultos que salen de una partida al sacar n módulos (proporcional a los bultos con que entró).
 function sgaBultosSalida(p, n){ return p.bultos != null && p.inicial ? Math.round(n * p.bultos / p.inicial * 100) / 100 : n; }
-function sgaStockCliente(clienteId){
-  return sgaPartidas.filter(p => p.clienteId === clienteId && p.warehouseId === currentWarehouseId && p.actual > 0)
+function sgaStockCliente(clienteId, wid){
+  return sgaPartidas.filter(p => p.clienteId === clienteId && (!wid || p.warehouseId === wid) && p.actual > 0)
     .sort((a, b) => a.fechaEntrada.localeCompare(b.fechaEntrada) || String(a.createdAt).localeCompare(String(b.createdAt)));
 }
 function sgaClientesParaSalida(){ return sgaClientesAlmacenLista().filter(c => sgaStockCliente(c.id).length); }
@@ -3689,7 +3707,7 @@ async function sgaSalidaCancelar(){
 }
 function sgaSalidaStockHtml(clienteId){
   const cfg = sgaClienteCfg(clienteId);
-  const ps = sgaStockCliente(clienteId);
+  const ps = sgaStockCliente(clienteId, sgaSalidaWh());
   const conDesc = ps.some(p => p.descripcion);
   const tipos = [...new Set(ps.map(p => p.productoId))].sort((a, b) => sgaProdTxt(a).localeCompare(sgaProdTxt(b), 'es'));
   return `
@@ -3723,14 +3741,29 @@ function sgaSalidaTipoCambio(){
   const t = document.getElementById('sl-q-tipo');
   const r = document.getElementById('sl-q-ref');
   if (!t || !r) return;
-  const refs = [...new Set(sgaStockCliente(sgaSalidaClienteId()).filter(p => p.productoId === t.value).map(p => p.referencia))].sort();
+  const refs = [...new Set(sgaStockCliente(sgaSalidaClienteId(), sgaSalidaWh()).filter(p => p.productoId === t.value).map(p => p.referencia))].sort();
   r.innerHTML = `<option value="">Cualquiera</option>${refs.filter(Boolean).map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}${refs.includes('') && refs.length > 1 ? '<option value="__sin">Sin referencia</option>' : ''}`;
 }
+// Almacenes donde el cliente tiene stock: si es uno, se elige solo; si son varios, se escoge de cuál sale la mercancía.
 function sgaSalidaClienteCambio(){
   const clienteId = sgaSalidaClienteId();
+  const alm = document.getElementById('sl-almacen');
+  if (alm) {
+    const ids = [...new Set(sgaStockCliente(clienteId).map(p => p.warehouseId))];
+    const whs = allWarehouses.filter(w => ids.includes(w.id));
+    alm.innerHTML = clienteId ? `${whs.length === 1 ? '' : '<option value="">Elige el almacén…</option>'}${whs.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}` : '<option value="">Elige primero el cliente</option>';
+    if (whs.length === 1) alm.value = whs[0].id;
+  }
+  sgaSalidaAlmacenCambio();
+}
+function sgaSalidaAlmacenCambio(){
+  const clienteId = sgaSalidaClienteId();
   const cont = document.getElementById('sl-stock');
-  cont.innerHTML = clienteId ? sgaSalidaStockHtml(clienteId) : '<div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div>';
-  if (clienteId) sgaSalidaTipoCambio();
+  const wid = sgaSalidaWh();
+  cont.innerHTML = !clienteId ? '<div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div>'
+    : !wid ? '<div style="color:var(--mutedFaint);font-size:12.5px;">Elige el almacén de donde sale la mercancía.</div>'
+    : sgaSalidaStockHtml(clienteId);
+  if (clienteId && wid) sgaSalidaTipoCambio();
   window.__stockDirty = true;
   sgaSalidaRefrescar();
 }
@@ -3755,7 +3788,7 @@ function sgaSalidaRepartir(){
   const ref = document.getElementById('sl-q-ref').value;
   const quiere = parseInt(document.getElementById('sl-q-cant').value, 10);
   if (!(quiere > 0)) { appToast('Escribe cuántos salen.', 'error'); return; }
-  const cand = sgaStockCliente(clienteId).filter(p => p.productoId === tipo && (ref === '' || (ref === '__sin' ? !p.referencia : p.referencia === ref)));
+  const cand = sgaStockCliente(clienteId, sgaSalidaWh()).filter(p => p.productoId === tipo && (ref === '' || (ref === '__sin' ? !p.referencia : p.referencia === ref)));
   const hay = cand.reduce((s, p) => s + p.actual, 0);
   if (quiere > hay) { appToast(`Solo hay ${hay} de eso en el almacén.`, 'error'); return; }
   cand.forEach(p => sgaSalidaPonerCantidad(p.id, 0));
@@ -3783,7 +3816,7 @@ function sgaSalidaFifo(clienteId, items){
   const toma = new Map(items.map(x => [x.p.id, x.n > 0 ? x.n : 0]));
   const saltados = new Set(), avisos = [];
   const grupos = {};
-  sgaStockCliente(clienteId).forEach(p => { (grupos[p.productoId + '|' + p.referencia] = grupos[p.productoId + '|' + p.referencia] || []).push(p); });
+  sgaStockCliente(clienteId, sgaSalidaWh()).forEach(p => { (grupos[p.productoId + '|' + p.referencia] = grupos[p.productoId + '|' + p.referencia] || []).push(p); });
   Object.keys(grupos).forEach(k => {
     let incompleta = false, viola = false;
     grupos[k].forEach(p => {
@@ -3830,7 +3863,7 @@ function tplStockSalidaPage(){
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
         <div class="deca-banner-title">Nueva salida</div>
-        <div class="deca-banner-sub">${esc(wh.name || '')} · la mercancía que sale del almacén.</div>
+        <div class="deca-banner-sub">La mercancía que sale de un cliente, del almacén donde la tiene.</div>
       </div>
     </div>
     <div class="deca-form" oninput="window.__stockDirty=true; sgaSalidaRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
@@ -3840,6 +3873,7 @@ function tplStockSalidaPage(){
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
             <div class="field" style="flex:2;min-width:240px;"><label>Cliente <span class="dc-req">*</span></label>
               <select id="sl-cliente" onchange="sgaSalidaClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos con stock'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
+            <div class="field" style="flex:1;min-width:190px;"><label>Almacén de salida <span class="dc-req">*</span></label><select id="sl-almacen" onchange="sgaSalidaAlmacenCambio()"><option value="">Elige primero el cliente</option></select></div>
             <div class="field" style="flex:1;min-width:150px;"><label>Fecha de salida <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="sl-fecha" type="date" value="${today()}" />`)}</div>
             <div class="field" style="flex:1;min-width:180px;"><label>Referencia / nº de albarán</label>${decaInputIcon('file', `<input id="sl-ref" maxlength="60" placeholder="Opcional" />`)}</div>
           </div>
@@ -3882,6 +3916,7 @@ async function sgaSalidaConfirmar(){
   const errores = [];
   if (!d.clienteId) errores.push('Elige el cliente.');
   if (!d.fecha) errores.push('Indica la fecha de salida.');
+  if (d.clienteId && !sgaSalidaWh()) errores.push('Elige el almacén de donde sale la mercancía.');
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const cfg = sgaClienteCfg(d.clienteId);
   const sale = [];
@@ -3905,7 +3940,7 @@ async function sgaSalidaConfirmar(){
   const btn = document.querySelector('.sl-save');
   if (btn) btn.disabled = true;
   const payload = {
-    albaran: { created_by: currentUserEmail(), cliente_id: d.clienteId, warehouse_id: currentWarehouseId, fecha: d.fecha, referencia: d.referencia, modalidad: d.modalidad, transportista: d.transportista, matricula: d.matricula, observaciones: d.observaciones },
+    albaran: { created_by: currentUserEmail(), cliente_id: d.clienteId, warehouse_id: sgaSalidaWh(), fecha: d.fecha, referencia: d.referencia, modalidad: d.modalidad, transportista: d.transportista, matricula: d.matricula, observaciones: d.observaciones },
     salidas: sale.map(x => ({ partida_id: x.p.id, cantidad: x.n, bultos: sgaBultosSalida(x.p, x.n), fifo_saltado: fifo.saltados.has(x.p.id) })),
     servicios, cobros: calc.activo ? calc.cobros : [],
   };
