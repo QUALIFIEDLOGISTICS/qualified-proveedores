@@ -2355,6 +2355,12 @@ function computeBreadcrumbSegments(){
     return [{label: comercialSection() === 'tarifas' ? 'Tarifas Transporte' : 'Clientes', onclick:null}];
   }
   if (currentTab === 'stock' && window.__stockView === 'entrada') return [{label:'Stock', onclick:'sgaEntradaCancelar()'}, {label:'Nueva entrada', onclick:null}];
+  if (currentTab === 'stock' && (window.__stockView === 'articulo' || window.__stockView === 'rapida')) {
+    const pg = window.__stockView === 'articulo' ? window.__sgaArtForm : window.__sgaArtRapida;
+    const cl = pg ? contactos.find(x => x.id === pg.clienteId) : null;
+    const cerrar = window.__stockView === 'articulo' ? 'sgaArticuloCerrar()' : 'sgaArtRapidaCerrar()';
+    return [{label:'Catálogo', onclick:cerrar}, {label: cl ? ((cl.nombreComercial || '').trim() || cl.nombre) : 'Cliente', onclick:cerrar}, {label: window.__stockView === 'rapida' ? 'Alta rápida de artículos' : (pg && pg.id ? 'Artículo' : 'Nuevo artículo'), onclick:null}];
+  }
   if (currentTab === 'stock' && window.__stockView === 'salida') return [{label:'Stock', onclick:'sgaSalidaCancelar()'}, {label:'Nueva salida', onclick:null}];
   if (currentTab === ALMACEN_CONFIG_TAB) {
     if (window.__sgaPage) {
@@ -2513,7 +2519,7 @@ function tplAlmacenBar(){
    y un historial de quién cambió qué y cuándo. */
 const WAREHOUSE_COLORS = ['#2E6F95', '#C98A2E', '#8A4A35', '#3F8F5F', '#7C5CBF', '#C1443D', '#2C9A93', '#D9A72C', '#5C6670', '#1B3A6B'];
 const WAREHOUSES_PAGE_SIZE = 80;
-function almacenIsSubpage(){ return (currentTab === ALMACEN_CONFIG_TAB && (window.__whView === "form" || window.__apView === "form" || !!window.__sgaPage)) || (currentTab === "stock" && (window.__stockView === "entrada" || window.__stockView === "salida")); }
+function almacenIsSubpage(){ return (currentTab === ALMACEN_CONFIG_TAB && (window.__whView === "form" || window.__apView === "form" || !!window.__sgaPage)) || (currentTab === "stock" && ["entrada", "salida", "articulo", "rapida"].includes(window.__stockView)); }
 function warehouseConfirmLeaveForm(){
   if (currentTab === ALMACEN_CONFIG_TAB && window.__whView === 'form' && window.__whEditMode && window.__whFormDirty) {
     return leaveGuard();
@@ -3103,7 +3109,7 @@ function sgaSitioTxt(p){
   const z = sgaZonaDe(p.zonaId), u = sgaUbicDe(p.ubicacionId);
   return z ? sgaZonaNombre(z) + (u ? ' · ' + u.codigo : '') : '—';
 }
-function stockSeg(){ return window.__stockSeg === 'entradas' ? 'entradas' : window.__stockSeg === 'salidas' ? 'salidas' : 'stock'; }
+function stockSeg(){ return ['catalogo', 'entradas', 'salidas'].includes(window.__stockSeg) ? window.__stockSeg : 'stock'; }
 
 /* ---- Pantalla principal: stock por cliente y entradas ---- */
 function whNombre(id){ const w = allWarehouses.find(x => x.id === id); return w ? w.name : '—'; }
@@ -3145,6 +3151,7 @@ function stockClienteRowHtml(c, ps){
     </div>`;
 }
 function stockBodyHtml(){
+  if (stockSeg() === 'catalogo') return stockCatalogoBodyHtml();
   const q = (window.__stockSearch || '').trim().toLowerCase();
   const wid = window.__stockAlm || '';
   const okCli = c => !q || c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q);
@@ -3179,14 +3186,62 @@ function stockToggle(id){
   o[id] = !o[id];
   refreshStockBody();
 }
+/* ---- Catálogo de artículos dentro de Stock: un cliente abierto cada vez, con su tabla y sus botones ---- */
+function stockCatalogoCoincide(a, q){ return !q || sgaArticuloTxt(a).toLowerCase().includes(q) || (a.finalidad || '').toLowerCase().includes(q); }
+function stockCatalogoRowHtml(c, q){
+  const arts = sgaArticulosDe(c.id);
+  const nombre = ((c.nombreComercial || '').trim() || c.nombre);
+  const nombreCoincide = !q || nombre.toLowerCase().includes(q) || c.nombre.toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q);
+  const abierto = window.__catCliente === c.id || (!!q && !nombreCoincide);
+  const puede = sgaPuedeEditarStock();
+  const arch = sgaArticulosDe(c.id, true).length - arts.length;
+  let cuerpo = '';
+  if (abierto) {
+    window.__sgaArtSearch = nombreCoincide ? '' : q;
+    cuerpo = `<div class="tc-body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+        ${puede ? `<button class="btn btn-primary" style="padding:9px 16px;font-size:13px;" onclick="openSgaArticuloForm('${c.id}')">+ Artículo</button>
+        <button class="btn btn-ghost" style="background:var(--panel);padding:9px 16px;font-size:13px;" onclick="openSgaArtRapida('${c.id}')" title="Pega varios artículos de golpe desde tu Excel">Alta rápida (Excel)</button>` : ''}
+        ${arch || window.__sgaArtArch ? `<button type="button" class="tl-chg" style="margin-left:auto;" onclick="window.__sgaArtArch=${!window.__sgaArtArch}; refreshStockBody();">${window.__sgaArtArch ? 'Ver los activos' : `Ver archivados (${arch})`}</button>` : ''}
+      </div>
+      <div id="sga-art-body">${sgaArticulosFilasHtml(c)}</div>
+    </div>`;
+  }
+  return `
+    <div class="tc-row${abierto ? ' open' : ''}">
+      <div class="tc-head" onclick="catToggle('${c.id}')">
+        <span class="tc-ico">${contactoLogoThumbHtml(c)}</span>
+        <div style="min-width:0;"><div class="tc-name">${esc(nombre)}</div><div class="tc-sub">${sgaClienteCfg(c.id).activoDesde ? 'SGA activo' : 'SGA sin activar'}</div></div>
+        <div class="tc-chips"><span class="tc-chip" ${arts.length ? 'style="background:color-mix(in srgb,var(--primary) 10%,var(--panel));color:var(--primary);border-color:color-mix(in srgb,var(--primary) 30%,var(--border));"' : ''}><b>${arts.length}</b> artículo${arts.length === 1 ? '' : 's'}</span></div>
+        <span class="tc-chev">${homeIcon(HOME_ICON_PATHS.chevron, 18, 'currentColor', 2.2)}</span>
+      </div>
+      ${cuerpo}
+    </div>`;
+}
+function stockCatalogoBodyHtml(){
+  const q = (window.__stockSearch || '').trim().toLowerCase();
+  const nombreDe = c => ((c.nombreComercial || '').trim() || c.nombre);
+  const lista = contactos.filter(c => c.esClienteAlmacen && !c.archived)
+    .filter(c => !q || nombreDe(c).toLowerCase().includes(q) || c.nombre.toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q) || sgaArticulosDe(c.id).some(a => stockCatalogoCoincide(a, q)))
+    .sort((a, b) => nombreDe(a).localeCompare(nombreDe(b), 'es'));
+  if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q ? 'Ningún cliente ni artículo coincide con la búsqueda.' : 'Todavía no hay clientes de almacén.'}</div>`;
+  return lista.map(c => stockCatalogoRowHtml(c, q)).join('');
+}
+function catToggle(id){
+  window.__catCliente = window.__catCliente === id ? '' : id;
+  window.__sgaArtArch = false;
+  refreshStockBody();
+}
 function tplStock(){
   if (window.__stockView === 'entrada') return tplStockEntradaPage();
   if (window.__stockView === 'salida') return tplStockSalidaPage();
+  if (window.__stockView === 'articulo') { const c = contactos.find(x => x.id === (window.__sgaArtForm || {}).clienteId); return c ? tplSgaArticuloPage(c) : ''; }
+  if (window.__stockView === 'rapida') { const c = contactos.find(x => x.id === (window.__sgaArtRapida || {}).clienteId); return c ? tplSgaArtRapidaPage(c) : ''; }
   const wid = window.__stockAlm || '';
   const ps = sgaPartidas.filter(p => (!wid || p.warehouseId === wid) && p.actual > 0);
   const palets = ps.reduce((s, p) => s + p.actual, 0);
   const nCli = new Set(ps.map(p => p.clienteId)).size;
-  const hoy = sgaAlbaranes.filter(a => a.warehouseId === wid && a.fecha === today() && a.estado === 'confirmado').length;
+  const hoy = sgaAlbaranes.filter(a => (!wid || a.warehouseId === wid) && a.fecha === today() && a.estado === 'confirmado').length;
   const seg = stockSeg();
   const segBtn = (id, label) => `<button type="button" class="${seg === id ? 'on' : ''}" onclick="window.__stockSeg='${id}'; renderTab();">${label}</button>`;
   return `
@@ -3195,7 +3250,7 @@ function tplStock(){
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 280px;">
         <div class="deca-banner-title">Stock</div>
-        <div class="deca-banner-sub">Lo que hay almacenado de cada cliente, en el almacén donde lo tiene, y sus entradas y salidas.</div>
+        <div class="deca-banner-sub">El catálogo de artículos, el stock de cada cliente en el almacén donde lo tiene, y sus entradas y salidas.</div>
       </div>
       <div class="deca-banner-actions">
         <div class="deca-stat"><b>${nCli}</b><span>Clientes</span></div>
@@ -3207,11 +3262,11 @@ function tplStock(){
     </div>
     <div class="card deca-toolbar">
       <div class="deca-search">
-        <input placeholder="Buscar cliente por nombre o NIF…" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
+        <input placeholder="${seg === 'catalogo' ? 'Buscar cliente o artículo…' : 'Buscar cliente por nombre o NIF…'}" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      <select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${allWarehouses.filter(w => !w.archived).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>
-      <div class="doc-seg">${segBtn('stock', 'Stock')}${segBtn('entradas', 'Entradas')}${segBtn('salidas', 'Salidas')}</div>
+      ${seg === 'catalogo' ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${allWarehouses.filter(w => !w.archived).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
+      <div class="doc-seg">${segBtn('catalogo', 'Catálogo')}${segBtn('stock', 'Stock')}${segBtn('entradas', 'Entradas')}${segBtn('salidas', 'Salidas')}</div>
     </div>
     <div id="stock-body">${stockBodyHtml()}</div>
     </div>`;
@@ -4011,12 +4066,14 @@ function tplSgaArticulosCard(c){
     </div>`;
 }
 function sgaArticuloCerrar(){
+  window.__stockView = 'home';
   window.__sgaArtForm = null;
   window.__sgaArtRapida = null;
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
 }
 function openSgaArticuloForm(clienteId, id){
+  window.__stockView = 'articulo'; window.__stockSeg = 'catalogo'; window.__catCliente = clienteId;
   window.__sgaArtForm = { clienteId, id: id || null };
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
@@ -4133,12 +4190,14 @@ async function setSgaArticuloArchivado(id, archivar){
    Se copian en el Excel las columnas de la hoja «BASE DE DATOS» (Producto, Referencia, Bultos, Metros lineales, Peso, Nave,
    Información, Finalidad), se pegan en un cuadro y el SGA enseña lo que va a crear antes de guardar nada. */
 function openSgaArtRapida(clienteId){
+  window.__stockView = 'rapida'; window.__stockSeg = 'catalogo'; window.__catCliente = clienteId;
   window.__sgaArtRapida = { clienteId };
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
   setTimeout(() => { const el = document.getElementById('sgar-txt'); if (el) el.focus(); }, 0);
 }
 function sgaArtRapidaCerrar(){
+  window.__stockView = 'home';
   window.__sgaArtRapida = null;
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
@@ -7373,7 +7432,7 @@ function tplContactoDetailPage(){
   const inComercial = activeTab === 'comercial';
   const historial = Array.isArray(window.__contactoHistorial) ? window.__contactoHistorial.filter(h => !(h.resumen || '').startsWith(TARIFA_LOG_PREFIX)) : window.__contactoHistorial;
   const tabContentHtml = () => {
-    if (activeTab === 'almacen') return tplContactoAlmacenCard(editing, editMode) + tplSgaClienteCard(editing) + tplSgaArticulosCard(editing) + tplAlmacenajeTarifasCard(editing) + tplAlmacenajeTarifasHistoricasCard(editing) + tplContactoOperativasCard(editing) + tplContactoOperativasHistoricasCard(editing);
+    if (activeTab === 'almacen') return tplContactoAlmacenCard(editing, editMode) + tplSgaClienteCard(editing) + tplAlmacenajeTarifasCard(editing) + tplAlmacenajeTarifasHistoricasCard(editing) + tplContactoOperativasCard(editing) + tplContactoOperativasHistoricasCard(editing);
     if (activeTab === 'comercial') return tplContactoPersonasCard(editing) + tplContactoTarifasCard(editing) + tplContactoTarifasHistoricasCard(editing);
     if (activeTab === 'transporte') return tplContactoTabTransporte(editing);
     if (activeTab === 'autonomos') return tplContactoTabAutonomos(editing);
