@@ -302,6 +302,11 @@
   .tl-since{font-size:11px;color:var(--mutedFaint);margin-top:3px;}
   .tl-chg{align-self:flex-start;margin-top:6px;padding:0;border:none;background:none;color:var(--primary);font-size:11.5px;font-weight:600;cursor:pointer;font-family:var(--body);}
   .tl-chg:hover{text-decoration:underline;}
+  .rm-tabla .r{text-align:right;font-variant-numeric:tabular-nums;}
+  .rm-tabla .rm-sin td{color:var(--mutedFaint);}
+  .rm-tabla .rm-act td{font-weight:600;color:var(--text);}
+  .rm-tabla .rm-ini td{font-style:italic;color:var(--muted);}
+  .rm-tabla tfoot td{font-weight:700;border-top:2px solid var(--text);position:sticky;bottom:0;background:var(--panel2);}
   .se-aviso{margin-top:8px;padding:8px 12px;border-radius:8px;background:#FBF7E8;border:1px solid #E8D9A8;color:#8A6D1A;font-size:12.5px;}
   .sga-zona{display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--border);border-radius:12px;background:var(--panel);}
   .sga-zona.arch{opacity:.6;}
@@ -3109,7 +3114,7 @@ function sgaSitioTxt(p){
   const z = sgaZonaDe(p.zonaId), u = sgaUbicDe(p.ubicacionId);
   return z ? sgaZonaNombre(z) + (u ? ' · ' + u.codigo : '') : '—';
 }
-function stockSeg(){ return ['catalogo', 'entradas', 'salidas'].includes(window.__stockSeg) ? window.__stockSeg : 'stock'; }
+function stockSeg(){ return ['catalogo', 'entradas', 'salidas', 'resumen'].includes(window.__stockSeg) ? window.__stockSeg : 'stock'; }
 
 /* ---- Pantalla principal: stock por cliente y entradas ---- */
 function whNombre(id){ const w = allWarehouses.find(x => x.id === id); return w ? w.name : '—'; }
@@ -3152,6 +3157,7 @@ function stockClienteRowHtml(c, ps){
 }
 function stockBodyHtml(){
   if (stockSeg() === 'catalogo') return stockCatalogoBodyHtml();
+  if (stockSeg() === 'resumen') return stockResumenBodyHtml();
   const q = (window.__stockSearch || '').trim().toLowerCase();
   const wid = window.__stockAlm || '';
   const okCli = c => !q || c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q);
@@ -3261,12 +3267,16 @@ function tplStock(){
       </div>
     </div>
     <div class="card deca-toolbar">
+      ${seg === 'resumen' ? `
+      <select id="rm-cliente" onchange="sgaResumenElegir()" style="min-width:230px;"><option value="">Elige el cliente…</option>${sgaClientesAlmacenLista().map(c => `<option value="${c.id}" ${c.id === sgaResumenEstado().clienteId ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
+      <input id="rm-mes" type="month" value="${esc(sgaResumenEstado().periodo)}" onchange="sgaResumenElegir()" style="width:170px;" />
+      <button class="btn btn-ghost" onclick="sgaResumenImprimir()" title="Imprimir o guardar como PDF en blanco y negro">${homeIcon(HOME_ICON_PATHS.file, 16, 'currentColor', 1.8)}<span>Imprimir / PDF</span></button>` : `
       <div class="deca-search">
         <input placeholder="${seg === 'catalogo' ? 'Buscar cliente o artículo…' : 'Buscar cliente por nombre o NIF…'}" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
-      </div>
-      ${seg === 'catalogo' ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${allWarehouses.filter(w => !w.archived).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
-      <div class="doc-seg">${segBtn('catalogo', 'Catálogo')}${segBtn('stock', 'Stock')}${segBtn('entradas', 'Entradas')}${segBtn('salidas', 'Salidas')}</div>
+      </div>`}
+      ${seg === 'catalogo' || seg === 'resumen' ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${allWarehouses.filter(w => !w.archived).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
+      <div class="doc-seg">${segBtn('catalogo', 'Catálogo')}${segBtn('stock', 'Stock')}${segBtn('entradas', 'Entradas')}${segBtn('salidas', 'Salidas')}${segBtn('resumen', 'Resumen mensual')}</div>
     </div>
     <div id="stock-body">${stockBodyHtml()}</div>
     </div>`;
@@ -4388,6 +4398,179 @@ async function sgaArtRapidaCrear(){
   await logContactoHistorial(pg.clienteId, `SGA · ha añadido ${data.length} artículo${data.length !== 1 ? 's' : ''} pegando desde Excel.`);
   appToast(`${data.length} artículo${data.length !== 1 ? 's creados' : ' creado'}.`, 'ok');
   sgaArtRapidaCerrar();
+}
+
+/* ---- SGA · Resumen mensual (la cuadrícula de tus hojas OCT-26, SET-26…) ----
+   Por cliente y mes: día a día entradas, salidas y saldo, lo que se cobra cada día, el desglose por concepto y los m² fijos del
+   mes. Se imprime en blanco y negro para facturar. */
+const SGA_MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+function sgaPeriodoTxt(p){ const [y, m] = p.split('-'); const t = SGA_MESES[Number(m) - 1] || ''; return `${t.charAt(0).toUpperCase()}${t.slice(1)} ${y}`; }
+function sgaDiasDelMes(p){ const [y, m] = p.split('-').map(Number); return new Date(y, m, 0).getDate(); }
+function sgaResumenEstado(){ return (window.__rm = window.__rm || { clienteId: '', periodo: today().slice(0, 7), datos: null, cargando: false }); }
+async function sgaResumenCargar(){
+  const rm = sgaResumenEstado();
+  if (!rm.clienteId) { rm.datos = null; refreshStockBody(); return; }
+  rm.cargando = true; refreshStockBody();
+  const cid = rm.clienteId, per = rm.periodo, desde = per + '-01';
+  const [a, c, m2] = await Promise.all([
+    supabaseClient.from('sga_albaranes').select('id,tipo,fecha,estado').eq('cliente_id', cid).eq('estado', 'confirmado').gte('fecha', desde),
+    supabaseClient.from('sga_cobros').select('*').eq('cliente_id', cid).eq('periodo', per),
+    supabaseClient.from('sga_m2').select('*').eq('cliente_id', cid).order('periodo', { ascending: false }).limit(24),
+  ]);
+  const albaranes = a.data || [];
+  const movs = [];
+  const ids = albaranes.map(x => x.id);
+  for (let i = 0; i < ids.length; i += 80) {
+    const r = await supabaseClient.from('sga_movimientos').select('albaran_id,cantidad,bultos,fecha,tipo').in('albaran_id', ids.slice(i, i + 80));
+    (r.data || []).forEach(x => movs.push({ albaranId: x.albaran_id, cantidad: Number(x.cantidad), bultos: x.bultos == null ? null : Number(x.bultos), fecha: x.fecha, tipo: x.tipo }));
+  }
+  rm.datos = { clienteId: cid, periodo: per, movs, cobros: (c.data || []).map(x => ({ fecha: x.fecha, origen: x.origen, productoId: x.producto_id, cantidad: Number(x.cantidad), precio: Number(x.precio), importe: Number(x.importe) })), m2: (m2.data || []).map(x => ({ periodo: x.periodo, m2: Number(x.m2) })) };
+  rm.cargando = false;
+  refreshStockBody();
+}
+function sgaResumenElegir(){
+  const rm = sgaResumenEstado();
+  rm.clienteId = (document.getElementById('rm-cliente') || {}).value || '';
+  rm.periodo = (document.getElementById('rm-mes') || {}).value || today().slice(0, 7);
+  sgaResumenCargar();
+}
+// Cálculo del resumen a partir de lo cargado
+function sgaResumenCalcular(d){
+  const cfg = sgaClienteCfg(d.clienteId);
+  const usaBultos = sgaClienteConArticulos(d.clienteId);
+  const dias = sgaDiasDelMes(d.periodo);
+  const ps = sgaPartidas.filter(p => p.clienteId === d.clienteId && p.actual > 0);
+  const bultosDe = p => (p.bultos != null ? sgaBultosSalida(p, p.actual) : p.actual);
+  const actualMod = ps.reduce((s, p) => s + p.actual, 0), actualBul = ps.reduce((s, p) => s + bultosDe(p), 0);
+  const filas = [];
+  for (let n = 1; n <= dias; n++) {
+    const f = `${d.periodo}-${String(n).padStart(2, '0')}`;
+    const delDia = d.movs.filter(m => m.fecha === f && m.tipo !== 'apertura');
+    const ent = delDia.filter(m => m.cantidad > 0), sal = delDia.filter(m => m.cantidad < 0);
+    const posterior = d.movs.filter(m => m.fecha > f);
+    const cobrosDia = d.cobros.filter(c => c.fecha === f);
+    filas.push({
+      f, n, entMod: ent.reduce((s, m) => s + m.cantidad, 0), entBul: ent.reduce((s, m) => s + (m.bultos != null ? m.bultos : m.cantidad), 0),
+      salMod: -sal.reduce((s, m) => s + m.cantidad, 0), salBul: -sal.reduce((s, m) => s + (m.bultos != null ? m.bultos : m.cantidad), 0),
+      saldoMod: actualMod - posterior.reduce((s, m) => s + m.cantidad, 0), saldoBul: actualBul - posterior.reduce((s, m) => s + (m.bultos != null ? m.bultos : m.cantidad), 0),
+      mov: cobrosDia.filter(c => c.origen === 'movimiento').reduce((s, c) => s + c.importe, 0),
+      serv: cobrosDia.filter(c => c.origen === 'servicio').reduce((s, c) => s + c.importe, 0),
+    });
+  }
+  const antes = d.movs.filter(m => m.fecha >= d.periodo + '-01');
+  const inicial = { mod: actualMod - antes.reduce((s, m) => s + m.cantidad, 0), bul: actualBul - antes.reduce((s, m) => s + (m.bultos != null ? m.bultos : m.cantidad), 0) };
+  const conceptos = {};
+  d.cobros.forEach(c => { const k = c.productoId + '|' + c.precio; const e = (conceptos[k] = conceptos[k] || { productoId: c.productoId, precio: c.precio, cantidad: 0, importe: 0, origen: c.origen }); e.cantidad += c.cantidad; e.importe += c.importe; });
+  const totMov = d.cobros.filter(c => c.origen === 'movimiento').reduce((s, c) => s + c.importe, 0);
+  const totServ = d.cobros.filter(c => c.origen === 'servicio').reduce((s, c) => s + c.importe, 0);
+  // m² del mes: el guardado para este mes o, si no hay, el del último mes anterior
+  const guardado = d.m2.find(x => x.periodo === d.periodo);
+  const previo = d.m2.filter(x => x.periodo < d.periodo)[0];
+  const m2 = guardado ? guardado.m2 : (previo ? previo.m2 : null);
+  const prodM2 = almacenajeProductos.find(p => !p.archived && p.disparador === 'stock_mes' && almacenajeTarifas.some(t => t.clienteId === d.clienteId && t.tipo === p.id));
+  const finMes = `${d.periodo}-${String(dias).padStart(2, '0')}`;
+  const tM2 = prodM2 ? sgaTarifaEn(d.clienteId, prodM2.id, finMes) : null;
+  return { cfg, usaBultos, filas, inicial, final: { mod: actualMod, bul: actualBul }, conceptos: Object.values(conceptos), totMov, totServ, m2, m2Guardado: !!guardado, prodM2, tM2, finMes };
+}
+function sgaResumenHtml(d, paraImprimir){
+  const r = sgaResumenCalcular(d);
+  const cliente = contactos.find(c => c.id === d.clienteId) || {};
+  const nombre = (cliente.nombreComercial || '').trim() || cliente.nombre || '';
+  const eur = n => eur2(sgaR2(n));
+  const fijo = r.m2 != null && r.tM2 ? sgaR2(r.m2 * r.tM2.precio) : 0;
+  const total = sgaR2(r.totMov + r.totServ + fijo);
+  const num = n => (n ? String(sgaNumTxt(n)) : '·');
+  const th = (t, right) => `<th style="${right ? 'text-align:right;' : ''}">${t}</th>`;
+  const colsB = r.usaBultos;
+  const tot = k => sgaR2(r.filas.reduce((s, f) => s + f[k], 0));
+  const tabla = `
+    <table class="${paraImprimir ? '' : 'tf-table'} rm-tabla">
+      <thead><tr>${th('Día')}${th('Entradas', 1)}${colsB ? th('Bultos', 1) : ''}${th('Salidas', 1)}${colsB ? th('Bultos', 1) : ''}${th('Saldo', 1)}${colsB ? th('Bultos', 1) : ''}${th('Movimientos €', 1)}${th('Servicios €', 1)}</tr></thead>
+      <tbody>
+        <tr class="rm-ini"><td>Stock inicial</td><td></td>${colsB ? '<td></td>' : ''}<td></td>${colsB ? '<td></td>' : ''}<td class="r">${sgaNumTxt(r.inicial.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.inicial.bul)}</td>` : ''}<td></td><td></td></tr>
+        ${r.filas.map(f => { const act = f.entMod || f.salMod || f.mov || f.serv; return `
+        <tr class="${act ? 'rm-act' : 'rm-sin'}"><td>${f.n} ${SGA_MESES[Number(d.periodo.split('-')[1]) - 1].slice(0, 3)}</td>
+          <td class="r">${num(f.entMod)}</td>${colsB ? `<td class="r">${num(f.entBul)}</td>` : ''}
+          <td class="r">${num(f.salMod)}</td>${colsB ? `<td class="r">${num(f.salBul)}</td>` : ''}
+          <td class="r">${sgaNumTxt(f.saldoMod)}</td>${colsB ? `<td class="r">${sgaNumTxt(f.saldoBul)}</td>` : ''}
+          <td class="r">${f.mov ? eur(f.mov) : '·'}</td><td class="r">${f.serv ? eur(f.serv) : '·'}</td></tr>`; }).join('')}
+      </tbody>
+      <tfoot><tr><td>TOTAL</td><td class="r">${sgaNumTxt(tot('entMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('entBul'))}</td>` : ''}<td class="r">${sgaNumTxt(tot('salMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('salBul'))}</td>` : ''}<td class="r">${sgaNumTxt(r.final.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.final.bul)}</td>` : ''}<td class="r">${eur(r.totMov)}</td><td class="r">${eur(r.totServ)}</td></tr></tfoot>
+    </table>`;
+  const desglose = r.conceptos.length ? `
+    <table class="${paraImprimir ? '' : 'tf-table'} rm-tabla" style="margin-top:6px;">
+      <thead><tr>${th('Concepto')}${th('Cantidad', 1)}${th('Precio', 1)}${th('Importe', 1)}</tr></thead>
+      <tbody>${r.conceptos.map(c => `<tr><td>${esc(sgaProdTxt(c.productoId))}</td><td class="r">${sgaNumTxt(c.cantidad)}</td><td class="r">${esc(eurPrecio(c.precio))}</td><td class="r">${eur(c.importe)}</td></tr>`).join('')}</tbody>
+    </table>` : '<div style="color:var(--mutedFaint);font-size:12.5px;">No hay cobros este mes.</div>';
+  const m2Html = paraImprimir
+    ? (r.m2 != null && r.tM2 ? `<table class="rm-tabla"><tbody><tr><td>${esc(sgaProdTxt(r.prodM2.id))}</td><td class="r">${sgaNumTxt(r.m2)} m²</td><td class="r">${esc(eurPrecio(r.tM2.precio))}</td><td class="r">${eur(fijo)}</td></tr></tbody></table>` : '<div>Sin m² fijos este mes.</div>')
+    : `<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+        <div class="field" style="width:150px;margin-bottom:0;"><label>m² del mes</label><input id="rm-m2" inputmode="decimal" maxlength="8" value="${r.m2 != null ? esc(String(r.m2).replace('.', ',')) : ''}" placeholder="Ej. 300" onchange="sgaResumenGuardarM2()" /></div>
+        <div style="font-size:13px;color:var(--muted);padding-bottom:9px;">${r.tM2 ? `× ${esc(eurPrecio(r.tM2.precio))}/m² = <b style="color:var(--text);">${eur(fijo)}</b>${r.m2Guardado ? '' : (r.m2 != null ? ' <span style="color:var(--mutedFaint);">(los del mes anterior: pulsa fuera para confirmarlos)</span>' : '')}` : (r.prodM2 ? '' : 'Este cliente no tiene tarifa de «M² ocupado»: no hay costes fijos por superficie.')}</div>
+      </div>`;
+  return `
+    <div class="rm-doc">
+      ${paraImprimir ? `<div class="rm-cab"><h1>Resumen mensual · ${esc(sgaPeriodoTxt(d.periodo))}</h1><div>${esc(nombre)}</div></div>` : ''}
+      <div class="card deca-card" style="--dc-accent:var(--primary);${paraImprimir ? 'border:none;box-shadow:none;' : ''}">
+        ${paraImprimir ? '' : decaCardHead('calendar', `${esc(nombre)} · ${esc(sgaPeriodoTxt(d.periodo))}`, 'Día a día: lo que entra, lo que sale y lo que se cobra')}
+        <div class="${paraImprimir ? '' : 'deca-card-body'}"><div class="${paraImprimir ? '' : 'tc-hist-box'}" ${paraImprimir ? '' : 'style="max-height:560px;"'}>${tabla}</div></div>
+      </div>
+      <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:16px;${paraImprimir ? 'border:none;box-shadow:none;' : ''}">
+        ${paraImprimir ? '<h2>Desglose por concepto</h2>' : decaCardHead('tag', 'Desglose por concepto', 'Agrupado por producto y precio')}
+        <div class="${paraImprimir ? '' : 'deca-card-body'}">${desglose}</div>
+      </div>
+      <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:16px;${paraImprimir ? 'border:none;box-shadow:none;' : ''}">
+        ${paraImprimir ? '<h2>Costes fijos (superficie)</h2>' : decaCardHead('home', 'Costes fijos', 'Superficie contratada este mes')}
+        <div class="${paraImprimir ? '' : 'deca-card-body'}">${m2Html}</div>
+      </div>
+      <div class="op-total-row" style="margin-top:16px;${paraImprimir ? 'border:2px solid #000;background:none;' : ''}"><span>Total a facturar (sin IVA)</span><b>${eur(total)}</b></div>
+      ${r.cfg && !paraImprimir ? '<div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">Incluye los cobros de movimientos y servicios guardados en el SGA y los m² fijos. El cobro diario del stock (palet por día o máximo del mes) todavía no está en este resumen.</div>' : ''}
+    </div>`;
+}
+function stockResumenBodyHtml(){
+  const rm = sgaResumenEstado();
+  if (!rm.clienteId) return '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Elige un cliente y un mes para ver su resumen.</div>';
+  if (rm.cargando || !rm.datos) return '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Cargando…</div>';
+  return sgaResumenHtml(rm.datos, false);
+}
+async function sgaResumenGuardarM2(){
+  const rm = sgaResumenEstado();
+  const el = document.getElementById('rm-m2');
+  if (!el || !rm.datos) return;
+  const t = el.value.trim();
+  const n = t === '' ? null : Number(t.replace(',', '.'));
+  if (n == null || !isFinite(n) || n < 0) { appToast('Escribe los m² como un número.', 'error'); return; }
+  const { error } = await supabaseClient.from('sga_m2').upsert({ cliente_id: rm.clienteId, periodo: rm.periodo, m2: n, updated_at: new Date().toISOString() });
+  if (error) { appToast('No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test(error.message || '') ? 'falta ejecutar el SQL de «resumen mensual» en Supabase.' : error.message), 'error'); return; }
+  const ya = rm.datos.m2.find(x => x.periodo === rm.periodo);
+  if (ya) ya.m2 = n; else rm.datos.m2.unshift({ periodo: rm.periodo, m2: n });
+  refreshStockBody();
+}
+function sgaResumenImprimir(){
+  const rm = sgaResumenEstado();
+  if (!rm.datos) { appToast('Elige primero un cliente y un mes.', 'error'); return; }
+  const css = `
+    @page{size:A4 portrait;margin:12mm;}
+    *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    body{font-family:Arial,Helvetica,sans-serif;color:#000;margin:0;font-size:10px;}
+    h1{font-size:17px;margin:0 0 2px;} h2{font-size:12px;margin:14px 0 4px;}
+    .rm-cab{border-bottom:2px solid #000;padding-bottom:6px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:flex-end;}
+    .rm-cab div{font-size:13px;font-weight:700;}
+    table{width:100%;border-collapse:collapse;}
+    th,td{padding:3px 4px;border-bottom:1px solid #BBB;white-space:nowrap;}
+    th{border-bottom:1.5px solid #000;text-align:left;font-size:9px;}
+    .r{text-align:right;} .rm-sin td{color:#777;} .rm-act td{font-weight:700;} .rm-ini td{font-style:italic;}
+    tfoot td{border-top:1.5px solid #000;border-bottom:none;font-weight:700;}
+    .op-total-row{display:flex;justify-content:space-between;align-items:baseline;padding:8px 10px;margin-top:12px;} .op-total-row span{font-size:11px;font-weight:700;text-transform:uppercase;} .op-total-row b{font-size:17px;}
+    .card{background:none;} .op-lines{display:block;}
+  `;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Resumen mensual ${esc(sgaPeriodoTxt(rm.periodo))}</title><style>${css}</style></head><body>${sgaResumenHtml(rm.datos, true)}</body></html>`;
+  const f = document.createElement('iframe');
+  f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+  document.body.appendChild(f);
+  const doc = f.contentWindow.document;
+  doc.open(); doc.write(html); doc.close();
+  setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 3000); }, 300);
 }
 
 /* ---- Almacenes: historial de cambios (quién cambió qué y cuándo) ---- */
