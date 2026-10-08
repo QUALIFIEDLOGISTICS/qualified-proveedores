@@ -2922,9 +2922,10 @@ async function loadSgaConfig(){
     supabaseClient.from('sga_campos').select('*').order('orden', { ascending: true }).order('created_at', { ascending: true }),
   ]);
   sgaCampos = sgaCamposCompletar((cp && cp.data || []).map(r => ({ id: r.id, clave: r.clave, nombre: r.nombre, tipo: r.tipo, unidad: r.unidad || '', opciones: Array.isArray(r.opciones) ? r.opciones : [], ambito: r.ambito, enAlbaran: !!r.en_albaran, enStock: r.en_stock !== false, orden: r.orden || 0, archived: !!r.archived })));
-  sgaArticulos = (ar.data || []).map(r => ({ id: r.id, clienteId: r.cliente_id, nombre: r.nombre, referencia: r.referencia || '', productoId: r.producto_id || '', zonaId: r.zona_id || '', bultos: Number(r.bultos_por_unidad), metrosLineales: r.metros_lineales == null ? null : Number(r.metros_lineales), peso: r.peso == null ? null : Number(r.peso), medidas: r.medidas || '', finalidad: r.finalidad || '', atributos: r.atributos || {}, archived: !!r.archived }));
+  sgaArticulos = (ar.data || []).map(sgaArticuloDeFila);
   sgaClientes = {};
   (cl.data || []).forEach(r => { sgaClientes[r.cliente_id] = { activoDesde: r.activo_desde || '', codigosUnicos: !!r.codigos_unicos, campos: Object.assign({ referencia: 'opcional', descripcion: 'opcional', lote: 'no', peso: 'no', unidades: 'no', proveedor: 'no', serie: 'no', medidas: 'no' }, r.campos || {}), observaciones: r.observaciones || '', prefijo: r.prefijo || '' }; });
+  Object.keys(sgaClientes).forEach(id => { const cc = sgaClientes[id].campos; if (cc.finalidad === undefined && sgaArticulos.some(a => a.clienteId === id && sgaFinalidad(a))) cc.finalidad = 'opcional'; });
   sgaZonas = (z.data || []).map(r => ({ id: r.id, warehouseId: r.warehouse_id, nave: r.nave || '', nombre: r.nombre, tipo: r.tipo, orden: r.orden, archived: !!r.archived }));
   sgaUbicaciones = (u.data || []).map(r => ({ id: r.id, zonaId: r.zona_id, codigo: r.codigo, archived: !!r.archived }));
 }
@@ -3205,7 +3206,15 @@ const SGA_CAMPOS_BASE = [
   { clave: 'proveedor', nombre: 'Proveedor', tipo: 'texto' },
   { clave: 'serie', nombre: 'Nº de serie', tipo: 'texto' },
   { clave: 'medidas', nombre: 'Medidas', tipo: 'texto' },
+  { clave: 'finalidad', nombre: 'Finalidad', tipo: 'texto', ambito: 'articulo' },   // del artículo: cada cliente decide si la usa
 ];
+// Finalidad de un artículo (vive en sus atributos; las anteriores estaban en una columna aparte y se leen de ahí)
+function sgaFinalidad(a){ return String((a && a.atributos && a.atributos.finalidad) || ''); }
+// Un artículo tal como viene de la base de datos
+function sgaArticuloDeFila(r){
+  const atributos = Object.assign(r.finalidad ? { finalidad: r.finalidad } : {}, r.atributos || {});
+  return { id: r.id, clienteId: r.cliente_id, nombre: r.nombre, referencia: r.referencia || '', productoId: r.producto_id || '', zonaId: r.zona_id || '', bultos: Number(r.bultos_por_unidad), metrosLineales: r.metros_lineales == null ? null : Number(r.metros_lineales), peso: r.peso == null ? null : Number(r.peso), medidas: r.medidas || '', atributos, archived: !!r.archived };
+}
 const SGA_CAMPOS_COLUMNA = ['referencia', 'descripcion', 'lote'];   // se guardan en columnas de la partida
 const SGA_CAMPO_NIVELES = { no: 'No se usa', opcional: 'Opcional', obligatorio: 'Obligatorio' };
 /* ---- Campos propios de la mercancía (Configuración → Datos de mercancía) ----
@@ -3222,7 +3231,7 @@ function sgaCamposCliente(){ return sgaCamposPropios().map(sgaCampoDef); }
 // Campos de serie que todavía no están en la base de datos: aparecen en la lista y se guardan al tocarlos por primera vez.
 function sgaCamposCompletar(filas){
   SGA_CAMPOS_BASE.forEach((b, i) => {
-    if (!filas.some(f => f.clave === b.clave)) filas.push({ id: 'base:' + b.clave, virtual: true, clave: b.clave, nombre: b.nombre, tipo: b.tipo, unidad: b.unidad || '', opciones: [], ambito: 'entrada', enAlbaran: false, enStock: false, orden: i - 100, archived: false });
+    if (!filas.some(f => f.clave === b.clave)) filas.push({ id: 'base:' + b.clave, virtual: true, clave: b.clave, nombre: b.nombre, tipo: b.tipo, unidad: b.unidad || '', opciones: [], ambito: b.ambito || 'entrada', enAlbaran: false, enStock: false, orden: i - 100, archived: false });
   });
   return filas.sort((a, b) => (a.orden - b.orden) || a.nombre.localeCompare(b.nombre, 'es'));
 }
@@ -3257,7 +3266,7 @@ function sgaCampoControl(f, valor, attrs){
   if (f.tipo === 'si_no') return `<select ${attrs}><option value="">—</option>${['Sí', 'No'].map(opt).join('')}</select>`;
   if (f.tipo === 'fecha') return `<input type="date" ${attrs} value="${esc(v)}" />`;
   if (f.tipo === 'numero') return `<input inputmode="decimal" maxlength="14" ${attrs} value="${esc(v.replace('.', ','))}" />`;
-  return `<input maxlength="120" ${attrs}${['proveedor', 'descripcion'].includes(f.id) ? ' data-mayus' : ''} value="${esc(v)}" />`;
+  return `<input maxlength="120" ${attrs}${['proveedor', 'descripcion', 'finalidad'].includes(f.id) ? ' data-mayus' : ''} value="${esc(v)}" />`;
 }
 // Texto escrito → valor que se guarda ({ valor } o { error }). Vacío = sin valor.
 function sgaCampoParsear(f, txt){
@@ -3569,7 +3578,7 @@ function stockToggle(id){
   refreshStockBody();
 }
 /* ---- Catálogo de artículos dentro de Stock: un cliente abierto cada vez, con su tabla y sus botones ---- */
-function stockCatalogoCoincide(a, q){ return !q || sgaArticuloTxt(a).toLowerCase().includes(q) || (a.finalidad || '').toLowerCase().includes(q); }
+function stockCatalogoCoincide(a, q){ return !q || sgaArticuloTxt(a).toLowerCase().includes(q) || sgaFinalidad(a).toLowerCase().includes(q); }
 /* ---- Catálogo como hoja de cálculo ----
    Cliente arriba (recuerda el último), tabla siempre visible, celdas editables (Intro guarda), una fila al principio para
    dar de alta artículos sin salir, y el stock actual de cada artículo. */
@@ -3647,7 +3656,7 @@ function catFilaHtml(a, cols, conCliente){
       <td><select class="cg-in" ${dis} data-id="${a.id}" data-f="zonaId" onchange="catGuardarCelda(this)"><option value="">—</option>${sgaZonas.filter(z => !z.archived).map(z => `<option value="${z.id}" ${a.zonaId === z.id ? 'selected' : ''}>${esc(((allWarehouses.find(w => w.id === z.warehouseId) || {}).name || '') + ' · ' + sgaZonaNombre(z))}</option>`).join('')}</select></td>
       <td class="cg-stock" ${st.almacenes ? `title="${esc(st.almacenes)}"` : ''}>${st.mod ? `<b>${st.mod}</b> palet${st.mod === 1 ? '' : 's'}${cols.bultos && (a.bultos !== 1 || st.bul !== st.mod) ? ` <small>· ${sgaNumTxt(st.bul)} bultos</small>` : ''}` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
       <td class="cg-acc">${puede ? `
-        <button class="deca-act" title="Abrir el formulario completo (medidas, finalidad…)" onclick="openSgaArticuloForm('${a.clienteId}', '${a.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+        <button class="deca-act" title="Abrir el formulario completo (medidas, datos adicionales…)" onclick="openSgaArticuloForm('${a.clienteId}', '${a.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
         <button class="deca-act" title="Duplicar este artículo" onclick="catDuplicar('${a.id}')">${homeIcon(HOME_ICON_PATHS.copy, 15, 'currentColor', 2)}</button>
         <button class="deca-act" title="${a.archived ? 'Restaurar' : 'Archivar'}" onclick="setSgaArticuloArchivado('${a.id}', ${!a.archived})">${homeIcon(a.archived ? HOME_ICON_PATHS.check : HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>` : ''}</td>
     </tr>`;
@@ -3790,11 +3799,11 @@ async function catDuplicar(id){
   if (!a) return;
   let nombre = `${a.nombre} (copia)`, k = 2;
   while (sgaArticulos.some(x => x.clienteId === a.clienteId && (x.referencia || x.nombre).toLowerCase() === nombre.toLowerCase())) nombre = `${a.nombre} (copia ${k++})`;
-  const row = { cliente_id: a.clienteId, nombre, referencia: null, producto_id: a.productoId || null, zona_id: a.zonaId || null, bultos_por_unidad: a.bultos, metros_lineales: a.metrosLineales, peso: a.peso, medidas: a.medidas || null, finalidad: a.finalidad || null };
+  const row = { cliente_id: a.clienteId, nombre, referencia: null, producto_id: a.productoId || null, zona_id: a.zonaId || null, bultos_por_unidad: a.bultos, metros_lineales: a.metrosLineales, peso: a.peso, medidas: a.medidas || null };
   if (a.atributos && Object.keys(a.atributos).length) row.atributos = a.atributos;
   const { data, error } = await supabaseClient.from('sga_articulos').insert(row).select().single();
   if (error || !data) { appToast('No se pudo duplicar: ' + (error && error.message ? error.message : 'error desconocido.'), 'error'); return; }
-  sgaArticulos.push({ id: data.id, clienteId: a.clienteId, nombre, referencia: '', productoId: a.productoId, zonaId: a.zonaId, bultos: a.bultos, metrosLineales: a.metrosLineales, peso: a.peso, medidas: a.medidas, finalidad: a.finalidad, atributos: Object.assign({}, a.atributos), archived: false });
+  sgaArticulos.push({ id: data.id, clienteId: a.clienteId, nombre, referencia: '', productoId: a.productoId, zonaId: a.zonaId, bultos: a.bultos, metrosLineales: a.metrosLineales, peso: a.peso, medidas: a.medidas, atributos: Object.assign({}, a.atributos), archived: false });
   refreshStockBody();
   const el = document.querySelector(`.cg-row[data-id="${data.id}"] [data-f="nombre"]`);
   if (el) { el.focus(); el.select(); appToast('Duplicado: cámbiale el nombre y la referencia.', 'info'); }
@@ -4118,7 +4127,7 @@ function sgaArtNuevoRapido(i){
             <div class="field" style="flex:1;min-width:180px;"><label>Tipo de carga</label><select id="na-prod"><option value="">— Sin definir —</option>${prods.map(p => `<option value="${p.id}" ${fila.prod === p.id ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}${almacenajeTarifas.some(t => t.clienteId === clienteId && t.tipo === p.id) ? '' : ' · sin tarifa'}</option>`).join('')}</select></div>
           </div>
           <div class="field"><label>Zona o nave habitual</label><select id="na-zona"><option value="">— Sin definir —</option>${zonas.map(z => `<option value="${z.id}" ${fila.zona === z.id ? 'selected' : ''}>${esc(((allWarehouses.find(w => w.id === z.warehouseId) || {}).name || '') + ' · ' + sgaZonaNombre(z))}</option>`).join('')}</select></div>
-          <div style="font-size:12px;color:var(--mutedFaint);margin-bottom:10px;">Lo demás (peso, medidas, finalidad) se completa luego en Stock → Catálogo.</div>
+          <div style="font-size:12px;color:var(--mutedFaint);margin-bottom:10px;">Lo demás (peso, medidas…) se completa luego en Stock → Catálogo.</div>
           <div id="na-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
           <div style="display:flex;gap:10px;">
             <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
@@ -4734,14 +4743,14 @@ function sgaNumTxt(n){ return n == null || n === '' ? '—' : Number(n).toLocale
 function sgaArticulosFilasHtml(c){
   const q = (window.__sgaArtSearch || '').trim().toLowerCase();
   const verArch = !!window.__sgaArtArch;
-  const lista = sgaArticulosDe(c.id, true).filter(a => !!a.archived === verArch && (!q || sgaArticuloTxt(a).toLowerCase().includes(q) || (a.finalidad || '').toLowerCase().includes(q)))
+  const lista = sgaArticulosDe(c.id, true).filter(a => !!a.archived === verArch && (!q || sgaArticuloTxt(a).toLowerCase().includes(q) || sgaFinalidad(a).toLowerCase().includes(q)))
     .sort((a, b) => sgaArticuloTxt(a).localeCompare(sgaArticuloTxt(b), 'es'));
   if (!lista.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;padding:6px 2px;">${q ? 'Ningún artículo coincide con la búsqueda.' : verArch ? 'No hay artículos archivados.' : 'Este cliente todavía no tiene artículos. Crea el primero con «+ Artículo».'}</div>`;
   return `<div class="tc-hist-box" style="max-height:380px;"><table class="tf-table">
     <thead><tr>${thSort('Producto','text')}${thSort('Referencia','text')}${thSort('Tipo de carga','text')}${thSort('Bultos / palet','number','style="text-align:right;"')}${thSort('M. lineales','number','style="text-align:right;"')}${thSort('Peso (kg)','number','style="text-align:right;"')}${thSort('Zona','text')}<th style="width:120px;"></th></tr></thead>
     <tbody>${lista.map(a => { const z = sgaZonaDe(a.zonaId); return `
       <tr${a.archived ? ' style="opacity:.6;"' : ''}>
-        <td data-sort-value="${esc(a.nombre)}"><b>${esc(a.nombre)}</b>${a.finalidad ? `<div style="font-size:11.5px;color:var(--muted);">${esc(a.finalidad)}</div>` : ''}</td>
+        <td data-sort-value="${esc(a.nombre)}"><b>${esc(a.nombre)}</b>${sgaFinalidad(a) ? `<div style="font-size:11.5px;color:var(--muted);">${esc(sgaFinalidad(a))}</div>` : ''}</td>
         <td data-sort-value="${esc(a.referencia)}">${esc(a.referencia) || '—'}</td>
         <td data-sort-value="${esc(a.productoId ? sgaProdTxt(a.productoId) : '')}">${a.productoId ? esc(sgaProdTxt(a.productoId)) : '—'}</td>
         <td class="tf-precio" data-sort-value="${a.bultos}">${sgaNumTxt(a.bultos)}</td>
@@ -4810,7 +4819,6 @@ function tplSgaArticuloPage(c){
             <div class="field" style="flex:2;min-width:240px;"><label>Producto <span class="dc-req">*</span></label>${decaInputIcon('tag', `<input id="sgaa-nombre" data-mayus maxlength="150" placeholder="Ej. CARPA GREEN 9.15x20x4.5" value="${esc(a ? a.nombre : '')}" />`)}</div>
             <div class="field" style="flex:1;min-width:180px;"><label>Referencia / modelo</label>${decaInputIcon('file', `<input id="sgaa-ref" maxlength="80" placeholder="Ej. MODELO 306515RG" value="${esc(a ? a.referencia : '')}" />`)}</div>
           </div>
-          <div class="field" style="margin-bottom:0;"><label>Finalidad</label>${decaInputIcon('list', `<input id="sgaa-fin" data-mayus maxlength="80" placeholder="Opcional (ej. Agrícola)" value="${esc(a ? a.finalidad : '')}" />`)}</div>
         </div>
       </div>
       <div class="card deca-card">
@@ -4857,7 +4865,7 @@ async function submitSgaArticulo(){
   const errEl = document.getElementById('sgaa-error');
   errEl.textContent = '';
   const val = id => document.getElementById(id).value.trim();
-  const nombre = val('sgaa-nombre'), referencia = val('sgaa-ref'), finalidad = val('sgaa-fin');
+  const nombre = val('sgaa-nombre'), referencia = val('sgaa-ref');
   const productoId = val('sgaa-prod'), zonaId = val('sgaa-zona'), medidas = val('sgaa-medidas');
   const numero = id => { const t = val(id); return t === '' ? null : Number(t.replace(',', '.')); };
   const bultos = numero('sgaa-bultos'), ml = numero('sgaa-ml'), peso = numero('sgaa-peso');
@@ -4878,9 +4886,9 @@ async function submitSgaArticulo(){
   }
   const btn = document.querySelector('.sgaa-save');
   if (btn) btn.disabled = true;
-  const row = { cliente_id: pg.clienteId, nombre, referencia: referencia || null, producto_id: productoId || null, zona_id: zonaId || null, bultos_por_unidad: bultos, metros_lineales: ml, peso, medidas: medidas || null, finalidad: finalidad || null };
+  const row = { cliente_id: pg.clienteId, nombre, referencia: referencia || null, producto_id: productoId || null, zona_id: zonaId || null, bultos_por_unidad: bultos, metros_lineales: ml, peso, medidas: medidas || null };
   if (Object.keys(atributos).length || (previaArt && Object.keys(previaArt.atributos || {}).length)) row.atributos = atributos;   // sin campos propios no se toca la columna
-  const local = { clienteId: pg.clienteId, nombre, referencia, productoId, zonaId, bultos, metrosLineales: ml, peso, medidas, finalidad, atributos };
+  const local = { clienteId: pg.clienteId, nombre, referencia, productoId, zonaId, bultos, metrosLineales: ml, peso, medidas, atributos };
   try {
     if (pg.id) {
       const { error } = await supabaseClient.from('sga_articulos').update(row).eq('id', pg.id);
@@ -5105,10 +5113,10 @@ async function sgaArtRapidaCrear(){
   const productoId = (document.getElementById('sgar-prod') || {}).value || null;
   const btn = document.querySelector('.sgar-save');
   if (btn) btn.disabled = true;
-  const filas = nuevos.map(i => ({ cliente_id: pg.clienteId, nombre: i.nombre, referencia: i.referencia || null, producto_id: productoId, zona_id: i.zona ? i.zona.id : null, bultos_por_unidad: i.bultos, metros_lineales: i.ml, peso: i.peso, medidas: i.medidas || null, finalidad: i.finalidad || null }));
+  const filas = nuevos.map(i => ({ cliente_id: pg.clienteId, nombre: i.nombre, referencia: i.referencia || null, producto_id: productoId, zona_id: i.zona ? i.zona.id : null, bultos_por_unidad: i.bultos, metros_lineales: i.ml, peso: i.peso, medidas: i.medidas || null, ...(i.finalidad ? { atributos: { finalidad: i.finalidad } } : {}) }));
   const { data, error } = await supabaseClient.from('sga_articulos').insert(filas).select();
   if (error || !data) { errEl.textContent = 'No se pudo guardar (no se ha creado ninguno): ' + (error && error.message ? error.message : 'error desconocido.'); if (btn) btn.disabled = false; return; }
-  data.forEach(r => sgaArticulos.push({ id: r.id, clienteId: r.cliente_id, nombre: r.nombre, referencia: r.referencia || '', productoId: r.producto_id || '', zonaId: r.zona_id || '', bultos: Number(r.bultos_por_unidad), metrosLineales: r.metros_lineales == null ? null : Number(r.metros_lineales), peso: r.peso == null ? null : Number(r.peso), medidas: r.medidas || '', finalidad: r.finalidad || '', archived: false }));
+  data.forEach(r => sgaArticulos.push(sgaArticuloDeFila(r)));
   await logContactoHistorial(pg.clienteId, `SGA · ha añadido ${data.length} artículo${data.length !== 1 ? 's' : ''} pegando desde Excel.`);
   appToast(`${data.length} artículo${data.length !== 1 ? 's creados' : ' creado'}.`, 'ok');
   sgaArtRapidaCerrar();
