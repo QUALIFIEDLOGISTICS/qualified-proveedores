@@ -3812,6 +3812,19 @@ function sgaClientesAlmacenLista(){
 }
 function sgaCamposActivos(cfg){ return sgaCamposEntrada().filter(f => (cfg.campos[f.id] || 'no') !== 'no'); }
 function sgaEntradaWh(){ const el = document.getElementById('se-almacen'); return el && el.value ? el.value : currentWarehouseId; }
+// Almacenes que tiene activados un cliente (los de su ficha): solo en esos se le puede dar entrada.
+function sgaAlmacenesCliente(clienteId){
+  const c = contactos.find(x => x.id === clienteId);
+  const ids = (c && c.warehouseIds) || [];
+  return allWarehouses.filter(w => !w.archived && ids.includes(w.id));
+}
+function sgaAlmacenOptionsHtml(clienteId, sel){
+  if (!clienteId) return '<option value="">Elige primero el cliente</option>';
+  const ws = sgaAlmacenesCliente(clienteId);
+  if (!ws.length) return '<option value="">Sin almacén asignado</option>';
+  const elegido = ws.some(w => w.id === sel) ? sel : (ws.some(w => w.id === currentWarehouseId) ? currentWarehouseId : ws[0].id);
+  return ws.map(w => `<option value="${w.id}" ${w.id === elegido ? 'selected' : ''}>${esc(w.name)}</option>`).join('');
+}
 function sgaSalidaWh(){ const el = document.getElementById('sl-almacen'); return el && el.value ? el.value : ''; }
 function sgaZonasActivas(wid){ return sgaZonas.filter(z => z.warehouseId === (wid || sgaEntradaWh()) && !z.archived).sort((a, b) => (a.orden - b.orden) || sgaZonaNombre(a).localeCompare(sgaZonaNombre(b), 'es')); }
 function sgaProductosStock(){ return almacenajeProductos.filter(p => !p.archived && p.disparador === 'stock_dia').sort((a, b) => almacenajeProductoTexto(a).localeCompare(almacenajeProductoTexto(b), 'es')); }
@@ -4041,6 +4054,8 @@ function sgaEntradaClienteCambio(){
   const clienteId = sgaEntradaClienteId();
   const lnk = document.getElementById('se-nuevo-art'); if (lnk) lnk.style.display = clienteId ? '' : 'none';
   const cfg = sgaClienteCfg(clienteId);
+  const alm = document.getElementById('se-almacen');
+  if (alm) alm.innerHTML = sgaAlmacenOptionsHtml(clienteId, alm.value);   // solo los almacenes de este cliente
   const cont = document.getElementById('se-lineas');
   cont.innerHTML = clienteId ? sgaEntradaLineasHtml(cfg) : '<div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div>';
   const pegar = document.getElementById('se-pegar');
@@ -4146,7 +4161,7 @@ function tplStockEntradaPage(){
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
         <div class="deca-banner-title">Nueva entrada</div>
-        <div class="deca-banner-sub">La mercancía que llega a un cliente; tú eliges en qué almacén se queda.</div>
+        <div class="deca-banner-sub">La mercancía que llega a un cliente; eliges en cuál de sus almacenes se queda.</div>
       </div>
     </div>
     <div class="deca-form" oninput="window.__stockDirty=true; sgaEntradaRefrescar();" onchange="sgaEntradaRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
@@ -4156,7 +4171,7 @@ function tplStockEntradaPage(){
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
             <div class="field" style="flex:2;min-width:240px;"><label>Cliente <span class="dc-req">*</span></label>
               <select id="se-cliente" onchange="sgaEntradaClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos en el SGA'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select><button type="button" id="se-nuevo-art" class="tl-chg" style="display:none;margin-top:6px;" onclick="sgaArtNuevoRapido(-1)">+ Artículo nuevo de este cliente</button></div>
-            <div class="field" style="flex:1;min-width:190px;"><label>Almacén <span class="dc-req">*</span></label><select id="se-almacen" onchange="sgaEntradaAlmacenCambio()">${allWarehouses.filter(w => !w.archived).map(w => `<option value="${w.id}" ${w.id === currentWarehouseId ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select></div>
+            <div class="field" style="flex:1;min-width:190px;"><label>Almacén <span class="dc-req">*</span></label><select id="se-almacen" onchange="sgaEntradaAlmacenCambio()">${sgaAlmacenOptionsHtml('', '')}</select></div>
             <div class="field" style="flex:1;min-width:150px;"><label>Fecha de entrada <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="se-fecha" type="date" value="${today()}" />`)}</div>
             <div class="field" style="flex:1;min-width:180px;"><label>Referencia / nº de albarán</label>${decaInputIcon('file', `<input id="se-ref" maxlength="60" placeholder="Opcional" />`)}</div>
           </div>
@@ -4209,6 +4224,7 @@ async function sgaEntradaConfirmar(){
   const conArt = sgaClienteConArticulos(d.clienteId);
   const errores = [];
   if (!d.clienteId) errores.push('Elige el cliente.');
+  else if (!sgaAlmacenesCliente(d.clienteId).length) errores.push('Este cliente no tiene ningún almacén asignado. Asígnaselo en su ficha de cliente antes de dar la entrada.');
   if (!d.fecha) errores.push('Indica la fecha de entrada.');
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const hayZonas = sgaZonasActivas().length > 0;
