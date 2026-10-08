@@ -180,6 +180,20 @@
   .sga-tabs button{background:none;border:none;border-bottom:3px solid transparent;margin-bottom:-1px;padding:10px 16px;font-size:14px;font-weight:500;color:var(--muted);cursor:pointer;white-space:nowrap;font-family:var(--body);}
   .sga-tabs button.on{border-bottom-color:var(--primary);color:var(--primary);font-weight:700;}
   @media (max-width:760px){ .sga-acc-grid{grid-template-columns:1fr;} }
+  /* Ficha SGA del cliente: datos de la mercancía compactos (los que usa, y botones para añadir el resto) */
+  .sgac-tit{font-size:11.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);margin:14px 0 8px;}
+  .sgac-tit:first-child{margin-top:0;}
+  .sgac-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:8px;}
+  .sgac-fila{display:flex;align-items:center;gap:10px;padding:7px 8px 7px 12px;border:1px solid var(--border);border-radius:10px;background:var(--panel);}
+  .sgac-nom{flex:1;min-width:0;font-size:13.5px;font-weight:600;line-height:1.25;overflow-wrap:anywhere;}
+  .sgac-nom small{font-weight:400;font-size:11px;color:var(--mutedFaint);margin-left:6px;}
+  .sgac-seg button{padding:4px 10px;font-size:12px;}
+  .sgac-seg button.on.ob{background:var(--danger);}
+  .sgac-x{background:none;border:none;color:var(--mutedFaint);font-size:14px;cursor:pointer;padding:4px 6px;border-radius:6px;}
+  .sgac-x:hover{color:var(--danger);background:color-mix(in srgb,var(--danger) 10%,transparent);}
+  .sgac-chips{display:flex;flex-wrap:wrap;gap:6px;}
+  .sgac-chip{background:var(--panel2);border:1px dashed var(--border);border-radius:999px;padding:5px 12px;font-size:12.5px;color:var(--muted);cursor:pointer;font-family:var(--body);}
+  .sgac-chip:hover{border-color:var(--primary);color:var(--primary);background:color-mix(in srgb,var(--primary) 6%,var(--panel));}
   .doc-table td{vertical-align:middle;}
   .doc-row{cursor:pointer;}
   .doc-row.drop td{background:color-mix(in srgb,var(--primary) 9%,var(--panel)) !important;}
@@ -3278,7 +3292,7 @@ function tplSgaClienteCard(c){
   const estado = !activo
     ? '<span style="color:var(--muted);">Sin activar · sigue en el Excel</span>'
     : hoyActivo ? `<b>Activo</b> <span style="color:var(--muted);">desde el ${esc(fmtDateDMY(cfg.activoDesde))}</span>` : `<b>Se activará</b> <span style="color:var(--muted);">el ${esc(fmtDateDMY(cfg.activoDesde))}</span>`;
-  const campos = sgaCamposCliente().filter(f => (cfg.campos[f.id] || 'no') !== 'no').map(f => `${f.label}: ${SGA_CAMPO_NIVELES[cfg.campos[f.id]].toLowerCase()}`).join(' · ') || 'Ninguno';
+  const campos = sgaCamposCliente().filter(f => (cfg.campos[f.id] || 'no') !== 'no').map(f => `<span class="tc-chip" style="margin:2px 4px 2px 0;" title="${esc(SGA_CAMPO_NIVELES[cfg.campos[f.id]])}">${esc(f.label)}${cfg.campos[f.id] === 'obligatorio' ? ' <b style="color:var(--danger);">*</b>' : ''}</span>`).join('') || '<span style="color:var(--mutedFaint);">Ninguno</span>';
   return `
     <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:20px;">
       ${decaCardHead('box', 'Gestión de stock (SGA)', 'Cómo se lleva el stock y el cobro automático de este cliente', sgaPuedeConfigurar() ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaClienteModal('${c.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>` : '')}
@@ -3287,7 +3301,7 @@ function tplSgaClienteCard(c){
           ${decaViewRow('clock', 'Estado del SGA', estado)}
           ${decaViewRow('tag', 'Códigos únicos por palet', cfg.codigosUnicos ? 'Sí: cada palet lleva su código' : 'No: partidas de palets iguales')}
           ${decaViewRow('box', 'Bultos por palet', sgaClienteConBultos(c.id) ? 'Sí: sus palets llevan varios bultos' : 'No: 1 palet = 1 bulto')}
-          ${decaViewRow('list', 'Datos de la mercancía', esc(campos), '', true)}
+          ${decaViewRow('list', 'Datos de la mercancía', campos, '', true)}
           ${cfg.observaciones ? decaViewRow('file', 'Observaciones', esc(cfg.observaciones), '', true) : ''}
         </div>
       </div>
@@ -3296,6 +3310,7 @@ function tplSgaClienteCard(c){
 // Pantalla completa dentro de la ficha del cliente (como el alta de tarifas): sin cabecera ni pestañas de la ficha.
 function sgaClienteCerrar(){
   window.__sgaClienteFormId = null;
+  window.__sgacFor = null; window.__sgacCampos = null;
   window.__sgaArtForm = null;
   window.__sgaArtRapida = null;
   renderHeader(); renderTab();
@@ -3307,14 +3322,39 @@ function openSgaClienteForm(clienteId){
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
 }
+/* ---- Datos de la mercancía del cliente, en compacto ----
+   Arriba solo los datos que usa (con su nivel: opcional u obligatorio); debajo, botones para añadir el resto. El estado se
+   guarda en window.__sgacCampos hasta que se pulsa Guardar. */
+function sgacCamposHtml(){
+  const est = window.__sgacCampos || {};
+  const todos = sgaCamposCliente();
+  const act = todos.filter(f => (est[f.id] || 'no') !== 'no');
+  const libres = todos.filter(f => (est[f.id] || 'no') === 'no');
+  const fila = f => `
+    <div class="sgac-fila">
+      <div class="sgac-nom" title="${esc(f.label)}">${esc(f.label)}</div>
+      <div class="doc-seg sgac-seg">
+        <button type="button" class="${est[f.id] === 'opcional' ? 'on' : ''}" onclick="sgacNivel('${f.id}', 'opcional')">Opcional</button>
+        <button type="button" class="${est[f.id] === 'obligatorio' ? 'on ob' : ''}" onclick="sgacNivel('${f.id}', 'obligatorio')">Obligatorio</button>
+      </div>
+      <button type="button" class="sgac-x" title="Este cliente ya no usa este dato" onclick="sgacNivel('${f.id}', 'no')">✕</button>
+    </div>`;
+  const grupo = (titulo, lista) => lista.length ? `<div class="sgac-tit">${titulo}</div><div class="sgac-grid">${lista.map(fila).join('')}</div>` : '';
+  return `
+    ${act.length ? grupo('Al recibir la mercancía', act.filter(f => f.ambito !== 'articulo')) + grupo('En el catálogo del cliente', act.filter(f => f.ambito === 'articulo'))
+      : '<div style="color:var(--mutedFaint);font-size:12.5px;">Este cliente no usa ningún dato extra de la mercancía.</div>'}
+    ${libres.length ? `<div class="sgac-tit">Añadir un dato</div><div class="sgac-chips">${libres.map(f => `<button type="button" class="sgac-chip" title="${f.ambito === 'articulo' ? 'Del artículo (catálogo)' : 'De la entrada'}" onclick="sgacNivel('${f.id}', 'opcional')">+ ${esc(f.label)}</button>`).join('')}</div>` : ''}`;
+}
+function sgacNivel(id, nivel){
+  window.__sgacCampos = window.__sgacCampos || {};
+  window.__sgacCampos[id] = nivel;
+  const el = document.getElementById('sgac-campos');
+  if (el) el.innerHTML = sgacCamposHtml();
+}
 function tplSgaClientePage(c){
   const cfg = sgaClienteCfg(c.id);
   const nombre = (c.nombreComercial || '').trim() || c.nombre;
-  const campoFila = f => `
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);">
-      <span style="font-size:13.5px;">${esc(f.label)}${f.custom ? ` <small style="color:var(--mutedFaint);">· ${f.ambito === 'articulo' ? 'del artículo (catálogo)' : 'de la entrada'}</small>` : ''}</span>
-      <select id="sgac-${f.id}" style="width:190px;">${Object.keys(SGA_CAMPO_NIVELES).map(k => `<option value="${k}" ${cfg.campos[f.id] === k ? 'selected' : ''}>${SGA_CAMPO_NIVELES[k]}</option>`).join('')}</select>
-    </div>`;
+  if (window.__sgacFor !== c.id || !window.__sgacCampos) { window.__sgacCampos = Object.assign({}, cfg.campos); window.__sgacFor = c.id; }
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
@@ -3324,7 +3364,7 @@ function tplSgaClientePage(c){
         <div class="deca-banner-sub">${esc(nombre)} · cómo se lleva su stock y su cobro automático.</div>
       </div>
     </div>
-    <div class="deca-form" style="max-width:640px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
+    <div class="deca-form" style="max-width:760px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
       <div class="card deca-card">
         ${decaCardHead('clock', 'Activación', 'Desde cuándo el SGA le cobra')}
         <div class="deca-card-body">
@@ -3340,16 +3380,15 @@ function tplSgaClientePage(c){
         </div>
       </div>
       <div class="card deca-card">
-        ${decaCardHead('box', 'Bultos por palet', 'Solo para clientes a los que se cobra por bulto')}
-        <div class="deca-card-body">
-          <label style="display:flex;align-items:flex-start;gap:10px;font-size:13.5px;cursor:pointer;"><input type="checkbox" class="switch" id="sgac-bultos" ${sgaClienteConBultos(c.id) ? 'checked' : ''} style="margin-top:2px;" />
-            <span><b>Sus palets llevan varios bultos</b><br><span style="font-size:12px;color:var(--muted);">Normalmente 1 palet = 1 bulto y no hace falta activarlo. Actívalo si un palet o modelo lleva varias cajas y se cobra por caja: p. ej. una carpa de 3 cajas cuenta como 1 palet en el stock y se cobran 3 bultos. Entonces el catálogo guarda cuántos bultos lleva cada artículo y la entrada los calcula sola.</span></span></label>
+        <div class="deca-card-body" style="padding:14px 18px;">
+          <label style="display:flex;align-items:center;gap:10px;font-size:13.5px;cursor:pointer;"><input type="checkbox" class="switch" id="sgac-bultos" ${sgaClienteConBultos(c.id) ? 'checked' : ''} />
+            <span style="flex:1;"><b>Sus palets llevan varios bultos</b> <span style="font-size:12px;color:var(--muted);">· se cobra por bulto</span></span>
+            <span title="Normalmente 1 palet = 1 bulto y no hace falta activarlo. Actívalo si un palet o modelo lleva varias cajas y se cobra por caja: p. ej. una carpa de 3 cajas cuenta como 1 palet en el stock y se cobran 3 bultos. El catálogo guarda cuántos bultos lleva cada artículo y la entrada los calcula sola." style="display:inline-flex;color:var(--mutedFaint);cursor:help;">${homeIcon(HOME_ICON_PATHS.info, 18, 'currentColor', 1.8)}</span></label>
         </div>
       </div>
       <div class="card deca-card">
-        ${decaCardHead('list', 'Datos de la mercancía', 'Qué datos usa este cliente: en cada entrada y en su catálogo')}
-        <div class="deca-card-body" style="padding-top:6px;">${sgaCamposCliente().map(campoFila).join('')}
-          <div style="font-size:12px;color:var(--mutedFaint);margin-top:10px;">Aquí aparecen los datos de serie y los que se crean en Configuración → Datos de mercancía.</div></div>
+        ${decaCardHead('list', 'Datos de la mercancía', 'Qué datos usa este cliente. Los nuevos se crean en Configuración → Datos de mercancía')}
+        <div class="deca-card-body" id="sgac-campos">${sgacCamposHtml()}</div>
       </div>
       <div class="card deca-card">
         ${decaCardHead('file', 'Albaranes de salida', 'Cómo se numeran los albaranes de este cliente')}
@@ -3363,7 +3402,7 @@ function tplSgaClientePage(c){
         <div class="deca-card-body"><div class="field" style="margin-bottom:0;">${decaInputIcon('file', `<input id="sgac-obs" maxlength="250" placeholder="Opcional" value="${esc(cfg.observaciones || '')}" />`)}</div></div>
       </div>
     </div>
-    <div class="deca-actions" style="max-width:640px;">
+    <div class="deca-actions" style="max-width:760px;">
       <div id="sgac-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
       <div class="deca-actions-row">
         <button class="btn btn-ghost deca-cancel" onclick="sgaClienteCerrar()">Cancelar</button>
@@ -3381,7 +3420,7 @@ async function submitSgaCliente(){
   const activoDesde = document.getElementById('sgac-desde').value || '';
   const codigosUnicos = document.getElementById('sgac-codigos').checked;
   const campos = Object.assign({}, previa.campos);   // se conservan los niveles de los campos archivados
-  sgaCamposCliente().forEach(f => { campos[f.id] = document.getElementById(`sgac-${f.id}`).value; });
+  sgaCamposCliente().forEach(f => { campos[f.id] = (window.__sgacCampos || {})[f.id] || 'no'; });
   campos.__bultos = document.getElementById('sgac-bultos').checked ? 'si' : 'no';
   const observaciones = document.getElementById('sgac-obs').value.trim();
   const prefijo = ((document.getElementById('sgac-prefijo') || {}).value || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
