@@ -2484,6 +2484,13 @@ function computeBreadcrumbSegments(){
       }
       return [{label:'DeCA', onclick:null}];
     }
+    if (traficoSection() === 'ordenes') {
+      if (window.__ocView === 'form') {
+        const ed = window.__ocFormId ? ordenesCarga.find(x => x.id === window.__ocFormId) : null;
+        return [{label:'Órdenes de carga', onclick:'backToOrdenesCarga()'}, {label: ed ? 'Orden ' + ocRef(ed) : 'Nueva orden', onclick:null}];
+      }
+      return [{label:'Órdenes de carga', onclick:null}];
+    }
     if (traficoSection() === 'colaboradores') {
       if (window.__colabView === 'rutaForm') {
         const ed = window.__colabRutaFormId ? transportistaRutas.find(r=>r.id===window.__colabRutaFormId) : null;
@@ -11606,6 +11613,7 @@ function tplAutonomosDashboardBody(){
 const TRAFICO_SECTIONS = [
   { id: 'transportistas', label: 'Transportistas', desc: 'Contactos marcados como transportista, con su correo y teléfono.' },
   { id: 'colaboradores', label: 'Rutas', desc: 'Qué transportista cubre cada ruta, para contactarlo si sobra un viaje.' },
+  { id: 'ordenes', label: 'Órdenes de carga', desc: 'Órdenes para contratar a un transportista un viaje vendido a un cliente, con su PDF y, si hace falta, su DeCA.' },
   { id: 'deca', label: 'DeCA', desc: 'Documento electrónico de control administrativo del transporte.' },
   { id: 'direcciones', label: 'Direcciones', desc: 'Agenda de naves, muelles y direcciones de carga y descarga.' },
 ];
@@ -11629,12 +11637,14 @@ function tplTraficoBar(){
 function traficoIsSubpage(){
   return (traficoSection() === 'deca' && window.__traficoView === 'decaForm')
     || (traficoSection() === 'direcciones' && window.__administracionView === 'direccionForm')
-    || (traficoSection() === 'colaboradores' && window.__colabView === 'rutaForm');
+    || (traficoSection() === 'colaboradores' && window.__colabView === 'rutaForm')
+    || (traficoSection() === 'ordenes' && window.__ocView === 'form');
 }
 function setTraficoSection(id){
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
   if (!colabRutaConfirmLeaveForm()) return;
+  if (!ocConfirmLeaveForm()) return;
   if (!sectionAllowedFor(PROFILE, 'trafico', id)) return;
   traficoEnterSection(id);
   renderHeader(); renderTab();
@@ -11645,6 +11655,7 @@ function traficoEnterSection(id){
   window.__direccionFormDirty = false;
   window.__traficoSection = id;
   window.__traficoView = id === 'deca' ? 'deca' : 'home';
+  window.__ocView = 'list'; window.__ocFormDirty = false; window.__ocSearch = '';
   window.__decaMenuOpen = null;
   if (id === 'direcciones') {
     window.__administracionView = 'direcciones';
@@ -11661,6 +11672,7 @@ function tplTrafico(){
   if (sec === 'deca') return window.__traficoView === 'decaForm' ? tplDecaFormPage() : tplDecaPage();
   if (sec === 'direcciones') return window.__administracionView === 'direccionForm' ? tplDireccionFormPage() : tplDireccionesPage();
   if (sec === 'colaboradores') return window.__colabView === 'rutaForm' ? tplColabRutaFormPage() : tplColaboradoresPage();
+  if (sec === 'ordenes') return window.__ocView === 'form' ? tplOcFormPage() : tplOrdenesCargaPage();
   return tplTransportistasPage();
 }
 function openDecaModule(){
@@ -11674,6 +11686,580 @@ function backToTraficoHome(){
   window.__decaFormDirty = false;
   window.__traficoView = window.__traficoSection === 'deca' ? 'deca' : 'home';
   renderHeader(); renderTab();
+}
+
+/* ============================= ÓRDENES DE CARGA (Transporte) =============================
+   Las órdenes con las que se contrata a un transportista para un viaje que se ha vendido a un cliente. Llevan un contador
+   propio (S012285…), una o varias cargas y descargas, y opcionalmente generan el DeCA (en internacional no hace falta).
+   El PDF (la orden, las instrucciones de facturación y las condiciones) se genera al momento: no se guarda. */
+const OC_EMPRESA = {
+  nombre: 'QUALIFIED S.L.', direccion: 'C/PONT, 22 APTDO DE CORREOS 20', cp: '08650', poblacion: 'Sallent', provincia: 'Barcelona',
+  pais: 'España', cif: 'ESB98650062', correoTrafico: 'trafico@qualified3.com', correoAdmin: 'administracion@qualified3.com',
+  telefono: '+34 938 78 75 66', telefonoRetrasos: '938 787 566',
+};
+const OC_CONDICIONES = [
+  ['Comunicación de la Documentación CMR', 'Es imprescindible el envío del documento de Control de Mercancías por Carretera (CMR) al correo electrónico administracion@qualified3.com en un plazo máximo de 10 días tras la descarga.'],
+  ['Cumplimiento Normativo y Seguro CMR', 'Requerimos estrictamente que todos nuestros transportistas cuenten con un seguro CMR vigente, además de la documentación necesaria acorde a la normativa de circulación actual.'],
+  ['Información de los Vehículos y Fechas de Servicio', 'Rogamos nos faciliten con antelación las matrículas de los camiones asignados a este servicio. Es esencial respetar las fechas de carga y descarga acordadas. En caso de retrasos imprevistos en la carga o descarga, por favor contacten de manera inmediata al teléfono: 938 787 566.'],
+  ['Gestión de Palets', 'En situaciones donde se haya acordado el intercambio de palets, éstos deben ser cambiados o devueltos de manera inmediata. De no ser así, se aplicará un cargo de 9€ por palet no intercambiado o devuelto en un plazo de 15 días.'],
+  ['Responsabilidad sobre el Vehículo y la Mercancía', 'La responsabilidad del estado del vehículo, así como la seguridad y protección de la mercancía durante el transporte, recae sobre el transportista. Esto incluye la supervisión de la carga y descarga, asegurando la correcta estabilidad y control de cantidades de las mercancías transportadas.'],
+  ['Procedimiento de Facturación', 'Las facturas deben enviarse por duplicado, incluyendo el número de referencia correspondiente. El pago se realizará contra la presentación del CMR y los albaranes originales debidamente cumplimentados, con un plazo de pago de 60 días desde la fecha de recepción de la factura, efectuándose el pago el día 15 de cada mes.'],
+  ['Confidencialidad de Información de Clientes', 'La protección de la información de nuestros clientes es un pilar fundamental en este contrato. Cualquier divulgación no autorizada de dicha información será tratada con la máxima seriedad y conforme a la ley.'],
+  ['Aceptación de la Orden de Carga', 'La no respuesta a esta orden de carga implicará la aceptación automática del viaje, incluyendo las primeras 3 horas de espera tanto en la carga como en la descarga.'],
+  ['Restricción de Manipulación de Mercancía', 'Queda terminantemente prohibida la manipulación de la mercancía entre el origen y el destino sin una autorización expresa previa por parte de Qualified S.L.'],
+  ['Resolución de Controversias y Jurisdicción', 'Para controversias de hasta seis mil euros, ambas partes se someten a la competencia de las Juntas Arbitrales de Transporte. Cualquier otra reclamación superior será resuelta exclusivamente ante los Juzgados y Tribunales de Justicia de Barcelona, bajo la legislación española.'],
+  ['Seguridad de la Carga', 'EL TRANSPORTISTA deberá garantizar la seguridad de la carga durante el transporte, planificando y supervisando el tipo de vehículo, la carga máxima, la naturaleza de la carga, su disposición y los elementos de sujeción necesarios para asegurar la estabilidad y seguridad del vehículo en ruta.'],
+];
+let ordenesCarga = [];
+function ocDeFila(r){
+  return {
+    id: r.id, numero: r.numero, createdAt: r.created_at, estado: r.estado || 'emitida', anuladoMotivo: r.anulado_motivo || '',
+    fechaPedido: r.fecha_pedido || '', clienteId: r.cliente_id || '', transportistaId: r.transportista_id || '',
+    transportistaNombre: r.transportista_nombre || '', transportistaNif: r.transportista_nif || '',
+    transportistaDireccion: r.transportista_direccion || '', transportistaPoblacion: r.transportista_poblacion || '',
+    matriculaTractora: r.matricula_tractora || '', matriculaRemolque: r.matricula_remolque || '',
+    mercancia: r.mercancia || '', indicaciones: r.indicaciones || '', observacionesEspeciales: r.observaciones_especiales || '',
+    precio: r.precio == null ? null : Number(r.precio),
+    cargas: Array.isArray(r.cargas) ? r.cargas : [], descargas: Array.isArray(r.descargas) ? r.descargas : [],
+    pesoKg: r.peso_kg || '', decaId: r.deca_id || '',
+  };
+}
+async function loadOrdenesCarga(){
+  const { data } = await supabaseClient.from('ordenes_carga').select('*').order('numero', { ascending: false });
+  ordenesCarga = (data || []).map(ocDeFila);
+}
+function ocRef(o){ return 'S' + String(o.numero).padStart(6, '0'); }
+function ocClienteNombre(o){ const c = contactos.find(x => x.id === o.clienteId); return c ? ((c.nombreComercial || '').trim() || c.nombre) : ''; }
+function ocPuntoResumen(p){ return p ? [p.poblacion, p.pais].filter(Boolean).join(', ') || p.empresa || '—' : '—'; }
+
+/* ---- Listado ---- */
+function ocFiltro(){ return ['emitida', 'anulada'].includes(window.__ocFiltro) ? window.__ocFiltro : 'todas'; }
+function tplOrdenesCargaPage(){
+  const mes = today().slice(0, 7);
+  const emitidas = ordenesCarga.filter(o => o.estado === 'emitida');
+  const delMes = emitidas.filter(o => (o.fechaPedido || '').startsWith(mes)).length;
+  const f = ocFiltro();
+  const seg = (k, t) => `<button type="button" class="${f === k ? 'on' : ''}" onclick="window.__ocFiltro='${k}'; renderTab();">${t}</button>`;
+  return `
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.file, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 280px;">
+        <div class="deca-banner-title">Órdenes de carga</div>
+        <div class="deca-banner-sub">Las órdenes con las que contratas a un transportista para un viaje, con su PDF y, si hace falta, su DeCA.</div>
+      </div>
+      <div class="deca-banner-actions">
+        <div class="deca-stat"><b>${emitidas.length}</b><span>Emitidas</span></div>
+        <div class="deca-stat"><b>${delMes}</b><span>Este mes</span></div>
+        <button class="btn btn-primary deca-new-btn" onclick="openOcForm()">${homeIcon(HOME_ICON_PATHS.file, 17, 'currentColor', 1.8)}<span>Nueva orden</span></button>
+      </div>
+    </div>
+    <div class="card deca-toolbar">
+      <div class="deca-search">
+        <input placeholder="Buscar por nº, cliente, transportista, lugar o matrícula…" value="${esc(window.__ocSearch || '')}" oninput="window.__ocSearch=this.value; refreshOcListBody();" />
+        <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
+      </div>
+      <div class="doc-seg">${seg('todas', 'Todas')}${seg('emitida', 'Emitidas')}${seg('anulada', 'Anuladas')}</div>
+    </div>
+    <div id="oc-list-body">${ocListBodyHtml()}</div>`;
+}
+function refreshOcListBody(){ const el = document.getElementById('oc-list-body'); if (el) el.innerHTML = ocListBodyHtml(); }
+function ocListBodyHtml(){
+  const q = (window.__ocSearch || '').toLowerCase();
+  const f = ocFiltro();
+  const list = ordenesCarga.filter(o => (f === 'todas' || o.estado === f) && (!q || [ocRef(o), ocClienteNombre(o), o.transportistaNombre, o.matriculaTractora, o.matriculaRemolque, o.mercancia,
+    ...o.cargas.map(p => [p.empresa, p.poblacion].join(' ')), ...o.descargas.map(p => [p.empresa, p.poblacion].join(' '))].some(v => String(v || '').toLowerCase().includes(q))));
+  if (!list.length) {
+    return `<div class="card deca-table-card"><div class="deca-empty"><span class="ico">${homeIcon(HOME_ICON_PATHS.file, 26, '#C1443D', 1.6)}</span><div style="font-size:14px;color:var(--text);font-weight:600;">${q || f !== 'todas' ? 'Ninguna orden coincide' : 'Todavía no hay ninguna orden de carga'}</div><div style="font-size:12.5px;">${q || f !== 'todas' ? 'Prueba con otra búsqueda o cambia el filtro.' : 'Pulsa «Nueva orden» para crear la primera.'}</div></div></div>`;
+  }
+  const pill = o => o.estado === 'anulada'
+    ? `<span class="tc-chip" style="background:color-mix(in srgb,var(--danger) 10%,var(--panel));color:var(--danger);border-color:color-mix(in srgb,var(--danger) 30%,var(--border));" title="${esc(o.anuladoMotivo)}">Anulada</span>`
+    : `<span class="tc-chip" style="background:color-mix(in srgb,var(--success) 12%,var(--panel));color:var(--success);border-color:color-mix(in srgb,var(--success) 30%,var(--border));">Emitida</span>`;
+  const mas = l => l.length > 1 ? `<span class="deca-pill-extra">+${l.length - 1}</span>` : '';
+  return `
+    <div class="card deca-table-card"><div class="deca-table-scroll">
+      <table class="deca-table">
+        <thead><tr>
+          ${thSort('Nº', 'text')}${thSort('Fecha', 'date')}${thSort('Cliente', 'text')}${thSort('Transportista', 'text')}${thSort('Carga', 'text')}${thSort('Descarga', 'text')}${thSort('Precio', 'number', 'style="text-align:right;"')}${thSort('Estado', 'text')}<th>DeCA</th><th>Acciones</th>
+        </tr></thead>
+        <tbody>
+          ${list.map(o => { const d = o.decaId ? decaDocuments.find(x => x.id === o.decaId) : null; return `
+            <tr class="dr-row"${o.estado === 'anulada' ? ' style="opacity:.6;"' : ''}>
+              <td data-sort-value="${o.numero}" style="white-space:nowrap;"><span class="deca-code-pill" style="font-size:12px;">${esc(ocRef(o))}</span></td>
+              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(o.fechaPedido)}">${fmtDateDMY(o.fechaPedido)}</td>
+              <td style="font-weight:600;white-space:nowrap;" data-sort-value="${esc(ocClienteNombre(o))}" title="${esc(ocClienteNombre(o))}">${esc(truncateText(ocClienteNombre(o), 22)) || '—'}</td>
+              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(o.transportistaNombre)}" title="${esc(o.transportistaNombre)}">${esc(truncateText(o.transportistaNombre, 24))}</td>
+              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(ocPuntoResumen(o.cargas[0]))}" title="${esc(o.cargas.map(p => [p.empresa, p.poblacion, fmtDateDMY(p.fecha)].filter(Boolean).join(' · ')).join('\n'))}">${esc(truncateText(ocPuntoResumen(o.cargas[0]), 22))}${mas(o.cargas)}</td>
+              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(ocPuntoResumen(o.descargas[0]))}" title="${esc(o.descargas.map(p => [p.empresa, p.poblacion, fmtDateDMY(p.fecha)].filter(Boolean).join(' · ')).join('\n'))}">${esc(truncateText(ocPuntoResumen(o.descargas[0]), 22))}${mas(o.descargas)}</td>
+              <td class="tf-precio" data-sort-value="${o.precio == null ? '' : o.precio}">${o.precio == null ? '—' : esc(eur2(o.precio))}</td>
+              <td data-sort-value="${esc(o.estado)}">${pill(o)}</td>
+              <td style="white-space:nowrap;">${d ? `<button class="deca-code-pill" style="font-size:12px;cursor:pointer;border:none;" onclick="openDecaViewModal('${d.id}')" title="Ver el DeCA">${esc(d.codigo || 'DeCA')}</button>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+              <td style="white-space:nowrap;">
+                <button class="deca-act" onclick="ocDescargarPdf('${o.id}')" title="Descargar el PDF (${esc(ocRef(o))}.pdf)">${homeIcon(HOME_ICON_PATHS.download, 15, 'currentColor', 2)}</button>
+                ${o.estado === 'emitida' ? `<button class="deca-act" onclick="openOcForm('${o.id}')" title="Editar">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+                <button class="deca-act danger" onclick="ocAnularAbrir('${o.id}')" title="Anular la orden">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>` : ''}
+              </td>
+            </tr>`; }).join('')}
+        </tbody>
+      </table>
+    </div></div>`;
+}
+
+/* ---- Formulario (pantalla completa) ---- */
+function openOcForm(editId){
+  window.__traficoSection = 'ordenes';
+  window.__traficoView = 'home';
+  window.__ocView = 'form';
+  window.__ocFormId = editId || null;
+  window.__ocFormDirty = false;
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
+}
+function ocConfirmLeaveForm(){
+  if (window.__ocView === 'form' && window.__ocFormDirty) return leaveGuard();
+  return true;
+}
+function backToOrdenesCarga(){
+  if (!ocConfirmLeaveForm()) return;
+  window.__ocFormDirty = false;
+  window.__ocView = 'list';
+  renderHeader(); renderTab();
+}
+function ocPuntoRowHtml(tipo, p, quitar){
+  p = p || {};
+  const r = (k, label, ph, extra) => `<div class="field" style="flex:1;min-width:${extra || 170}px;margin-bottom:10px;"><label>${label}</label><input data-k="${k}" maxlength="200" placeholder="${ph || ''}" value="${esc(p[k] || '')}" /></div>`;
+  return `
+    <div class="oc-pt" data-t="${tipo}" style="border:1px solid var(--border);border-radius:12px;padding:14px 14px 4px;margin-bottom:10px;background:var(--panel2);">
+      <div style="display:flex;gap:10px;align-items:flex-start;">
+        <div class="field" style="flex:1;margin-bottom:10px;"><label>${tipo === 'carga' ? 'Dirección de carga' : 'Dirección de descarga'} <small style="color:var(--mutedFaint);font-weight:400;">· elige una de tu agenda y se rellena sola</small></label>
+          ${decaInputIcon('pin', `<input class="oc-dir" maxlength="200" data-combo="oc-direcciones-datalist" autocomplete="off" placeholder="Busca en tus direcciones…" oninput="ocElegirDireccion(this)" />`)}</div>
+        ${quitar ? `<button type="button" class="deca-act danger" style="margin-top:24px;" onclick="ocPuntoQuitar(this)" title="Quitar este punto">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>` : ''}
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">${r('empresa', 'Empresa', 'Ej. Qualified Logistics', 220)}${r('poblacion', 'Población', '', 160)}</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">${r('direccion', 'Dirección', 'Calle, número, polígono…', 260)}${r('cp', 'C.P.', '', 90)}${r('pais', 'País', '', 130)}</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:150px;margin-bottom:10px;"><label>Fecha</label><input data-k="fecha" type="date" value="${esc(p.fecha || '')}" /></div>
+        ${r('hora', 'Hora', 'Ej. 8-16H', 150)}${r('ref', tipo === 'carga' ? 'Ref. carga' : 'Ref. descarga', '', 150)}
+      </div>
+      <div class="field" style="margin-bottom:10px;"><label>Observaciones</label><input data-k="observaciones" maxlength="400" placeholder="Ej. Avisar 24 h antes de llegar" value="${esc(p.observaciones || '')}" /></div>
+    </div>`;
+}
+function ocElegirDireccion(el){
+  const d = direcciones.find(x => !x.archived && decaDireccionText(x) === el.value);
+  if (!d) return;
+  const row = el.closest('.oc-pt');
+  const set = (k, v) => { const i = row.querySelector(`[data-k="${k}"]`); if (i) i.value = v || ''; };
+  set('empresa', d.nombre); set('direccion', [d.calle1, d.calle2].filter(Boolean).join(', '));
+  set('cp', d.codigoPostal); set('poblacion', d.ciudad); set('pais', d.pais);
+  window.__ocFormDirty = true;
+}
+function ocPuntoAdd(tipo){
+  const cont = document.getElementById(tipo === 'carga' ? 'oc-cargas' : 'oc-descargas');
+  if (cont) cont.insertAdjacentHTML('beforeend', ocPuntoRowHtml(tipo, {}, true));
+  window.__ocFormDirty = true;
+}
+function ocPuntoQuitar(btn){ const r = btn.closest('.oc-pt'); if (r) r.remove(); window.__ocFormDirty = true; }
+function ocLeerPuntos(tipo){
+  return [...document.querySelectorAll(`.oc-pt[data-t="${tipo}"]`)].map(row => {
+    const p = {};
+    row.querySelectorAll('[data-k]').forEach(i => { p[i.dataset.k] = i.value.trim(); });
+    return p;
+  });
+}
+function ocElegirTransportista(){
+  const v = document.getElementById('oc-transp-nombre').value;
+  const c = contactos.find(x => !x.archived && x.esTransportista && x.nombre === v);
+  if (!c) return;
+  document.getElementById('oc-transp-nif').value = c.nif || '';
+  document.getElementById('oc-transp-dir').value = [c.calle1, c.calle2].filter(Boolean).join(', ');
+  document.getElementById('oc-transp-pob').value = c.ciudad || '';
+}
+function ocDecaToggle(){
+  const on = document.getElementById('oc-deca-on').checked;
+  const box = document.getElementById('oc-deca-campos');
+  if (box) box.style.display = on ? '' : 'none';
+}
+function tplOcFormPage(){
+  const editId = window.__ocFormId;
+  const o = editId ? ordenesCarga.find(x => x.id === editId) : null;
+  const e = o || { fechaPedido: today(), indicaciones: 'INDEXACIÓN GASOIL YA INCLUIDA EN EL PRECIO', cargas: [{}], descargas: [{}] };
+  const cargas = e.cargas.length ? e.cargas : [{}], descargas = e.descargas.length ? e.descargas : [{}];
+  const req = '<span class="dc-req">*</span>';
+  const deca = o && o.decaId ? decaDocuments.find(x => x.id === o.decaId) : null;
+  return `
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.file, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;">
+        <div class="deca-banner-title">${o ? 'Orden de carga' : 'Nueva orden de carga'}${o ? `<span class="deca-code-pill">${esc(ocRef(o))}</span>` : ''}</div>
+        <div class="deca-banner-sub">${o ? 'Al guardar cambia la orden; el número se mantiene.' : 'El número se asigna al guardar. Después puedes descargar el PDF para enviárselo al transportista.'}</div>
+      </div>
+    </div>
+    <div class="deca-form" oninput="window.__ocFormDirty=true;" onchange="window.__ocFormDirty=true;">
+      <datalist id="oc-direcciones-datalist">${decaDireccionesOptionsHtml()}</datalist>
+      <div class="deca-grid" style="margin-bottom:6px;">
+        <div class="card deca-card" style="--dc-accent:var(--primary);">
+          ${decaCardHead('briefcase', 'Pedido', 'Para quién es el viaje y cuánto se paga')}
+          <div class="deca-card-body">
+            <div class="field"><label>Cliente al que se vende el transporte</label>
+              ${decaInputIcon('building', `<input id="oc-cliente" maxlength="150" data-combo="oc-clientes-datalist" autocomplete="off" placeholder="Elige entre tus clientes de transporte" value="${esc((contactos.find(c => c.id === e.clienteId) || {}).nombre || '')}" />`)}
+              <datalist id="oc-clientes-datalist">${decaCargadoresOptionsHtml()}</datalist></div>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;">
+              <div class="field" style="flex:1;min-width:150px;"><label>Fecha del pedido ${req}</label>${decaInputIcon('calendar', `<input id="oc-fecha" type="date" value="${esc(e.fechaPedido || today())}" />`)}</div>
+              <div class="field" style="flex:1;min-width:150px;"><label>Precio ${req}</label>${decaInputIcon('weight', `<input id="oc-precio" inputmode="decimal" maxlength="12" placeholder="Ej. 700" value="${esc(e.precio == null ? '' : String(e.precio).replace('.', ','))}" />`, '€')}</div>
+            </div>
+            <div class="field"><label>Mercancía</label>${decaInputIcon('box', `<input id="oc-mercancia" maxlength="250" placeholder="Ej. 2 cajas etiquetadas" value="${esc(e.mercancia || '')}" />`)}</div>
+            <div class="field" style="margin-bottom:0;"><label>Indicaciones</label>${decaInputIcon('file', `<input id="oc-indicaciones" maxlength="250" value="${esc(e.indicaciones || '')}" />`)}</div>
+          </div>
+        </div>
+        <div class="card deca-card" style="--dc-accent:var(--primary);">
+          ${decaCardHead('truck', 'Transportista', 'Quién hace el viaje')}
+          <div class="deca-card-body">
+            <div class="field"><label>Nombre o razón social ${req}</label>
+              ${decaInputIcon('truck', `<input id="oc-transp-nombre" maxlength="150" data-combo="oc-transportistas-datalist" autocomplete="off" oninput="ocElegirTransportista()" placeholder="Elige entre tus transportistas" value="${esc(e.transportistaNombre || '')}" />`)}
+              <datalist id="oc-transportistas-datalist">${contactos.filter(c => !c.archived && c.esTransportista).map(c => `<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('')}</datalist></div>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;">
+              <div class="field" style="flex:1;min-width:150px;"><label>CIF</label>${decaInputIcon('idcard', `<input id="oc-transp-nif" maxlength="20" value="${esc(e.transportistaNif || '')}" />`)}</div>
+              <div class="field" style="flex:1;min-width:150px;"><label>Población</label>${decaInputIcon('pin', `<input id="oc-transp-pob" maxlength="100" value="${esc(e.transportistaPoblacion || '')}" />`)}</div>
+            </div>
+            <div class="field"><label>Dirección</label>${decaInputIcon('pin', `<input id="oc-transp-dir" maxlength="200" value="${esc(e.transportistaDireccion || '')}" />`)}</div>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;">
+              <div class="field" style="flex:1;min-width:150px;margin-bottom:0;"><label>Matrícula tractora</label>${decaInputIcon('truck', `<input id="oc-mat-tractora" maxlength="15" oninput="this.value=this.value.toUpperCase();" value="${esc(e.matriculaTractora || '')}" />`)}</div>
+              <div class="field" style="flex:1;min-width:150px;margin-bottom:0;"><label>Matrícula remolque</label>${decaInputIcon('trailer', `<input id="oc-mat-remolque" maxlength="15" oninput="this.value=this.value.toUpperCase();" value="${esc(e.matriculaRemolque || '')}" />`)}</div>
+            </div>
+          </div>
+        </div>
+        <div class="card deca-card" style="grid-column:1 / -1;--dc-accent:var(--primary);">
+          ${decaCardHead('upload', 'Cargas', 'Dónde se recoge. Si hay varios puntos, añade cada uno')}
+          <div class="deca-card-body">
+            <div id="oc-cargas">${cargas.map((p, i) => ocPuntoRowHtml('carga', p, i > 0)).join('')}</div>
+            <button type="button" class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px;" onclick="ocPuntoAdd('carga')">+ Añadir punto de carga</button>
+          </div>
+        </div>
+        <div class="card deca-card" style="grid-column:1 / -1;--dc-accent:var(--primary);">
+          ${decaCardHead('download', 'Descargas', 'Dónde se entrega. Si hay varios puntos, añade cada uno')}
+          <div class="deca-card-body">
+            <div id="oc-descargas">${descargas.map((p, i) => ocPuntoRowHtml('descarga', p, i > 0)).join('')}</div>
+            <button type="button" class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px;" onclick="ocPuntoAdd('descarga')">+ Añadir punto de descarga</button>
+          </div>
+        </div>
+        <div class="card deca-card" style="--dc-accent:var(--primary);">
+          ${decaCardHead('file', 'Observaciones especiales', 'Opcional · saldrán en el PDF')}
+          <div class="deca-card-body" style="display:flex;"><textarea id="oc-obs" maxlength="600" style="flex:1;min-height:110px;resize:vertical;">${esc(e.observacionesEspeciales || '')}</textarea></div>
+        </div>
+        <div class="card deca-card" style="--dc-accent:var(--primary);">
+          ${decaCardHead('shield', 'DeCA', 'Obligatorio en nacional; en internacional no se hace')}
+          <div class="deca-card-body">
+            ${deca
+              ? `<div style="font-size:13.5px;">Esta orden ya tiene su DeCA: <button type="button" class="deca-code-pill" style="cursor:pointer;border:none;" onclick="openDecaViewModal('${deca.id}')">${esc(deca.codigo || 'DeCA')}</button></div>`
+              : `<label style="display:flex;align-items:flex-start;gap:10px;font-size:13.5px;cursor:pointer;"><input type="checkbox" class="switch" id="oc-deca-on" onchange="ocDecaToggle()" style="margin-top:2px;" />
+                  <span><b>Generar también el DeCA</b><br><span style="font-size:12px;color:var(--muted);">Se crea con los datos de esta orden. El cargador contractual es el cliente de arriba. Déjalo apagado en transportes internacionales.</span></span></label>
+                <div id="oc-deca-campos" style="display:none;margin-top:14px;">
+                  <div class="field" style="max-width:240px;margin-bottom:0;"><label>Peso de la mercancía ${req}</label>${decaInputIcon('weight', `<input id="oc-peso" inputmode="decimal" maxlength="30" placeholder="Ej. 12.500" value="${esc(String(e.pesoKg || '').replace(/\s*kg\.?$/i, ''))}" />`, 'kg')}</div>
+                  <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">También hace falta la matrícula tractora y el NIF del cliente y del transportista.</div>
+                </div>`}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="deca-actions">
+      <div id="oc-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
+      <div class="deca-actions-row">
+        <button class="btn btn-ghost deca-cancel" onclick="backToOrdenesCarga()">Cancelar</button>
+        <button class="btn btn-primary deca-submit oc-save" onclick="submitOcForm('${editId || ''}')">${o ? 'Guardar cambios' : 'Crear orden'}</button>
+      </div>
+    </div>`;
+}
+async function submitOcForm(editId){
+  const errEl = document.getElementById('oc-error');
+  errEl.textContent = '';
+  const v = id => (document.getElementById(id) || {}).value ? document.getElementById(id).value.trim() : '';
+  const cliente = contactos.find(c => !c.archived && c.esClienteTransporte && c.nombre === v('oc-cliente'));
+  const transp = contactos.find(c => !c.archived && c.esTransportista && c.nombre === v('oc-transp-nombre'));
+  const precioTxt = v('oc-precio').replace(/\s*€$/, '').replace(',', '.');
+  const precio = precioTxt === '' ? null : Number(precioTxt);
+  const cargas = ocLeerPuntos('carga').filter(p => Object.values(p).some(Boolean));
+  const descargas = ocLeerPuntos('descarga').filter(p => Object.values(p).some(Boolean));
+  const conDeca = !!(document.getElementById('oc-deca-on') && document.getElementById('oc-deca-on').checked);
+  const pesoTxt = v('oc-peso').replace(/\s*kg\.?$/i, '');
+  const errores = [];
+  if (v('oc-cliente') && !cliente) errores.push('El cliente tiene que ser uno de tus clientes de transporte (elígelo de la lista).');
+  if (!v('oc-fecha')) errores.push('Indica la fecha del pedido.');
+  if (precio == null || !isFinite(precio) || precio < 0) errores.push('Indica el precio (un número).');
+  if (!v('oc-transp-nombre')) errores.push('Elige el transportista.');
+  if (!cargas.length) errores.push('Añade al menos una carga (empresa y población).');
+  if (!descargas.length) errores.push('Añade al menos una descarga (empresa y población).');
+  if (conDeca) {
+    if (!cliente) errores.push('DeCA: elige el cliente de transporte (es el cargador contractual).');
+    else if (!cliente.nif) errores.push('DeCA: el cliente no tiene NIF en su ficha.');
+    if (!(transp ? transp.nif : v('oc-transp-nif'))) errores.push('DeCA: falta el CIF del transportista.');
+    if (!v('oc-mat-tractora')) errores.push('DeCA: falta la matrícula tractora.');
+    if (!v('oc-mercancia')) errores.push('DeCA: escribe la mercancía.');
+    if (!pesoTxt) errores.push('DeCA: indica el peso de la mercancía.');
+  }
+  if (errores.length) { errEl.textContent = errores.join('\n'); return; }
+  const btn = document.querySelector('.oc-save');
+  if (btn) { btn.disabled = true; btn.textContent = 'Guardando…'; }
+  const fila = {
+    fecha_pedido: v('oc-fecha'), cliente_id: cliente ? cliente.id : null, transportista_id: transp ? transp.id : null,
+    transportista_nombre: v('oc-transp-nombre'), transportista_nif: v('oc-transp-nif') || null, transportista_direccion: v('oc-transp-dir') || null, transportista_poblacion: v('oc-transp-pob') || null,
+    matricula_tractora: v('oc-mat-tractora') || null, matricula_remolque: v('oc-mat-remolque') || null,
+    mercancia: v('oc-mercancia') || null, indicaciones: v('oc-indicaciones') || null, observaciones_especiales: (document.getElementById('oc-obs') || {}).value ? document.getElementById('oc-obs').value.trim() : null,
+    precio, cargas, descargas, peso_kg: pesoTxt || null, updated_at: new Date().toISOString(),
+  };
+  try {
+    let oc;
+    if (editId) {
+      const { data, error } = await supabaseClient.from('ordenes_carga').update(fila).eq('id', editId).select().single();
+      if (error || !data) throw (error || new Error('sin datos'));
+      oc = ocDeFila(data);
+      const i = ordenesCarga.findIndex(x => x.id === editId); if (i > -1) ordenesCarga[i] = oc;
+    } else {
+      const { data, error } = await supabaseClient.from('ordenes_carga').insert({ ...fila, created_by: currentUserEmail() }).select().single();
+      if (error || !data) throw (error || new Error('sin datos'));
+      oc = ocDeFila(data);
+      ordenesCarga.unshift(oc);
+    }
+    let avisoDeca = '';
+    if (conDeca && !oc.decaId) {
+      try {
+        const doc = await ocCrearDeca(oc);
+        const { error: e2 } = await supabaseClient.from('ordenes_carga').update({ deca_id: doc.id }).eq('id', oc.id);
+        if (e2) throw e2;
+        oc.decaId = doc.id;
+      } catch (err) { avisoDeca = ' La orden se ha guardado, pero el DeCA no se pudo crear: ' + (err && err.message ? err.message : 'error desconocido.') + ' Ábrela con «Editar» para reintentarlo.'; }
+    }
+    window.__ocFormDirty = false;
+    window.__ocView = 'list';
+    renderHeader(); renderTab();
+    appToast(`Orden ${ocRef(oc)} ${editId ? 'actualizada' : 'creada'}.${avisoDeca}`, avisoDeca ? 'error' : 'ok');
+  } catch (err) {
+    const m = err && err.message ? err.message : 'error desconocido.';
+    errEl.textContent = 'No se pudo guardar: ' + (/ordenes_carga|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL «Órdenes de carga» en Supabase.' : m);
+    if (btn) { btn.disabled = false; btn.textContent = editId ? 'Guardar cambios' : 'Crear orden'; }
+  }
+}
+// Crea el DeCA de una orden (mismos pasos que el formulario del DeCA: PDF con QR, alta, y nuevo PDF con el número).
+async function ocCrearDeca(o){
+  const cl = contactos.find(c => c.id === o.clienteId);
+  if (!cl) throw new Error('falta el cliente de transporte (es el cargador contractual).');
+  const lugar = p => [p.empresa, p.direccion, [p.cp, p.poblacion].filter(Boolean).join(' '), p.pais].filter(Boolean).join(', ').slice(0, 150);
+  const cs = o.cargas.map(lugar).filter(Boolean), ds = o.descargas.map(lugar).filter(Boolean);
+  const peso = String(o.pesoKg || '').replace(/\s*kg\.?$/i, '').trim();
+  const fields = {
+    cargadorNombre: cl.nombre, cargadorNif: cl.nif || '', cargadorDomicilio: cargadorDireccionCompleta(cl),
+    transportistaNombre: o.transportistaNombre, transportistaNif: o.transportistaNif, transportistaDomicilio: [o.transportistaDireccion, o.transportistaPoblacion].filter(Boolean).join(', '),
+    origen: cs[0] || '', origenesExtra: cs.slice(1), destino: ds[0] || '', destinosExtra: ds.slice(1),
+    mercanciaNaturaleza: o.mercancia, mercanciaPeso: peso ? peso + ' kg' : '',
+    fechaTransporte: (o.cargas[0] && o.cargas[0].fecha) || o.fechaPedido,
+    matriculaTractora: o.matriculaTractora, matriculaRemolque: o.matriculaRemolque, relevos: [],
+    observaciones: 'Orden de carga ' + ocRef(o), creacionFecha: today(), creacionHora: new Date().toTimeString().slice(0, 8),
+  };
+  const faltan = ['cargadorNif', 'transportistaNif', 'origen', 'destino', 'mercanciaNaturaleza', 'mercanciaPeso', 'matriculaTractora'].filter(k => !fields[k]);
+  if (faltan.length) throw new Error('faltan datos para el DeCA (' + faltan.join(', ') + ').');
+  const storagePath = `deca/${nextId()}.pdf`;
+  const { url } = await buildAndUploadDecaPdf({ ...fields, codigo: '' }, storagePath, null);
+  const dbPayload = {
+    cargador_nombre: fields.cargadorNombre, cargador_nif: fields.cargadorNif, cargador_domicilio: fields.cargadorDomicilio || null,
+    transportista_nombre: fields.transportistaNombre, transportista_nif: fields.transportistaNif, transportista_domicilio: fields.transportistaDomicilio || null,
+    origen: fields.origen, origenes_extra: fields.origenesExtra, destino: fields.destino, destinos_extra: fields.destinosExtra,
+    mercancia_naturaleza: fields.mercanciaNaturaleza, mercancia_peso: fields.mercanciaPeso, fecha_transporte: fields.fechaTransporte,
+    matricula_tractora: fields.matriculaTractora, matricula_remolque: fields.matriculaRemolque || null, observaciones: fields.observaciones,
+    relevos: null, creacion_fecha: fields.creacionFecha, creacion_hora: fields.creacionHora,
+    pdf_storage_path: storagePath, pdf_url: url, updated_at: new Date().toISOString(),
+  };
+  const { data, error } = await supabaseClient.from('deca_documents').insert(dbPayload).select().single();
+  if (error || !data) throw (error || new Error('sin datos'));
+  if (data.codigo) await buildAndUploadDecaPdf({ ...fields, codigo: data.codigo }, storagePath, url);
+  const doc = { id: data.id, codigo: data.codigo || '', ...fields, pdfStoragePath: storagePath, pdfUrl: url };
+  decaDocuments.unshift(doc);
+  return doc;
+}
+
+/* ---- Anular ---- */
+function ocAnularAbrir(id){
+  const o = ordenesCarga.find(x => x.id === id);
+  if (!o) return;
+  window.__ocAnularId = id;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:500px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.trash, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Anular orden de carga</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">${esc(ocRef(o))} · ${esc(o.transportistaNombre)}</div></div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
+          <div style="font-size:13px;color:var(--muted);margin-bottom:12px;">La orden se conserva con su número, marcada como «Anulada». ${o.decaId ? 'Su DeCA no se toca: si hace falta, anúlalo o elimínalo desde el apartado DeCA.' : ''}</div>
+          <div class="field"><label>Motivo <span class="dc-req">*</span></label>${decaInputIcon('file', `<input id="ocan-motivo" maxlength="200" placeholder="Ej. El cliente cancela el viaje" onkeydown="if(event.key==='Enter'){ event.preventDefault(); ocAnularConfirmar(); }" />`)}</div>
+          <div id="ocan-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
+          <div style="display:flex;gap:10px;">
+            <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary deca-submit ocan-save" style="background:var(--danger);border-color:var(--danger);" onclick="ocAnularConfirmar()">Anular orden</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const el = document.getElementById('ocan-motivo'); if (el) el.focus(); }, 0);
+}
+async function ocAnularConfirmar(){
+  const o = ordenesCarga.find(x => x.id === window.__ocAnularId);
+  const errEl = document.getElementById('ocan-error');
+  const motivo = (document.getElementById('ocan-motivo') || {}).value ? document.getElementById('ocan-motivo').value.trim() : '';
+  if (!o) return;
+  if (!motivo) { errEl.textContent = 'Escribe el motivo.'; return; }
+  const btn = document.querySelector('.ocan-save'); if (btn) btn.disabled = true;
+  const { error } = await supabaseClient.from('ordenes_carga').update({ estado: 'anulada', anulado_motivo: motivo, updated_at: new Date().toISOString() }).eq('id', o.id);
+  if (error) { errEl.textContent = 'No se pudo anular: ' + error.message; if (btn) btn.disabled = false; return; }
+  o.estado = 'anulada'; o.anuladoMotivo = motivo;
+  closeModal();
+  refreshOcListBody();
+  appToast(`Orden ${ocRef(o)} anulada.`, 'ok');
+}
+
+/* ---- PDF (se genera al momento; no se guarda) ---- */
+// Helvetica solo sabe Latin-1: lo que no entra se pasa a su letra sin acento o a «?».
+const OC_WINANSI_EXTRA = new Set([0x20AC, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x017D, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x017E, 0x0178]);
+function ocPdfTxt(s){
+  return String(s == null ? '' : s).replace(/[\r\n]+/g, ' ').split('').map(ch => {
+    if (ch.charCodeAt(0) <= 255 || OC_WINANSI_EXTRA.has(ch.charCodeAt(0))) return ch;
+    const b = ch.normalize('NFD').replace(/[̀-ͯ]/g, '');
+    return b && b.charCodeAt(0) <= 255 ? b : '?';
+  }).join('');
+}
+async function ocBuildPdf(o){
+  const pdf = await PDFLib.PDFDocument.create();
+  const font = await pdf.embedFont(PDFLib.StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  let logo = null;
+  try { const r = await fetch('logo-full.png'); if (r.ok) logo = await pdf.embedPng(await r.arrayBuffer()); } catch (e) { /* sin logo */ }
+  const W = 595.28, H = 841.89, M = 38, CW = W - M * 2, ink = PDFLib.rgb(0, 0, 0), grey = PDFLib.rgb(0.35, 0.35, 0.35);
+  let page, y;
+  const E = OC_EMPRESA;
+  const cabecera = () => {
+    if (logo) { const h = 44, w = logo.width * (h / logo.height); page.drawImage(logo, { x: M, y: H - M - h, width: w, height: h }); }
+    const bw = 210, bh = 62, bx = W - M - bw, by = H - M - bh;
+    page.drawRectangle({ x: bx, y: by, width: bw, height: bh, borderColor: ink, borderWidth: 0.8, color: PDFLib.rgb(1, 1, 1) });
+    [[E.nombre, bold], [E.direccion, font], [`${E.cp} - ${E.poblacion}`, font], [E.provincia, font], [E.correoTrafico, font], [E.telefono, font]].forEach(([t, f], i) => {
+      page.drawText(ocPdfTxt(t), { x: bx + 7, y: by + bh - 12 - i * 9.4, size: 7.6, font: f, color: ink });
+    });
+    y = H - M - bh - 18;
+  };
+  const nueva = () => { page = pdf.addPage([W, H]); cabecera(); };
+  const asegurar = h => { if (y - h < M + 10) nueva(); };
+  const lineas = (txt, f, size, ancho) => wrapPdfText(ocPdfTxt(txt), f, size, ancho);
+  // Barra de título de sección
+  const barra = titulo => {
+    asegurar(70);
+    page.drawRectangle({ x: M, y: y - 15, width: CW, height: 15, borderColor: ink, borderWidth: 0.8, color: PDFLib.rgb(1, 1, 1) });
+    const tw = bold.widthOfTextAtSize(ocPdfTxt(titulo), 9);
+    page.drawText(ocPdfTxt(titulo), { x: M + (CW - tw) / 2, y: y - 11, size: 9, font: bold, color: ink });
+    y -= 19;
+  };
+  // Caja con filas de celdas [{l: etiqueta, v: valor, w: fracción}]: se mide primero para no partirla entre páginas.
+  const caja = (filas, extra) => {
+    const size = 7.8, lh = 9.6, pad = 6;
+    const medidas = filas.map(row => {
+      const cs = row.map(c => {
+        const w = CW * c.w - pad * 2;
+        const etw = c.l ? bold.widthOfTextAtSize(ocPdfTxt(c.l), 7.2) + 6 : 0;
+        const ls = (c.v === '' || c.v == null) ? [''] : lineas(c.v, font, size, Math.max(40, w - etw));
+        return { ...c, ls, etw };
+      });
+      return { cs, h: Math.max(...cs.map(c => c.ls.length)) * lh + 5 };
+    });
+    const total = medidas.reduce((s, r) => s + r.h, 0) + 6;
+    asegurar(total + 22);
+    const top = y;
+    let yy = y - 5;
+    medidas.forEach(r => {
+      r.cs.forEach(c => {
+        const x0 = M + CW * (r.cs.slice(0, r.cs.indexOf(c)).reduce((s, k) => s + k.w, 0)) + pad;
+        if (c.l) page.drawText(ocPdfTxt(c.l), { x: x0, y: yy - 7, size: 7.2, font: bold, color: ink });
+        c.ls.forEach((ln, i) => page.drawText(ln, { x: x0 + c.etw, y: yy - 7 - i * lh, size, font, color: ink }));
+      });
+      yy -= r.h;
+    });
+    page.drawRectangle({ x: M, y: top - total, width: CW, height: total, borderColor: ink, borderWidth: 0.8 });
+    y = top - total - 7;
+
+  };
+  const punto = p => [
+    [{ l: 'EMPRESA:', v: p.empresa, w: 0.55 }, { l: 'POBLACIÓN:', v: p.poblacion, w: 0.45 }],
+    [{ l: 'DIRECCIÓN:', v: p.direccion, w: 0.55 }, { l: 'C.P./PAÍS:', v: [p.cp, p.pais].filter(Boolean).join(' '), w: 0.45 }],
+    [{ l: 'FECHA:', v: p.fecha ? fmtDateDMY(p.fecha) : '', w: 0.55 }, { l: 'HORA:', v: p.hora, w: 0.45 }],
+    [{ l: 'OBSERVACIONES:', v: p.observaciones, w: 0.55 }, { l: o.cargas.includes(p) ? 'REF.CARGA:' : 'REF.DESCARGA:', v: p.ref, w: 0.45 }],
+  ];
+
+  nueva();
+  const t = 'ORDEN DE CARGA';
+  page.drawText(t, { x: M + (CW - bold.widthOfTextAtSize(t, 16)) / 2, y: y - 12, size: 16, font: bold, color: ink });
+  const st = 'Documento válido como Carta de Porte en supuestos art. 10bis LCTTM';
+  page.drawText(ocPdfTxt(st), { x: M, y: y - 28, size: 8.4, font, color: ink });
+  y -= 40;
+  barra('Cargador Contractual');
+  caja([[{ l: '', v: `${E.nombre}  ${E.direccion}  ${E.cp} ${E.provincia}  ${E.pais}  CIF: ${E.cif}`, w: 1 }]]);
+  barra('Transportista');
+  caja([
+    [{ l: 'NOMBRE:', v: o.transportistaNombre, w: 0.6 }, { l: 'CIF:', v: o.transportistaNif, w: 0.4 }],
+    [{ l: 'DIRECCIÓN:', v: o.transportistaDireccion, w: 0.6 }, { l: 'POBLACIÓN:', v: o.transportistaPoblacion, w: 0.4 }],
+    [{ l: 'MATRÍCULAS:', v: [o.matriculaTractora, o.matriculaRemolque].filter(Boolean).join(' / '), w: 1 }],
+  ]);
+  barra('Pedido');
+  caja([
+    [{ l: 'REF. FACTURACIÓNº:', v: ocRef(o), w: 0.6 }, { l: 'FECHA PEDIDO:', v: fmtDateDMY(o.fechaPedido), w: 0.4 }],
+    [{ l: '', v: '**Incluir referencia de facturación en su factura para poder efectuarles el pago**', w: 1 }],
+    [{ l: 'MERCANCÍA:', v: o.mercancia, w: 1 }],
+    [{ l: 'INDICACIONES:', v: o.indicaciones, w: 1 }],
+  ]);
+  barra('CARGA / S');
+  o.cargas.forEach(p => caja(punto(p)));
+  barra('DESCARGA / S');
+  o.descargas.forEach(p => caja(punto(p)));
+  asegurar(60);
+  page.drawText('OBSERVACIONES ESPECIALES:', { x: M, y: y - 10, size: 8, font: bold, color: ink });
+  y -= 14;
+  (o.observacionesEspeciales ? lineas(o.observacionesEspeciales, font, 8, CW) : []).forEach(ln => { asegurar(12); page.drawText(ln, { x: M, y: y - 9, size: 8, font, color: ink }); y -= 11; });
+  y -= 6;
+  asegurar(24);
+  page.drawText('PRECIO:', { x: M, y: y - 10, size: 9, font: bold, color: ink });
+  page.drawText(ocPdfTxt(`${o.precio == null ? '' : o.precio.toFixed(1)}   EUR`), { x: M + 60, y: y - 10, size: 9, font, color: ink });
+
+  // Página 2: dónde enviar la factura
+  nueva();
+  y -= 20;
+  ['LA FACTURA Y LA DOCUMENTACIÓN ORIGINAL DEBE ENVIARSE', 'POR CORREO POSTAL A :'].forEach((ln, i) => {
+    page.drawText(ocPdfTxt(ln), { x: M, y: y - i * 13, size: 10, font: bold, color: ink });
+  });
+  y -= 36;
+  [[E.nombre, bold], [E.correoAdmin, font], ['CIF: ' + E.cif, font], [E.direccion, font], [`${E.poblacion} , ${E.provincia} , ${E.cp}`, font], [E.pais, font]].forEach(([ln, f]) => {
+    page.drawText(ocPdfTxt(ln), { x: M, y: y - 9, size: 10, font: f, color: ink }); y -= 15;
+  });
+
+  // Página 3: condiciones
+  nueva();
+  page.drawText('OBSERVACIONES:', { x: M, y: y - 8, size: 9, font: bold, color: ink });
+  y -= 22;
+  OC_CONDICIONES.forEach(([tit, txt]) => {
+    const ls = lineas(`${tit}: ${txt}`, font, 8, CW);
+    asegurar(ls.length * 10.4 + 8);
+    ls.forEach((ln, i) => { page.drawText(ln, { x: M, y: y - 8, size: 8, font, color: ink }); y -= 10.4; });
+    y -= 6;
+  });
+  return await pdf.save();
+}
+async function ocDescargarPdf(id){
+  const o = ordenesCarga.find(x => x.id === id);
+  if (!o) return;
+  try {
+    const bytes = await ocBuildPdf(o);
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = `${ocRef(o)}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  } catch (err) {
+    appToast('No se pudo generar el PDF: ' + (err && err.message ? err.message : 'error desconocido.'), 'error');
+  }
 }
 
 /* ============================= MÓDULO COMERCIAL =============================
@@ -18400,7 +18986,7 @@ function leaveGuard(){
  'backToFlota', 'flotaNavGoto', 'exitFlotaEditMode', 'newVehiculo',
  'contactoNavGoto', 'closeContactoDetail', 'setContactoDetailTab', 'exitContactoEditMode', 'newContactoFromContext',
  'setTraficoSection', 'backToTraficoHome', 'setComercialSection', 'backFromAlmacenajeForm',
- 'backToTarifas', 'backToComercialClientes', 'backToColabRutas', 'backToDecaList',
+ 'backToTarifas', 'backToComercialClientes', 'backToColabRutas', 'backToDecaList', 'backToOrdenesCarga',
  'backToAdminList', 'adminNavGoto', 'adminExitEdit', 'almacenajeProductoNavGoto'].forEach(name => {
   const orig = window[name];
   if (typeof orig !== 'function') return;
@@ -18440,7 +19026,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   }
 
   await loadWarehouses();
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadOperativas(), loadSgaConfig(), loadSgaStock(), loadTransportistaRutas(), loadTransportistaContactos(), loadAlmacenajeTarifas(), loadAlmacenajeProductos()]);
+  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadOrdenesCarga(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadOperativas(), loadSgaConfig(), loadSgaStock(), loadTransportistaRutas(), loadTransportistaContactos(), loadAlmacenajeTarifas(), loadAlmacenajeProductos()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
