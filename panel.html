@@ -2494,6 +2494,7 @@ function computeBreadcrumbSegments(){
       }
       return [{label:'DeCA', onclick:null}];
     }
+    if (traficoSection() === 'configuracion') return [{label:'Configuración', onclick:null}];
     if (traficoSection() === 'ordenes') {
       if (window.__ocView === 'form') {
         const ed = window.__ocFormId ? ordenesCarga.find(x => x.id === window.__ocFormId) : null;
@@ -11633,18 +11634,20 @@ const TRAFICO_SECTIONS = [
 function traficoSection(){
   const allowed = moduleAllowedSections('trafico');
   const s = window.__traficoSection || 'transportistas';
+  if (s === 'configuracion' && PROFILE.isAdmin) return s;
   return allowed.some(x => x.id === s) || !allowed.length ? s : allowed[0].id;
 }
 function tplTraficoBar(){
   const sec = traficoSection();
+  // Los apartados a la izquierda; «Configuración» (solo administradores) a la derecha del todo
   return `
-    <div style="display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
       <div style="display:flex;gap:2px;flex-wrap:wrap;">
         ${moduleAllowedSections('trafico').map(s => moduleTabBtnHtml(`setTraficoSection('${s.id}')`, s.label, s.id === sec)).join('')}
       </div>
+      ${PROFILE.isAdmin ? `<div>${moduleTabBtnHtml("setTraficoSection('configuracion')", 'Configuración', sec === 'configuracion')}</div>` : ''}
     </div>`;
 }
-// Una subpágina (formulario de un DeCA o de una dirección) lleva el camino de
 // arriba para poder volver a su lista; las listas ya se ubican con la barra.
 function traficoIsSubpage(){
   return (traficoSection() === 'deca' && window.__traficoView === 'decaForm')
@@ -11657,7 +11660,8 @@ function setTraficoSection(id){
   if (!direccionConfirmLeaveForm()) return;
   if (!colabRutaConfirmLeaveForm()) return;
   if (!ocConfirmLeaveForm()) return;
-  if (!sectionAllowedFor(PROFILE, 'trafico', id)) return;
+  if (!tcfgConfirmLeaveForm()) return;
+  if (id === 'configuracion' ? !PROFILE.isAdmin : !sectionAllowedFor(PROFILE, 'trafico', id)) return;
   traficoEnterSection(id);
   renderHeader(); renderTab();
 }
@@ -11667,7 +11671,7 @@ function traficoEnterSection(id){
   window.__direccionFormDirty = false;
   window.__traficoSection = id;
   window.__traficoView = id === 'deca' ? 'deca' : 'home';
-  window.__ocView = 'list'; window.__ocFormDirty = false; window.__ocSearch = '';
+  window.__ocView = 'list'; window.__ocFormDirty = false; window.__ocSearch = ''; window.__tcfgDirty = false;
   window.__decaMenuOpen = null;
   if (id === 'direcciones') {
     window.__administracionView = 'direcciones';
@@ -11685,6 +11689,7 @@ function tplTrafico(){
   if (sec === 'direcciones') return window.__administracionView === 'direccionForm' ? tplDireccionFormPage() : tplDireccionesPage();
   if (sec === 'colaboradores') return window.__colabView === 'rutaForm' ? tplColabRutaFormPage() : tplColaboradoresPage();
   if (sec === 'ordenes') return window.__ocView === 'form' ? tplOcFormPage() : tplOrdenesCargaPage();
+  if (sec === 'configuracion') return tplTraficoConfigPage();
   return tplTransportistasPage();
 }
 function openDecaModule(){
@@ -11969,7 +11974,7 @@ function ocDecaToggle(){
 function tplOcFormPage(){
   const editId = window.__ocFormId;
   const o = editId ? ordenesCarga.find(x => x.id === editId) : null;
-  const e = window.__ocFormDraft || o || { fechaPedido: today(), indicaciones: 'INDEXACIÓN GASOIL YA INCLUIDA EN EL PRECIO', cargas: [{}], descargas: [{}] };
+  const e = window.__ocFormDraft || o || { fechaPedido: today(), indicaciones: ocCfgIndicaciones(), cargas: [{}], descargas: [{}] };
   const cargas = e.cargas.length ? e.cargas : [{}], descargas = e.descargas.length ? e.descargas : [{}];
   const req = '<span class="dc-req">*</span>';
   const deca = o && o.decaId ? decaDocuments.find(x => x.id === o.decaId) : null;
@@ -12120,7 +12125,7 @@ async function ocCrearDeca(o){
   const cs = o.cargas.map(lugar).filter(Boolean), ds = o.descargas.map(lugar).filter(Boolean);
   const peso = String(o.pesoKg || '').replace(/\s*kg\.?$/i, '').trim();
   const fields = {
-    cargadorNombre: OC_EMPRESA.nombre, cargadorNif: OC_EMPRESA.cif, cargadorDomicilio: `${OC_EMPRESA.direccion}, ${OC_EMPRESA.cp} ${OC_EMPRESA.poblacion}, ${OC_EMPRESA.provincia}, ${OC_EMPRESA.pais}`,
+    cargadorNombre: ocCfgEmpresa().nombre, cargadorNif: ocCfgEmpresa().cif, cargadorDomicilio: `${ocCfgEmpresa().direccion}, ${ocCfgEmpresa().cp} ${ocCfgEmpresa().poblacion}, ${ocCfgEmpresa().provincia}, ${ocCfgEmpresa().pais}`,
     transportistaNombre: o.transportistaNombre, transportistaNif: o.transportistaNif, transportistaDomicilio: [o.transportistaDireccion, o.transportistaPoblacion].filter(Boolean).join(', '),
     origen: cs[0] || '', origenesExtra: cs.slice(1), destino: ds[0] || '', destinosExtra: ds.slice(1),
     mercanciaNaturaleza: o.mercancia, mercanciaPeso: peso ? peso + ' kg' : '',
@@ -12239,7 +12244,7 @@ async function ocBuildPdf(o){
 async function ocBuildPdfDens(o, D){
   const pdf = await PDFLib.PDFDocument.create();
   pdf.setTitle(`Orden de carga ${ocRef(o)}`);
-  pdf.setAuthor(OC_EMPRESA.nombre);
+  pdf.setAuthor(ocCfgEmpresa().nombre);
   const font = await pdf.embedFont(PDFLib.StandardFonts.Helvetica);
   const bold = await pdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
   let logo = null;
@@ -12248,7 +12253,7 @@ async function ocBuildPdfDens(o, D){
   const NAVY = rgb(0.106, 0.227, 0.42), INK = rgb(0.1, 0.12, 0.16), MUTED = rgb(0.42, 0.46, 0.52);
   const LINE = rgb(0.8, 0.83, 0.88), SOFT = rgb(0.95, 0.96, 0.98), WHITE = rgb(1, 1, 1), CLARO = rgb(0.78, 0.85, 0.95);
   const W = 595.28, H = 841.89, M = 40, CW = W - M * 2, BOTTOM = M + 24;
-  const E = OC_EMPRESA, T = ocPdfTxt, ref = ocRef(o);
+  const E = ocCfgEmpresa(), FA = ocCfgFacturacion(), T = ocPdfTxt, ref = ocRef(o);
   const pages = [];
   let page, y;
   const txt = (s, x, yy, size, f, color) => page.drawText(T(s), { x, y: yy, size, font: f || font, color: color || INK });
@@ -12352,7 +12357,7 @@ async function ocBuildPdfDens(o, D){
     [{ l: 'Mercancía', v: o.mercancia, w: 1 }],
     [{ l: 'Indicaciones', v: o.indicaciones, w: 1 }],
   ]);
-  txt('Incluir la referencia de facturación en su factura para poder efectuarles el pago.', M + 2, y + D.gap - 8, 7.4, font, MUTED);
+  if (FA.notaRef) txt(FA.notaRef, M + 2, y + D.gap - 8, 7.4, font, MUTED);
   y -= 6;
 
   seccion('Cargas');
@@ -12374,16 +12379,18 @@ async function ocBuildPdfDens(o, D){
 
   // ---------- Página 2: facturación y condiciones ----------
   nueva();
-  rr(M, y, CW, 100, 6, SOFT, LINE);
-  page.drawRectangle({ x: M, y: y - 100, width: 4, height: 100, color: NAVY });
+  const introLs = wrapPdfText(T(FA.intro || ' '), font, 8.6, CW - 32);
+  const linFA = [[FA.nombre, bold], [FA.direccion, font], [FA.cif ? `CIF ${FA.cif}` : '', font], [FA.correo, font]].filter(([t]) => t);
+  const hFA = 38 + introLs.length * 11 + linFA.length * 12.5 + 8;
+  rr(M, y, CW, hFA, 6, SOFT, LINE);
+  page.drawRectangle({ x: M, y: y - hFA, width: 4, height: hFA, color: NAVY });
   txt('FACTURACIÓN', M + 16, y - 17, 8, bold, NAVY);
-  txt('La factura y la documentación original deben enviarse por correo postal a:', M + 16, y - 33, 8.6, font, INK);
-  [[E.nombre, bold], [`${E.direccion} · ${E.cp} ${E.poblacion} (${E.provincia}) · ${E.pais}`, font], [`CIF ${E.cif}`, font], [E.correoAdmin, font]]
-    .forEach(([t, f], i) => txt(t, M + 16, y - 49 - i * 12.5, 9, f, INK));
-  y -= 118;
+  introLs.forEach((ln, i) => page.drawText(ln, { x: M + 16, y: y - 33 - i * 11, size: 8.6, font, color: INK }));
+  linFA.forEach(([t, f], i) => txt(t, M + 16, y - 33 - introLs.length * 11 - 10 - i * 12.5, 9, f, INK));
+  y -= hFA + 18;
 
   seccion('Condiciones del servicio');
-  OC_CONDICIONES.forEach(([tit, cuerpo], i) => {
+  ocCfgCondiciones().forEach(([tit, cuerpo], i) => {
     const ls = wrapPdfText(T(cuerpo), font, 8, CW - 18);
     asegurar(ls.length * 10.4 + 24);
     txt(`${i + 1}.`, M + 2, y - 8, 8.2, bold, NAVY);
@@ -12414,6 +12421,167 @@ async function ocDescargarPdf(id){
   } catch (err) {
     appToast('No se pudo generar el PDF: ' + (err && err.message ? err.message : 'error desconocido.'), 'error');
   }
+}
+
+/* ============================= CONFIGURACIÓN DE TRANSPORTE =============================
+   Datos generales que usan las órdenes de carga y que pueden cambiar: el cargador contractual, la información de
+   facturación y las condiciones generales del servicio. Se guardan en la tabla transporte_config (clave 'ordenes_carga');
+   si no hay nada guardado se usan los valores de serie. Solo la editan los administradores. */
+const OC_FACTURACION_DEFECTO = {
+  intro: 'La factura y la documentación original deben enviarse por correo postal a:',
+  nombre: 'QUALIFIED S.L.', cif: 'ESB98650062',
+  direccion: 'C/PONT, 22 APTDO DE CORREOS 20 · 08650 Sallent (Barcelona) · España',
+  correo: 'administracion@qualified3.com',
+  notaRef: 'Incluir la referencia de facturación en su factura para poder efectuarles el pago.',
+};
+const OC_INDICACIONES_DEFECTO = 'INDEXACIÓN GASOIL YA INCLUIDA EN EL PRECIO';
+let ocConfig = {};
+async function loadTransporteConfig(){
+  const { data } = await supabaseClient.from('transporte_config').select('*').eq('clave', 'ordenes_carga');
+  const r = data && data[0];
+  ocConfig = (r && r.valor && typeof r.valor === 'object') ? r.valor : {};
+  window.__ocConfigMeta = r ? { actualizado: r.updated_at, por: r.updated_by || '' } : null;
+}
+function ocCfgEmpresa(){ return Object.assign({}, OC_EMPRESA, ocConfig.empresa || {}); }
+function ocCfgFacturacion(){ return Object.assign({}, OC_FACTURACION_DEFECTO, ocConfig.facturacion || {}); }
+function ocCfgIndicaciones(){ return ocConfig.indicaciones != null ? ocConfig.indicaciones : OC_INDICACIONES_DEFECTO; }
+function ocCfgCondiciones(){
+  return Array.isArray(ocConfig.condiciones) ? ocConfig.condiciones.map(c => [c.titulo || '', c.texto || '']) : OC_CONDICIONES;
+}
+
+function tcfgConfirmLeaveForm(){
+  if (window.__traficoSection === 'configuracion' && window.__tcfgDirty) return leaveGuard();
+  return true;
+}
+function tcfgCondRowHtml(c, i){
+  c = c || { titulo: '', texto: '' };
+  return `
+    <div class="tcfg-cond" style="border:1px solid var(--border);border-radius:12px;padding:12px 12px 4px;margin-bottom:10px;background:var(--panel2);">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+        <span class="tcfg-n" style="font-weight:700;color:var(--primary);min-width:22px;">${i + 1}.</span>
+        <input class="tcfg-t" maxlength="120" placeholder="Título de la condición" value="${esc(c.titulo)}" style="flex:1;font-weight:600;" />
+        <button type="button" class="deca-act" onclick="tcfgCondMover(this, -1)" title="Subir">↑</button>
+        <button type="button" class="deca-act" onclick="tcfgCondMover(this, 1)" title="Bajar">↓</button>
+        <button type="button" class="deca-act danger" onclick="tcfgCondQuitar(this)" title="Quitar esta condición">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>
+      </div>
+      <textarea class="tcfg-x" maxlength="1500" rows="3" placeholder="Texto de la condición" style="width:100%;resize:vertical;margin-bottom:8px;">${esc(c.texto)}</textarea>
+    </div>`;
+}
+function tcfgCondRenumerar(){
+  document.querySelectorAll('#tcfg-conds .tcfg-n').forEach((el, i) => { el.textContent = (i + 1) + '.'; });
+}
+function tcfgCondAdd(){
+  const cont = document.getElementById('tcfg-conds');
+  if (!cont) return;
+  cont.insertAdjacentHTML('beforeend', tcfgCondRowHtml(null, cont.children.length));
+  window.__tcfgDirty = true;
+  const t = cont.lastElementChild.querySelector('.tcfg-t'); if (t) t.focus();
+}
+function tcfgCondQuitar(btn){
+  const r = btn.closest('.tcfg-cond'); if (r) r.remove();
+  tcfgCondRenumerar(); window.__tcfgDirty = true;
+}
+function tcfgCondMover(btn, dir){
+  const r = btn.closest('.tcfg-cond');
+  if (!r) return;
+  const otro = dir < 0 ? r.previousElementSibling : r.nextElementSibling;
+  if (!otro) return;
+  if (dir < 0) r.parentNode.insertBefore(r, otro); else r.parentNode.insertBefore(otro, r);
+  tcfgCondRenumerar(); window.__tcfgDirty = true;
+}
+async function tcfgCondRestaurar(){
+  if (!(await appConfirm({ title: 'Restaurar las condiciones originales', message: 'Se sustituirán las condiciones que hay ahora en pantalla por las de serie. No se guarda nada hasta que pulses «Guardar».', confirmLabel: 'Restaurar', tone: 'warn', icon: 'warn' }))) return;
+  const cont = document.getElementById('tcfg-conds');
+  if (cont) cont.innerHTML = OC_CONDICIONES.map(([t, x], i) => tcfgCondRowHtml({ titulo: t, texto: x }, i)).join('');
+  window.__tcfgDirty = true;
+}
+function tplTraficoConfigPage(){
+  const E = ocCfgEmpresa(), F = ocCfgFacturacion(), conds = ocCfgCondiciones();
+  const m = window.__ocConfigMeta;
+  const campo = (id, label, valor, ph, extra) => `<div class="field" style="flex:1;min-width:${extra || 190}px;"><label>${label}</label><input id="${id}" maxlength="200" placeholder="${ph || ''}" value="${esc(valor || '')}" /></div>`;
+  return `
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.shield, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 280px;">
+        <div class="deca-banner-title">Configuración de Transporte</div>
+        <div class="deca-banner-sub">Datos generales de las órdenes de carga. Lo que cambies aquí sale en todas las órdenes que se generen a partir de ahora${m && m.actualizado ? ` · última modificación el ${esc(fmtDateDMY(String(m.actualizado).slice(0, 10)))}${m.por ? ' por ' + esc(m.por) : ''}` : ''}.</div>
+      </div>
+    </div>
+    <div class="deca-form" oninput="window.__tcfgDirty=true;" onchange="window.__tcfgDirty=true;" style="max-width:980px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
+      <div class="card deca-card">
+        ${decaCardHead('building', 'Cargador contractual', 'Sale en la cabecera de todas las páginas y en el apartado «Cargador contractual» de la orden. También es el cargador de los DeCA que se generan desde una orden')}
+        <div class="deca-card-body">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">${campo('tc-e-nombre', 'Razón social', E.nombre)}${campo('tc-e-cif', 'CIF', E.cif, '', 150)}</div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">${campo('tc-e-direccion', 'Dirección', E.direccion, '', 280)}${campo('tc-e-cp', 'C.P.', E.cp, '', 90)}${campo('tc-e-poblacion', 'Población', E.poblacion, '', 150)}</div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">${campo('tc-e-provincia', 'Provincia', E.provincia, '', 150)}${campo('tc-e-pais', 'País', E.pais, '', 150)}${campo('tc-e-correo', 'Correo de tráfico', E.correoTrafico)}${campo('tc-e-telefono', 'Teléfono', E.telefono, '', 150)}</div>
+        </div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('file', 'Información de facturación', 'Es el cuadro de la segunda página: a dónde hay que enviar la factura y la documentación')}
+        <div class="deca-card-body">
+          <div class="field"><label>Texto de introducción</label><input id="tc-f-intro" maxlength="250" value="${esc(F.intro)}" /></div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">${campo('tc-f-nombre', 'Razón social', F.nombre)}${campo('tc-f-cif', 'CIF', F.cif, '', 150)}</div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">${campo('tc-f-direccion', 'Dirección completa', F.direccion, '', 360)}${campo('tc-f-correo', 'Correo de administración', F.correo)}</div>
+          <div class="field" style="margin-bottom:0;"><label>Nota junto a la referencia de facturación <small style="color:var(--mutedFaint);font-weight:400;">· sale bajo el apartado «Pedido» de la primera página</small></label><input id="tc-f-nota" maxlength="250" value="${esc(F.notaRef)}" /></div>
+        </div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('edit', 'Valores por defecto', 'Lo que ya viene escrito al crear una orden nueva')}
+        <div class="deca-card-body">
+          <div class="field" style="margin-bottom:0;"><label>Indicaciones</label><input id="tc-indicaciones" maxlength="250" value="${esc(ocCfgIndicaciones())}" /></div>
+        </div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('list', 'Condiciones generales del servicio', 'Salen numeradas en la segunda página, en este orden. Puedes cambiarlas, reordenarlas, quitarlas o añadir otras', `<button class="btn btn-ghost" style="background:var(--panel);" onclick="tcfgCondRestaurar()">Restaurar las originales</button>`)}
+        <div class="deca-card-body">
+          <div id="tcfg-conds">${conds.map(([t, x], i) => tcfgCondRowHtml({ titulo: t, texto: x }, i)).join('')}</div>
+          <button type="button" class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px;" onclick="tcfgCondAdd()">+ Añadir condición</button>
+        </div>
+      </div>
+    </div>
+    <div class="deca-actions" style="max-width:980px;">
+      <div id="tcfg-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
+      <div class="deca-actions-row">
+        <button class="btn btn-ghost deca-cancel" onclick="tcfgDescartar()">Descartar cambios</button>
+        <button class="btn btn-primary deca-submit tcfg-save" onclick="submitTraficoConfig()">Guardar configuración</button>
+      </div>
+    </div>`;
+}
+function tcfgDescartar(){
+  window.__tcfgDirty = false;
+  renderTab();
+}
+async function submitTraficoConfig(){
+  const errEl = document.getElementById('tcfg-error');
+  errEl.textContent = '';
+  const v = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  if (!PROFILE.isAdmin) { errEl.textContent = 'Solo un administrador puede cambiar la configuración.'; return; }
+  const condiciones = [...document.querySelectorAll('#tcfg-conds .tcfg-cond')].map(r => ({
+    titulo: r.querySelector('.tcfg-t').value.trim(), texto: r.querySelector('.tcfg-x').value.trim(),
+  })).filter(c => c.titulo || c.texto);
+  if (condiciones.some(c => !c.titulo || !c.texto)) { errEl.textContent = 'Cada condición necesita su título y su texto (o quítala).'; return; }
+  if (!v('tc-e-nombre')) { errEl.textContent = 'Escribe la razón social del cargador contractual.'; return; }
+  const valor = {
+    empresa: { nombre: v('tc-e-nombre'), cif: v('tc-e-cif'), direccion: v('tc-e-direccion'), cp: v('tc-e-cp'), poblacion: v('tc-e-poblacion'), provincia: v('tc-e-provincia'), pais: v('tc-e-pais'), correoTrafico: v('tc-e-correo'), telefono: v('tc-e-telefono') },
+    facturacion: { intro: v('tc-f-intro'), nombre: v('tc-f-nombre'), cif: v('tc-f-cif'), direccion: v('tc-f-direccion'), correo: v('tc-f-correo'), notaRef: v('tc-f-nota') },
+    indicaciones: v('tc-indicaciones'),
+    condiciones,
+  };
+  const btn = document.querySelector('.tcfg-save');
+  if (btn) btn.disabled = true;
+  const por = currentUserEmail();
+  const { error } = await supabaseClient.from('transporte_config').upsert({ clave: 'ordenes_carga', valor, updated_at: new Date().toISOString(), updated_by: por });
+  if (error) {
+    const m = error.message || '';
+    errEl.textContent = 'No se pudo guardar: ' + (/transporte_config|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL «Configuración de Transporte» en Supabase.' : m);
+    if (btn) btn.disabled = false;
+    return;
+  }
+  ocConfig = valor;
+  window.__ocConfigMeta = { actualizado: new Date().toISOString(), por };
+  window.__tcfgDirty = false;
+  renderTab();
+  appToast('Configuración guardada. Se aplica a las órdenes que se generen a partir de ahora.', 'ok');
 }
 
 /* ============================= MÓDULO COMERCIAL =============================
@@ -19181,7 +19349,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   }
 
   await loadWarehouses();
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadOrdenesCarga(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadOperativas(), loadSgaConfig(), loadSgaStock(), loadTransportistaRutas(), loadTransportistaContactos(), loadAlmacenajeTarifas(), loadAlmacenajeProductos()]);
+  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadOrdenesCarga(), loadTransporteConfig(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadOperativas(), loadSgaConfig(), loadSgaStock(), loadTransportistaRutas(), loadTransportistaContactos(), loadAlmacenajeTarifas(), loadAlmacenajeProductos()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
