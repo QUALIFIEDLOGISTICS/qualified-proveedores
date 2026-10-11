@@ -3,12 +3,12 @@
 -- Pega todo esto en Supabase → SQL Editor → Run. Se puede ejecutar más de una vez.
 --
 --   ordenes_carga   Las órdenes con las que se contrata a un transportista para un viaje.
---                   El número es un contador propio (empieza en 12285: la siguiente a la S012284).
+--                   El número es un contador propio que empieza en 1 (se enseña como OC-0001), distinto del S0xxxxx del otro programa.
 --                   Cada orden puede llevar varias cargas y varias descargas, y un DeCA enlazado.
 --   Lo ve quien tiene el módulo Transporte (igual que el DeCA).
 -- =====================================================================
 
-create sequence if not exists public.oc_numero_seq start 12285;
+create sequence if not exists public.oc_numero_seq start 1;
 grant usage, select on sequence public.oc_numero_seq to authenticated;
 
 create table if not exists public.ordenes_carga (
@@ -16,7 +16,7 @@ create table if not exists public.ordenes_carga (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   created_by text,
-  numero integer not null unique default nextval('public.oc_numero_seq'),    -- S012285, S012286…
+  numero integer not null unique default nextval('public.oc_numero_seq'),    -- OC-0001, OC-0002…
   estado text not null default 'emitida' check (estado in ('emitida', 'anulada')),
   anulado_motivo text,
   fecha_pedido date not null default current_date,
