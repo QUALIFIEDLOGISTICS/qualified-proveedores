@@ -52,4 +52,4 @@ create policy ordenes_carga_insert on public.ordenes_carga for insert with check
 create policy ordenes_carga_update on public.ordenes_carga for update using (
   exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico']))
 );
--- Nada se borra: una orden se anula (queda con su número y su motivo).
+-- Una orden emitida solo se anula (queda con su número y su motivo). Las anuladas se pueden eliminar: ver ordenes-carga-eliminar.sql.

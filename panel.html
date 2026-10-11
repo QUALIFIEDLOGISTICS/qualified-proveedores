@@ -11806,7 +11806,7 @@ function ocListBodyHtml(){
               <td style="white-space:nowrap;">
                 <button class="deca-act" onclick="ocDescargarPdf('${o.id}')" title="Descargar el PDF (${esc(ocRef(o))}.pdf)">${homeIcon(HOME_ICON_PATHS.download, 15, 'currentColor', 2)}</button>
                 ${o.estado === 'emitida' ? `<button class="deca-act" onclick="openOcForm('${o.id}')" title="Editar">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
-                <button class="deca-act danger" onclick="ocAnularAbrir('${o.id}')" title="Anular la orden">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>` : ''}
+                <button class="deca-act danger" onclick="ocAnularAbrir('${o.id}')" title="Anular la orden">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>` : `<button class="deca-act danger" onclick="ocEliminar('${o.id}')" title="Eliminar la orden anulada">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>`}
               </td>
             </tr>`; }).join('')}
         </tbody>
@@ -12189,6 +12189,27 @@ async function ocAnularConfirmar(){
   closeModal();
   refreshOcListBody();
   appToast(`Orden ${ocRef(o)} anulada.`, 'ok');
+}
+
+// Una orden anulada se puede eliminar del todo (las emitidas solo se anulan). El DeCA que tuviera no se toca.
+async function ocEliminar(id){
+  const o = ordenesCarga.find(x => x.id === id);
+  if (!o || o.estado !== 'anulada') return;
+  if (!(await appConfirm({
+    title: 'Eliminar orden de carga', name: `${ocRef(o)} · ${o.transportistaNombre}`,
+    message: `Se eliminará esta orden anulada${o.anuladoMotivo ? ' (motivo: ' + o.anuladoMotivo + ')' : ''}. Esta acción no se puede deshacer.${o.decaId ? ' Su DeCA no se elimina.' : ''}`,
+    confirmLabel: 'Eliminar', tone: 'danger', icon: 'trash',
+  }))) return;
+  const { data: borradas, error } = await supabaseClient.from('ordenes_carga').delete().eq('id', id).eq('estado', 'anulada').select();
+  // Sin la política de borrado, Supabase no da error: simplemente no borra nada. Se avisa en ese caso.
+  if (error || !borradas || !borradas.length) {
+    const m = (error && error.message) || '';
+    appToast('No se pudo eliminar: ' + (!error || /policy|permission|denied/i.test(m) ? 'falta ejecutar el SQL de «eliminar órdenes anuladas» en Supabase.' : m), 'error');
+    return;
+  }
+  ordenesCarga = ordenesCarga.filter(x => x.id !== id);
+  refreshOcListBody();
+  appToast(`Orden ${ocRef(o)} eliminada.`, 'ok');
 }
 
 /* ---- PDF (se genera al momento; no se guarda) ---- */
