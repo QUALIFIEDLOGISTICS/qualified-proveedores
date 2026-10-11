@@ -6370,6 +6370,7 @@ function backToDirecciones(){
   // Cancelar la dirección que se estaba creando desde el DeCA vuelve al
   // DeCA (con lo que ya tenía escrito), no a la lista de Direcciones.
   if (window.__decaReturnTarget) { decaVolverDesdeDireccion(null); return; }
+  if (window.__ocReturnTarget) { ocVolverDesdeDireccion(null); return; }
   window.__administracionView = 'direcciones';
   renderHeader(); renderTab();
 }
@@ -6889,6 +6890,7 @@ async function submitDireccionForm(editId){
   // Si se ha venido desde "Crear dirección" en el DeCA, se vuelve allí con
   // el campo (Origen o Destino) ya relleno, en vez de quedarse en Direcciones.
   if (!editId && window.__decaReturnTarget) { decaVolverDesdeDireccion(direcciones.find(d=>d.id===savedId)); return; }
+  if (!editId && window.__ocReturnTarget) { ocVolverDesdeDireccion(direcciones.find(d=>d.id===savedId)); return; }
   openDireccionForm(savedId, true);
 }
 async function setDireccionArchived(id, archived){
@@ -11808,6 +11810,7 @@ function openOcForm(editId){
   window.__traficoView = 'home';
   window.__ocView = 'form';
   window.__ocFormId = editId || null;
+  window.__ocFormDraft = null;
   window.__ocFormDirty = false;
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
@@ -11829,7 +11832,7 @@ function ocPuntoRowHtml(tipo, p, quitar){
     <div class="oc-pt" data-t="${tipo}" style="border:1px solid var(--border);border-radius:12px;padding:14px 14px 4px;margin-bottom:10px;background:var(--panel2);">
       <div style="display:flex;gap:10px;align-items:flex-start;">
         <div class="field" style="flex:1;margin-bottom:10px;"><label>${tipo === 'carga' ? 'Dirección de carga' : 'Dirección de descarga'} <small style="color:var(--mutedFaint);font-weight:400;">· elige una de tu agenda y se rellena sola</small></label>
-          ${decaInputIcon('pin', `<input class="oc-dir" maxlength="200" data-combo="oc-direcciones-datalist" autocomplete="off" placeholder="Busca en tus direcciones…" oninput="ocElegirDireccion(this)" />`)}</div>
+          ${decaCampoConCrearHtml(decaInputIcon('pin', `<input class="oc-dir" maxlength="200" data-combo="oc-direcciones-datalist" autocomplete="off" placeholder="Busca en tus direcciones…" oninput="ocElegirDireccion(this)" />`), 'ocIrACrearDireccion(this)', 'Crear una dirección nueva (no está en la lista)')}</div>
         ${quitar ? `<button type="button" class="deca-act danger" style="margin-top:24px;" onclick="ocPuntoQuitar(this)" title="Quitar este punto">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>` : ''}
       </div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;">${r('empresa', 'Empresa', 'Ej. Qualified Logistics', 220)}${r('poblacion', 'Población', '', 160)}</div>
@@ -11849,6 +11852,55 @@ function ocElegirDireccion(el){
   set('empresa', d.nombre); set('direccion', [d.calle1, d.calle2].filter(Boolean).join(', '));
   set('cp', d.codigoPostal); set('poblacion', d.ciudad); set('pais', d.pais);
   window.__ocFormDirty = true;
+}
+// Crear una dirección desde una carga o una descarga: se va a la página real de «Nueva dirección» y, al guardar o cancelar,
+// se vuelve a la orden con todo lo que ya estaba escrito (y la dirección nueva puesta en ese punto). Mismo patrón que el DeCA.
+function ocSnapshotForm(){
+  const v = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  return {
+    fechaPedido: v('oc-fecha'), precio: v('oc-precio').replace(/\s*€$/, '').replace(',', '.'), mercancia: v('oc-mercancia'), indicaciones: v('oc-indicaciones'),
+    transportistaNombre: v('oc-transp-nombre'), transportistaNif: v('oc-transp-nif'), transportistaPoblacion: v('oc-transp-pob'), transportistaDireccion: v('oc-transp-dir'),
+    matriculaTractora: v('oc-mat-tractora'), matriculaRemolque: v('oc-mat-remolque'), observacionesEspeciales: v('oc-obs'),
+    pesoKg: v('oc-peso'), decaOn: !!(document.getElementById('oc-deca-on') && document.getElementById('oc-deca-on').checked),
+    cargas: ocLeerPuntos('carga'), descargas: ocLeerPuntos('descarga'),
+  };
+}
+function ocIrACrearDireccion(btn){
+  const row = btn.closest('.oc-pt');
+  if (!row) return;
+  const tipo = row.dataset.t;
+  const i = [...document.querySelectorAll(`.oc-pt[data-t="${tipo}"]`)].indexOf(row);
+  window.__ocFormDraft = ocSnapshotForm();
+  window.__ocReturnTarget = { tipo, i };
+  window.__ocReturnEditId = window.__ocFormId;
+  window.__traficoSection = 'direcciones';
+  openDireccionForm(null, true);
+}
+// direccionCreada: la dirección recién guardada, o null si se ha cancelado sin crear nada.
+function ocVolverDesdeDireccion(direccionCreada){
+  const draft = window.__ocFormDraft || {};
+  const t = window.__ocReturnTarget;
+  const editId = window.__ocReturnEditId;
+  if (direccionCreada && t) {
+    const d = direccionCreada;
+    const clave = t.tipo === 'carga' ? 'cargas' : 'descargas';
+    const lista = (draft[clave] || []).slice();
+    lista[t.i] = Object.assign({}, lista[t.i], {
+      empresa: d.nombre || '', direccion: [d.calle1, d.calle2].filter(Boolean).join(', '),
+      cp: d.codigoPostal || '', poblacion: d.ciudad || '', pais: d.pais || '',
+    });
+    draft[clave] = lista;
+  }
+  window.__ocFormDraft = draft;
+  window.__ocReturnTarget = null;
+  window.__ocReturnEditId = null;
+  window.__traficoSection = 'ordenes';
+  window.__traficoView = 'home';
+  window.__ocView = 'form';
+  window.__ocFormId = editId || null;
+  window.__ocFormDirty = true;
+  renderHeader(); renderTab();
+  window.__ocFormDraft = null;
 }
 function ocPuntoAdd(tipo){
   const cont = document.getElementById(tipo === 'carga' ? 'oc-cargas' : 'oc-descargas');
@@ -11879,7 +11931,7 @@ function ocDecaToggle(){
 function tplOcFormPage(){
   const editId = window.__ocFormId;
   const o = editId ? ordenesCarga.find(x => x.id === editId) : null;
-  const e = o || { fechaPedido: today(), indicaciones: 'INDEXACIÓN GASOIL YA INCLUIDA EN EL PRECIO', cargas: [{}], descargas: [{}] };
+  const e = window.__ocFormDraft || o || { fechaPedido: today(), indicaciones: 'INDEXACIÓN GASOIL YA INCLUIDA EN EL PRECIO', cargas: [{}], descargas: [{}] };
   const cargas = e.cargas.length ? e.cargas : [{}], descargas = e.descargas.length ? e.descargas : [{}];
   const req = '<span class="dc-req">*</span>';
   const deca = o && o.decaId ? decaDocuments.find(x => x.id === o.decaId) : null;
@@ -11941,9 +11993,9 @@ function tplOcFormPage(){
           <div class="deca-card-body">
             ${deca
               ? `<div style="font-size:13.5px;">Esta orden ya tiene su DeCA: <button type="button" class="deca-code-pill" style="cursor:pointer;border:none;" onclick="openDecaViewModal('${deca.id}')">${esc(deca.codigo || 'DeCA')}</button></div>`
-              : `<label style="display:flex;align-items:flex-start;gap:10px;font-size:13.5px;cursor:pointer;"><input type="checkbox" class="switch" id="oc-deca-on" onchange="ocDecaToggle()" style="margin-top:2px;" />
+              : `<label style="display:flex;align-items:flex-start;gap:10px;font-size:13.5px;cursor:pointer;"><input type="checkbox" class="switch" id="oc-deca-on" onchange="ocDecaToggle()" ${e.decaOn ? 'checked' : ''} style="margin-top:2px;" />
                   <span><b>Generar también el DeCA</b><br><span style="font-size:12px;color:var(--muted);">Se crea con los datos de esta orden (el cargador contractual es Qualified, como en la orden). Déjalo apagado en transportes internacionales.</span></span></label>
-                <div id="oc-deca-campos" style="display:none;margin-top:14px;">
+                <div id="oc-deca-campos" style="display:${e.decaOn ? '' : 'none'};margin-top:14px;">
                   <div class="field" style="max-width:240px;margin-bottom:0;"><label>Peso de la mercancía ${req}</label>${decaInputIcon('weight', `<input id="oc-peso" inputmode="decimal" maxlength="30" placeholder="Ej. 12.500" value="${esc(String(e.pesoKg || '').replace(/\s*kg\.?$/i, ''))}" />`, 'kg')}</div>
                   <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">También hace falta la matrícula tractora y el CIF del transportista.</div>
                 </div>`}
