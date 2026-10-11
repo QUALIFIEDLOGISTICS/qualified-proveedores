@@ -435,6 +435,11 @@
   .dir-card-main{min-width:0;flex:1;}
   .dir-card-name{font-family:var(--display);font-size:16px;font-weight:800;line-height:1.3;text-transform:uppercase;letter-spacing:.2px;margin-bottom:10px;overflow-wrap:anywhere;}
   .dir-card-arch{margin-left:8px;font-family:var(--body);font-size:10.5px;font-weight:600;letter-spacing:.3px;padding:2px 8px;border-radius:999px;background:var(--panel2);color:var(--mutedFaint);vertical-align:middle;}
+  .dir-ver{display:inline-block;font-family:var(--body);font-size:10.5px;font-weight:700;letter-spacing:.2px;padding:2px 9px;border-radius:999px;border:1px solid transparent;}
+  .dir-ver.ok{background:color-mix(in srgb,var(--success) 12%,var(--panel));color:var(--success);border-color:color-mix(in srgb,var(--success) 30%,var(--border));}
+  .dir-ver.pend{background:color-mix(in srgb,#C98A2E 14%,var(--panel));color:#9A6A1D;border-color:color-mix(in srgb,#C98A2E 35%,var(--border));}
+  .dir-verbtn{flex:1 1 100%;margin-top:2px;width:100%;padding:7px 12px;border-radius:999px;border:1px solid color-mix(in srgb,var(--success) 40%,var(--border));background:color-mix(in srgb,var(--success) 8%,var(--panel));color:var(--success);font-family:var(--body);font-size:12.5px;font-weight:700;cursor:pointer;}
+  .dir-verbtn:hover{background:var(--success);color:#fff;}
   .dir-rows{display:flex;flex-direction:column;gap:7px;margin-bottom:14px;}
   .dir-row{display:flex;gap:10px;align-items:flex-start;font-size:13px;line-height:1.45;color:var(--muted);}
   .dir-row-ico{flex-shrink:0;display:flex;margin-top:1px;color:var(--mutedFaint);}
@@ -451,7 +456,7 @@
   .dir-maps.none{background:none;border:1px dashed var(--border);color:var(--mutedFaint);font-weight:500;padding:6px 12px;font-size:12.5px;}
   .dir-card.col{flex-direction:column;align-items:stretch;gap:0;}
   .dir-card-top{display:flex;gap:16px;align-items:flex-start;flex:1;}
-  .dir-card-foot{display:flex;justify-content:center;margin-top:16px;}
+  .dir-card-foot{display:flex;justify-content:center;align-items:center;margin-top:16px;gap:8px;}
   /* Ventanas de confirmación y avisos propios (sustituyen a confirm()/alert() del navegador) */
   .app-dlg-overlay{position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;background:rgba(15,25,45,.55);padding:16px;animation:appDlgFade .14s ease-out;}
   .app-dlg{width:100%;max-width:430px;background:var(--panel);border:1px solid var(--border);border-radius:16px;box-shadow:0 24px 60px rgba(15,30,60,.3);overflow:hidden;animation:appDlgPop .16s ease-out;}
@@ -6375,6 +6380,7 @@ async function loadDirecciones(){
     id: d.id, nombre: d.nombre, calle1: d.calle1 || '', calle2: d.calle2 || '', codigoPostal: d.codigo_postal || '',
     ciudad: d.ciudad || '', provincia: d.provincia || '', pais: d.pais || '',
     telefono: d.telefono || '', horarios: d.horarios || '', observaciones: d.observaciones || '', mapsUrl: d.google_maps_url || '', archived: !!d.archived,
+    createdBy: d.created_by || '', verificada: !!d.verificada, verificadaPor: d.verificada_por || '', verificadaAt: d.verificada_at || '',
   }));
 }
 async function openContactosFromHome(){
@@ -6400,11 +6406,99 @@ function direccionConfirmLeaveForm(){
 function direccionesFilteredList(){
   const archivedView = (window.__direccionesView || 'activos') === 'archivados';
   const search = (window.__direccionesSearch || '').toLowerCase();
-  const list = direcciones.filter(d => !!d.archived === archivedView && (!search
+  const ver = direccionesVerFiltro();
+  const list = direcciones.filter(d => !!d.archived === archivedView && (ver === 'todas' || (ver === 'pendientes' ? !d.verificada : !!d.verificada)) && (!search
     || d.nombre.toLowerCase().includes(search)
     || cargadorDireccionCompleta(d).toLowerCase().includes(search)
     || phoneMatches(d.telefono, search)));
   return { list, archivedView, search };
+}
+/* ---- Direcciones: verificación ----
+   Cualquiera puede crear una dirección; después otra persona comprueba que está bien creada y la marca como verificada.
+   Si luego se cambia el lugar (calle, código postal, ciudad, provincia, país o enlace de Maps), vuelve a quedar pendiente. */
+function direccionesVerFiltro(){ return ['pendientes', 'verificadas'].includes(window.__direccionesVer) ? window.__direccionesVer : 'todas'; }
+// Los administradores verifican cualquiera; el resto, las que no ha creado él mismo.
+function direccionPuedeVerificar(d){
+  if (!d || d.verificada) return false;
+  return !!PROFILE.isAdmin || !d.createdBy || d.createdBy !== currentUserEmail();
+}
+function direccionVerInfo(d){
+  if (d.verificada) {
+    const cuando = d.verificadaAt ? fmtDateDMY(String(d.verificadaAt).slice(0, 10)) : '';
+    return `Verificada${d.verificadaPor ? ' por ' + d.verificadaPor : ''}${cuando ? ' el ' + cuando : ''}`;
+  }
+  return d.createdBy ? `Creada por ${d.createdBy}: pendiente de que otra persona la verifique` : 'Pendiente de verificar';
+}
+function direccionVerPillHtml(d){
+  return d.verificada
+    ? `<span class="dir-ver ok" title="${esc(direccionVerInfo(d))}">✓ Verificada</span>`
+    : `<span class="dir-ver pend" title="${esc(direccionVerInfo(d))}">Sin verificar</span>`;
+}
+function direccionVerificarAbrir(id){
+  const d = direcciones.find(x => x.id === id);
+  if (!d) return;
+  if (!direccionPuedeVerificar(d)) { appToast('Esta dirección la tiene que verificar otra persona distinta de quien la creó.', 'error'); return; }
+  window.__verDirId = id;
+  const dir = cargadorDireccionCompleta(d);
+  const maps = safeMapsUrl(d.mapsUrl);
+  const fila = (k, v) => `<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;"><span style="width:110px;flex-shrink:0;color:var(--muted);">${k}</span><span style="min-width:0;word-break:break-word;">${v || '<span style="color:var(--mutedFaint);">—</span>'}</span></div>`;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:560px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.pin, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Verificar dirección</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">${esc(d.nombre)}</div></div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
+          <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">Comprueba que los datos son correctos (mejor con el enlace de Google Maps abierto) y márcala como verificada.</div>
+          ${fila('Nombre', esc(d.nombre))}
+          ${fila('Dirección', esc(dir))}
+          ${fila('Teléfono', d.telefono ? esc(phoneFormat(d.telefono)) : '')}
+          ${fila('Horario', d.horarios ? esc(d.horarios) : '')}
+          ${fila('Google Maps', maps ? `<a href="${esc(maps)}" target="_blank" rel="noopener noreferrer" style="color:var(--primary);font-weight:600;text-decoration:none;">Abrir en Google Maps ↗</a>` : '')}
+          ${fila('Creada por', esc(d.createdBy || ''))}
+          <div style="display:flex;gap:10px;margin-top:16px;">
+            <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-ghost" onclick="closeModal(); openDireccionForm('${d.id}')">Corregir datos</button>
+            <button class="btn btn-primary deca-submit dver-save" onclick="direccionVerificarConfirmar()">Marcar como verificada</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+async function direccionVerificarConfirmar(){
+  const id = window.__verDirId;
+  const d = direcciones.find(x => x.id === id);
+  if (!d) return;
+  const btn = document.querySelector('.dver-save'); if (btn) btn.disabled = true;
+  const por = currentUserEmail();
+  const ahora = new Date().toISOString();
+  const { data, error } = await supabaseClient.from('direcciones').update({ verificada: true, verificada_por: por, verificada_at: ahora }).eq('id', id).select();
+  if (error || !data || !data.length) {
+    appToast('No se pudo verificar: ' + (error && /verificada|column|schema/i.test(error.message || '') ? 'falta ejecutar el SQL «Direcciones · verificación» en Supabase.' : (error ? error.message : 'sin permiso.')), 'error');
+    if (btn) btn.disabled = false;
+    return;
+  }
+  d.verificada = true; d.verificadaPor = por; d.verificadaAt = ahora;
+  await logDireccionHistorial(id, 'Verificada.');
+  closeModal();
+  if (window.__administracionView === 'direccionForm') renderTab(); else refreshDireccionesListBody();
+  appToast(`«${d.nombre}» verificada.`, 'ok');
+}
+// Solo administradores: verifica de golpe todas las pendientes de la lista que se está viendo (para limpiar lo que ya existía).
+async function direccionesVerificarTodas(){
+  if (!PROFILE.isAdmin) return;
+  const pend = direccionesFilteredList().list.filter(d => !d.verificada);
+  if (!pend.length) return;
+  if (!(await appConfirm({ title: 'Verificar todas las pendientes', message: `Se marcarán como verificadas las ${pend.length} direcciones pendientes que estás viendo. Úsalo solo si ya sabes que están bien (por ejemplo, las que existían antes de esta función).`, confirmLabel: 'Verificar todas', tone: 'warn', icon: 'warn' }))) return;
+  const por = currentUserEmail(), ahora = new Date().toISOString();
+  const { data, error } = await supabaseClient.from('direcciones').update({ verificada: true, verificada_por: por, verificada_at: ahora }).in('id', pend.map(d => d.id)).select();
+  if (error || !data) { appToast('No se pudo verificar: ' + (error ? error.message : 'sin permiso.'), 'error'); return; }
+  pend.forEach(d => { d.verificada = true; d.verificadaPor = por; d.verificadaAt = ahora; });
+  renderTab();
+  appToast(`${data.length} direcciones verificadas.`, 'ok');
 }
 // Cada tarjeta muestra siempre los mismos datos (código postal, ciudad,
 // teléfono, horario y enlace de Google Maps); si falta alguno se indica.
@@ -6421,7 +6515,7 @@ function direccionCardHtml(d, archivedView){
       <div class="dir-card-top">
         <div class="dir-card-tile">${homeIcon(HOME_ICON_PATHS.pin, 30, 'var(--primary)', 1.8)}</div>
         <div class="dir-card-main">
-          <div class="dir-card-name">${esc(d.nombre)}${archivedView ? '<span class="dir-card-arch">archivada</span>' : ''}</div>
+          <div class="dir-card-name">${esc(d.nombre)}${archivedView ? '<span class="dir-card-arch">archivada</span>' : ''}</div><div style="margin-top:4px;">${direccionVerPillHtml(d)}</div>
           <div class="dir-rows" style="margin-bottom:0;">
             ${row('pin', cpCiudad ? esc(cpCiudad) : 'Sin código postal ni ciudad', !cpCiudad)}
             ${tel
@@ -6431,10 +6525,11 @@ function direccionCardHtml(d, archivedView){
           </div>
         </div>
       </div>
-      <div class="dir-card-foot">
+      <div class="dir-card-foot" style="flex-wrap:wrap;">
         ${maps
           ? `<a class="dir-maps" href="${esc(maps)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();"><span class="dir-maps-pin">${homeIcon(HOME_ICON_PATHS.pin, 15, '#fff', 2)}</span>Ver en Google Maps<span class="dir-maps-out">${homeIcon('<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line>', 14, 'currentColor', 2)}</span></a>`
           : `<div class="dir-maps none">Sin enlace de Google Maps</div>`}
+        ${direccionPuedeVerificar(d) && !archivedView ? `<button type="button" class="dir-verbtn" onclick="event.stopPropagation(); direccionVerificarAbrir('${d.id}')">Verificar</button>` : ''}
       </div>
     </div>`;
 }
@@ -6456,7 +6551,7 @@ function tplDireccionesPaginationHtml(){
 }
 function direccionesListBodyHtml(){
   const { list, archivedView, search } = direccionesFilteredList();
-  if (!list.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search ? 'Ninguna dirección coincide con la búsqueda.' : archivedView ? 'No hay direcciones archivadas.' : 'Todavía no hay ninguna dirección creada.'}</div>`;
+  if (!list.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search ? 'Ninguna dirección coincide con la búsqueda.' : archivedView ? 'No hay direcciones archivadas.' : direccionesVerFiltro() === 'pendientes' ? 'No hay direcciones pendientes de verificar. 🎉' : direccionesVerFiltro() === 'verificadas' ? 'Todavía no hay direcciones verificadas.' : 'Todavía no hay direcciones. Crea la primera con «Nueva dirección».'}</div>`;
   const totalPages = Math.max(1, Math.ceil(list.length / DIRECCIONES_PAGE_SIZE));
   if ((window.__direccionesPage||0) > totalPages - 1) window.__direccionesPage = totalPages - 1;
   const page = window.__direccionesPage || 0;
@@ -6471,36 +6566,39 @@ function refreshDireccionesListBody(){
 }
 function tplDireccionesPage(){
   const archivedView = (window.__direccionesView || 'activos') === 'archivados';
-  const activas = direcciones.filter(d => !d.archived).length, archivadas = direcciones.length - activas;
+  const ver = direccionesVerFiltro();
+  const pend = direcciones.filter(d => !d.archived && !d.verificada).length;
+  const segBtn = (k, t) => `<button type="button" class="${ver === k ? 'on' : ''}" onclick="window.__direccionesVer='${k}'; window.__direccionesPage=0; renderTab();">${t}</button>`;
+  const hayPendientes = direccionesFilteredList().list.some(d => !d.verificada);
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.pin, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 280px;">
         <div class="deca-banner-title">Direcciones</div>
-        <div class="deca-banner-sub">Agenda de lugares: naves, muelles, puntos de carga y descarga.</div>
+        <div class="deca-banner-sub">Naves, muelles y puntos de carga y descarga. Se eligen al crear órdenes de carga y DeCA.</div>
       </div>
       <div class="deca-banner-actions">
-        <div class="deca-stat"><b>${activas}</b><span>Activas</span></div>
-        <div class="deca-stat"><b>${archivadas}</b><span>Archivadas</span></div>
         ${archivedView ? '' : `<button class="btn btn-primary deca-new-btn" onclick="openDireccionForm()">${homeIcon(HOME_ICON_PATHS.pin, 17, 'currentColor', 1.8)}<span>Nueva dirección</span></button>`}
       </div>
     </div>
     <div class="card deca-toolbar">
       <div class="deca-search">
-        <input placeholder="Buscar por nombre, dirección o teléfono…" value="${esc(window.__direccionesSearch||'')}" oninput="window.__direccionesSearch=this.value; window.__direccionesPage=0; refreshDireccionesListBody();" />
+        <input placeholder="Buscar por nombre, calle, ciudad o teléfono…" value="${esc(window.__direccionesSearch||'')}" oninput="window.__direccionesSearch=this.value; window.__direccionesPage=0; refreshDireccionesListBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
+      <div class="doc-seg" title="Una dirección la crea cualquiera y la comprueba otra persona">${segBtn('todas', 'Todas')}${segBtn('pendientes', `Sin verificar${pend ? ` <span style="font-weight:700;">${pend}</span>` : ''}`)}${segBtn('verificadas', 'Verificadas')}</div>
       <div style="position:relative;">
-        <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__direccionesFilterOpen=!window.__direccionesFilterOpen; renderTab();">Filtros${archivedView?' (1)':''} ▾</button>
+        <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__direccionesFilterOpen=!window.__direccionesFilterOpen; renderTab();">Más filtros${archivedView?' (1)':''} ▾</button>
         ${window.__direccionesFilterOpen ? `
-          <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:0;margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:190px;">
+          <div onclick="event.stopPropagation();" style="position:absolute;top:100%;left:0;margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:200px;">
             <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 4px;cursor:pointer;white-space:nowrap;">
               <input type="checkbox" ${archivedView?'checked':''} onchange="window.__direccionesView=this.checked?'archivados':'activos'; window.__direccionesPage=0; renderTab();" style="width:auto;" />
-              Archivadas
+              Ver las archivadas
             </label>
           </div>` : ''}
       </div>
+      ${PROFILE.isAdmin && ver === 'pendientes' && hayPendientes ? `<button class="btn btn-ghost" onclick="direccionesVerificarTodas()" title="Marca como verificadas todas las pendientes de esta lista">Verificar todas</button>` : ''}
       <div id="direcciones-pagination" style="display:flex;align-items:center;gap:8px;margin-left:auto;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplDireccionesPaginationHtml()}</div>
     </div>
     <div id="direcciones-list-body">${direccionesListBodyHtml()}</div>
@@ -6779,7 +6877,7 @@ function tplDireccionFormPage(){
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.pin, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
         <div class="deca-banner-title">${editing ? esc(editing.nombre) : 'Nueva dirección'}${editing && editing.archived ? '<span class="deca-code-pill" style="background:color-mix(in srgb,var(--danger) 12%,transparent);color:var(--danger);">Archivada</span>' : ''}</div>
-        <div class="deca-banner-sub">Agenda de lugares: naves, muelles, puntos de carga y descarga.</div>
+        <div class="deca-banner-sub">${editing ? direccionVerPillHtml(editing) + ' <span style="margin-left:6px;">' + esc(direccionVerInfo(editing)) + '</span>' : 'Después de crearla, otra persona comprobará que está bien y la verificará.'}</div>
       </div>
       <div class="deca-banner-actions">
         ${editing ? `
@@ -6797,6 +6895,7 @@ function tplDireccionFormPage(){
             <span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${navIdx+1}/${navIds.length}</span>
             ${arrowBtn(1, 'Dirección siguiente', '→')}
           </div>` : ''}
+        ${editing && !editMode && !editing.archived && direccionPuedeVerificar(editing) ? `<button class="btn btn-primary" onclick="direccionVerificarAbrir('${editing.id}')">Verificar</button>` : ''}
         ${!editMode ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="enterDireccionEditMode()">Editar</button>` : ''}
         <button class="btn btn-ghost" style="background:var(--panel);" onclick="newDireccion()">+ Nuevo</button>
         ${editMode ? `<button class="btn btn-primary dr-submit-btn" onclick="submitDireccionForm('${editId||''}')">${submitLabel}</button>` : ''}
@@ -6886,9 +6985,23 @@ async function submitDireccionForm(editId){
   const btns = [...document.querySelectorAll('.dr-submit-btn')];
   btns.forEach(b => b.disabled = true);
   const before = editId ? { ...direcciones.find(d=>d.id===editId) } : null;
-  const res = editId
+  // Verificación: una dirección nueva nace sin verificar y con su autor; si se cambia el lugar de una ya verificada,
+  // vuelve a quedar pendiente para que otra persona la compruebe de nuevo.
+  let vuelveAPendiente = false;
+  if (before && before.verificada) {
+    const lugarAntes = [before.nombre, before.calle1, before.calle2, before.codigoPostal, before.ciudad, before.provincia, before.pais, before.mapsUrl].map(x => String(x || '').trim().toLowerCase()).join('|');
+    const lugarAhora = [nombre, payload.calle1, payload.calle2, payload.codigo_postal, payload.ciudad, payload.provincia, payload.pais, payload.google_maps_url].map(x => String(x || '').trim().toLowerCase()).join('|');
+    if (lugarAntes !== lugarAhora) { vuelveAPendiente = true; Object.assign(payload, { verificada: false, verificada_por: null, verificada_at: null }); }
+  }
+  if (!editId) payload.created_by = currentUserEmail();
+  let res = editId
     ? await supabaseClient.from('direcciones').update(payload).eq('id', editId).select()
     : await supabaseClient.from('direcciones').insert(payload).select();
+  // Si todavía no se ha ejecutado el SQL de verificación, la dirección se guarda igual (sin autor).
+  if (!editId && res.error && /created_by|verificada|schema cache/i.test(res.error.message || '')) {
+    const { created_by, ...sinAutor } = payload;
+    res = await supabaseClient.from('direcciones').insert(sinAutor).select();
+  }
   if (res.error || !res.data || !res.data.length) {
     showFormError(errEl, 'No se pudo guardar: ' + (res.error && res.error.message ? res.error.message : 'sin permiso o error desconocido.'));
     btns.forEach(b => b.disabled = false);
@@ -6900,6 +7013,7 @@ async function submitDireccionForm(editId){
     observaciones: payload.observaciones || '', mapsUrl: payload.google_maps_url || '', telefono: payload.telefono || '', horarios: payload.horarios || '',
   };
   const changeLines = before ? buildDireccionChangeSummary(before, after) : ['Dirección creada.'];
+  if (vuelveAPendiente) { changeLines.push('Vuelve a estar sin verificar porque se ha cambiado el lugar.'); appToast('Al cambiar el lugar, la dirección vuelve a quedar sin verificar.', 'info'); }
   const savedId = editId || res.data[0].id;
   if (changeLines.length) await logDireccionHistorial(savedId, changeLines.join('\n'));
   await loadDirecciones();
@@ -11682,6 +11796,7 @@ function traficoEnterSection(id){
   if (id === 'direcciones') {
     window.__administracionView = 'direcciones';
     window.__direccionesView = 'activos';
+    window.__direccionesVer = 'todas';
     window.__direccionesSearch = '';
     window.__direccionesFilterOpen = false;
     window.__direccionesPage = 0;
