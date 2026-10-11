@@ -12113,122 +12113,157 @@ function ocPdfTxt(s){
 }
 async function ocBuildPdf(o){
   const pdf = await PDFLib.PDFDocument.create();
+  pdf.setTitle(`Orden de carga ${ocRef(o)}`);
+  pdf.setAuthor(OC_EMPRESA.nombre);
   const font = await pdf.embedFont(PDFLib.StandardFonts.Helvetica);
   const bold = await pdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
   let logo = null;
   try { const r = await fetch('logo-full.png'); if (r.ok) logo = await pdf.embedPng(await r.arrayBuffer()); } catch (e) { /* sin logo */ }
-  const W = 595.28, H = 841.89, M = 38, CW = W - M * 2, ink = PDFLib.rgb(0, 0, 0), grey = PDFLib.rgb(0.35, 0.35, 0.35);
+  const rgb = PDFLib.rgb;
+  const NAVY = rgb(0.106, 0.227, 0.42), INK = rgb(0.1, 0.12, 0.16), MUTED = rgb(0.42, 0.46, 0.52);
+  const LINE = rgb(0.8, 0.83, 0.88), SOFT = rgb(0.95, 0.96, 0.98), WHITE = rgb(1, 1, 1), CLARO = rgb(0.78, 0.85, 0.95);
+  const W = 595.28, H = 841.89, M = 40, CW = W - M * 2, BOTTOM = M + 24;
+  const E = OC_EMPRESA, T = ocPdfTxt, ref = ocRef(o);
+  const pages = [];
   let page, y;
-  const E = OC_EMPRESA;
+  const txt = (s, x, yy, size, f, color) => page.drawText(T(s), { x, y: yy, size, font: f || font, color: color || INK });
+  const tw = (s, size, f) => (f || font).widthOfTextAtSize(T(s), size);
+  // Rectángulo con esquinas redondeadas: top es el borde superior (el trazo baja desde ahí)
+  const rr = (x, top, w, h, r, fill, border) => page.drawSvgPath(
+    `M ${r},0 H ${w - r} Q ${w},0 ${w},${r} V ${h - r} Q ${w},${h} ${w - r},${h} H ${r} Q 0,${h} 0,${h - r} V ${r} Q 0,0 ${r},0 Z`,
+    { x, y: top, color: fill, borderColor: border, borderWidth: border ? 0.8 : 0 });
   const cabecera = () => {
-    if (logo) { const h = 44, w = logo.width * (h / logo.height); page.drawImage(logo, { x: M, y: H - M - h, width: w, height: h }); }
-    const bw = 210, bh = 62, bx = W - M - bw, by = H - M - bh;
-    page.drawRectangle({ x: bx, y: by, width: bw, height: bh, borderColor: ink, borderWidth: 0.8, color: PDFLib.rgb(1, 1, 1) });
-    [[E.nombre, bold], [E.direccion, font], [`${E.cp} - ${E.poblacion}`, font], [E.provincia, font], [E.correoTrafico, font], [E.telefono, font]].forEach(([t, f], i) => {
-      page.drawText(ocPdfTxt(t), { x: bx + 7, y: by + bh - 12 - i * 9.4, size: 7.6, font: f, color: ink });
-    });
-    y = H - M - bh - 18;
+    if (logo) { const h = 40, w = logo.width * (h / logo.height); page.drawImage(logo, { x: M, y: H - M - h + 4, width: w, height: h }); }
+    [[`${E.nombre} · CIF ${E.cif}`, bold], [E.direccion, font], [`${E.cp} ${E.poblacion} (${E.provincia}) · ${E.pais}`, font], [`${E.correoTrafico} · ${E.telefono}`, font]]
+      .forEach(([t, f], i) => txt(t, W - M - tw(t, 7.6, f), H - M - 4 - i * 9.8, 7.6, f, i === 0 ? INK : MUTED));
+    page.drawLine({ start: { x: M, y: H - M - 50 }, end: { x: W - M, y: H - M - 50 }, thickness: 1.4, color: NAVY });
+    y = H - M - 68;
   };
-  const nueva = () => { page = pdf.addPage([W, H]); cabecera(); };
-  const asegurar = h => { if (y - h < M + 10) nueva(); };
-  const lineas = (txt, f, size, ancho) => wrapPdfText(ocPdfTxt(txt), f, size, ancho);
-  // Barra de título de sección
-  const barra = titulo => {
+  const nueva = () => { page = pdf.addPage([W, H]); pages.push(page); cabecera(); };
+  const asegurar = h => { if (y - h < BOTTOM) nueva(); };
+  // Título de sección: franja azul con el texto en blanco
+  const seccion = titulo => {
     asegurar(70);
-    page.drawRectangle({ x: M, y: y - 15, width: CW, height: 15, borderColor: ink, borderWidth: 0.8, color: PDFLib.rgb(1, 1, 1) });
-    const tw = bold.widthOfTextAtSize(ocPdfTxt(titulo), 9);
-    page.drawText(ocPdfTxt(titulo), { x: M + (CW - tw) / 2, y: y - 11, size: 9, font: bold, color: ink });
-    y -= 19;
+    rr(M, y, CW, 17, 3, NAVY);
+    txt(titulo.toUpperCase(), M + 9, y - 12, 8, bold, WHITE);
+    y -= 22;
   };
-  // Caja con filas de celdas [{l: etiqueta, v: valor, w: fracción}]: se mide primero para no partirla entre páginas.
-  const caja = (filas, extra) => {
-    const size = 7.8, lh = 9.6, pad = 6;
-    const medidas = filas.map(row => {
+  // Caja con filas de celdas { l: etiqueta, v: valor, w: fracción del ancho }: se mide antes para no partirla entre páginas
+  const celdas = (filas, rotulo, rotuloH) => {
+    const pad = 9, lh = 11.2;
+    const med = filas.map(row => {
       const cs = row.map(c => {
-        const w = CW * c.w - pad * 2;
-        const etw = c.l ? bold.widthOfTextAtSize(ocPdfTxt(c.l), 7.2) + 6 : 0;
-        const ls = (c.v === '' || c.v == null) ? [''] : lineas(c.v, font, size, Math.max(40, w - etw));
-        return { ...c, ls, etw };
+        const vacio = c.v === '' || c.v == null;
+        const ls = vacio ? ['—'] : wrapPdfText(T(c.v), font, 9, Math.max(40, CW * c.w - pad * 2));
+        return { ...c, ls, vacio };
       });
-      return { cs, h: Math.max(...cs.map(c => c.ls.length)) * lh + 5 };
+      const conL = cs.some(c => c.l);
+      return { cs, conL, h: 8 + (conL ? 9 : 0) + Math.max(...cs.map(c => c.ls.length)) * lh + 4 };
     });
-    const total = medidas.reduce((s, r) => s + r.h, 0) + 6;
-    asegurar(total + 22);
-    const top = y;
-    let yy = y - 5;
-    medidas.forEach(r => {
+    const total = med.reduce((s, r) => s + r.h, 0) + 4;
+    asegurar(total + 6 + (rotuloH || 0));
+    if (rotulo) { rotulo(); y -= rotuloH; }
+    rr(M, y, CW, total, 4, WHITE, LINE);
+    let yy = y - 2;
+    med.forEach((r, ri) => {
+      if (ri > 0) page.drawLine({ start: { x: M + 6, y: yy }, end: { x: M + CW - 6, y: yy }, thickness: 0.5, color: LINE });
+      let acc = 0;
       r.cs.forEach(c => {
-        const x0 = M + CW * (r.cs.slice(0, r.cs.indexOf(c)).reduce((s, k) => s + k.w, 0)) + pad;
-        if (c.l) page.drawText(ocPdfTxt(c.l), { x: x0, y: yy - 7, size: 7.2, font: bold, color: ink });
-        c.ls.forEach((ln, i) => page.drawText(ln, { x: x0 + c.etw, y: yy - 7 - i * lh, size, font, color: ink }));
+        const x0 = M + CW * acc + pad;
+        acc += c.w;
+        if (c.l) txt(String(c.l).toUpperCase(), x0, yy - 12, 6.6, bold, MUTED);
+        c.ls.forEach((ln, i) => page.drawText(ln, { x: x0, y: yy - (r.conL ? 24 : 16) - i * lh, size: 9, font, color: c.vacio ? MUTED : INK }));
       });
       yy -= r.h;
     });
-    page.drawRectangle({ x: M, y: top - total, width: CW, height: total, borderColor: ink, borderWidth: 0.8 });
-    y = top - total - 7;
-
+    y -= total + 9;
   };
-  const punto = p => [
-    [{ l: 'EMPRESA:', v: p.empresa, w: 0.55 }, { l: 'POBLACIÓN:', v: p.poblacion, w: 0.45 }],
-    [{ l: 'DIRECCIÓN:', v: p.direccion, w: 0.55 }, { l: 'C.P./PAÍS:', v: [p.cp, p.pais].filter(Boolean).join(' '), w: 0.45 }],
-    [{ l: 'FECHA:', v: p.fecha ? fmtDateDMY(p.fecha) : '', w: 0.55 }, { l: 'HORA:', v: p.hora, w: 0.45 }],
-    [{ l: 'OBSERVACIONES:', v: p.observaciones, w: 0.55 }, { l: o.cargas.includes(p) ? 'REF.CARGA:' : 'REF.DESCARGA:', v: p.ref, w: 0.45 }],
-  ];
+  const punto = (p, i, esCarga) => {
+    const filas = [
+      [{ l: 'Empresa', v: p.empresa, w: 0.58 }, { l: 'Población', v: p.poblacion, w: 0.42 }],
+      [{ l: 'Dirección', v: p.direccion, w: 0.58 }, { l: 'C.P. / País', v: [p.cp, p.pais].filter(Boolean).join(' · '), w: 0.42 }],
+      [{ l: esCarga ? 'Ref. carga' : 'Ref. descarga', v: p.ref, w: 0.58 }, { l: 'Hora', v: p.hora, w: 0.42 }],
+    ];
+    if (p.observaciones) filas.push([{ l: 'Observaciones', v: p.observaciones, w: 1 }]);
+    const rotulo = () => {
+      txt(`${esCarga ? 'CARGA' : 'DESCARGA'} ${i + 1}`, M + 2, y - 8, 8.2, bold, NAVY);
+      if (p.fecha) { const f = fmtDateDMY(p.fecha); txt(f, W - M - tw(f, 8.2, bold), y - 8, 8.2, bold, INK); }
+    };
+    celdas(filas, rotulo, 13);
+  };
 
   nueva();
-  const t = 'ORDEN DE CARGA';
-  page.drawText(t, { x: M + (CW - bold.widthOfTextAtSize(t, 16)) / 2, y: y - 12, size: 16, font: bold, color: ink });
-  const st = 'Documento válido como Carta de Porte en supuestos art. 10bis LCTTM';
-  page.drawText(ocPdfTxt(st), { x: M, y: y - 28, size: 8.4, font, color: ink });
-  y -= 40;
-  barra('Cargador Contractual');
-  caja([[{ l: '', v: `${E.nombre}  ${E.direccion}  ${E.cp} ${E.provincia}  ${E.pais}  CIF: ${E.cif}`, w: 1 }]]);
-  barra('Transportista');
-  caja([
-    [{ l: 'NOMBRE:', v: o.transportistaNombre, w: 0.6 }, { l: 'CIF:', v: o.transportistaNif, w: 0.4 }],
-    [{ l: 'DIRECCIÓN:', v: o.transportistaDireccion, w: 0.6 }, { l: 'POBLACIÓN:', v: o.transportistaPoblacion, w: 0.4 }],
-    [{ l: 'MATRÍCULAS:', v: [o.matriculaTractora, o.matriculaRemolque].filter(Boolean).join(' / '), w: 1 }],
+  // Título y número de orden
+  txt('ORDEN DE CARGA', M, y - 18, 21, bold, NAVY);
+  txt('Documento válido como Carta de Porte en supuestos art. 10bis LCTTM', M, y - 33, 8, font, MUTED);
+  const pw = 128, ph = 42;
+  rr(W - M - pw, y + 2, pw, ph, 7, NAVY);
+  txt('Nº DE ORDEN', W - M - pw + 11, y - 12, 6.6, bold, CLARO);
+  txt(ref, W - M - pw + 11, y - 32, 16, bold, WHITE);
+  y -= 58;
+
+  seccion('Cargador contractual');
+  celdas([[{ l: 'Razón social', v: E.nombre, w: 0.34 }, { l: 'CIF', v: E.cif, w: 0.2 }, { l: 'Domicilio', v: `${E.direccion}, ${E.cp} ${E.poblacion}, ${E.provincia}, ${E.pais}`, w: 0.46 }]]);
+  seccion('Transportista');
+  celdas([
+    [{ l: 'Nombre', v: o.transportistaNombre, w: 0.58 }, { l: 'CIF', v: o.transportistaNif, w: 0.42 }],
+    [{ l: 'Dirección', v: o.transportistaDireccion, w: 0.58 }, { l: 'Población', v: o.transportistaPoblacion, w: 0.42 }],
+    [{ l: 'Matrículas', v: [o.matriculaTractora, o.matriculaRemolque].filter(Boolean).join('  /  '), w: 1 }],
   ]);
-  barra('Pedido');
-  caja([
-    [{ l: 'REF. FACTURACIÓNº:', v: ocRef(o), w: 0.6 }, { l: 'FECHA PEDIDO:', v: fmtDateDMY(o.fechaPedido), w: 0.4 }],
-    [{ l: '', v: '**Incluir referencia de facturación en su factura para poder efectuarles el pago**', w: 1 }],
-    [{ l: 'MERCANCÍA:', v: o.mercancia, w: 1 }],
-    [{ l: 'INDICACIONES:', v: o.indicaciones, w: 1 }],
+  seccion('Pedido');
+  celdas([
+    [{ l: 'Ref. facturación', v: ref, w: 0.58 }, { l: 'Fecha del pedido', v: fmtDateDMY(o.fechaPedido), w: 0.42 }],
+    [{ l: 'Mercancía', v: o.mercancia, w: 1 }],
+    [{ l: 'Indicaciones', v: o.indicaciones, w: 1 }],
   ]);
-  barra('CARGA / S');
-  o.cargas.forEach(p => caja(punto(p)));
-  barra('DESCARGA / S');
-  o.descargas.forEach(p => caja(punto(p)));
-  asegurar(60);
-  page.drawText('OBSERVACIONES ESPECIALES:', { x: M, y: y - 10, size: 8, font: bold, color: ink });
-  y -= 14;
-  (o.observacionesEspeciales ? lineas(o.observacionesEspeciales, font, 8, CW) : []).forEach(ln => { asegurar(12); page.drawText(ln, { x: M, y: y - 9, size: 8, font, color: ink }); y -= 11; });
-  y -= 6;
-  asegurar(24);
-  page.drawText('PRECIO:', { x: M, y: y - 10, size: 9, font: bold, color: ink });
-  page.drawText(ocPdfTxt(`${o.precio == null ? '' : o.precio.toFixed(1)}   EUR`), { x: M + 60, y: y - 10, size: 9, font, color: ink });
+  txt('Incluir la referencia de facturación en su factura para poder efectuarles el pago.', M + 2, y - 4, 7.6, font, MUTED);
+  y -= 16;
 
-  // Página 2: dónde enviar la factura
-  nueva();
-  y -= 20;
-  ['LA FACTURA Y LA DOCUMENTACIÓN ORIGINAL DEBE ENVIARSE', 'POR CORREO POSTAL A :'].forEach((ln, i) => {
-    page.drawText(ocPdfTxt(ln), { x: M, y: y - i * 13, size: 10, font: bold, color: ink });
-  });
-  y -= 36;
-  [[E.nombre, bold], [E.correoAdmin, font], ['CIF: ' + E.cif, font], [E.direccion, font], [`${E.poblacion} , ${E.provincia} , ${E.cp}`, font], [E.pais, font]].forEach(([ln, f]) => {
-    page.drawText(ocPdfTxt(ln), { x: M, y: y - 9, size: 10, font: f, color: ink }); y -= 15;
+  seccion('Cargas');
+  o.cargas.forEach((p, i) => punto(p, i, true));
+  seccion('Descargas');
+  o.descargas.forEach((p, i) => punto(p, i, false));
+
+  if (o.observacionesEspeciales) {
+    seccion('Observaciones especiales');
+    celdas([[{ l: '', v: o.observacionesEspeciales, w: 1 }]]);
+  }
+
+  // Precio
+  asegurar(56);
+  rr(M, y, CW, 40, 7, SOFT, LINE);
+  txt('PRECIO ACORDADO', M + 14, y - 24, 8, bold, MUTED);
+  const precio = (o.precio == null ? '' : o.precio.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })) + ' EUR';
+  txt(precio, W - M - 14 - tw(precio, 18, bold), y - 27, 18, bold, NAVY);
+  y -= 56;
+
+  // Dónde enviar la factura
+  asegurar(112);
+  rr(M, y, CW, 100, 6, SOFT, LINE);
+  page.drawRectangle({ x: M, y: y - 100, width: 4, height: 100, color: NAVY });
+  txt('FACTURACIÓN', M + 16, y - 17, 8, bold, NAVY);
+  txt('La factura y la documentación original deben enviarse por correo postal a:', M + 16, y - 33, 8.6, font, INK);
+  [[E.nombre, bold], [`${E.direccion} · ${E.cp} ${E.poblacion} (${E.provincia}) · ${E.pais}`, font], [`CIF ${E.cif}`, font], [E.correoAdmin, font]]
+    .forEach(([t, f], i) => txt(t, M + 16, y - 49 - i * 12.5, 9, f, INK));
+  y -= 116;
+
+  // Condiciones
+  seccion('Condiciones del servicio');
+  OC_CONDICIONES.forEach(([tit, cuerpo], i) => {
+    const ls = wrapPdfText(T(cuerpo), font, 8, CW - 18);
+    asegurar(ls.length * 10.4 + 24);
+    txt(`${i + 1}.`, M + 2, y - 8, 8.2, bold, NAVY);
+    txt(tit, M + 18, y - 8, 8.2, bold, NAVY);
+    ls.forEach((ln, k) => page.drawText(ln, { x: M + 18, y: y - 20 - k * 10.4, size: 8, font, color: INK }));
+    y -= ls.length * 10.4 + 20;
   });
 
-  // Página 3: condiciones
-  nueva();
-  page.drawText('OBSERVACIONES:', { x: M, y: y - 8, size: 9, font: bold, color: ink });
-  y -= 22;
-  OC_CONDICIONES.forEach(([tit, txt]) => {
-    const ls = lineas(`${tit}: ${txt}`, font, 8, CW);
-    asegurar(ls.length * 10.4 + 8);
-    ls.forEach((ln, i) => { page.drawText(ln, { x: M, y: y - 8, size: 8, font, color: ink }); y -= 10.4; });
-    y -= 6;
+  // Pie de todas las páginas
+  pages.forEach((pg, i) => {
+    pg.drawLine({ start: { x: M, y: M + 10 }, end: { x: W - M, y: M + 10 }, thickness: 0.6, color: LINE });
+    pg.drawText(T(`Orden de carga ${ref} · ${E.nombre}`), { x: M, y: M - 2, size: 7.2, font, color: MUTED });
+    const n = `Página ${i + 1} de ${pages.length}`;
+    pg.drawText(T(n), { x: W - M - font.widthOfTextAtSize(n, 7.2), y: M - 2, size: 7.2, font, color: MUTED });
   });
   return await pdf.save();
 }
