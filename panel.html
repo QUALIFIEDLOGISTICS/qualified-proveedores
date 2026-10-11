@@ -11827,7 +11827,7 @@ function backToOrdenesCarga(){
 }
 function ocPuntoRowHtml(tipo, p, quitar){
   p = p || {};
-  const r = (k, label, ph, extra) => `<div class="field" style="flex:1;min-width:${extra || 170}px;margin-bottom:10px;"><label>${label}</label><input data-k="${k}" maxlength="200" placeholder="${ph || ''}" value="${esc(p[k] || '')}" /></div>`;
+  const r = (k, label, ph, extra) => `<div class="field" style="flex:1;min-width:${extra || 170}px;margin-bottom:10px;"><label>${label}</label><input data-k="${k}" maxlength="${k === 'maps' ? 500 : 200}" placeholder="${ph || ''}" value="${esc(p[k] || '')}" /></div>`;
   return `
     <div class="oc-pt" data-t="${tipo}" style="border:1px solid var(--border);border-radius:12px;padding:14px 14px 4px;margin-bottom:10px;background:var(--panel2);">
       <div style="display:flex;gap:10px;align-items:flex-start;">
@@ -11839,7 +11839,11 @@ function ocPuntoRowHtml(tipo, p, quitar){
       <div style="display:flex;gap:12px;flex-wrap:wrap;">${r('direccion', 'Dirección', 'Calle, número, polígono…', 260)}${r('cp', 'C.P.', '', 90)}${r('pais', 'País', '', 130)}</div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
         <div class="field" style="flex:1;min-width:150px;margin-bottom:10px;"><label>Fecha</label><input data-k="fecha" type="date" value="${esc(p.fecha || '')}" /></div>
-        ${r('hora', 'Hora', 'Ej. 8-16H', 150)}${r('ref', tipo === 'carga' ? 'Ref. carga' : 'Ref. descarga', '', 150)}
+        ${r('hora', 'Hora de la cita', 'Ej. 8-16H', 150)}${r('ref', tipo === 'carga' ? 'Ref. carga' : 'Ref. descarga', '', 150)}
+      </div>
+      <label style="display:flex;align-items:center;gap:9px;font-size:13px;margin:0 0 12px;cursor:pointer;"><input type="checkbox" class="switch" data-k="imperativa" ${p.imperativa ? 'checked' : ''} /><span>La cita es con <b>hora imperativa</b> (no se puede mover)</span></label>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        ${r('horario', 'Horario de la dirección', 'Se rellena con la ficha de la dirección', 260)}${r('maps', 'Google Maps', 'Enlace de la ficha de la dirección', 260)}
       </div>
       <div class="field" style="margin-bottom:10px;"><label>Observaciones</label><input data-k="observaciones" maxlength="400" placeholder="Ej. Avisar 24 h antes de llegar" value="${esc(p.observaciones || '')}" /></div>
     </div>`;
@@ -11851,6 +11855,7 @@ function ocElegirDireccion(el){
   const set = (k, v) => { const i = row.querySelector(`[data-k="${k}"]`); if (i) i.value = v || ''; };
   set('empresa', d.nombre); set('direccion', [d.calle1, d.calle2].filter(Boolean).join(', '));
   set('cp', d.codigoPostal); set('poblacion', d.ciudad); set('pais', d.pais);
+  set('horario', d.horarios); set('maps', d.mapsUrl);
   window.__ocFormDirty = true;
 }
 // Crear una dirección desde una carga o una descarga: se va a la página real de «Nueva dirección» y, al guardar o cancelar,
@@ -11887,7 +11892,7 @@ function ocVolverDesdeDireccion(direccionCreada){
     const lista = (draft[clave] || []).slice();
     lista[t.i] = Object.assign({}, lista[t.i], {
       empresa: d.nombre || '', direccion: [d.calle1, d.calle2].filter(Boolean).join(', '),
-      cp: d.codigoPostal || '', poblacion: d.ciudad || '', pais: d.pais || '',
+      cp: d.codigoPostal || '', poblacion: d.ciudad || '', pais: d.pais || '', horario: d.horarios || '', maps: d.mapsUrl || '',
     });
     draft[clave] = lista;
   }
@@ -11911,7 +11916,7 @@ function ocPuntoQuitar(btn){ const r = btn.closest('.oc-pt'); if (r) r.remove();
 function ocLeerPuntos(tipo){
   return [...document.querySelectorAll(`.oc-pt[data-t="${tipo}"]`)].map(row => {
     const p = {};
-    row.querySelectorAll('[data-k]').forEach(i => { p[i.dataset.k] = i.value.trim(); });
+    row.querySelectorAll('[data-k]').forEach(i => { p[i.dataset.k] = i.type === 'checkbox' ? i.checked : i.value.trim(); });
     return p;
   });
 }
@@ -12221,8 +12226,16 @@ async function ocBuildPdfDens(o, D){
       const cs = row.map(c => {
         const vacio = c.v === '' || c.v == null;
         const etw = c.l ? tw(String(c.l).toUpperCase(), D.lab, bold) + 7 : 0;
-        const ls = vacio ? ['—'] : wrapPdfText(T(c.v), font, D.fs, Math.max(40, CW * c.w - D.pad * 2 - etw));
-        return { ...c, ls, vacio, etw };
+        const anchoV = Math.max(40, CW * c.w - D.pad * 2 - etw);
+        const fv = c.bold ? bold : font;
+        let ls;
+        if (vacio) ls = ['—'];
+        else if (c.enlace) {   // un enlace va siempre en una línea: si no cabe, se recorta con «…»
+          const full = T(c.v); let t = full;
+          while (t.length > 4 && fv.widthOfTextAtSize(t, D.fs) > anchoV) t = t.slice(0, -2);
+          ls = [t.length < full.length ? t.slice(0, -1) + '…' : t];
+        } else ls = wrapPdfText(T(c.v), fv, D.fs, anchoV);
+        return { ...c, ls, vacio, etw, fv };
       });
       return { cs, h: D.rowPad + Math.max(...cs.map(c => c.ls.length)) * D.lh + D.tail };
     });
@@ -12239,7 +12252,7 @@ async function ocBuildPdfDens(o, D){
         acc += c.w;
         const base = D.rowPad + D.fs - 1;
         if (c.l) txt(String(c.l).toUpperCase(), x0, yy - base, D.lab, bold, MUTED);
-        c.ls.forEach((ln, i) => page.drawText(ln, { x: x0 + c.etw, y: yy - base - i * D.lh, size: D.fs, font, color: c.vacio ? MUTED : INK }));
+        c.ls.forEach((ln, i) => page.drawText(ln, { x: x0 + c.etw, y: yy - base - i * D.lh, size: D.fs, font: c.fv || font, color: c.vacio ? MUTED : INK }));
       });
       yy -= r.h;
     });
@@ -12249,8 +12262,10 @@ async function ocBuildPdfDens(o, D){
     const filas = [
       [{ l: 'Empresa', v: p.empresa, w: 0.58 }, { l: 'Población', v: p.poblacion, w: 0.42 }],
       [{ l: 'Dirección', v: p.direccion, w: 0.58 }, { l: 'C.P. / País', v: [p.cp, p.pais].filter(Boolean).join(' · '), w: 0.42 }],
-      [{ l: esCarga ? 'Ref. carga' : 'Ref. descarga', v: p.ref, w: 0.58 }, { l: 'Hora', v: p.hora, w: 0.42 }],
+      [{ l: esCarga ? 'Ref. carga' : 'Ref. descarga', v: p.ref, w: 0.4 }, { l: 'Hora', v: [p.hora, p.imperativa ? 'HORA IMPERATIVA' : ''].filter(Boolean).join('  ·  '), w: 0.6, bold: !!p.imperativa }],
     ];
+    if (p.horario) filas.push([{ l: 'Horario', v: p.horario, w: 1 }]);
+    if (p.maps) filas.push([{ l: 'Google Maps', v: p.maps, w: 1, enlace: true }]);
     if (p.observaciones) filas.push([{ l: 'Observaciones', v: p.observaciones, w: 1 }]);
     const rotulo = () => {
       txt(`${esCarga ? 'CARGA' : 'DESCARGA'} ${i + 1}`, M + 2, y - 8, 8, bold, NAVY);
