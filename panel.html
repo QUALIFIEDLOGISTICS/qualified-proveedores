@@ -12111,7 +12111,21 @@ function ocPdfTxt(s){
     return b && b.charCodeAt(0) <= 255 ? b : '?';
   }).join('');
 }
+// Densidades del PDF: la orden entera tiene que caber en la primera página; si no cabe, se compacta un nivel (letra y
+// espacios algo más pequeños). La facturación y las condiciones van siempre en una página aparte.
+const OC_PDF_DENS = [
+{ fs: 8.6, lab: 6.6, lh: 10.4, pad: 8, rowPad: 5, tail: 3, strip: 16, stripGap: 21, rotH: 13, gap: 8, tit: 20, titH: 54, precioH: 36 },  { fs: 8,   lab: 6.3, lh: 9.6,  pad: 7, rowPad: 4, tail: 3, strip: 14, stripGap: 18, rotH: 12, gap: 6, tit: 18, titH: 48, precioH: 32 },  { fs: 7.5, lab: 6,   lh: 9,    pad: 6, rowPad: 3, tail: 2, strip: 13, stripGap: 16, rotH: 11, gap: 5, tit: 17, titH: 44, precioH: 30 },
+  { fs: 7,   lab: 5.7, lh: 8.3,  pad: 5, rowPad: 2, tail: 1.5, strip: 12, stripGap: 14, rotH: 10, gap: 3, tit: 15, titH: 38, precioH: 26 },
+];
 async function ocBuildPdf(o){
+  let ultimo = null;
+  for (let d = 0; d < OC_PDF_DENS.length; d++) {
+    ultimo = await ocBuildPdfDens(o, OC_PDF_DENS[d]);
+    if (ultimo.cabe) break;
+  }
+  return ultimo.bytes;
+}
+async function ocBuildPdfDens(o, D){
   const pdf = await PDFLib.PDFDocument.create();
   pdf.setTitle(`Orden de carga ${ocRef(o)}`);
   pdf.setAuthor(OC_EMPRESA.nombre);
@@ -12137,28 +12151,28 @@ async function ocBuildPdf(o){
     [[`${E.nombre} · CIF ${E.cif}`, bold], [E.direccion, font], [`${E.cp} ${E.poblacion} (${E.provincia}) · ${E.pais}`, font], [`${E.correoTrafico} · ${E.telefono}`, font]]
       .forEach(([t, f], i) => txt(t, W - M - tw(t, 7.6, f), H - M - 4 - i * 9.8, 7.6, f, i === 0 ? INK : MUTED));
     page.drawLine({ start: { x: M, y: H - M - 50 }, end: { x: W - M, y: H - M - 50 }, thickness: 1.4, color: NAVY });
-    y = H - M - 68;
+    y = H - M - 66;
   };
   const nueva = () => { page = pdf.addPage([W, H]); pages.push(page); cabecera(); };
   const asegurar = h => { if (y - h < BOTTOM) nueva(); };
   // Título de sección: franja azul con el texto en blanco
   const seccion = titulo => {
-    asegurar(70);
-    rr(M, y, CW, 17, 3, NAVY);
-    txt(titulo.toUpperCase(), M + 9, y - 12, 8, bold, WHITE);
-    y -= 22;
+    asegurar(D.strip + D.stripGap + 40);
+    rr(M, y, CW, D.strip, 3, NAVY);
+    txt(titulo.toUpperCase(), M + 9, y - D.strip + 5, 7.8, bold, WHITE);
+    y -= D.stripGap;
   };
   // Caja con filas de celdas { l: etiqueta, v: valor, w: fracción del ancho }: se mide antes para no partirla entre páginas
   const celdas = (filas, rotulo, rotuloH) => {
-    const pad = 9, lh = 11.2;
+    // Etiqueta y valor en la misma línea (como en el documento original); las líneas siguientes del valor quedan alineadas.
     const med = filas.map(row => {
       const cs = row.map(c => {
         const vacio = c.v === '' || c.v == null;
-        const ls = vacio ? ['—'] : wrapPdfText(T(c.v), font, 9, Math.max(40, CW * c.w - pad * 2));
-        return { ...c, ls, vacio };
+        const etw = c.l ? tw(String(c.l).toUpperCase(), D.lab, bold) + 7 : 0;
+        const ls = vacio ? ['—'] : wrapPdfText(T(c.v), font, D.fs, Math.max(40, CW * c.w - D.pad * 2 - etw));
+        return { ...c, ls, vacio, etw };
       });
-      const conL = cs.some(c => c.l);
-      return { cs, conL, h: 8 + (conL ? 9 : 0) + Math.max(...cs.map(c => c.ls.length)) * lh + 4 };
+      return { cs, h: D.rowPad + Math.max(...cs.map(c => c.ls.length)) * D.lh + D.tail };
     });
     const total = med.reduce((s, r) => s + r.h, 0) + 4;
     asegurar(total + 6 + (rotuloH || 0));
@@ -12169,14 +12183,15 @@ async function ocBuildPdf(o){
       if (ri > 0) page.drawLine({ start: { x: M + 6, y: yy }, end: { x: M + CW - 6, y: yy }, thickness: 0.5, color: LINE });
       let acc = 0;
       r.cs.forEach(c => {
-        const x0 = M + CW * acc + pad;
+        const x0 = M + CW * acc + D.pad;
         acc += c.w;
-        if (c.l) txt(String(c.l).toUpperCase(), x0, yy - 12, 6.6, bold, MUTED);
-        c.ls.forEach((ln, i) => page.drawText(ln, { x: x0, y: yy - (r.conL ? 24 : 16) - i * lh, size: 9, font, color: c.vacio ? MUTED : INK }));
+        const base = D.rowPad + D.fs - 1;
+        if (c.l) txt(String(c.l).toUpperCase(), x0, yy - base, D.lab, bold, MUTED);
+        c.ls.forEach((ln, i) => page.drawText(ln, { x: x0 + c.etw, y: yy - base - i * D.lh, size: D.fs, font, color: c.vacio ? MUTED : INK }));
       });
       yy -= r.h;
     });
-    y -= total + 9;
+    y -= total + D.gap;
   };
   const punto = (p, i, esCarga) => {
     const filas = [
@@ -12186,21 +12201,21 @@ async function ocBuildPdf(o){
     ];
     if (p.observaciones) filas.push([{ l: 'Observaciones', v: p.observaciones, w: 1 }]);
     const rotulo = () => {
-      txt(`${esCarga ? 'CARGA' : 'DESCARGA'} ${i + 1}`, M + 2, y - 8, 8.2, bold, NAVY);
-      if (p.fecha) { const f = fmtDateDMY(p.fecha); txt(f, W - M - tw(f, 8.2, bold), y - 8, 8.2, bold, INK); }
+      txt(`${esCarga ? 'CARGA' : 'DESCARGA'} ${i + 1}`, M + 2, y - 8, 8, bold, NAVY);
+      if (p.fecha) { const f = fmtDateDMY(p.fecha); txt(f, W - M - tw(f, 8, bold), y - 8, 8, bold, INK); }
     };
-    celdas(filas, rotulo, 13);
+    celdas(filas, rotulo, D.rotH);
   };
 
+  // ---------- Página 1: la orden ----------
   nueva();
-  // Título y número de orden
-  txt('ORDEN DE CARGA', M, y - 18, 21, bold, NAVY);
-  txt('Documento válido como Carta de Porte en supuestos art. 10bis LCTTM', M, y - 33, 8, font, MUTED);
-  const pw = 128, ph = 42;
+  txt('ORDEN DE CARGA', M, y - D.tit + 3, D.tit, bold, NAVY);
+  txt('Documento válido como Carta de Porte en supuestos art. 10bis LCTTM', M, y - D.tit - 11, 7.8, font, MUTED);
+  const pw = 128, ph = D.titH - 16;
   rr(W - M - pw, y + 2, pw, ph, 7, NAVY);
-  txt('Nº DE ORDEN', W - M - pw + 11, y - 12, 6.6, bold, CLARO);
-  txt(ref, W - M - pw + 11, y - 32, 16, bold, WHITE);
-  y -= 58;
+  txt('Nº DE ORDEN', W - M - pw + 11, y - 10, 6.4, bold, CLARO);
+  txt(ref, W - M - pw + 11, y - ph + 10, 15, bold, WHITE);
+  y -= D.titH;
 
   seccion('Cargador contractual');
   celdas([[{ l: 'Razón social', v: E.nombre, w: 0.34 }, { l: 'CIF', v: E.cif, w: 0.2 }, { l: 'Domicilio', v: `${E.direccion}, ${E.cp} ${E.poblacion}, ${E.provincia}, ${E.pais}`, w: 0.46 }]]);
@@ -12216,38 +12231,36 @@ async function ocBuildPdf(o){
     [{ l: 'Mercancía', v: o.mercancia, w: 1 }],
     [{ l: 'Indicaciones', v: o.indicaciones, w: 1 }],
   ]);
-  txt('Incluir la referencia de facturación en su factura para poder efectuarles el pago.', M + 2, y - 4, 7.6, font, MUTED);
-  y -= 16;
+  txt('Incluir la referencia de facturación en su factura para poder efectuarles el pago.', M + 2, y + D.gap - 8, 7.4, font, MUTED);
+  y -= 6;
 
   seccion('Cargas');
   o.cargas.forEach((p, i) => punto(p, i, true));
   seccion('Descargas');
   o.descargas.forEach((p, i) => punto(p, i, false));
-
   if (o.observacionesEspeciales) {
     seccion('Observaciones especiales');
     celdas([[{ l: '', v: o.observacionesEspeciales, w: 1 }]]);
   }
-
   // Precio
-  asegurar(56);
-  rr(M, y, CW, 40, 7, SOFT, LINE);
-  txt('PRECIO ACORDADO', M + 14, y - 24, 8, bold, MUTED);
+  asegurar(D.precioH + 8);
+  rr(M, y, CW, D.precioH, 7, SOFT, LINE);
+  txt('PRECIO ACORDADO', M + 14, y - D.precioH / 2 - 3, 8, bold, MUTED);
   const precio = (o.precio == null ? '' : o.precio.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })) + ' EUR';
-  txt(precio, W - M - 14 - tw(precio, 18, bold), y - 27, 18, bold, NAVY);
-  y -= 56;
+  txt(precio, W - M - 14 - tw(precio, 17, bold), y - D.precioH / 2 - 6, 17, bold, NAVY);
+  y -= D.precioH + 8;
+  const cabe = pages.length === 1;
 
-  // Dónde enviar la factura
-  asegurar(112);
+  // ---------- Página 2: facturación y condiciones ----------
+  nueva();
   rr(M, y, CW, 100, 6, SOFT, LINE);
   page.drawRectangle({ x: M, y: y - 100, width: 4, height: 100, color: NAVY });
   txt('FACTURACIÓN', M + 16, y - 17, 8, bold, NAVY);
   txt('La factura y la documentación original deben enviarse por correo postal a:', M + 16, y - 33, 8.6, font, INK);
   [[E.nombre, bold], [`${E.direccion} · ${E.cp} ${E.poblacion} (${E.provincia}) · ${E.pais}`, font], [`CIF ${E.cif}`, font], [E.correoAdmin, font]]
     .forEach(([t, f], i) => txt(t, M + 16, y - 49 - i * 12.5, 9, f, INK));
-  y -= 116;
+  y -= 118;
 
-  // Condiciones
   seccion('Condiciones del servicio');
   OC_CONDICIONES.forEach(([tit, cuerpo], i) => {
     const ls = wrapPdfText(T(cuerpo), font, 8, CW - 18);
@@ -12265,7 +12278,7 @@ async function ocBuildPdf(o){
     const n = `Página ${i + 1} de ${pages.length}`;
     pg.drawText(T(n), { x: W - M - font.widthOfTextAtSize(n, 7.2), y: M - 2, size: 7.2, font, color: MUTED });
   });
-  return await pdf.save();
+  return { bytes: await pdf.save(), cabe, paginas: pages.length };
 }
 async function ocDescargarPdf(id){
   const o = ordenesCarga.find(x => x.id === id);
