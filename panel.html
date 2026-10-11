@@ -2071,9 +2071,12 @@ const ADMINISTRACION_SECTIONS = [
   { id: 'flota', label: 'Flota', desc: 'Tractoras y remolques con sus vencimientos.' },
 ];
 function moduleSectionList(mod){ return mod === 'trafico' ? TRAFICO_SECTIONS : mod === 'comercial' ? COMERCIAL_SECTIONS : mod === 'administracion' ? ADMINISTRACION_SECTIONS : null; }
+// Apartados que no se heredan: hay que dárselos expresamente a la persona (Gestión de Permisos).
+const SECCIONES_SOLO_EXPLICITAS = ['trafico:configuracion'];
 function sectionAllowedFor(s, mod, sec){
   if (s.isAdmin) return true;
   if (!s.allowedTabs.includes(mod)) return false;
+  if (SECCIONES_SOLO_EXPLICITAS.includes(mod + ':' + sec)) return s.allowedTabs.includes(mod + ':' + sec);
   const own = s.allowedTabs.filter(t => t.startsWith(mod + ':'));
   return !own.length || own.includes(mod + ':' + sec);
 }
@@ -2083,7 +2086,7 @@ function moduleAllowedSections(mod){ return moduleSectionList(mod).filter(x => s
 function permExpandTabs(tabs){
   const out = tabs.slice();
   ['trafico','comercial','administracion'].forEach(mod => {
-    if (out.includes(mod) && !out.some(t => t.startsWith(mod + ':'))) moduleSectionList(mod).forEach(x => out.push(mod + ':' + x.id));
+    if (out.includes(mod) && !out.some(t => t.startsWith(mod + ':'))) moduleSectionList(mod).forEach(x => { if (!SECCIONES_SOLO_EXPLICITAS.includes(mod + ':' + x.id)) out.push(mod + ':' + x.id); });
   });
   return out;
 }
@@ -11632,23 +11635,23 @@ const TRAFICO_SECTIONS = [
   { id: 'ordenes', label: 'Órdenes de carga', desc: 'Órdenes para contratar a un transportista un viaje vendido a un cliente, con su PDF y, si hace falta, su DeCA.' },
   { id: 'deca', label: 'DeCA', desc: 'Documento electrónico de control administrativo del transporte.' },
   { id: 'direcciones', label: 'Direcciones', desc: 'Agenda de naves, muelles y direcciones de carga y descarga.' },
+  { id: 'configuracion', label: 'Configuración', desc: 'Datos generales de Transporte: cargador contractual, facturación y condiciones de las órdenes de carga. Se da aparte; no va con el resto.' },
 ];
 // El apartado abierto, siempre uno que la persona tenga permitido (si no, el primero que sí).
 function traficoSection(){
   const allowed = moduleAllowedSections('trafico');
   const s = window.__traficoSection || 'transportistas';
-  if (s === 'configuracion' && PROFILE.isAdmin) return s;
   return allowed.some(x => x.id === s) || !allowed.length ? s : allowed[0].id;
 }
 function tplTraficoBar(){
   const sec = traficoSection();
-  // Los apartados a la izquierda; «Configuración» (solo administradores) a la derecha del todo
+  // Los apartados a la izquierda; «Configuración» (se da aparte en Gestión de Permisos) a la derecha del todo
   return `
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
       <div style="display:flex;gap:2px;flex-wrap:wrap;">
-        ${moduleAllowedSections('trafico').map(s => moduleTabBtnHtml(`setTraficoSection('${s.id}')`, s.label, s.id === sec)).join('')}
+        ${moduleAllowedSections('trafico').filter(s => s.id !== 'configuracion').map(s => moduleTabBtnHtml(`setTraficoSection('${s.id}')`, s.label, s.id === sec)).join('')}
       </div>
-      ${PROFILE.isAdmin ? `<div>${moduleTabBtnHtml("setTraficoSection('configuracion')", 'Configuración', sec === 'configuracion')}</div>` : ''}
+      ${sectionAllowedFor(PROFILE, 'trafico', 'configuracion') ? `<div>${moduleTabBtnHtml("setTraficoSection('configuracion')", 'Configuración', sec === 'configuracion')}</div>` : ''}
     </div>`;
 }
 // arriba para poder volver a su lista; las listas ya se ubican con la barra.
@@ -11664,7 +11667,7 @@ function setTraficoSection(id){
   if (!colabRutaConfirmLeaveForm()) return;
   if (!ocConfirmLeaveForm()) return;
   if (!tcfgConfirmLeaveForm()) return;
-  if (id === 'configuracion' ? !PROFILE.isAdmin : !sectionAllowedFor(PROFILE, 'trafico', id)) return;
+  if (!sectionAllowedFor(PROFILE, 'trafico', id)) return;
   traficoEnterSection(id);
   renderHeader(); renderTab();
 }
@@ -12577,7 +12580,7 @@ async function submitTraficoConfig(){
   const errEl = document.getElementById('tcfg-error');
   errEl.textContent = '';
   const v = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
-  if (!PROFILE.isAdmin) { errEl.textContent = 'Solo un administrador puede cambiar la configuración.'; return; }
+  if (!sectionAllowedFor(PROFILE, 'trafico', 'configuracion')) { errEl.textContent = 'No tienes permiso para cambiar la configuración.'; return; }
   const condiciones = [...document.querySelectorAll('#tcfg-conds .tcfg-cond')].map(r => ({
     titulo: r.querySelector('.tcfg-t').value.trim(), texto: r.querySelector('.tcfg-x').value.trim(),
   })).filter(c => c.titulo || c.texto);

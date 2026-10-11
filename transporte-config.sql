@@ -4,7 +4,7 @@
 --
 --   transporte_config   Valores editables desde Transporte → Configuración: el cargador contractual, la información de
 --                       facturación y las condiciones generales que salen en el PDF de las órdenes de carga.
---   Lo lee quien tiene el módulo Transporte; solo la modifican los administradores.
+--   Lo lee quien tiene el módulo Transporte; la modifican los administradores y quien tenga la casilla «Configuración» (ver transporte-config-permisos.sql).
 -- =====================================================================
 
 create table if not exists public.transporte_config (
