@@ -2175,6 +2175,7 @@ async function setTab(id){
     window.__administracionView = 'home';
     window.__showingContactoDetail = false;
     window.__contactosView = 'activos';
+    window.__contactosVer = 'todos';
     window.__contactosRoleFilters = [];
     window.__contactosSearch = '';
     window.__contactosFilterOpen = false;
@@ -6358,6 +6359,7 @@ function openContactosModule(){
   if (!sectionAllowedFor(PROFILE, 'administracion', 'contactos')) return;
   window.__administracionView = 'contactos';
   window.__contactosView = 'activos';
+  window.__contactosVer = 'todos';
   window.__contactosRoleFilters = [];
   window.__contactosSearch = '';
   window.__contactosFilterOpen = false;
@@ -7814,6 +7816,10 @@ function tplContactosPage(){
   const activos = contactos.filter(c => !c.archived);
   const nuevos = activos.filter(contactoEsReciente).length;
   const archivados = contactos.length - activos.length;
+  const verV = contactosVerFiltro();
+  const pendV = activos.filter(c => !c.transpVerificado).length;
+  const segBtn = (k, t) => `<button type="button" class="${verV === k ? 'on' : ''}" onclick="window.__contactosVer='${k}'; window.__contactosPage=0; renderTab();">${t}</button>`;
+  const hayPendV = contactosFilteredList().list.some(c => !c.transpVerificado);
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
@@ -7834,10 +7840,12 @@ function tplContactosPage(){
         <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__contactosSearch||'')}" oninput="window.__contactosSearch=this.value; window.__contactosPage=0; refreshContactosListBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
+      <div class="doc-seg" title="Un contacto lo da de alta cualquiera y lo comprueba otra persona. Se verifica una sola vez y vale en todas partes">${segBtn('todos', 'Todos')}${segBtn('pendientes', `Sin verificar${pendV ? ` <span style="font-weight:700;">${pendV}</span>` : ''}`)}${segBtn('verificados', 'Verificados')}</div>
       <div style="position:relative;">
         <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__contactosFilterOpen=!window.__contactosFilterOpen; renderTab();">Filtros${filterCount?` (${filterCount})`:''} ▾</button>
         ${window.__contactosFilterOpen ? tplContactosFilterDropdown() : ''}
       </div>
+      ${PROFILE.isAdmin && verV === 'pendientes' && hayPendV ? `<button class="btn btn-ghost" onclick="contactosVerificarTodos('contactos')" title="Marca como verificados todos los pendientes de esta lista">Verificar todos</button>` : ''}
       <div style="display:flex;align-items:center;gap:14px;margin-left:auto;">${contactosLayoutToggleHtml()}<div id="contactos-pagination" style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplContactosPaginationHtml()}</div></div>
     </div>
     <div id="contactos-list-body">${contactosListBodyHtml()}</div>
@@ -8002,6 +8010,8 @@ function contactosFilteredList(){
   // Filtros por tipo (se pueden marcar los dos: salen los que cumplan alguno).
   if (roleFilters.length) list = list.filter(c => roleFilters.some(r => r === 'almacen' ? c.esClienteAlmacen : r === 'transportista' ? c.esTransportista : c.esAutonomos));
   if (window.__contactosRecientes) list = list.filter(contactoEsReciente);
+  const ver = contactosVerFiltro();
+  if (ver !== 'todos') list = list.filter(c => ver === 'pendientes' ? !c.transpVerificado : !!c.transpVerificado);
   list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || c.nif.toLowerCase().includes(search));
   return { list, archivedView, search, roleFilters };
 }
@@ -8013,7 +8023,7 @@ function contactosListBodyHtml(){
   const { list, archivedView, search, roleFilters } = contactosFilteredList();
   window.__contactoNavContext = { label: 'Contactos', ids: list.map(c=>c.id) };
   if (!list.length) {
-    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search||roleFilters.length||window.__contactosRecientes ? 'Ningún contacto coincide con el filtro.' : archivedView ? 'No hay contactos archivados.' : 'Todavía no hay ningún contacto creado.'}</div>`;
+    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search||roleFilters.length||window.__contactosRecientes||contactosVerFiltro() !== 'todos' ? 'Ningún contacto coincide con el filtro.' : archivedView ? 'No hay contactos archivados.' : 'Todavía no hay ningún contacto creado.'}</div>`;
   }
   const totalPages = Math.max(1, Math.ceil(list.length / CONTACTOS_PAGE_SIZE));
   if ((window.__contactosPage||0) > totalPages - 1) window.__contactosPage = totalPages - 1;
@@ -8380,6 +8390,7 @@ function tplContactoTabGeneral(editing){
   const plural = (n, s, p) => `<b>${n}</b> ${n === 1 ? s : p}`;
   return `
     <div style="display:flex;flex-direction:column;gap:16px;">
+      ${contactoVerCardHtml(c, false)}
       <div class="card deca-card" style="--dc-accent:var(--primary);">
         ${decaCardHead('idcard', 'Identidad', 'Razón social, nombre comercial y NIF')}
         <div class="deca-card-body">
@@ -8772,7 +8783,7 @@ function tplContactoTabTransporte(c){
       </table>
       </div>` : `<div style="color:var(--mutedFaint);font-size:12.5px;padding:18px;">Todavía no cubre ninguna ruta.${canRutas ? ' Se apuntan aquí o en Transporte → Rutas.' : ''}</div>`}
     </div>`;
-  return transportistaVerCardHtml(c) + perfil + tplContactoPersonasCard(c) + rutasCard;
+  return contactoVerCardHtml(c, true) + perfil + tplContactoPersonasCard(c) + rutasCard;
 }
 // Contenido de la pestaña "Autónomos": resumen de conductores (se gestionan en el módulo Autónomos).
 function tplContactoTabAutonomos(c){
@@ -9017,13 +9028,12 @@ async function submitContactoForm(editId){
   try {
     let contactoId = editId;
     let changeLines = [];
-    // Verificación de transportista: nace sin verificar y con su autor; si se cambian sus datos, vuelve a quedar pendiente.
+    // Verificación (contacto maestro, vale para todas las pantallas): nace sin verificar y con su autor; si se cambian sus datos, vuelve a quedar pendiente.
     const verNueva = { transp_creado_por: currentUserEmail(), transp_verificado: false, transp_verificado_por: null, transp_verificado_at: null };
     const verLocal = p => ({ transpCreadoPor: p.transp_creado_por || '', transpVerificado: !!p.transp_verificado, transpVerificadoPor: p.transp_verificado_por || '', transpVerificadoAt: p.transp_verificado_at || '' });
     if (editId) {
       let ver = null, verAnulada = false;
-      if (esTransportista && prevContacto && !prevContacto.esTransportista) ver = verNueva;
-      else if (esTransportista && prevContacto && prevContacto.transpVerificado && transportistaDatosCambiados(prevContacto, fields)) {
+      if (prevContacto && prevContacto.transpVerificado && contactoDatosCambiados(prevContacto, fields)) {
         ver = { transp_verificado: false, transp_verificado_por: null, transp_verificado_at: null }; verAnulada = true;
       }
       let res = await supabaseClient.from('contactos').update(ver ? { ...dbPayload, ...ver } : dbPayload).eq('id', editId).select();
@@ -9034,12 +9044,12 @@ async function submitContactoForm(editId){
       if (c) {
         changeLines = buildContactoChangeSummary(c, fields); Object.assign(c, fields);
         if (ver) Object.assign(c, ver.transp_creado_por !== undefined ? verLocal(ver) : { transpVerificado: false, transpVerificadoPor: '', transpVerificadoAt: '' });
-        if (verAnulada) changeLines.push('Verificación de transportista anulada: se han cambiado sus datos.');
+        if (verAnulada) changeLines.push('Verificación anulada: se han cambiado sus datos.');
       }
     } else {
-      let payload = esTransportista ? { ...dbPayload, ...verNueva } : dbPayload;
+      let payload = { ...dbPayload, ...verNueva };
       let res = await supabaseClient.from('contactos').insert(payload).select().single();
-      if (res.error && esTransportista && /transp_|schema cache|column/i.test(res.error.message || '')) { payload = dbPayload; res = await supabaseClient.from('contactos').insert(payload).select().single(); }
+      if (res.error && /transp_|schema cache|column/i.test(res.error.message || '')) { payload = dbPayload; res = await supabaseClient.from('contactos').insert(payload).select().single(); }
       const { data, error } = res;
       if (error || !data) throw (error || new Error('sin permiso o error desconocido.'));
       contactoId = data.id;
@@ -15029,41 +15039,44 @@ async function deleteTarifa(id){
   if (window.__showingContactoDetail) { renderTab(); return; }
   tarifaReturn();
 }
-/* ---- Transportistas: verificación ----
-   Igual que en Direcciones: cualquiera da de alta un transportista y otra persona comprueba que está bien.
-   Si luego se cambian sus datos (nombre, NIF o dirección fiscal), vuelve a quedar pendiente. */
-function transportistaDatosCambiados(prev, now){
+/* ---- Contactos: verificación ----
+   Contactos es la agenda maestra: un contacto se verifica una sola vez y queda verificado en todas partes
+   (Contactos, Proveedores Transporte…), porque es el mismo registro. Cualquiera da de alta un contacto y otra persona
+   comprueba que está bien. Si luego se cambian sus datos (nombre, NIF o dirección fiscal), vuelve a quedar pendiente.
+   Se guarda en las columnas transp_creado_por / transp_verificado / transp_verificado_por / transp_verificado_at de «contactos». */
+function contactoDatosCambiados(prev, now){
   return ['nombre', 'nif', 'calle1', 'calle2', 'codigoPostal', 'ciudad', 'provincia', 'pais']
     .some(k => String(prev[k] || '').trim() !== String(now[k] || '').trim());
 }
 function transpVerFiltro(){ return ['pendientes', 'verificados'].includes(window.__transpVer) ? window.__transpVer : 'todos'; }
+function contactosVerFiltro(){ return ['pendientes', 'verificados'].includes(window.__contactosVer) ? window.__contactosVer : 'todos'; }
 // Los administradores verifican cualquiera; el resto, los que no ha dado de alta él mismo.
-function transportistaPuedeVerificar(c){
-  if (!c || !c.esTransportista || c.archived || c.transpVerificado) return false;
+function contactoPuedeVerificar(c){
+  if (!c || c.archived || c.transpVerificado) return false;
   return !!PROFILE.isAdmin || !c.transpCreadoPor || c.transpCreadoPor !== currentUserEmail();
 }
-function transportistaVerInfo(c){
+function contactoVerInfo(c){
   if (c.transpVerificado) {
     const cuando = c.transpVerificadoAt ? fmtDateDMY(String(c.transpVerificadoAt).slice(0, 10)) : '';
     return `Verificado${c.transpVerificadoPor ? ' por ' + c.transpVerificadoPor : ''}${cuando ? ' el ' + cuando : ''}`;
   }
   return c.transpCreadoPor ? `Dado de alta por ${c.transpCreadoPor}: pendiente de que otra persona lo verifique` : 'Pendiente de verificar';
 }
-// Franja de la pestaña Transporte de la ficha: estado y botón para verificar.
-function transportistaVerCardHtml(c){
+// Franja de la ficha (Datos generales y Transporte): estado y botón para verificar.
+function contactoVerCardHtml(c, conMargen){
   const ok = !!c.transpVerificado;
   return `
-    <div class="card" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;margin-bottom:20px;">
+    <div class="card" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;${conMargen ? 'margin-bottom:20px;' : ''}">
       <span class="dir-ver ${ok ? 'ok' : 'pend'}">${ok ? '✓ Verificado' : 'Sin verificar'}</span>
-      <span style="flex:1 1 220px;font-size:12.5px;color:var(--muted);">${esc(transportistaVerInfo(c))}</span>
-      ${transportistaPuedeVerificar(c) ? `<button class="btn btn-primary" onclick="transportistaVerificarAbrir('${c.id}')">Verificar</button>` : ''}
+      <span style="flex:1 1 220px;font-size:12.5px;color:var(--muted);">${esc(contactoVerInfo(c))}</span>
+      ${contactoPuedeVerificar(c) ? `<button class="btn btn-primary" onclick="contactoVerificarAbrir('${c.id}')">Verificar</button>` : ''}
     </div>`;
 }
-function transportistaVerificarAbrir(id){
+function contactoVerificarAbrir(id){
   const c = contactos.find(x => x.id === id);
   if (!c) return;
-  if (!transportistaPuedeVerificar(c)) { appToast('Este transportista lo tiene que verificar otra persona distinta de quien lo dio de alta.', 'error'); return; }
-  window.__verTranspId = id;
+  if (!contactoPuedeVerificar(c)) { appToast('Este contacto lo tiene que verificar otra persona distinta de quien lo dio de alta.', 'error'); return; }
+  window.__verContactoId = id;
   const dir = contactoDireccionLineas(c).join(' · ');
   const personas = transportistaContactos.filter(p => p.contactoId === id);
   const rutas = transportistaRutas.filter(r => r.contactoId === id).length;
@@ -15073,36 +15086,36 @@ function transportistaVerificarAbrir(id){
     <div class="modal-overlay">
       <div class="modal-box" style="max-width:560px;padding:0;border-radius:14px;overflow:hidden;">
         <div class="deca-view-head pri">
-          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.truck, 21, '#fff', 1.8)}</span>
-          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Verificar transportista</div>
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.users, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Verificar contacto</div>
             <div class="deca-banner-sub" style="margin-top:1px;">${esc(c.nombre)}</div></div>
           <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
         </div>
         <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
-          <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">Comprueba que los datos son correctos y márcalo como verificado.</div>
+          <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">Comprueba que los datos son correctos y márcalo como verificado. Quedará verificado en todas partes.</div>
           ${fila('Razón social', esc(c.nombre))}
           ${fila('NIF', esc(c.nif || ''))}
           ${fila('Dirección fiscal', esc(dir))}
-          ${fila('Contactos', personas.length ? personas.map(p => `<div>${persona(p)}</div>`).join('') : '')}
-          ${fila('Rutas', rutas ? `${rutas} cobertura${rutas === 1 ? '' : 's'}` : '')}
+          ${fila('Tipo', esc(contactoTipoTexto(c)))}
+          ${personas.length ? fila('Contactos', personas.map(p => `<div>${persona(p)}</div>`).join('')) : ''}
+          ${c.esTransportista ? fila('Rutas', rutas ? `${rutas} cobertura${rutas === 1 ? '' : 's'}` : '') : ''}
           ${fila('Dado de alta por', esc(c.transpCreadoPor || ''))}
           <div style="display:flex;gap:10px;margin-top:16px;">
             <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
-            <button class="btn btn-ghost" onclick="closeModal(); transportistaCorregir('${c.id}')">Corregir datos</button>
-            <button class="btn btn-primary deca-submit tver-save" onclick="transportistaVerificarConfirmar()">Marcar como verificado</button>
+            <button class="btn btn-ghost" onclick="closeModal(); contactoCorregir('${c.id}')">Corregir datos</button>
+            <button class="btn btn-primary deca-submit tver-save" onclick="contactoVerificarConfirmar()">Marcar como verificado</button>
           </div>
         </div>
       </div>
     </div>`;
 }
-function transportistaCorregir(id){
-  window.__contactoNavContext = { label: 'Proveedores Transporte', ids: transportistasFilteredList().list.map(c => c.id) };
-  openContactoModal(id);
+function contactoCorregir(id){
+  if (!(window.__showingContactoDetail && window.__contactoDetailId === id)) openContactoModal(id);
   window.__contactoDetailTab = 'general';
   enterContactoEditMode();
 }
-async function transportistaVerificarConfirmar(){
-  const id = window.__verTranspId;
+async function contactoVerificarConfirmar(){
+  const id = window.__verContactoId;
   const c = contactos.find(x => x.id === id);
   if (!c) return;
   const btn = document.querySelector('.tver-save'); if (btn) btn.disabled = true;
@@ -15114,23 +15127,25 @@ async function transportistaVerificarConfirmar(){
     return;
   }
   Object.assign(c, { transpVerificado: true, transpVerificadoPor: por, transpVerificadoAt: ahora });
-  await logContactoHistorial(id, 'Verificado como transportista.');
+  await logContactoHistorial(id, 'Verificado.');
   closeModal();
   renderTab();
   appToast(`«${c.nombre}» verificado.`, 'ok');
 }
 // Solo administradores: verifica de golpe todos los pendientes de la lista que se está viendo (para limpiar lo que ya existía).
-async function transportistasVerificarTodos(){
+// origen: 'transp' (Proveedores Transporte) o 'contactos' (Contactos).
+async function contactosVerificarTodos(origen){
   if (!PROFILE.isAdmin) return;
-  const pend = transportistasFilteredList().list.filter(c => !c.transpVerificado);
+  const lista = origen === 'transp' ? transportistasFilteredList().list : contactosFilteredList().list;
+  const pend = lista.filter(c => !c.transpVerificado);
   if (!pend.length) return;
-  if (!(await appConfirm({ title: 'Verificar todos los pendientes', message: `Se marcarán como verificados los ${pend.length} transportistas pendientes que estás viendo. Úsalo solo si ya sabes que están bien (por ejemplo, los que existían antes de esta función).`, confirmLabel: 'Verificar todos', tone: 'warn', icon: 'warn' }))) return;
+  if (!(await appConfirm({ title: 'Verificar todos los pendientes', message: `Se marcarán como verificados los ${pend.length} contactos pendientes que estás viendo. Quedarán verificados en todas partes. Úsalo solo si ya sabes que están bien (por ejemplo, los que existían antes de esta función).`, confirmLabel: 'Verificar todos', tone: 'warn', icon: 'warn' }))) return;
   const por = currentUserEmail(), ahora = new Date().toISOString();
   const { data, error } = await supabaseClient.from('contactos').update({ transp_verificado: true, transp_verificado_por: por, transp_verificado_at: ahora }).in('id', pend.map(c => c.id)).select();
   if (error || !data) { appToast('No se pudo verificar: ' + (error ? error.message : 'sin permiso.'), 'error'); return; }
   pend.forEach(c => Object.assign(c, { transpVerificado: true, transpVerificadoPor: por, transpVerificadoAt: ahora }));
   renderTab();
-  appToast(`${data.length} transportistas verificados.`, 'ok');
+  appToast(`${data.length} contactos verificados.`, 'ok');
 }
 /* ---- Transportistas: todos los contactos marcados como transportista ---- */
 const TRANSP_PAGE_SIZE = 80;
@@ -15225,7 +15240,7 @@ function tplTransportistasPage(){
         <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__transpFilterOpen=!window.__transpFilterOpen; renderTab();">Filtros${filterCount?` (${filterCount})`:''} ▾</button>
         ${window.__transpFilterOpen ? tplTransportistasFilterDropdown() : ''}
       </div>
-      ${PROFILE.isAdmin && ver === 'pendientes' && hayPendientes ? `<button class="btn btn-ghost" onclick="transportistasVerificarTodos()" title="Marca como verificados todos los pendientes de esta lista">Verificar todos</button>` : ''}
+      ${PROFILE.isAdmin && ver === 'pendientes' && hayPendientes ? `<button class="btn btn-ghost" onclick="contactosVerificarTodos('transp')" title="Marca como verificados todos los pendientes de esta lista">Verificar todos</button>` : ''}
       <div style="display:flex;align-items:center;gap:14px;margin-left:auto;">${contactosLayoutToggleHtml()}<div id="transp-pagination" style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplTransportistasPaginationHtml()}</div></div>
     </div>
     <div id="transp-list-body">${transportistasListBodyHtml()}</div>`;
