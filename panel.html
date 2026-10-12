@@ -7593,6 +7593,8 @@ async function loadContactos(){
     calle1: c.calle1 || '', calle2: c.calle2 || '', codigoPostal: c.codigo_postal || '',
     ciudad: c.ciudad || '', provincia: c.provincia || '', pais: c.pais || '',
     logoStoragePath: c.logo_storage_path || null, createdAt: c.created_at || null,
+    transpCreadoPor: c.transp_creado_por || '', transpVerificado: !!c.transp_verificado,
+    transpVerificadoPor: c.transp_verificado_por || '', transpVerificadoAt: c.transp_verificado_at || '',
   }));
   refreshContactoLogoThumbnails();
 }
@@ -8752,7 +8754,7 @@ function tplContactoTabTransporte(c){
       </table>
       </div>` : `<div style="color:var(--mutedFaint);font-size:12.5px;padding:18px;">Todavía no cubre ninguna ruta.${canRutas ? ' Se apuntan aquí o en Transporte → Rutas.' : ''}</div>`}
     </div>`;
-  return perfil + tplContactoPersonasCard(c) + rutasCard;
+  return transportistaVerCardHtml(c) + perfil + tplContactoPersonasCard(c) + rutasCard;
 }
 // Contenido de la pestaña "Autónomos": resumen de conductores (se gestionan en el módulo Autónomos).
 function tplContactoTabAutonomos(c){
@@ -8997,16 +8999,33 @@ async function submitContactoForm(editId){
   try {
     let contactoId = editId;
     let changeLines = [];
+    // Verificación de transportista: nace sin verificar y con su autor; si se cambian sus datos, vuelve a quedar pendiente.
+    const verNueva = { transp_creado_por: currentUserEmail(), transp_verificado: false, transp_verificado_por: null, transp_verificado_at: null };
+    const verLocal = p => ({ transpCreadoPor: p.transp_creado_por || '', transpVerificado: !!p.transp_verificado, transpVerificadoPor: p.transp_verificado_por || '', transpVerificadoAt: p.transp_verificado_at || '' });
     if (editId) {
-      const { data, error } = await supabaseClient.from('contactos').update(dbPayload).eq('id', editId).select();
+      let ver = null, verAnulada = false;
+      if (esTransportista && prevContacto && !prevContacto.esTransportista) ver = verNueva;
+      else if (esTransportista && prevContacto && prevContacto.transpVerificado && transportistaDatosCambiados(prevContacto, fields)) {
+        ver = { transp_verificado: false, transp_verificado_por: null, transp_verificado_at: null }; verAnulada = true;
+      }
+      let res = await supabaseClient.from('contactos').update(ver ? { ...dbPayload, ...ver } : dbPayload).eq('id', editId).select();
+      if (res.error && ver && /transp_|schema cache|column/i.test(res.error.message || '')) { ver = null; verAnulada = false; res = await supabaseClient.from('contactos').update(dbPayload).eq('id', editId).select(); }
+      const { data, error } = res;
       if (error || !data || !data.length) throw (error || new Error('sin permiso o error desconocido.'));
       const c = contactos.find(x=>x.id===editId);
-      if (c) { changeLines = buildContactoChangeSummary(c, fields); Object.assign(c, fields); }
+      if (c) {
+        changeLines = buildContactoChangeSummary(c, fields); Object.assign(c, fields);
+        if (ver) Object.assign(c, ver.transp_creado_por !== undefined ? verLocal(ver) : { transpVerificado: false, transpVerificadoPor: '', transpVerificadoAt: '' });
+        if (verAnulada) changeLines.push('Verificación de transportista anulada: se han cambiado sus datos.');
+      }
     } else {
-      const { data, error } = await supabaseClient.from('contactos').insert(dbPayload).select().single();
+      let payload = esTransportista ? { ...dbPayload, ...verNueva } : dbPayload;
+      let res = await supabaseClient.from('contactos').insert(payload).select().single();
+      if (res.error && esTransportista && /transp_|schema cache|column/i.test(res.error.message || '')) { payload = dbPayload; res = await supabaseClient.from('contactos').insert(payload).select().single(); }
+      const { data, error } = res;
       if (error || !data) throw (error || new Error('sin permiso o error desconocido.'));
       contactoId = data.id;
-      contactos.push({ id: data.id, archived: false, ...fields });
+      contactos.push({ id: data.id, archived: false, ...fields, ...verLocal(payload) });
       contactos.sort((a,b) => a.nombre.localeCompare(b.nombre));
       changeLines = ['Contacto creado.'];
     }
@@ -14969,11 +14988,115 @@ async function deleteTarifa(id){
   if (window.__showingContactoDetail) { renderTab(); return; }
   tarifaReturn();
 }
+/* ---- Transportistas: verificación ----
+   Igual que en Direcciones: cualquiera da de alta un transportista y otra persona comprueba que está bien.
+   Si luego se cambian sus datos (nombre, NIF o dirección fiscal), vuelve a quedar pendiente. */
+function transportistaDatosCambiados(prev, now){
+  return ['nombre', 'nif', 'calle1', 'calle2', 'codigoPostal', 'ciudad', 'provincia', 'pais']
+    .some(k => String(prev[k] || '').trim() !== String(now[k] || '').trim());
+}
+function transpVerFiltro(){ return ['pendientes', 'verificados'].includes(window.__transpVer) ? window.__transpVer : 'todos'; }
+// Los administradores verifican cualquiera; el resto, los que no ha dado de alta él mismo.
+function transportistaPuedeVerificar(c){
+  if (!c || !c.esTransportista || c.archived || c.transpVerificado) return false;
+  return !!PROFILE.isAdmin || !c.transpCreadoPor || c.transpCreadoPor !== currentUserEmail();
+}
+function transportistaVerInfo(c){
+  if (c.transpVerificado) {
+    const cuando = c.transpVerificadoAt ? fmtDateDMY(String(c.transpVerificadoAt).slice(0, 10)) : '';
+    return `Verificado${c.transpVerificadoPor ? ' por ' + c.transpVerificadoPor : ''}${cuando ? ' el ' + cuando : ''}`;
+  }
+  return c.transpCreadoPor ? `Dado de alta por ${c.transpCreadoPor}: pendiente de que otra persona lo verifique` : 'Pendiente de verificar';
+}
+// Franja de la pestaña Transporte de la ficha: estado y botón para verificar.
+function transportistaVerCardHtml(c){
+  const ok = !!c.transpVerificado;
+  return `
+    <div class="card" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;margin-bottom:20px;">
+      <span class="dir-ver ${ok ? 'ok' : 'pend'}">${ok ? '✓ Verificado' : 'Sin verificar'}</span>
+      <span style="flex:1 1 220px;font-size:12.5px;color:var(--muted);">${esc(transportistaVerInfo(c))}</span>
+      ${transportistaPuedeVerificar(c) ? `<button class="btn btn-primary" onclick="transportistaVerificarAbrir('${c.id}')">Verificar</button>` : ''}
+    </div>`;
+}
+function transportistaVerificarAbrir(id){
+  const c = contactos.find(x => x.id === id);
+  if (!c) return;
+  if (!transportistaPuedeVerificar(c)) { appToast('Este transportista lo tiene que verificar otra persona distinta de quien lo dio de alta.', 'error'); return; }
+  window.__verTranspId = id;
+  const dir = contactoDireccionLineas(c).join(' · ');
+  const personas = transportistaContactos.filter(p => p.contactoId === id);
+  const rutas = transportistaRutas.filter(r => r.contactoId === id).length;
+  const fila = (k, v) => `<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;"><span style="width:110px;flex-shrink:0;color:var(--muted);">${k}</span><span style="min-width:0;word-break:break-word;">${v || '<span style="color:var(--mutedFaint);">—</span>'}</span></div>`;
+  const persona = p => esc([[p.nombre, p.apellidos].filter(Boolean).join(' '), p.email, p.telefono ? phoneFormat(p.telefono) : ''].filter(Boolean).join(' · '));
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:560px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.truck, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Verificar transportista</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">${esc(c.nombre)}</div></div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
+          <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">Comprueba que los datos son correctos y márcalo como verificado.</div>
+          ${fila('Razón social', esc(c.nombre))}
+          ${fila('NIF', esc(c.nif || ''))}
+          ${fila('Dirección fiscal', esc(dir))}
+          ${fila('Contactos', personas.length ? personas.map(p => `<div>${persona(p)}</div>`).join('') : '')}
+          ${fila('Rutas', rutas ? `${rutas} cobertura${rutas === 1 ? '' : 's'}` : '')}
+          ${fila('Dado de alta por', esc(c.transpCreadoPor || ''))}
+          <div style="display:flex;gap:10px;margin-top:16px;">
+            <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-ghost" onclick="closeModal(); transportistaCorregir('${c.id}')">Corregir datos</button>
+            <button class="btn btn-primary deca-submit tver-save" onclick="transportistaVerificarConfirmar()">Marcar como verificado</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+function transportistaCorregir(id){
+  window.__contactoNavContext = { label: 'Transportistas', ids: transportistasFilteredList().list.map(c => c.id) };
+  openContactoModal(id);
+  window.__contactoDetailTab = 'general';
+  enterContactoEditMode();
+}
+async function transportistaVerificarConfirmar(){
+  const id = window.__verTranspId;
+  const c = contactos.find(x => x.id === id);
+  if (!c) return;
+  const btn = document.querySelector('.tver-save'); if (btn) btn.disabled = true;
+  const por = currentUserEmail(), ahora = new Date().toISOString();
+  const { data, error } = await supabaseClient.from('contactos').update({ transp_verificado: true, transp_verificado_por: por, transp_verificado_at: ahora }).eq('id', id).select();
+  if (error || !data || !data.length) {
+    appToast('No se pudo verificar: ' + (error && /transp_|column|schema/i.test(error.message || '') ? 'falta ejecutar el SQL «Transportistas · verificación» en Supabase.' : (error ? error.message : 'sin permiso.')), 'error');
+    if (btn) btn.disabled = false;
+    return;
+  }
+  Object.assign(c, { transpVerificado: true, transpVerificadoPor: por, transpVerificadoAt: ahora });
+  await logContactoHistorial(id, 'Verificado como transportista.');
+  closeModal();
+  renderTab();
+  appToast(`«${c.nombre}» verificado.`, 'ok');
+}
+// Solo administradores: verifica de golpe todos los pendientes de la lista que se está viendo (para limpiar lo que ya existía).
+async function transportistasVerificarTodos(){
+  if (!PROFILE.isAdmin) return;
+  const pend = transportistasFilteredList().list.filter(c => !c.transpVerificado);
+  if (!pend.length) return;
+  if (!(await appConfirm({ title: 'Verificar todos los pendientes', message: `Se marcarán como verificados los ${pend.length} transportistas pendientes que estás viendo. Úsalo solo si ya sabes que están bien (por ejemplo, los que existían antes de esta función).`, confirmLabel: 'Verificar todos', tone: 'warn', icon: 'warn' }))) return;
+  const por = currentUserEmail(), ahora = new Date().toISOString();
+  const { data, error } = await supabaseClient.from('contactos').update({ transp_verificado: true, transp_verificado_por: por, transp_verificado_at: ahora }).in('id', pend.map(c => c.id)).select();
+  if (error || !data) { appToast('No se pudo verificar: ' + (error ? error.message : 'sin permiso.'), 'error'); return; }
+  pend.forEach(c => Object.assign(c, { transpVerificado: true, transpVerificadoPor: por, transpVerificadoAt: ahora }));
+  renderTab();
+  appToast(`${data.length} transportistas verificados.`, 'ok');
+}
 /* ---- Transportistas: todos los contactos marcados como transportista ---- */
 const TRANSP_PAGE_SIZE = 80;
 function resetTransportistasState(){
   window.__transpView = 'activos';
   window.__transpAutonomos = false;
+  window.__transpVer = 'todos';
   window.__transpSearch = '';
   window.__transpFilterOpen = false;
   window.__transpPage = 0;
@@ -14983,6 +15106,8 @@ function transportistasFilteredList(){
   const search = (window.__transpSearch || '').toLowerCase();
   let list = contactos.filter(c => c.esTransportista && !!c.archived === archivedView);
   if (window.__transpAutonomos) list = list.filter(c => c.esAutonomos);
+  const ver = transpVerFiltro();
+  if (ver !== 'todos') list = list.filter(c => ver === 'pendientes' ? !c.transpVerificado : !!c.transpVerificado);
   list = list.filter(c => !search || c.nombre.toLowerCase().includes(search) || (c.nombreComercial||'').toLowerCase().includes(search) || (c.nif||'').toLowerCase().includes(search));
   return { list, archivedView, search };
 }
@@ -15011,7 +15136,7 @@ function transportistasListBodyHtml(){
   const { list, archivedView, search } = transportistasFilteredList();
   window.__contactoNavContext = { label: 'Transportistas', ids: list.map(c=>c.id) };
   if (!list.length) {
-    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search || window.__transpAutonomos ? 'Ningún transportista coincide con el filtro.' : archivedView ? 'No hay transportistas archivados.' : 'Todavía no hay ningún transportista. Crea uno con «+ Nuevo transportista».'}</div>`;
+    return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${search || window.__transpAutonomos || transpVerFiltro() !== 'todos' ? 'Ningún transportista coincide con el filtro.' : archivedView ? 'No hay transportistas archivados.' : 'Todavía no hay ningún transportista. Crea uno con «+ Nuevo transportista».'}</div>`;
   }
   const totalPages = Math.max(1, Math.ceil(list.length / TRANSP_PAGE_SIZE));
   if ((window.__transpPage||0) > totalPages - 1) window.__transpPage = totalPages - 1;
@@ -15034,6 +15159,10 @@ function tplTransportistasFilterDropdown(){
 }
 function tplTransportistasPage(){
   const filterCount = ((window.__transpView || 'activos') === 'archivados' ? 1 : 0) + (window.__transpAutonomos ? 1 : 0);
+  const ver = transpVerFiltro();
+  const pendT = contactos.filter(c => c.esTransportista && !c.archived && !c.transpVerificado).length;
+  const segBtn = (k, t) => `<button type="button" class="${ver === k ? 'on' : ''}" onclick="window.__transpVer='${k}'; window.__transpPage=0; renderTab();">${t}</button>`;
+  const hayPendientes = transportistasFilteredList().list.some(c => !c.transpVerificado);
   return `
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.truck, 26, '#fff', 1.8)}</span>
@@ -15050,10 +15179,12 @@ function tplTransportistasPage(){
         <input placeholder="Buscar por nombre o NIF…" value="${esc(window.__transpSearch||'')}" oninput="window.__transpSearch=this.value; window.__transpPage=0; refreshTransportistasListBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
+      <div class="doc-seg" title="Un transportista lo da de alta cualquiera y lo comprueba otra persona">${segBtn('todos', 'Todos')}${segBtn('pendientes', `Sin verificar${pendT ? ` <span style="font-weight:700;">${pendT}</span>` : ''}`)}${segBtn('verificados', 'Verificados')}</div>
       <div style="position:relative;">
         <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__transpFilterOpen=!window.__transpFilterOpen; renderTab();">Filtros${filterCount?` (${filterCount})`:''} ▾</button>
         ${window.__transpFilterOpen ? tplTransportistasFilterDropdown() : ''}
       </div>
+      ${PROFILE.isAdmin && ver === 'pendientes' && hayPendientes ? `<button class="btn btn-ghost" onclick="transportistasVerificarTodos()" title="Marca como verificados todos los pendientes de esta lista">Verificar todos</button>` : ''}
       <div style="display:flex;align-items:center;gap:14px;margin-left:auto;">${contactosLayoutToggleHtml()}<div id="transp-pagination" style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);white-space:nowrap;">${tplTransportistasPaginationHtml()}</div></div>
     </div>
     <div id="transp-list-body">${transportistasListBodyHtml()}</div>`;
