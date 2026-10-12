@@ -416,6 +416,18 @@
   .af-cp-t{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--primary);margin-bottom:10px;}
   .af-cp-h{margin-top:10px;font-size:12px;color:var(--muted);}
   .af-cp-h .tl-chg{margin:0 0 0 8px;align-self:auto;}
+  /* Editar tarifa: cada línea existente en una sola fila compacta */
+  .af-compact{display:grid;grid-template-columns:minmax(150px,200px) 1fr auto;gap:10px 16px;align-items:end;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--panel);}
+  .af-c-name{display:flex;flex-direction:column;align-items:flex-start;gap:5px;align-self:center;font-size:14px;color:var(--text);min-width:0;overflow-wrap:anywhere;}
+  .af-c-fields{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;min-width:0;}
+  .af-c-fields .af-fld{flex:0 0 auto;}
+  .af-c-n{width:128px;}
+  .af-c-d{width:148px;}
+  .af-f-base{width:130px;}
+  .af-c-fields .af-c-obs{flex:1 1 170px;min-width:150px;}
+  .af-c-act{display:flex;align-items:center;gap:10px;align-self:center;}
+  .af-compact>.af-cp{grid-column:1 / -1;margin-top:0;}
+  @media (max-width:760px){.af-compact{grid-template-columns:1fr;}.af-c-act{justify-content:space-between;}}
   .cg-tabla td{padding:4px 6px;vertical-align:middle;}
   .cg-tabla input.cg-in,.cg-tabla select.cg-in,.cg-nuevo input,.cg-nuevo select{border:1px solid transparent;background:transparent;padding:6px 8px;border-radius:7px;font-size:13px;width:100%;}
   .cg-tabla input.cg-in:hover,.cg-tabla select.cg-in:hover{border-color:var(--border);background:var(--panel);}
@@ -13645,7 +13657,37 @@ function almacenajeFilaFechaChange(i){
 // Una línea de la tarifa = una tarjeta: arriba se elige la actividad con tres botones; después salen solo los campos que
 // hacen falta (producto, subtipo si lo usa, cobro si es de stock, precio, mínimo, fecha y observaciones) y debajo se lee
 // la línea como quedará. Los ids (af-N-…) son los de siempre: la lógica de guardado no cambia.
+// «Editar tarifa»: cada línea que ya existe va en UNA fila compacta (qué es a la izquierda, sus datos en medio y las acciones a la derecha).
+// El producto no se cambia aquí (para eso se quita la línea y se añade otra); lo que se corrige es precio, mínimo, fecha y observaciones.
+// Los campos de producto/actividad/subtipo siguen existiendo (ocultos) con los ids de siempre, así que el guardado es el mismo.
+function almacenajeFilaCompactaHtml(i, preset){
+  const precioTxt = String(preset.precio).replace('.', ',');
+  const cat = almacenajeCategoriaDe(preset.tipo);
+  const minVisible = cat === 'movimiento' || preset.importeMinimo != null;
+  return `
+    <div class="af-row af-compact" data-i="${i}" data-id="${esc(preset.id)}">
+      <div class="af-c-name">${almacenajeCategoriaBadgeHtml(cat)}<b>${esc(almacenajeEtiqueta(preset))}</b></div>
+      <div style="display:none;">
+        <input type="hidden" id="af-${i}-actividad" value="${cat}" />
+        <select id="af-${i}-tipo">${almacenajeTipoOptionsHtml(preset.tipo, cat)}</select>
+        <input id="af-${i}-subtipo" maxlength="60" data-combo="af-subtipos" autocomplete="off" />
+      </div>
+      <div class="af-c-fields">
+        <div class="field af-fld af-f-base" style="display:none;"><label title="Solo en productos de stock: por día (cada noche) o por el máximo del mes">Cobro</label><select id="af-${i}-base" onchange="window.__almacenajeFormDirty=true;"><option value="dia">Por día</option><option value="mes_max">Máx. del mes</option></select></div>
+        <div class="field af-fld af-c-n"><label>Precio (€${esc(almacenajeUnidadTxt(preset.tipo, preset.base).replace(' (máx.)', ' máx.'))})</label><input id="af-${i}-precio" inputmode="decimal" maxlength="10" placeholder="0,00" value="${esc(precioTxt)}" /></div>
+        <div class="field af-fld af-c-n"${minVisible ? '' : ' style="display:none;"'}><label title="Importe mínimo por albarán (opcional)">Mínimo (€)</label><input id="af-${i}-min" inputmode="decimal" maxlength="10" placeholder="Opcional" value="${preset.importeMinimo != null ? esc(String(preset.importeMinimo).replace('.', ',')) : ''}" /></div>
+        <div class="field af-fld af-c-d"><label>Vigente desde</label><input id="af-${i}-fecha" type="date" value="${esc(preset.fecha)}" onchange="almacenajeFilaFechaChange(${i});" /></div>
+        <div class="field af-fld af-c-obs"><label>Observaciones</label><input id="af-${i}-obs" maxlength="250" placeholder="Opcional" value="${esc(preset.observaciones || '')}" /></div>
+      </div>
+      <div class="af-c-act">
+        <button type="button" class="tl-chg af-cpbtn" id="af-${i}-cpbtn" onclick="almacenajeFilaCambioPrecio(${i}, true)" title="El precio nuevo vale desde una fecha; el actual pasa al histórico">Cambiar precio desde una fecha</button>
+        <button type="button" class="af-x" onclick="almacenajeFilaRemoveRow(${i})" title="Quitar esta línea de la tarifa">✕</button>
+      </div>
+      ${almacenajeCambioPrecioHtml(i, preset)}
+    </div>`;
+}
 function almacenajeFilaRowHtml(i, preset){
+  if (preset && window.__almacenajeEditar) return almacenajeFilaCompactaHtml(i, preset);
   const precioTxt = preset ? String(preset.precio).replace('.', ',') : '';
   const cat = preset ? almacenajeCategoriaDe(preset.tipo) : '';
   const seg = Object.keys(ALMACENAJE_CATEGORIAS).map(k => `<button type="button" class="af-seg-b${k === cat ? ' on' : ''}" data-cat="${k}" onclick="almacenajeFilaSetActividad(${i}, '${k}')">${esc(ALMACENAJE_CATEGORIAS[k])}</button>`).join('');
@@ -13666,10 +13708,8 @@ function almacenajeFilaRowHtml(i, preset){
         <div class="field af-fld"><label>Vigente desde</label><input id="af-${i}-fecha" type="date" value="${preset ? esc(preset.fecha) : almacenajeFechaFilaPrevia()}" onchange="almacenajeFilaFechaChange(${i}); almacenajeFilaResumen(${i});" /></div>
         <div class="field af-fld" style="grid-column:1 / -1;"><label>Observaciones</label><input id="af-${i}-obs" maxlength="250" placeholder="Opcional. Con Intro se añade otra línea" value="${preset ? esc(preset.observaciones || '') : ''}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); almacenajeFilaAddRow(true); }" /></div>
       </div>
-      ${preset && window.__almacenajeEditar ? almacenajeCambioPrecioHtml(i, preset) : ''}
       <div class="af-foot">
         <div class="af-resumen" id="af-${i}-resumen"></div>
-        ${preset && window.__almacenajeEditar ? `<button type="button" class="tl-chg af-cpbtn" id="af-${i}-cpbtn" onclick="almacenajeFilaCambioPrecio(${i}, true)" title="El precio nuevo vale desde una fecha; el actual pasa al histórico">Cambiar precio desde una fecha</button>` : ''}
       </div>
     </div>`;
 }
