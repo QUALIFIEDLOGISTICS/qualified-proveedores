@@ -409,6 +409,13 @@
   .af-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;}
   .af-fld{margin-bottom:0;}
   .af-resumen{margin-top:12px;font-size:13px;font-weight:600;color:var(--primary);min-height:18px;}
+  .af-foot{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;}
+  .af-foot .af-resumen{margin-top:0;flex:1 1 240px;}
+  .af-cpbtn{align-self:center;margin-top:0;white-space:nowrap;font-size:12.5px;}
+  .af-cp{margin-top:12px;padding:12px 14px;border:1px dashed var(--primary);border-radius:10px;background:var(--panel);}
+  .af-cp-t{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--primary);margin-bottom:10px;}
+  .af-cp-h{margin-top:10px;font-size:12px;color:var(--muted);}
+  .af-cp-h .tl-chg{margin:0 0 0 8px;align-self:auto;}
   .cg-tabla td{padding:4px 6px;vertical-align:middle;}
   .cg-tabla input.cg-in,.cg-tabla select.cg-in,.cg-nuevo input,.cg-nuevo select{border:1px solid transparent;background:transparent;padding:6px 8px;border-radius:7px;font-size:13px;width:100%;}
   .cg-tabla input.cg-in:hover,.cg-tabla select.cg-in:hover{border-color:var(--border);background:var(--panel);}
@@ -13659,8 +13666,42 @@ function almacenajeFilaRowHtml(i, preset){
         <div class="field af-fld"><label>Vigente desde</label><input id="af-${i}-fecha" type="date" value="${preset ? esc(preset.fecha) : almacenajeFechaFilaPrevia()}" onchange="almacenajeFilaFechaChange(${i}); almacenajeFilaResumen(${i});" /></div>
         <div class="field af-fld" style="grid-column:1 / -1;"><label>Observaciones</label><input id="af-${i}-obs" maxlength="250" placeholder="Opcional. Con Intro se añade otra línea" value="${preset ? esc(preset.observaciones || '') : ''}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); almacenajeFilaAddRow(true); }" /></div>
       </div>
-      <div class="af-resumen" id="af-${i}-resumen"></div>
+      ${preset && window.__almacenajeEditar ? almacenajeCambioPrecioHtml(i, preset) : ''}
+      <div class="af-foot">
+        <div class="af-resumen" id="af-${i}-resumen"></div>
+        ${preset && window.__almacenajeEditar ? `<button type="button" class="tl-chg af-cpbtn" id="af-${i}-cpbtn" onclick="almacenajeFilaCambioPrecio(${i}, true)" title="El precio nuevo vale desde una fecha; el actual pasa al histórico">Cambiar precio desde una fecha</button>` : ''}
+      </div>
     </div>`;
+}
+// «Editar tarifa»: cambio de precio con fecha. El precio actual pasa al histórico con sus fechas y el nuevo vale desde el día que se indique
+// (para corregir un error de tecleo se cambia directamente el precio de la línea).
+function almacenajeCambioPrecioHtml(i, t){
+  const sig = new Date(t.fecha + 'T00:00:00'); sig.setDate(sig.getDate() + 1);
+  const minF = toDateStr(sig);
+  const hoy = today();
+  const minVisible = t.categoria === 'movimiento' || t.importeMinimo != null;
+  return `
+      <div class="af-cp" id="af-${i}-cp" style="display:none;">
+        <div class="af-cp-t">Cambio de precio desde una fecha</div>
+        <div class="af-grid">
+          <div class="field af-fld"><label>Nuevo precio (€)</label><input id="af-${i}-nprecio" inputmode="decimal" maxlength="10" placeholder="0,00" /></div>
+          <div class="field af-fld"><label>Vigente desde</label><input id="af-${i}-nfecha" type="date" min="${esc(minF)}" value="${esc(hoy > minF ? hoy : minF)}" /></div>
+          ${minVisible ? `<div class="field af-fld"><label>Nuevo mínimo por albarán (€)</label><input id="af-${i}-nmin" inputmode="decimal" maxlength="10" placeholder="Opcional" value="${t.importeMinimo != null ? esc(String(t.importeMinimo).replace('.', ',')) : ''}" /></div>` : ''}
+        </div>
+        <div class="af-cp-h">El precio actual (${esc(almacenajePrecioTxt(t))}) pasa al histórico con sus fechas. Si solo era un error de tecleo, cambia el precio de arriba.
+          <button type="button" class="tl-chg" onclick="almacenajeFilaCambioPrecio(${i}, false)">Cancelar el cambio</button></div>
+      </div>`;
+}
+function almacenajeFilaCambioPrecio(i, on){
+  const row = document.querySelector(`.af-row[data-i="${i}"]`);
+  const box = document.getElementById(`af-${i}-cp`);
+  if (!row || !box) return;
+  row.dataset.cp = on ? '1' : '';
+  box.style.display = on ? '' : 'none';
+  const btn = document.getElementById(`af-${i}-cpbtn`);
+  if (btn) btn.style.display = on ? 'none' : '';
+  window.__almacenajeFormDirty = true;
+  if (on) { const el = document.getElementById(`af-${i}-nprecio`); if (el) el.focus(); }
 }
 // Elegir la actividad con los botones: guarda el valor y deja que el desplegable de producto ofrezca solo los de esa actividad.
 function almacenajeFilaSetActividad(i, cat){
@@ -13765,6 +13806,7 @@ async function submitAlmacenajeTarifaForm(){
   const clienteId = window.__almacenajeFormClienteId;
   const editar = !!window.__almacenajeEditar;
   const nuevas = [];       // filas sin id: altas
+  const preciosNuevos = []; // líneas existentes con «cambiar precio desde una fecha»: línea nueva y la anterior pasa al histórico
   const cambios = [];      // filas de líneas existentes que han cambiado: correcciones
   const presentes = new Set();
   const errores = [];
@@ -13797,10 +13839,26 @@ async function submitAlmacenajeTarifaForm(){
     if (!antes) return;
     const igual = antes.fecha === fecha && antes.tipo === tipo && (antes.subtipo || '') === subtipo && Number(antes.precio) === precio && (antes.importeMinimo == null ? null : Number(antes.importeMinimo)) === minimo && (antes.observaciones || '') === obs && (antes.base || 'dia') === base;
     if (!igual) cambios.push({ id, payload, antes });
+    // «Cambiar precio desde una fecha»: el precio nuevo es una línea nueva del mismo producto; la actual pasa sola al histórico.
+    if (tr.dataset.cp === '1') {
+      const npTxt = v('nprecio').trim(), nfecha = v('nfecha'), nmTxt = v('nmin').trim();
+      const np = Number(npTxt.replace(',', '.'));
+      const nm = nmTxt === '' ? null : Number(nmTxt.replace(',', '.'));
+      if (!npTxt || !isFinite(np) || np < 0) { errores.push(`${nombreFila}: indica el nuevo precio.`); return; }
+      if (np === precio) { errores.push(`${nombreFila}: el precio nuevo es el mismo que el actual.`); return; }
+      if (!nfecha) { errores.push(`${nombreFila}: indica desde qué fecha vale el precio nuevo.`); return; }
+      if (nfecha <= fecha) { errores.push(`${nombreFila}: la fecha del precio nuevo tiene que ser posterior a la del actual (${fmtDateDMY(fecha)}).`); return; }
+      if (nm !== null && (!isFinite(nm) || nm < 0)) { errores.push(`${nombreFila}: el nuevo mínimo no es válido.`); return; }
+      const hayMin = !!document.getElementById(`af-${i}-nmin`);
+      preciosNuevos.push({
+        antesPrecio: precio, antesBase: base,
+        row: { cliente_id: clienteId, fecha: nfecha, tipo, subtipo: subtipo || null, precio: np, importe_minimo: hayMin ? nm : minimo, observaciones: obs || null, tipo_actividad: almacenajeCategoriaDe(tipo), base_cobro: base },
+      });
+    }
   });
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const eliminar = editar ? (window.__almacenajeOrigIds || []).filter(id => !presentes.has(id) && almacenajeTarifas.some(t => t.id === id)) : [];
-  if (!nuevas.length && !cambios.length && !eliminar.length) {
+  if (!nuevas.length && !cambios.length && !eliminar.length && !preciosNuevos.length) {
     if (editar) { window.__almacenajeFormDirty = false; window.__almacenajeFormClienteId = null; window.__almacenajeEditar = false; if (window.__almacenajeOrigen === 'lista') { almacenajeVolverALista(); return; } renderTab(); return; }
     errEl.textContent = 'Añade al menos una línea con su precio.'; return;
   }
@@ -13835,8 +13893,8 @@ async function submitAlmacenajeTarifaForm(){
     almacenajeTarifas = almacenajeTarifas.filter(t => !eliminar.includes(t.id));
   }
   // 3) Líneas nuevas
-  if (nuevas.length) {
-    const { data, error } = await supabaseClient.from('almacenaje_tarifas').insert(nuevas.map(f => ({ ...f, created_by: currentUserEmail() }))).select();
+  if (nuevas.length || preciosNuevos.length) {
+    const { data, error } = await supabaseClient.from('almacenaje_tarifas').insert(nuevas.concat(preciosNuevos.map(p => p.row)).map(f => ({ ...f, created_by: currentUserEmail() }))).select();
     if (error || !data) { fallo(error && error.message ? error.message : 'error desconocido.'); return; }
     data.forEach(row => almacenajeTarifas.push({
       id: row.id, createdAt: row.created_at, clienteId: row.cliente_id, fecha: row.fecha, tipo: row.tipo,
@@ -13845,6 +13903,10 @@ async function submitAlmacenajeTarifaForm(){
     nuevas.forEach(f => {
       const etiqueta = f.subtipo ? `${almacenajeTipoLabel(f.tipo)} ${f.subtipo}` : almacenajeTipoLabel(f.tipo);
       resumen.push(`ha añadido la línea ${etiqueta} a ${eurPrecio(f.precio)}${almacenajeUnidadTxt(f.tipo, f.base_cobro)}${f.importe_minimo != null ? ` (mínimo ${eurPrecio(f.importe_minimo)})` : ''}, vigente desde el ${fmtDateDMY(f.fecha)}.`);
+    });
+    preciosNuevos.forEach(p => {
+      const f = p.row;
+      resumen.push(`ha cambiado el precio de ${almacenajeEtiqueta({ tipo: f.tipo, subtipo: f.subtipo || '' })} de ${eurPrecio(p.antesPrecio)} a ${eurPrecio(f.precio)}${almacenajeUnidadTxt(f.tipo, f.base_cobro)}, vigente desde el ${fmtDateDMY(f.fecha)}.`);
     });
   }
   await logAlmacenajeHistorial(clienteId, resumen.join('\n'));
@@ -13855,79 +13917,6 @@ async function submitAlmacenajeTarifaForm(){
   window.__sgaArtRapida = null;
   window.__almacenajeEditar = false;
   if (window.__almacenajeOrigen === 'lista') { almacenajeVolverALista(); return; }
-  renderTab();
-}
-/* ---- Cambio de precio desde una fecha ----
-   Añade una línea nueva del mismo producto con el precio y la fecha nuevos; la anterior pasa sola al histórico
-   (con sus fechas), así se conserva lo que se cobró hasta entonces. Para corregir un error de tecleo se usa «Editar tarifa». */
-function openAlmacenajeCambioPrecio(id){
-  const t = almacenajeTarifas.find(x => x.id === id);
-  if (!t) return;
-  const cliente = contactos.find(c => c.id === t.clienteId);
-  const minVisible = t.categoria === 'movimiento' || t.importeMinimo != null;
-  window.__cambioPrecioId = id;
-  const sig = new Date(t.fecha + 'T00:00:00'); sig.setDate(sig.getDate() + 1);
-  const desde = toDateStr(sig);
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box" style="max-width:520px;padding:0;border-radius:14px;overflow:hidden;">
-        <div class="deca-view-head pri">
-          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.tag, 21, '#fff', 1.8)}</span>
-          <div style="min-width:0;flex:1;">
-            <div class="deca-banner-title" style="font-size:19px;">Cambio de precio</div>
-            <div class="deca-banner-sub" style="margin-top:1px;">${cliente ? esc((cliente.nombreComercial || '').trim() || cliente.nombre) + ' · ' : ''}${esc(almacenajeEtiqueta(t))}</div>
-          </div>
-          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
-        </div>
-        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
-          <div style="padding:10px 14px;border-radius:10px;background:var(--panel2);border:1px solid var(--border);margin-bottom:16px;font-size:13px;">
-            Precio actual: <b>${esc(almacenajePrecioTxt(t))}</b> <span style="color:var(--muted);">· vigente desde el ${esc(fmtDateDMY(t.fecha))}</span>
-          </div>
-          <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <div class="field" style="flex:1;min-width:160px;"><label>Nuevo precio (€${esc(almacenajeUnidadTxt(t.tipo, t.base))}) <span class="dc-req">*</span></label>${decaInputIcon('tag', `<input id="cp-precio" inputmode="decimal" maxlength="10" placeholder="Ej. 0,50" />`, '€')}</div>
-            <div class="field" style="flex:1;min-width:160px;"><label>Vigente desde <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="cp-fecha" type="date" min="${esc(desde)}" value="${esc(today() > t.fecha ? today() : desde)}" />`)}</div>
-          </div>
-          ${minVisible ? `<div class="field"><label>Importe mínimo por albarán (€, opcional)</label>${decaInputIcon('file', `<input id="cp-min" inputmode="decimal" maxlength="10" value="${t.importeMinimo != null ? esc(String(t.importeMinimo).replace('.', ',')) : ''}" />`, '€')}</div>` : ''}
-          <div class="field"><label>Observaciones (opcional)</label>${decaInputIcon('file', `<input id="cp-obs" maxlength="250" value="${esc(t.observaciones || '')}" />`)}</div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">El precio actual pasa al histórico con sus fechas. Si solo quieres corregir un error de tecleo, usa «Editar tarifa».</div>
-          <div id="cp-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
-          <div style="display:flex;gap:10px;">
-            <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
-            <button class="btn btn-primary deca-submit cp-save" onclick="submitAlmacenajeCambioPrecio()">Guardar el cambio</button>
-          </div>
-        </div>
-      </div>
-    </div>`;
-  setTimeout(() => { const el = document.getElementById('cp-precio'); if (el) el.focus(); }, 0);
-}
-async function submitAlmacenajeCambioPrecio(){
-  const t = almacenajeTarifas.find(x => x.id === window.__cambioPrecioId);
-  const errEl = document.getElementById('cp-error');
-  if (!t || !errEl) return;
-  errEl.textContent = '';
-  const precioTxt = document.getElementById('cp-precio').value.trim();
-  const fecha = document.getElementById('cp-fecha').value;
-  const minEl = document.getElementById('cp-min');
-  const minTxt = minEl ? minEl.value.trim() : (t.importeMinimo != null ? String(t.importeMinimo) : '');
-  const obs = document.getElementById('cp-obs').value.trim();
-  const precio = Number(precioTxt.replace(',', '.'));
-  const minimo = minTxt === '' ? null : Number(minTxt.replace(',', '.'));
-  if (!precioTxt || !isFinite(precio) || precio < 0) { errEl.textContent = 'Indica el nuevo precio.'; return; }
-  if (precio === Number(t.precio)) { errEl.textContent = 'Es el mismo precio que ya tiene. Si no cambia, no hace falta ningún cambio.'; return; }
-  if (!fecha) { errEl.textContent = 'Indica desde qué fecha vale el precio nuevo.'; return; }
-  if (fecha <= t.fecha) { errEl.textContent = `La fecha tiene que ser posterior a la del precio actual (${fmtDateDMY(t.fecha)}).`; return; }
-  if (minimo !== null && (!isFinite(minimo) || minimo < 0)) { errEl.textContent = 'El importe mínimo no es válido.'; return; }
-  const btn = document.querySelector('.cp-save');
-  if (btn) btn.disabled = true;
-  const row = { cliente_id: t.clienteId, fecha, tipo: t.tipo, subtipo: t.subtipo || null, precio, importe_minimo: minimo, observaciones: obs || null, tipo_actividad: t.categoria, base_cobro: t.base || 'dia', created_by: currentUserEmail() };
-  const { data, error } = await supabaseClient.from('almacenaje_tarifas').insert(row).select().single();
-  if (error || !data) { errEl.textContent = 'No se pudo guardar: ' + (error && error.message ? error.message : 'error desconocido.'); if (btn) btn.disabled = false; return; }
-  almacenajeTarifas.push({
-    id: data.id, createdAt: data.created_at, clienteId: t.clienteId, fecha, tipo: t.tipo, subtipo: t.subtipo || '', precio,
-    observaciones: obs, importeMinimo: minimo, base: t.base || 'dia', categoria: t.categoria,
-  });
-  await logAlmacenajeHistorial(t.clienteId, `ha cambiado el precio de ${almacenajeEtiqueta(t)} de ${eurPrecio(t.precio)} a ${eurPrecio(precio)}${almacenajeUnidadTxt(t.tipo, t.base)}, vigente desde el ${fmtDateDMY(fecha)}.`);
-  closeModal();
   renderTab();
 }
 // Borra TODA la tarifa de almacenaje de un cliente: líneas vigentes y su histórico. (Si solo se quitaran las vigentes, la
