@@ -8206,6 +8206,19 @@ function closeContactoDetail(){
   // estuviera antes — con los datos rellenos si se ha guardado
   // (decaVolverDesdeContacto ya los habrá puesto en el borrador), o tal
   // cual estaba si se cancela.
+  // Igual si se abrió desde «+» del transportista en una orden de carga (ocIrACrearTransportista).
+  if (window.__ocReturnContacto) {
+    window.__ocReturnContacto = false;
+    window.__traficoSection = 'ordenes';
+    window.__traficoView = 'home';
+    window.__ocView = 'form';
+    window.__ocFormId = window.__ocReturnEditId || null;
+    window.__ocReturnEditId = null;
+    window.__ocFormDirty = true;
+    renderHeader(); renderTab();
+    window.__ocFormDraft = null;
+    return;
+  }
   if (window.__decaReturnContactoRole) {
     window.__decaReturnContactoRole = null;
     window.__decaFormId = window.__decaReturnEditId || null;
@@ -9043,6 +9056,7 @@ async function submitContactoForm(editId){
     }
     if (changeLines.length) await logContactoHistorial(contactoId, changeLines.join('\n'));
     await Promise.all([loadClients(), loadCompanies()]);
+    if (!editId && window.__ocReturnContacto) { ocVolverDesdeContacto(contactos.find(x=>x.id===contactoId)); return; }
     if (!editId && window.__decaReturnContactoRole) { decaVolverDesdeContacto(contactos.find(x=>x.id===contactoId)); return; }
     if (!editId && window.__tarifaClienteReturnPending) { window.__tarifaClienteReturnPending = false; openTarifaForm(null, null, contactoId); return; }
     openContactoModal(contactoId);
@@ -12088,6 +12102,28 @@ function ocVolverDesdeDireccion(direccionCreada){
   renderHeader(); renderTab();
   window.__ocFormDraft = null;
 }
+// Crear el proveedor de transporte desde la orden: se va a la ficha real de «Nuevo contacto» (ya como proveedor) y, al guardar o
+// cancelar, se vuelve a la orden con todo lo que ya estaba escrito (y el proveedor nuevo puesto). Mismo patrón que el DeCA.
+function ocIrACrearTransportista(){
+  window.__ocFormDraft = ocSnapshotForm();
+  window.__ocReturnContacto = true;
+  window.__ocReturnEditId = window.__ocFormId;
+  window.__contactoNavContext = { label: 'Proveedores Transporte', ids: [] };
+  openContactoModal(null, contactoPresetForNavLabel('Proveedores Transporte'));
+}
+// contactoCreado: el contacto recién guardado, o null si se ha cancelado sin crear nada (lo gestiona closeContactoDetail).
+function ocVolverDesdeContacto(contactoCreado){
+  const draft = window.__ocFormDraft || {};
+  if (contactoCreado) {
+    draft.transportistaNombre = contactoCreado.nombre;
+    draft.transportistaNif = contactoCreado.nif || '';
+    draft.transportistaDireccion = [contactoCreado.calle1, contactoCreado.calle2].filter(Boolean).join(', ');
+    draft.transportistaPoblacion = contactoCreado.ciudad || '';
+  }
+  window.__ocFormDraft = draft;
+  window.__contactoFormDirty = false;   // ya se ha guardado: no preguntar por cambios sin guardar
+  closeContactoDetail();
+}
 function ocPuntoAdd(tipo){
   const cont = document.getElementById(tipo === 'carga' ? 'oc-cargas' : 'oc-descargas');
   if (cont) cont.insertAdjacentHTML('beforeend', ocPuntoRowHtml(tipo, {}, true));
@@ -12137,7 +12173,7 @@ function tplOcFormPage(){
           <div class="deca-card-body">
             <div style="display:flex;gap:14px;flex-wrap:wrap;">
               <div class="field" style="flex:2;min-width:260px;"><label>Transportista ${req}</label>
-                ${decaInputIcon('truck', `<input id="oc-transp-nombre" maxlength="150" data-combo="oc-transportistas-datalist" autocomplete="off" oninput="ocElegirTransportista()" placeholder="Elige entre tus transportistas" value="${esc(e.transportistaNombre || '')}" />`)}
+                ${decaCampoConCrearHtml(decaInputIcon('truck', `<input id="oc-transp-nombre" maxlength="150" data-combo="oc-transportistas-datalist" autocomplete="off" oninput="ocElegirTransportista()" placeholder="Elige entre tus proveedores de transporte" value="${esc(e.transportistaNombre || '')}" />`), 'ocIrACrearTransportista()', 'Crear un proveedor de transporte nuevo (no está en la lista)')}
                 <datalist id="oc-transportistas-datalist">${contactos.filter(c => !c.archived && c.esTransportista).map(c => `<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('')}</datalist></div>
               <div class="field" style="flex:1;min-width:150px;"><label>CIF</label>${decaInputIcon('idcard', `<input id="oc-transp-nif" maxlength="20" value="${esc(e.transportistaNif || '')}" />`)}</div>
               <div class="field" style="flex:1;min-width:150px;"><label>Población</label>${decaInputIcon('pin', `<input id="oc-transp-pob" maxlength="100" value="${esc(e.transportistaPoblacion || '')}" />`)}</div>
