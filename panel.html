@@ -377,6 +377,13 @@
   .tl-name{font-size:13px;font-weight:600;}
   .tl-price{font-family:var(--display);font-size:21px;font-weight:700;color:var(--primary);line-height:1.25;}
   .tl-price small{font-size:12px;font-weight:500;color:var(--muted);font-family:var(--body);}
+  /* Comercial → Tarifas Almacén: resumen de precios con el cliente cerrado y detalle como el de la ficha */
+  .tc-sum{flex:1 1 0;display:flex;gap:6px;flex-wrap:wrap;min-width:0;}
+  .tc-pl{font-size:12px;padding:3px 10px;border-radius:999px;background:var(--panel2);border:1px solid var(--border);white-space:nowrap;color:var(--text);}
+  .tc-pl i{font-style:normal;font-weight:700;color:var(--primary);margin-left:4px;}
+  .tc-pl.tc-more{color:var(--muted);}
+  .alm-box{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--panel);}
+  .tc-body .tc-bar{margin-bottom:10px;}
   .tl-min,.tl-obs{font-size:11.5px;color:var(--muted);}
   .tl-since{font-size:11px;color:var(--mutedFaint);margin-top:3px;}
   .tl-chg{align-self:flex-start;margin-top:6px;padding:0;border:none;background:none;color:var(--primary);font-size:11.5px;font-weight:600;cursor:pointer;font-family:var(--body);}
@@ -1507,35 +1514,11 @@ function talmPillHtml(t){
     </div>`;
 }
 function talmDetalleTarifasHtml(c, l, hist){
-  // El botón «Editar tarifa» va en la misma línea que el primer título de grupo (a la derecha), sin fila propia.
-  const editar = `<button class="btn btn-ghost tc-edit" onclick="almacenajeIrAForm('${c.id}', true)" title="Corregir de golpe todas las líneas, quitar las que sobren o añadir otras">${homeIcon(HOME_ICON_PATHS.edit, 14, 'currentColor', 2)}<span>Editar tarifa</span></button>`;
-  let primero = true;
-  const grupos = Object.keys(ALMACENAJE_CATEGORIAS).map(cat => {
-    const items = l.filter(t => t.categoria === cat);
-    if (!items.length) return '';
-    const cab = `<div class="tc-grp-row${primero ? ' first' : ''}"><div class="tc-grp">${esc(almacenajeCategoriaLabel(cat))}</div>${primero ? editar : ''}</div>`;
-    primero = false;
-    return `${cab}<div class="tc-grid">${items.map(talmPillHtml).join('')}</div>`;
-  }).join('');
+  // Mismo diseño que la tarifa de la ficha del cliente: bloques por actividad con el precio a la derecha y el histórico plegado.
+  const editar = `<button class="btn btn-ghost tc-edit" onclick="almacenajeIrAForm('${c.id}', true)" title="Corregir de golpe todas las líneas, cambiar un precio desde una fecha, quitar las que sobren o añadir otras">${homeIcon(HOME_ICON_PATHS.edit, 14, 'currentColor', 2)}<span>Editar tarifa</span></button>`;
   return `
-    ${grupos}
-    ${hist.length ? `
-    <div class="tc-hist">
-      <div class="tc-hist-t">Histórico (${hist.length})</div>
-      <div class="tc-hist-box">
-      <table class="tf-table tf-hist">
-        <thead><tr>${thSort('Vigente del','date')}${thSort('Hasta','date')}${thSort('Tipo','text')}${thSort('Precio','number','style="text-align:right;"')}<th style="width:44px;"></th></tr></thead>
-        <tbody>${hist.map(t => `
-          <tr>
-            <td style="white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
-            <td style="white-space:nowrap;" data-sort-value="${esc(t.hasta)}">${fmtDateDMY(t.hasta)}</td>
-            <td data-sort-value="${esc(almacenajeEtiqueta(t))}">${esc(almacenajeEtiqueta(t))}</td>
-            <td class="tf-precio" data-sort-value="${t.precio}">${almacenajePrecioCeldaHtml(t)}</td>
-            <td style="text-align:right;white-space:nowrap;"><button class="deca-act danger" onclick="deleteAlmacenajeTarifa('${t.id}')" title="Eliminar esta línea del histórico">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button></td>
-          </tr>`).join('')}</tbody>
-      </table>
-      </div>
-    </div>` : ''}`;
+    <div class="tc-bar"><span class="tc-right">${editar}</span></div>
+    <div class="alm-box">${almacenajeLineasAgrupadasHtml(l)}${tplAlmacenajeHistoricoDetalle(hist.slice().sort(almacenajeOrdenDefecto))}</div>`;
 }
 function talmDetalleOperativasHtml(c, o, hist){
   return `
@@ -1562,6 +1545,16 @@ function talmDetalleOperativasHtml(c, o, hist){
       </div>
     </div>` : ''}`;
 }
+// Con el cliente cerrado: los precios clave en píldoras, para verlos sin abrirlo («Palet europeo 6,50 €/mes · Entrada 2,00 €…»).
+function talmResumenPrecios(seg, items){
+  const MAX = 3;
+  const pill = (n, p) => `<span class="tc-pl">${esc(n)} <i>${esc(p)}</i></span>`;
+  const lista = seg === 'tarifas'
+    ? items.slice(0, MAX).map(t => pill(almacenajeEtiqueta(t), eurPrecio(t.precio) + almacenajeUnidadTxt(t.tipo, t.base).replace(' (máx.)', '')))
+    : items.slice(0, MAX).map(x => pill(x.nombre, eur2(x.total)));
+  if (items.length > MAX) lista.push(`<span class="tc-pl tc-more">+${items.length - MAX} más</span>`);
+  return lista.join('');
+}
 function talmBodyHtml(){
   const { lineas, lineasHist, ops, opsHist, clientes } = talmClientesConDatos();
   const q = (window.__talmSearch || '').trim().toLowerCase();
@@ -1583,6 +1576,7 @@ function talmBodyHtml(){
             <div class="tc-name">${esc(talmNombreCliente(c))}</div>
             ${sub ? `<div class="tc-sub">${esc(sub)}</div>` : ''}
           </div>
+          ${abierto ? '' : `<div class="tc-sum">${talmResumenPrecios(seg, items)}</div>`}
           <div class="tc-chips"><span class="tc-chip">Actualizada ${esc(fmtDateDMY(talmFechaMax(items)))}</span></div>
           <span class="tc-chev">${homeIcon(HOME_ICON_PATHS.chevron, 18, 'currentColor', 2.2)}</span>
         </div>
@@ -1616,9 +1610,8 @@ function talmMenu(ev){
 }
 document.addEventListener('click', () => { const m = document.getElementById('talm-menu'); if (m) m.classList.remove('show'); });
 function tplTarifasAlmacenPage(){
-  const { lineas, ops, clientes } = talmClientesConDatos();
   const seg = talmSeg();
-  const segBtn = (id, label, n) => `<button type="button" class="${seg === id ? 'on' : ''}" onclick="window.__talmSeg='${id}'; renderTab();">${label}</button>`;
+  const segBtn = (id, label) => `<button type="button" class="${seg === id ? 'on' : ''}" onclick="window.__talmSeg='${id}'; renderTab();">${label}</button>`;
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
@@ -1628,8 +1621,6 @@ function tplTarifasAlmacenPage(){
         <div class="deca-banner-sub">Lo que se cobra a cada cliente por almacenaje, movimientos y extras, y sus operativas con precio cerrado.</div>
       </div>
       <div class="deca-banner-actions">
-        <div class="deca-stat"><b>${clientes.length}</b><span>Clientes</span></div>
-        <div class="deca-stat"><b>${ops.length}</b><span>Operativas</span></div>
         <div class="nuevo-wrap">
           <button class="btn btn-primary deca-new-btn" onclick="talmMenu(event)"><span>+ Nuevo</span>${homeIcon(HOME_ICON_PATHS.chevron, 14, 'currentColor', 2.4)}</button>
           <div class="nuevo-menu" id="talm-menu">
@@ -1644,7 +1635,7 @@ function tplTarifasAlmacenPage(){
         <input placeholder="Buscar cliente por nombre o NIF…" value="${esc(window.__talmSearch || '')}" oninput="window.__talmSearch=this.value; refreshTalmBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      <div class="doc-seg">${segBtn('tarifas', 'Tarifas', lineas.length)}${segBtn('operativas', 'Operativas', ops.length)}</div>
+      <div class="doc-seg">${segBtn('tarifas', 'Tarifas')}${segBtn('operativas', 'Operativas')}</div>
     </div>
     <div id="talm-body">${talmBodyHtml()}</div>
     </div>`;
@@ -14001,9 +13992,8 @@ async function deleteAlmacenajeTarifa(id){
 // Tarifa de almacenaje de un cliente: las líneas vigentes agrupadas por actividad (Almacenaje, Movimiento, Extra),
 // con el precio grande y la unidad pequeña. El histórico va plegado dentro de la misma tarjeta.
 const ALMACENAJE_CATEGORIA_DESC = { almacenaje: 'Lo que cuesta tener la mercancía', movimiento: 'Entradas y salidas', extra: 'Servicios aparte' };
-function tplAlmacenajeTarifasCard(c){
-  const todas = almacenajePeriodos(almacenajeTarifas.filter(t=>t.clienteId===c.id));
-  const vigentes = todas.filter(t=>t.vigente).sort(almacenajeOrdenDefecto);
+// Las líneas vigentes en bloques por actividad (se usa en la ficha del cliente y en Comercial → Tarifas Almacén).
+function almacenajeLineasAgrupadasHtml(vigentes){
   const grupo = cat => {
     const lineas = vigentes.filter(t => t.categoria === cat);
     if (!lineas.length) return '';
@@ -14020,15 +14010,20 @@ function tplAlmacenajeTarifasCard(c){
   };
   const sueltas = vigentes.filter(t => !ALMACENAJE_CATEGORIAS[t.categoria]);   // por si alguna línea tuviera una actividad desconocida
   return `
+      <div class="alm-tarifa">
+        ${Object.keys(ALMACENAJE_CATEGORIAS).map(grupo).join('')}
+        ${sueltas.length ? grupo(sueltas[0].categoria) : ''}
+      </div>`;
+}
+function tplAlmacenajeTarifasCard(c){
+  const todas = almacenajePeriodos(almacenajeTarifas.filter(t=>t.clienteId===c.id));
+  const vigentes = todas.filter(t=>t.vigente).sort(almacenajeOrdenDefecto);
+  return `
     <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:20px;">
       ${decaCardHead('file', `Tarifa de almacenaje (${vigentes.length})`, 'Lo pactado con este cliente por almacenaje y movimientos. Puede combinar varios tipos a la vez.', vigentes.length
         ? decaAccion('edit', 'Editar tarifa', `openAlmacenajeTarifaEditar('${c.id}')`, 'Corregir las líneas, quitar las que sobren o añadir otras')
         : decaAccion('add', 'Añadir tarifa', `openAlmacenajeTarifaForm('${c.id}')`))}
-      ${vigentes.length ? `
-      <div class="alm-tarifa">
-        ${Object.keys(ALMACENAJE_CATEGORIAS).map(grupo).join('')}
-        ${sueltas.length ? grupo(sueltas[0].categoria) : ''}
-      </div>` : `<div style="color:var(--mutedFaint);font-size:12.5px;padding:18px;">Este cliente todavía no tiene tarifa de almacenaje. Créala con «+ Añadir tarifa».</div>`}
+      ${vigentes.length ? almacenajeLineasAgrupadasHtml(vigentes) : `<div style="color:var(--mutedFaint);font-size:12.5px;padding:18px;">Este cliente todavía no tiene tarifa de almacenaje. Créala con «+ Añadir tarifa».</div>`}
       ${tplAlmacenajeHistoricoDetalle(todas.filter(t=>!t.vigente).sort(almacenajeOrdenDefecto))}
     </div>`;
 }
