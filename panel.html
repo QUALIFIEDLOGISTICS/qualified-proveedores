@@ -381,6 +381,21 @@
   .tl-since{font-size:11px;color:var(--mutedFaint);margin-top:3px;}
   .tl-chg{align-self:flex-start;margin-top:6px;padding:0;border:none;background:none;color:var(--primary);font-size:11.5px;font-weight:600;cursor:pointer;font-family:var(--body);}
   .tl-chg:hover{text-decoration:underline;}
+  /* Tarifa de almacenaje agrupada por actividad (ficha del cliente → Almacén) */
+  .alm-tg-head{display:flex;align-items:center;gap:10px;padding:9px 18px;background:var(--panel2);border-top:1px solid var(--border);font-size:12px;color:var(--muted);}
+  .alm-tarifa .alm-tg-head:first-child{border-top:none;}
+  .alm-tl{display:flex;align-items:center;gap:14px;padding:12px 18px;border-top:1px solid var(--border);}
+  .alm-tl-n{flex:1;min-width:0;font-weight:600;font-size:14px;color:var(--text);}
+  .alm-tl-n small{display:block;font-weight:400;font-size:12px;color:var(--muted);margin-top:2px;}
+  .alm-tl-p{text-align:right;font-weight:700;font-size:16.5px;white-space:nowrap;font-variant-numeric:tabular-nums;}
+  .alm-tl-p small{font-size:11.5px;font-weight:500;color:var(--muted);}
+  .alm-tl-chg{align-self:center;margin-top:0;white-space:nowrap;}
+  .alm-hist{border-top:1px solid var(--border);}
+  .alm-hist>summary{cursor:pointer;padding:11px 18px;font-size:13px;font-weight:600;color:var(--primary);list-style:none;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;}
+  .alm-hist>summary::-webkit-details-marker{display:none;}
+  .alm-hist>summary::before{content:'▸';font-size:11px;}
+  .alm-hist[open]>summary::before{content:'▾';}
+  .alm-hist>summary span{font-weight:400;font-size:12px;color:var(--muted);}
   .cg-tabla td{padding:4px 6px;vertical-align:middle;}
   .cg-tabla input.cg-in,.cg-tabla select.cg-in,.cg-nuevo input,.cg-nuevo select{border:1px solid transparent;background:transparent;padding:6px 8px;border-radius:7px;font-size:13px;width:100%;}
   .cg-tabla input.cg-in:hover,.cg-tabla select.cg-in:hover{border-color:var(--border);background:var(--panel);}
@@ -13920,38 +13935,47 @@ async function deleteAlmacenajeTarifa(id){
   await logAlmacenajeHistorial(t.clienteId, `ha eliminado la línea ${almacenajeEtiqueta(t)}.`);
   renderTab();
 }
+// Tarifa de almacenaje de un cliente: las líneas vigentes agrupadas por actividad (Almacenaje, Movimiento, Extra),
+// con el precio grande y la unidad pequeña. El histórico va plegado dentro de la misma tarjeta.
+const ALMACENAJE_CATEGORIA_DESC = { almacenaje: 'Lo que cuesta tener la mercancía', movimiento: 'Entradas y salidas', extra: 'Servicios aparte' };
 function tplAlmacenajeTarifasCard(c){
-  const vigentes = almacenajePeriodos(almacenajeTarifas.filter(t=>t.clienteId===c.id)).filter(t=>t.vigente).sort(almacenajeOrdenDefecto);
+  const todas = almacenajePeriodos(almacenajeTarifas.filter(t=>t.clienteId===c.id));
+  const vigentes = todas.filter(t=>t.vigente).sort(almacenajeOrdenDefecto);
+  const grupo = cat => {
+    const lineas = vigentes.filter(t => t.categoria === cat);
+    if (!lineas.length) return '';
+    return `
+      <div class="alm-tg-head">${almacenajeCategoriaBadgeHtml(cat)}<span>${esc(ALMACENAJE_CATEGORIA_DESC[cat] || '')}</span></div>
+      ${lineas.map(t => {
+        const detalle = [`desde ${fmtDateDMY(t.fecha)}`, almacenajeMinimoTxt(t), t.observaciones].filter(Boolean).map(esc).join(' · ');
+        return `
+        <div class="alm-tl">
+          <div class="alm-tl-n">${esc(almacenajeEtiqueta(t))}<small>${detalle}</small></div>
+          <div class="alm-tl-p">${esc(eurPrecio(t.precio))} <small>${esc(almacenajeUnidadTxt(t.tipo, t.base))}</small></div>
+          <button type="button" class="tl-chg alm-tl-chg" onclick="openAlmacenajeCambioPrecio('${t.id}')" title="El precio nuevo vale desde una fecha; el actual pasa al histórico">Cambiar precio</button>
+        </div>`;
+      }).join('')}`;
+  };
+  const sueltas = vigentes.filter(t => !ALMACENAJE_CATEGORIAS[t.categoria]);   // por si alguna línea tuviera una actividad desconocida
   return `
     <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:20px;">
       ${decaCardHead('file', `Tarifa de almacenaje (${vigentes.length})`, 'Lo pactado con este cliente por almacenaje y movimientos. Puede combinar varios tipos a la vez.', vigentes.length
         ? decaAccion('edit', 'Editar tarifa', `openAlmacenajeTarifaEditar('${c.id}')`, 'Corregir las líneas, quitar las que sobren o añadir otras')
         : decaAccion('add', 'Añadir tarifa', `openAlmacenajeTarifaForm('${c.id}')`))}
       ${vigentes.length ? `
-      <div style="overflow-x:auto;">
-      <table class="tf-table">
-        <thead><tr>${thSort('Vigente desde','date')}${thSort('Actividad','text')}${thSort('Tipo','text')}${thSort('Precio','number','style="text-align:right;"')}${thSort('Observaciones','text')}<th style="width:120px;"></th></tr></thead>
-        <tbody>
-          ${vigentes.map(t => `
-            <tr>
-              <td style="white-space:nowrap;" data-sort-value="${esc(t.fecha)}">${fmtDateDMY(t.fecha)}</td>
-              <td data-sort-value="${esc(almacenajeCategoriaLabel(t.categoria))}">${almacenajeCategoriaBadgeHtml(t.categoria)}</td>
-              <td data-sort-value="${esc(almacenajeEtiqueta(t))}">${esc(almacenajeEtiqueta(t))}</td>
-              <td class="tf-precio" data-sort-value="${t.precio}">${almacenajePrecioCeldaHtml(t)}</td>
-              <td style="color:var(--muted);" data-sort-value="${esc(t.observaciones)}">${t.observaciones ? esc(t.observaciones) : '—'}</td>
-              <td style="text-align:right;white-space:nowrap;"><button type="button" class="tl-chg" onclick="openAlmacenajeCambioPrecio('${t.id}')" title="El precio nuevo vale desde una fecha; el actual pasa al histórico">Cambiar precio</button></td>
-            </tr>`).join('')}
-        </tbody>
-      </table>
+      <div class="alm-tarifa">
+        ${Object.keys(ALMACENAJE_CATEGORIAS).map(grupo).join('')}
+        ${sueltas.length ? grupo(sueltas[0].categoria) : ''}
       </div>` : `<div style="color:var(--mutedFaint);font-size:12.5px;padding:18px;">Este cliente todavía no tiene tarifa de almacenaje. Créala con «+ Añadir tarifa».</div>`}
+      ${tplAlmacenajeHistoricoDetalle(todas.filter(t=>!t.vigente).sort(almacenajeOrdenDefecto))}
     </div>`;
 }
-function tplAlmacenajeTarifasHistoricasCard(c){
-  const historicas = almacenajePeriodos(almacenajeTarifas.filter(t=>t.clienteId===c.id)).filter(t=>!t.vigente).sort(almacenajeOrdenDefecto);
+// Histórico de la tarifa (líneas que ya cambiaron de precio): plegado, dentro de la tarjeta de la tarifa.
+function tplAlmacenajeHistoricoDetalle(historicas){
   if (!historicas.length) return '';
   return `
-    <div class="card deca-card" style="--dc-accent:#5C6670;margin-top:20px;">
-      ${decaCardHead('clock', `Histórico de almacenaje (${historicas.length})`, 'Las líneas que ya cambiaron de precio, con las fechas en que estuvieron vigentes')}
+    <details class="alm-hist">
+      <summary>Ver histórico (${historicas.length})<span>Las líneas que ya cambiaron de precio, con las fechas en que estuvieron vigentes</span></summary>
       <div style="overflow-x:auto;">
       <table class="tf-table tf-hist">
         <thead><tr>${thSort('Vigente del','date')}${thSort('Hasta','date')}${thSort('Actividad','text')}${thSort('Tipo','text')}${thSort('Precio','number','style="text-align:right;"')}<th style="width:44px;"></th></tr></thead>
@@ -13968,8 +13992,10 @@ function tplAlmacenajeTarifasHistoricasCard(c){
         </tbody>
       </table>
       </div>
-    </div>`;
+    </details>`;
 }
+// El histórico ya va dentro de la tarjeta de la tarifa (tplAlmacenajeHistoricoDetalle).
+function tplAlmacenajeTarifasHistoricasCard(c){ return ''; }
 /* ---- Historial de cambios de tarifas (ficha del cliente en Comercial) ----
    Cada alta, cambio o baja de una tarifa queda anotado en el historial del cliente
    como "Tarifa · ha cambiado …" (con quién lo hizo y cuándo). En Comercial solo se
