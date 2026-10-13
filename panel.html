@@ -384,6 +384,20 @@
   .tc-pl.tc-more{color:var(--muted);}
   .alm-box{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--panel);}
   .tc-body .tc-bar{margin-bottom:10px;}
+  /* Órdenes de carga: filtros y filtros guardados */
+  .ocf-panel{position:absolute;top:calc(100% + 8px);right:0;z-index:35;width:min(520px,86vw);padding:14px;border-radius:12px;background:var(--panel);border:1px solid var(--border);box-shadow:0 12px 32px rgba(0,0,0,.18);}
+  .ocf-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;}
+  .ocf-pie{display:flex;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border);flex-wrap:wrap;}
+  .ocf-chips{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-4px 2px 12px;}
+  .ocf-chip{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;background:var(--panel);overflow:hidden;}
+  .ocf-chip button{border:none;background:none;font-family:var(--body);font-size:12.5px;color:var(--text);cursor:pointer;padding:5px 10px;}
+  .ocf-chip button:hover{background:var(--panel2);}
+  .ocf-chip .ocf-x{padding:5px 8px;color:var(--mutedFaint);font-size:11px;border-left:1px solid var(--border);}
+  .ocf-chip .ocf-x:hover{color:var(--danger);}
+  .ocf-chip.on{border-color:var(--primary);background:var(--primary);}
+  .ocf-chip.on button{color:#fff;}
+  .ocf-chip.on button:hover{background:rgba(255,255,255,.14);}
+  .ocf-chip.on .ocf-x{border-left-color:rgba(255,255,255,.35);color:#fff;}
   .tl-min,.tl-obs{font-size:11.5px;color:var(--muted);}
   .tl-since{font-size:11px;color:var(--mutedFaint);margin-top:3px;}
   .tl-chg{align-self:flex-start;margin-top:6px;padding:0;border:none;background:none;color:var(--primary);font-size:11.5px;font-weight:600;cursor:pointer;font-family:var(--body);}
@@ -11893,7 +11907,7 @@ function traficoEnterSection(id){
   window.__direccionFormDirty = false;
   window.__traficoSection = id;
   window.__traficoView = id === 'deca' ? 'deca' : 'home';
-  window.__ocView = 'list'; window.__ocFormDirty = false; window.__ocSearch = ''; window.__tcfgDirty = false;
+  window.__ocView = 'list'; window.__ocFormDirty = false; window.__ocSearch = ''; window.__ocFiltroAv = {}; window.__ocFiltroActivo = null; window.__tcfgDirty = false;
   window.__decaMenuOpen = null;
   if (id === 'direcciones') {
     window.__administracionView = 'direcciones';
@@ -11980,6 +11994,149 @@ function ocPuntoCodigo(p){
 
 /* ---- Listado ---- */
 function ocFiltro(){ return ['emitida', 'anulada'].includes(window.__ocFiltro) ? window.__ocFiltro : 'todas'; }
+/* ---- Filtros de la lista de órdenes ----
+   Junto a Todas / Emitidas / Anuladas: «Filtros» abre un panel para filtrar las órdenes ya creadas (transportista, carga,
+   descarga, referencia, fechas, precio, DeCA). Un filtro se puede guardar con nombre y aparece como botón debajo de la barra
+   para aplicarlo con un clic. Los guardados están en la tabla oc_filtros (los ve todo el que tiene Transporte). */
+const OC_FILTRO_VACIO = { transportista: '', carga: '', descarga: '', ref: '', desde: '', hasta: '', precioMin: '', precioMax: '', deca: '' };
+let ocFiltrosGuardados = [];
+async function loadOcFiltros(){
+  const { data, error } = await supabaseClient.from('oc_filtros').select('*').order('nombre', { ascending: true });
+  ocFiltrosGuardados = error ? [] : (data || []).map(r => ({ id: r.id, nombre: r.nombre, filtro: (r.filtro && typeof r.filtro === 'object') ? r.filtro : {}, createdBy: r.created_by || '' }));
+}
+function ocFiltroAv(){ return Object.assign({}, OC_FILTRO_VACIO, window.__ocFiltroAv || {}); }
+function ocFiltroAvCount(){ const F = ocFiltroAv(); return Object.keys(OC_FILTRO_VACIO).filter(k => String(F[k] || '').trim() !== '').length; }
+function ocCumpleFiltro(o, F){
+  const low = s => String(s || '').trim().toLowerCase();
+  const sinEsp = s => low(s).replace(/\s+/g, '');
+  const textoPuntos = ps => ps.map(p => sinEsp([p.empresa, p.poblacion, p.cp, p.pais, p.direccion, ocPuntoCodigo(p)].join(' '))).join('|');
+  if (low(F.transportista) && !low(o.transportistaNombre).includes(low(F.transportista))) return false;
+  if (low(F.ref) && !low(o.refFacturacion).includes(low(F.ref))) return false;
+  if (sinEsp(F.carga) && !textoPuntos(o.cargas).includes(sinEsp(F.carga))) return false;
+  if (sinEsp(F.descarga) && !textoPuntos(o.descargas).includes(sinEsp(F.descarga))) return false;
+  if (F.desde && !(o.fechaPedido >= F.desde)) return false;
+  if (F.hasta && !(o.fechaPedido <= F.hasta)) return false;
+  const num = s => { const t = String(s || '').trim().replace(',', '.'); return t === '' ? null : Number(t); };
+  const pmin = num(F.precioMin), pmax = num(F.precioMax);
+  if (pmin !== null && isFinite(pmin) && !(o.precio != null && o.precio >= pmin)) return false;
+  if (pmax !== null && isFinite(pmax) && !(o.precio != null && o.precio <= pmax)) return false;
+  if (F.deca === 'con' && !o.decaId) return false;
+  if (F.deca === 'sin' && o.decaId) return false;
+  return true;
+}
+function ocFiltrosBotonTxt(){ const n = ocFiltroAvCount(); return `Filtros${n ? ` (${n})` : ''} ▾`; }
+// Los botones de los filtros guardados (debajo de la barra).
+function ocFiltrosChipsHtml(){
+  if (!ocFiltrosGuardados.length) return '';
+  const activo = window.__ocFiltroActivo || null;
+  return `
+    <span style="font-size:12px;color:var(--muted);">Filtros guardados:</span>
+    ${ocFiltrosGuardados.map(g => `
+      <span class="ocf-chip${g.id === activo ? ' on' : ''}">
+        <button type="button" onclick="ocFiltroAplicarGuardado('${g.id}')" title="Aplicar este filtro">${esc(g.nombre)}</button>
+        <button type="button" class="ocf-x" onclick="ocFiltroEliminar('${g.id}')" title="Eliminar este filtro guardado">✕</button>
+      </span>`).join('')}`;
+}
+function ocFiltrosPanelHtml(){
+  const F = ocFiltroAv();
+  const nombres = [...new Set(ordenesCarga.map(o => o.transportistaNombre).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
+  const campo = (k, label, ph, extra) => `<div class="field" style="margin-bottom:0;"><label>${label}</label><input id="ocf-${k}" value="${esc(F[k] || '')}" placeholder="${ph || ''}" oninput="ocFiltroSet('${k}', this.value)" ${extra || ''} /></div>`;
+  const fecha = (k, label) => `<div class="field" style="margin-bottom:0;"><label>${label}</label><input id="ocf-${k}" type="date" value="${esc(F[k] || '')}" onchange="ocFiltroSet('${k}', this.value)" /></div>`;
+  return `
+    <div class="ocf-grid">
+      <div class="field" style="margin-bottom:0;grid-column:1 / -1;"><label>Transportista</label>
+        <input id="ocf-transportista" list="ocf-transportistas" value="${esc(F.transportista || '')}" placeholder="Nombre o parte del nombre" oninput="ocFiltroSet('transportista', this.value)" />
+        <datalist id="ocf-transportistas">${nombres.map(n => `<option value="${esc(n)}">`).join('')}</datalist></div>
+      ${campo('carga', 'Carga', 'ES08650, Sallent, empresa…')}
+      ${campo('descarga', 'Descarga', 'FR69001, Lyon, empresa…')}
+      ${campo('ref', 'Ref. facturación', 'S12284')}
+      <div class="field" style="margin-bottom:0;"><label>DeCA</label>
+        <select id="ocf-deca" onchange="ocFiltroSet('deca', this.value)">
+          <option value=""${F.deca ? '' : ' selected'}>Todas</option>
+          <option value="con"${F.deca === 'con' ? ' selected' : ''}>Con DeCA</option>
+          <option value="sin"${F.deca === 'sin' ? ' selected' : ''}>Sin DeCA</option>
+        </select></div>
+      ${fecha('desde', 'Fecha del pedido desde')}${fecha('hasta', 'hasta')}
+      ${campo('precioMin', 'Precio desde (€)', '0', 'inputmode="decimal"')}${campo('precioMax', 'Precio hasta (€)', '', 'inputmode="decimal"')}
+    </div>
+    <div class="ocf-pie">
+      <button type="button" class="btn btn-ghost" onclick="ocFiltroLimpiar()">Limpiar</button>
+      <span style="flex:1;"></span>
+      <div id="ocf-guardar" style="display:none;gap:8px;align-items:center;">
+        <input id="ocf-nombre" maxlength="60" placeholder="Nombre del filtro" style="width:190px;" onkeydown="if(event.key==='Enter'){ event.preventDefault(); ocFiltroGuardar(); }" />
+        <button type="button" class="btn btn-primary" onclick="ocFiltroGuardar()">Guardar</button>
+      </div>
+      <button type="button" class="btn btn-ghost" id="ocf-guardar-btn" onclick="ocFiltroGuardarAbrir()">Guardar este filtro…</button>
+    </div>`;
+}
+function ocFiltrosToggle(ev){
+  if (ev) ev.stopPropagation();
+  const p = document.getElementById('ocf-panel');
+  if (p) p.style.display = p.style.display === 'none' || !p.style.display ? 'block' : 'none';
+}
+document.addEventListener('click', ev => {
+  const p = document.getElementById('ocf-panel');
+  if (p && p.style.display === 'block' && !p.contains(ev.target)) p.style.display = 'none';
+});
+function ocFiltrosRefrescar(){
+  const b = document.getElementById('ocf-btn'); if (b) b.textContent = ocFiltrosBotonTxt();
+  const c = document.getElementById('ocf-chips'); if (c) { c.innerHTML = ocFiltrosChipsHtml(); c.style.display = ocFiltrosGuardados.length ? '' : 'none'; }
+  refreshOcListBody();
+}
+function ocFiltroSet(k, v){
+  window.__ocFiltroAv = Object.assign(ocFiltroAv(), { [k]: v });
+  window.__ocFiltroActivo = null;
+  ocFiltrosRefrescar();
+}
+function ocFiltroLimpiar(){
+  window.__ocFiltroAv = {};
+  window.__ocFiltroActivo = null;
+  renderTab();
+}
+function ocFiltroGuardarAbrir(){
+  if (!ocFiltroAvCount() && ocFiltro() === 'todas') { appToast('Primero elige algún filtro para poder guardarlo.', 'info'); return; }
+  const g = document.getElementById('ocf-guardar'), b = document.getElementById('ocf-guardar-btn');
+  if (g) g.style.display = 'flex';
+  if (b) b.style.display = 'none';
+  const n = document.getElementById('ocf-nombre'); if (n) n.focus();
+}
+async function ocFiltroGuardar(){
+  const nombre = ((document.getElementById('ocf-nombre') || {}).value || '').trim();
+  if (!nombre) { appToast('Ponle un nombre al filtro.', 'info'); return; }
+  if (ocFiltrosGuardados.some(g => g.nombre.toLowerCase() === nombre.toLowerCase())) { appToast('Ya hay un filtro con ese nombre.', 'info'); return; }
+  const filtro = Object.assign(ocFiltroAv(), { estado: ocFiltro() });
+  const { data, error } = await supabaseClient.from('oc_filtros').insert({ nombre, filtro, created_by: currentUserEmail() }).select().single();
+  if (error || !data) {
+    appToast('No se pudo guardar: ' + (error && /oc_filtros|does not exist|schema cache/i.test(error.message || '') ? 'falta ejecutar el SQL «Filtros de órdenes de carga» en Supabase.' : (error ? error.message : 'sin permiso.')), 'error');
+    return;
+  }
+  ocFiltrosGuardados.push({ id: data.id, nombre: data.nombre, filtro: data.filtro || filtro, createdBy: data.created_by || '' });
+  ocFiltrosGuardados.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  window.__ocFiltroActivo = data.id;
+  renderTab();
+  appToast(`Filtro «${nombre}» guardado.`, 'ok');
+}
+function ocFiltroAplicarGuardado(id){
+  const g = ocFiltrosGuardados.find(x => x.id === id);
+  if (!g) return;
+  if (window.__ocFiltroActivo === id) { window.__ocFiltroAv = {}; window.__ocFiltroActivo = null; window.__ocFiltro = 'todas'; renderTab(); return; }   // pulsarlo otra vez lo quita
+  const { estado, ...resto } = g.filtro || {};
+  window.__ocFiltroAv = Object.assign({}, resto);
+  window.__ocFiltro = ['emitida', 'anulada'].includes(estado) ? estado : 'todas';
+  window.__ocFiltroActivo = id;
+  renderTab();
+}
+async function ocFiltroEliminar(id){
+  const g = ocFiltrosGuardados.find(x => x.id === id);
+  if (!g) return;
+  if (!(await appConfirm({ title: 'Eliminar filtro', name: g.nombre, message: 'Se elimina el filtro guardado. Las órdenes no se tocan.', confirmLabel: 'Eliminar', tone: 'danger', icon: 'trash' }))) return;
+  const { data, error } = await supabaseClient.from('oc_filtros').delete().eq('id', id).select();
+  if (error || !data || !data.length) { appToast('No se pudo eliminar: ' + (error ? error.message : 'sin permiso.'), 'error'); return; }
+  ocFiltrosGuardados = ocFiltrosGuardados.filter(x => x.id !== id);
+  if (window.__ocFiltroActivo === id) window.__ocFiltroActivo = null;
+  renderTab();
+}
+
 function tplOrdenesCargaPage(){
   const f = ocFiltro();
   const seg = (k, t) => `<button type="button" class="${f === k ? 'on' : ''}" onclick="window.__ocFiltro='${k}'; renderTab();">${t}</button>`;
@@ -12000,17 +12157,23 @@ function tplOrdenesCargaPage(){
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
       <div class="doc-seg">${seg('todas', 'Todas')}${seg('emitida', 'Emitidas')}${seg('anulada', 'Anuladas')}</div>
+      <div style="position:relative;">
+        <button type="button" class="btn btn-ghost" id="ocf-btn" onclick="ocFiltrosToggle(event)" title="Filtrar las órdenes ya creadas">${ocFiltrosBotonTxt()}</button>
+        <div id="ocf-panel" class="ocf-panel" style="display:none;" onclick="event.stopPropagation();">${ocFiltrosPanelHtml()}</div>
+      </div>
     </div>
+    <div id="ocf-chips" class="ocf-chips"${ocFiltrosGuardados.length ? '' : ' style="display:none;"'}>${ocFiltrosChipsHtml()}</div>
     <div id="oc-list-body">${ocListBodyHtml()}</div>`;
 }
 function refreshOcListBody(){ const el = document.getElementById('oc-list-body'); if (el) el.innerHTML = ocListBodyHtml(); }
 function ocListBodyHtml(){
   const q = (window.__ocSearch || '').toLowerCase();
   const f = ocFiltro();
-  const list = ordenesCarga.filter(o => (f === 'todas' || o.estado === f) && (!q || [ocRef(o), o.refFacturacion, o.transportistaNombre, o.matriculaTractora, o.matriculaRemolque, o.mercancia,
+  const FA = ocFiltroAv(), hayFiltro = ocFiltroAvCount() > 0;
+  const list = ordenesCarga.filter(o => (f === 'todas' || o.estado === f) && (!hayFiltro || ocCumpleFiltro(o, FA)) && (!q || [ocRef(o), o.refFacturacion, o.transportistaNombre, o.matriculaTractora, o.matriculaRemolque, o.mercancia,
     ...o.cargas.map(p => [p.empresa, p.poblacion, ocPuntoCodigo(p)].join(' ')), ...o.descargas.map(p => [p.empresa, p.poblacion, ocPuntoCodigo(p)].join(' '))].some(v => String(v || '').toLowerCase().includes(q))));
   if (!list.length) {
-    return `<div class="card deca-table-card"><div class="deca-empty"><span class="ico">${homeIcon(HOME_ICON_PATHS.file, 26, '#C1443D', 1.6)}</span><div style="font-size:14px;color:var(--text);font-weight:600;">${q || f !== 'todas' ? 'Ninguna orden coincide' : 'Todavía no hay ninguna orden de carga'}</div><div style="font-size:12.5px;">${q || f !== 'todas' ? 'Prueba con otra búsqueda o cambia el filtro.' : 'Pulsa «Nueva orden» para crear la primera.'}</div></div></div>`;
+    return `<div class="card deca-table-card"><div class="deca-empty"><span class="ico">${homeIcon(HOME_ICON_PATHS.file, 26, '#C1443D', 1.6)}</span><div style="font-size:14px;color:var(--text);font-weight:600;">${q || f !== 'todas' || hayFiltro ? 'Ninguna orden coincide' : 'Todavía no hay ninguna orden de carga'}</div><div style="font-size:12.5px;">${q || f !== 'todas' || hayFiltro ? 'Prueba con otra búsqueda o cambia los filtros.' : 'Pulsa «Nueva orden» para crear la primera.'}</div></div></div>`;
   }
   const pill = o => o.estado === 'anulada'
     ? `<span class="tc-chip" style="background:color-mix(in srgb,var(--danger) 10%,var(--panel));color:var(--danger);border-color:color-mix(in srgb,var(--danger) 30%,var(--border));" title="${esc(o.anuladoMotivo)}">Anulada</span>`
@@ -19786,7 +19949,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   }
 
   await loadWarehouses();
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadOrdenesCarga(), loadTransporteConfig(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadOperativas(), loadSgaConfig(), loadSgaStock(), loadTransportistaRutas(), loadTransportistaContactos(), loadAlmacenajeTarifas(), loadAlmacenajeProductos()]);
+  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadOrdenesCarga(), loadOcFiltros(), loadTransporteConfig(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadOperativas(), loadSgaConfig(), loadSgaStock(), loadTransportistaRutas(), loadTransportistaContactos(), loadAlmacenajeTarifas(), loadAlmacenajeProductos()]);
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
