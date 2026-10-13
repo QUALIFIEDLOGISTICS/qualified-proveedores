@@ -2574,7 +2574,7 @@ function computeBreadcrumbSegments(){
     }
     return [{label: comercialSection() === 'tarifas' ? 'Tarifas Transporte' : 'Clientes', onclick:null}];
   }
-  if (currentTab === 'stock' && window.__stockView === 'entrada') return [{label:'Control Stock SGA', onclick:'sgaEntradaCancelar()'}, {label:'Nueva entrada', onclick:null}];
+  if (currentTab === 'stock' && window.__stockView === 'entrada') return [{label:'Control Stock SGA', onclick:'sgaEntradaCancelar()'}, {label: window.__seEdit ? 'Editar entrada' : 'Nueva entrada', onclick:null}];
   if (currentTab === 'stock' && (window.__stockView === 'articulo' || window.__stockView === 'rapida')) {
     const pg = window.__stockView === 'articulo' ? window.__sgaArtForm : window.__sgaArtRapida;
     const cl = pg ? contactos.find(x => x.id === pg.clienteId) : null;
@@ -3856,7 +3856,7 @@ function stockBodyHtml(){
           <td data-sort-value="${esc(a.modalidad)}">${a.tipo === 'regularizacion' ? 'Regularización' : a.tipo === 'apertura' ? 'Stock inicial' : esc(SGA_MODALIDADES[a.modalidad] || a.modalidad)}</td>
           <td class="tf-precio" data-sort-value="${Math.abs(sgaMovsAlbaran[a.id] || 0)}">${sgaMovsAlbaran[a.id] == null ? '—' : a.tipo === 'regularizacion' ? (sgaMovsAlbaran[a.id] > 0 ? '+' : '') + sgaMovsAlbaran[a.id] : Math.abs(sgaMovsAlbaran[a.id])}</td>
           <td data-sort-value="${esc(a.estado)}"${a.estado === 'anulado' ? ` title="${esc(a.anuladoMotivo)}" style="color:var(--danger);"` : ''}>${a.estado === 'confirmado' ? 'Confirmada' : a.estado === 'anulado' ? 'Anulada' : 'Borrador'}</td>
-          <td style="text-align:right;white-space:nowrap;">${a.estado === 'confirmado' && a.tipo === 'salida' ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="sgaAlbaranImprimir('${a.id}')" title="Imprimir el albarán o guardarlo en PDF">Albarán</button>` : ''} ${a.estado === 'confirmado' && a.tipo === 'salida' && sgaPuedeEditarStock() ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="sgaSalidaEditar('${a.id}')" title="Cambiar esta salida: al guardar se recalcula todo">Editar</button>` : ''} ${a.estado === 'confirmado' && a.tipo !== 'regularizacion' && sgaPuedeEditarStock() ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:var(--danger);" onclick="sgaAnularAbrir('${a.id}')">Anular</button>` : ''}</td>
+          <td style="text-align:right;white-space:nowrap;">${a.estado === 'confirmado' && a.tipo === 'salida' ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="sgaAlbaranImprimir('${a.id}')" title="Imprimir el albarán o guardarlo en PDF">Albarán</button>` : ''} ${a.estado === 'confirmado' && (a.tipo === 'salida' || a.tipo === 'entrada') && sgaPuedeEditarStock() ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="${a.tipo === 'salida' ? 'sgaSalidaEditar' : 'sgaEntradaEditar'}('${a.id}')" title="Cambiar esta ${a.tipo}: al guardar se recalcula todo">Editar</button>` : ''} ${a.estado === 'confirmado' && a.tipo !== 'regularizacion' && sgaPuedeEditarStock() ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:var(--danger);" onclick="sgaAnularAbrir('${a.id}')">Anular</button>` : ''}</td>
         </tr>`; }).join('')}</tbody></table></div>`;
   }
   const porCliente = {};
@@ -4337,6 +4337,7 @@ function tplStock(){
     </div>`;
 }
 function stockVolver(){
+  window.__seEdit = null;
   if (window.__slEdit) { window.__slEdit = null; loadSgaStock().then(() => { if (currentTab === 'stock') renderTab(); }); }
   window.__stockView = 'home';
   window.__stockDirty = false;
@@ -4475,7 +4476,7 @@ function sgaEntradaFilaHtml(i, cfg, pre){
     return cell(`<input id="se-${i}-${f.id}" ${num ? 'inputmode="decimal"' : ''} maxlength="80" placeholder="${ph}" value="${esc(pre[f.id] || '')}" />`, num ? 100 : 130);
   };
   return `
-    <tr class="se-row" data-i="${i}">
+    <tr class="se-row" data-i="${i}"${pre.pid ? ` data-pid="${pre.pid}" data-cons="${pre.cons || 0}"` : ''}>
       <td style="padding:5px 4px;color:var(--mutedFaint);font-size:12px;text-align:right;width:26px;">${i + 1}</td>
       ${conArt ? cell(`<select id="se-${i}-art" onchange="sgaEntradaArticuloCambio(${i})">${sgaArticuloOptionsHtml(clienteId, pre.art || '')}</select>`, 230) : ''}
       ${cell(`<select id="se-${i}-prod">${sgaProdOptionsHtml(clienteId, pre.prod || '')}</select>`, 190)}
@@ -4486,7 +4487,7 @@ function sgaEntradaFilaHtml(i, cfg, pre){
       ${cell(`<select id="se-${i}-zona" onchange="sgaEntradaZonaCambio(${i})">${sgaZonaOptionsHtml(pre.zona || '')}</select>`, 170)}
       ${cell(`<select id="se-${i}-ubic" onchange="sgaEntradaUbicCambio()">${sgaUbicOptionsHtml(pre.zona || "", pre.ubic || "", i)}</select>`, 120)}
       ${campos.map(campoInput).join('')}
-      <td style="padding:5px 0 5px 4px;"><button type="button" onclick="sgaEntradaQuitarFila(${i})" title="Quitar la línea" style="background:none;border:none;color:var(--mutedFaint);font-size:15px;">✕</button></td>
+      <td style="padding:5px 0 5px 4px;">${pre.cons > 0 ? `<span title="Ya han salido ${pre.cons} palet${pre.cons === 1 ? '' : 's'} de esta línea: no se puede quitar ni dejar con menos" style="color:var(--mutedFaint);font-size:12px;white-space:nowrap;">salieron ${pre.cons}</span>` : ''}<button type="button"${pre.cons > 0 ? ' disabled style="display:none;"' : ''} onclick="sgaEntradaQuitarFila(${i})" title="Quitar la línea" style="background:none;border:none;color:var(--mutedFaint);font-size:15px;">✕</button></td>
     </tr>`;
 }
 // Al elegir el artículo se rellenan solos su tipo de carga, su zona habitual y los bultos.
@@ -4738,7 +4739,7 @@ function sgaEntradaLeer(){
   const val = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
   const lineas = [...document.querySelectorAll('.se-row')].map(tr => {
     const i = tr.dataset.i;
-    const l = { i: Number(i), productoId: val(`se-${i}-prod`), zonaId: val(`se-${i}-zona`), ubicacionId: val(`se-${i}-ubic`), codigo: val(`se-${i}-codigo`), cantidadTxt: val(`se-${i}-cant`), articuloId: val(`se-${i}-art`), bultosTxt: val(`se-${i}-bultos`) };
+    const l = { i: Number(i), pid: tr.dataset.pid || '', cons: Number(tr.dataset.cons || 0), productoId: val(`se-${i}-prod`), zonaId: val(`se-${i}-zona`), ubicacionId: val(`se-${i}-ubic`), codigo: val(`se-${i}-codigo`), cantidadTxt: val(`se-${i}-cant`), articuloId: val(`se-${i}-art`), bultosTxt: val(`se-${i}-bultos`) };
     sgaCamposEntrada().forEach(f => { l[f.id] = val(`se-${i}-${f.id}`); });
     return l;
   });
@@ -4774,6 +4775,68 @@ function sgaEntradaAbrir(){
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
 }
+/* ---- Editar una entrada ya confirmada ----
+   Se abre el mismo formulario de la entrada con todo rellenado (una línea por cada partida). Al guardar, sga_editar_entrada actualiza
+   las líneas en su sitio y rehace servicios y cobros. De una línea de la que ya ha salido mercancía no se pueden quitar palets
+   de más ni borrarla. */
+async function sgaEntradaEditar(id){
+  const a = sgaAlbaranes.find(x => x.id === id);
+  if (!a || a.tipo !== 'entrada' || a.estado !== 'confirmado') return;
+  const [p, s] = await Promise.all([
+    supabaseClient.from('sga_partidas').select('*').eq('albaran_entrada_id', id).order('created_at', { ascending: true }),
+    supabaseClient.from('sga_servicios').select('producto_id,cantidad,nota').eq('albaran_id', id),
+  ]);
+  if (p.error || !(p.data || []).length) { appToast('No se pudo abrir la entrada' + (p.error ? ': ' + p.error.message : '.'), 'error'); return; }
+  window.__seEdit = { id, albaran: a, partidas: p.data.map(sgaPartidaDeFila), servicios: s.data || [] };
+  window.__stockView = 'entrada';
+  window.__stockDirty = false;
+  renderHeader(); renderTab();
+  sgaEntradaRellenar();
+  window.scrollTo(0, 0);
+}
+function sgaEntradaRellenar(){
+  const e = window.__seEdit;
+  if (!e) return;
+  const a = e.albaran;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v == null ? '' : v; };
+  const cli = document.getElementById('se-cliente');
+  if (cli) {
+    if (![...cli.options].some(o => o.value === a.clienteId)) {
+      const c = contactos.find(x => x.id === a.clienteId);
+      cli.insertAdjacentHTML('beforeend', `<option value="${a.clienteId}">${esc(c ? ((c.nombreComercial || '').trim() || c.nombre) : '—')}</option>`);
+    }
+    cli.value = a.clienteId;
+    cli.disabled = true;   // el cliente de una entrada no se cambia
+  }
+  sgaEntradaClienteCambio();   // prepara el formulario del cliente (con una línea vacía)
+  const alm = document.getElementById('se-almacen');
+  if (alm) {
+    if (![...alm.options].some(o => o.value === a.warehouseId)) alm.insertAdjacentHTML('beforeend', `<option value="${a.warehouseId}">${esc(whNombre(a.warehouseId))}</option>`);
+    alm.value = a.warehouseId;
+    if (e.partidas.some(p => p.actual !== p.inicial)) alm.disabled = true;   // ya ha salido mercancía: el almacén se queda
+  }
+  set('se-fecha', a.fecha); set('se-ref', a.referencia); set('se-transp', a.transportista); set('se-matr', a.matricula); set('se-obs', a.observaciones);
+  if (a.modalidad && document.getElementById('se-mod')) sgaEntradaModalidad(a.modalidad);
+  // una línea por cada partida de la entrada (se sustituye la línea vacía)
+  const cont = document.getElementById('se-rows');
+  if (cont) cont.innerHTML = '';
+  window.__stockN = 0;
+  const cfg = sgaClienteCfg(a.clienteId);
+  const conArt = sgaClienteConArticulos(a.clienteId);
+  const num = v => (v == null ? '' : String(v).replace('.', ','));
+  e.partidas.forEach(p => {
+    const pre = { pid: p.id, cons: Math.max(0, p.inicial - p.actual), prod: p.productoId, zona: p.zonaId || '', ubic: p.ubicacionId || '', art: p.articuloId || '',
+      codigo: p.codigo || '', cant: String(p.inicial), bultos: num(p.bultos) };
+    if (!conArt) sgaCamposActivos(cfg).forEach(f => { pre[f.id] = SGA_CAMPOS_COLUMNA.includes(f.id) ? (p[f.id] || '') : num((p.atributos || {})[f.id]); });
+    sgaEntradaAddFila(pre);
+  });
+  (e.servicios || []).forEach(s => {
+    const j = (window.__stockJ = (window.__stockJ || 0) + 1);
+    document.getElementById('se-servicios').insertAdjacentHTML('beforeend', sgaServicioFilaHtml(j, { prod: s.producto_id, cant: String(s.cantidad).replace('.', ','), nota: s.nota || '' }));
+  });
+  window.__stockDirty = false;
+  sgaEntradaRefrescar();
+}
 async function sgaEntradaCancelar(){
   if (window.__stockDirty && !(await appConfirm({ title: 'Descartar la entrada', message: 'Has empezado a rellenar esta entrada. Si sales, se pierde lo escrito.', confirmLabel: 'Descartar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
   stockVolver();
@@ -4788,8 +4851,8 @@ function tplStockEntradaPage(){
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
-        <div class="deca-banner-title">Nueva entrada</div>
-        <div class="deca-banner-sub">La mercancía que llega a un cliente; eliges en cuál de sus almacenes se queda.</div>
+        <div class="deca-banner-title">${window.__seEdit ? 'Editar entrada ' + esc(sgaNumAlbaran(window.__seEdit.albaran)) : 'Nueva entrada'}</div>
+        <div class="deca-banner-sub">${window.__seEdit ? 'Cambia lo que necesites: al guardar se recalculan el stock y lo que se cobra. De una línea de la que ya ha salido mercancía no se pueden quitar palets de más.' : 'La mercancía que llega a un cliente; eliges en cuál de sus almacenes se queda.'}</div>
       </div>
     </div>
     <div class="deca-form" oninput="window.__stockDirty=true; sgaEntradaRefrescar();" onchange="sgaEntradaRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
@@ -4841,7 +4904,7 @@ function tplStockEntradaPage(){
       <div id="se-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
       <div class="deca-actions-row">
         <button class="btn btn-ghost deca-cancel" onclick="sgaEntradaCancelar()">Cancelar</button>
-        <button class="btn btn-primary deca-submit se-save" onclick="sgaEntradaConfirmar()">Confirmar entrada</button>
+        <button class="btn btn-primary deca-submit se-save" onclick="sgaEntradaConfirmar()">${window.__seEdit ? 'Guardar cambios' : 'Confirmar entrada'}</button>
       </div>
     </div>
     </div>`;
@@ -4860,7 +4923,9 @@ async function sgaEntradaConfirmar(){
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const hayZonas = sgaZonasActivas().length > 0;
   const partidas = [];
-  const codigos = new Set(sgaPartidas.filter(p => p.clienteId === d.clienteId && p.codigo).map(p => p.codigo.toLowerCase()));
+  const editando = window.__seEdit || null;
+  const propios = new Set(editando ? editando.partidas.map(p => p.id) : []);   // las partidas de esta misma entrada no cuentan como «ya existentes»
+  const codigos = new Set(sgaPartidas.filter(p => p.clienteId === d.clienteId && p.codigo && !propios.has(p.id)).map(p => p.codigo.toLowerCase()));
   const vistos = new Set();
   const ubicsUsadas = new Set();
   d.lineas.forEach((l, n) => {
@@ -4879,13 +4944,14 @@ async function sgaEntradaConfirmar(){
     } else {
       cantidad = parseInt(l.cantidadTxt, 10);
       if (!isFinite(cantidad) || cantidad < 1 || String(cantidad) !== l.cantidadTxt) { errores.push(`${f}: indica cuántos palets (un número entero).`); return; }
+      if (l.cons && cantidad < l.cons) { errores.push(`${f}: ya han salido ${l.cons} palets de esta línea, no puede quedar con menos.`); return; }
     }
     if (hayZonas && !l.zonaId) { errores.push(`${f}: elige la zona.`); return; }
     const z = sgaZonaDe(l.zonaId);
     if (z && z.tipo === 'estanteria' && !l.ubicacionId) { errores.push(`${f}: elige la ubicación (la zona es de estantería).`); return; }
     if (l.ubicacionId) {
       if (ubicsUsadas.has(l.ubicacionId)) { errores.push(`${f}: esa ubicación está repetida en esta entrada.`); return; }
-      if (sgaPartidas.some(p => p.actual > 0 && p.ubicacionId === l.ubicacionId)) { errores.push(`${f}: esa ubicación ya está ocupada.`); return; }
+      if (sgaPartidas.some(p => p.actual > 0 && p.ubicacionId === l.ubicacionId && !propios.has(p.id))) { errores.push(`${f}: esa ubicación ya está ocupada.`); return; }
       ubicsUsadas.add(l.ubicacionId);
     }
     for (const c of sgaCamposEntrada()) {
@@ -4899,7 +4965,7 @@ async function sgaEntradaConfirmar(){
     const art = sgaArticulos.find(x => x.id === l.articuloId);
     const bTxt = sgaNumero(l.bultosTxt);
     const bultos = isFinite(bTxt) && bTxt > 0 ? bTxt : (art && sgaClienteConBultos(d.clienteId) ? Math.round(cantidad * art.bultos * 100) / 100 : null);
-    partidas.push({ producto_id: l.productoId, zona_id: l.zonaId || '', ubicacion_id: l.ubicacionId || '', referencia: art ? art.referencia : (l.referencia || ''), descripcion: art ? art.nombre : (l.descripcion || ''), lote: l.lote || '', codigo: cfg.codigosUnicos ? l.codigo : '', cantidad, atributos, articulo_id: art ? art.id : '', bultos });
+    partidas.push({ id: l.pid || '', producto_id: l.productoId, zona_id: l.zonaId || '', ubicacion_id: l.ubicacionId || '', referencia: art ? art.referencia : (l.referencia || ''), descripcion: art ? art.nombre : (l.descripcion || ''), lote: l.lote || '', codigo: cfg.codigosUnicos ? l.codigo : '', cantidad, atributos, articulo_id: art ? art.id : '', bultos });
   });
   const servicios = [];
   d.servicios.forEach((s, n) => {
@@ -4916,15 +4982,26 @@ async function sgaEntradaConfirmar(){
     albaran: { created_by: currentUserEmail(), tipo: 'entrada', cliente_id: d.clienteId, warehouse_id: sgaEntradaWh(), fecha: d.fecha, referencia: d.referencia, modalidad: d.modalidad, transportista: d.transportista, matricula: d.matricula, observaciones: d.observaciones },
     partidas, servicios, cobros: calc.activo ? calc.cobros : [],
   };
-  const { data, error } = await supabaseClient.rpc('sga_confirmar_entrada', { p: payload });
+  const editE = window.__seEdit;
+  const { data, error } = editE
+    ? await supabaseClient.rpc('sga_editar_entrada', { p_id: editE.id, p: payload })
+    : await supabaseClient.rpc('sga_confirmar_entrada', { p: payload });
   if (error) {
     const m = error.message || 'error desconocido.';
-    errEl.textContent = 'No se pudo guardar: ' + (/sga_partidas_codigo_unico|duplicate key/i.test(m) ? 'hay un código de palet repetido para este cliente.' : /function .*sga_confirmar_entrada|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL de «confirmar entrada» en Supabase.' : m);
+    errEl.textContent = 'No se pudo guardar: ' + (/sga_partidas_codigo_unico|duplicate key/i.test(m) ? 'hay un código de palet repetido para este cliente.' : /function .*sga_editar_entrada/i.test(m) ? 'falta ejecutar el SQL de «editar entrada» en Supabase.' : /function .*sga_confirmar_entrada|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL de «confirmar entrada» en Supabase.' : m);
     if (btn) btn.disabled = false;
     return;
   }
   await loadSgaStock();
   const total = partidas.reduce((s, p) => s + p.cantidad, 0);
+  if (editE) {
+    window.__seEdit = null;
+    await logContactoHistorial(d.clienteId, `SGA · ha editado la entrada ${sgaNumAlbaran(editE.albaran)}: ahora ${total} palet${total !== 1 ? 's' : ''} el ${fmtDateDMY(d.fecha)}${d.referencia ? ', ref. ' + d.referencia : ''}. Stock y cobros recalculados.`);
+    appToast(`Entrada ${sgaNumAlbaran(editE.albaran)} actualizada: stock y cobros recalculados.`, 'ok');
+    window.__stockSeg = 'entradas';
+    stockVolver();
+    return;
+  }
   await logContactoHistorial(d.clienteId, `SGA · ha registrado una entrada de ${total} palet${total !== 1 ? 's' : ''} (${SGA_MODALIDADES[d.modalidad]}) el ${fmtDateDMY(d.fecha)}${d.referencia ? ', ref. ' + d.referencia : ''}.`);
   appToast(`Entrada registrada: ${total} palet${total !== 1 ? 's' : ''}.`, 'ok');
   window.__stockSeg = 'entradas';
