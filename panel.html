@@ -395,6 +395,9 @@
   .oc-chips button.on{background:var(--primary);border-color:var(--primary);color:#fff;}
   #oc-servicio-grp button{min-width:78px;}
   .oc-margen{align-self:flex-end;font-size:13px;color:var(--muted);padding-bottom:10px;}
+  .oc-tag{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:.2px;vertical-align:1px;}
+  .oc-tag.pdf{background:color-mix(in srgb,var(--primary) 12%,var(--panel));color:var(--primary);}
+  .oc-tag.int{background:color-mix(in srgb,#7C5CBF 14%,var(--panel));color:#6B4BB0;}
   /* Órdenes de carga: filtros y filtros guardados */
   .ocf-panel{position:absolute;top:calc(100% + 8px);right:0;z-index:35;width:min(520px,86vw);padding:14px;border-radius:12px;background:var(--panel);border:1px solid var(--border);box-shadow:0 12px 32px rgba(0,0,0,.18);}
   .ocf-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;}
@@ -12013,7 +12016,7 @@ function ocFiltro(){ return ['emitida', 'anulada'].includes(window.__ocFiltro) ?
    Junto a Todas / Emitidas / Anuladas: «Filtros» abre un panel para filtrar las órdenes ya creadas (transportista, carga,
    descarga, referencia, fechas, precio, DeCA). Un filtro se puede guardar con nombre y aparece como botón debajo de la barra
    para aplicarlo con un clic. Los guardados están en la tabla oc_filtros (los ve todo el que tiene Transporte). */
-const OC_FILTRO_VACIO = { transportista: '', cliente: '', servicio: '', carga: '', descarga: '', ref: '', desde: '', hasta: '', precioMin: '', precioMax: '', deca: '' };
+const OC_FILTRO_VACIO = { transportista: '', cliente: '', servicio: '', carga: '', descarga: '', ref: '', desde: '', hasta: '', precioMin: '', precioMax: '', cobroMin: '', cobroMax: '', deca: '' };
 let ocFiltrosGuardados = [];
 async function loadOcFiltros(){
   const { data, error } = await supabaseClient.from('oc_filtros').select('*').order('nombre', { ascending: true });
@@ -12037,6 +12040,9 @@ function ocCumpleFiltro(o, F){
   const pmin = num(F.precioMin), pmax = num(F.precioMax);
   if (pmin !== null && isFinite(pmin) && !(o.precio != null && o.precio >= pmin)) return false;
   if (pmax !== null && isFinite(pmax) && !(o.precio != null && o.precio <= pmax)) return false;
+  const cmin = num(F.cobroMin), cmax = num(F.cobroMax);
+  if (cmin !== null && isFinite(cmin) && !(o.precioCliente != null && o.precioCliente >= cmin)) return false;
+  if (cmax !== null && isFinite(cmax) && !(o.precioCliente != null && o.precioCliente <= cmax)) return false;
   if (F.deca === 'con' && !o.decaId) return false;
   if (F.deca === 'sin' && o.decaId) return false;
   return true;
@@ -12081,7 +12087,8 @@ function ocFiltrosPanelHtml(){
           <option value="sin"${F.deca === 'sin' ? ' selected' : ''}>Sin DeCA</option>
         </select></div>
       ${fecha('desde', 'Fecha del pedido desde')}${fecha('hasta', 'hasta')}
-      ${campo('precioMin', 'Precio desde (€)', '0', 'inputmode="decimal"')}${campo('precioMax', 'Precio hasta (€)', '', 'inputmode="decimal"')}
+      ${campo('precioMin', 'Contratado desde (€)', '0', 'inputmode="decimal"')}${campo('precioMax', 'Contratado hasta (€)', '', 'inputmode="decimal"')}
+      ${campo('cobroMin', 'Cobramos desde (€)', '0', 'inputmode="decimal"')}${campo('cobroMax', 'Cobramos hasta (€)', '', 'inputmode="decimal"')}
     </div>
     <div class="ocf-pie">
       <button type="button" class="btn btn-ghost" onclick="ocFiltroLimpiar()">Limpiar</button>
@@ -12207,7 +12214,7 @@ function ocListBodyHtml(){
     <div class="card deca-table-card"><div class="deca-table-scroll">
       <table class="deca-table oc-tabla">
         <thead><tr>
-          ${thSort('Nº', 'text')}${thSort('Ref. facturación', 'text')}${thSort('Fecha', 'date')}${thSort('Cliente', 'text')}${thSort('Transportista', 'text')}${thSort('Carga', 'text')}${thSort('Descarga', 'text')}${thSort('Servicio', 'text')}${thSort('Precio', 'number')}${thSort('Estado', 'text')}<th>DeCA</th><th>Acciones</th>
+          ${thSort('Nº', 'text')}${thSort('Ref. facturación', 'text')}${thSort('Fecha', 'date')}${thSort('Cliente', 'text')}${thSort('Transportista', 'text')}${thSort('Carga', 'text')}${thSort('Descarga', 'text')}${thSort('Servicio', 'text')}${thSort('Contratado', 'number')}${thSort('Cobramos', 'number')}${thSort('Margen', 'number')}${thSort('Estado', 'text')}<th>DeCA</th><th>Acciones</th>
         </tr></thead>
         <tbody>
           ${list.map(o => { const d = o.decaId ? decaDocuments.find(x => x.id === o.decaId) : null; return `
@@ -12220,7 +12227,9 @@ function ocListBodyHtml(){
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(ocPuntoCodigo(o.cargas[0]))}" title="${esc(o.cargas.map(p => [p.empresa, p.poblacion, fmtDateDMY(p.fecha)].filter(Boolean).join(' · ')).join('\n'))}">${esc(ocPuntoCodigo(o.cargas[0]))}${mas(o.cargas)}</td>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(ocPuntoCodigo(o.descargas[0]))}" title="${esc(o.descargas.map(p => [p.empresa, p.poblacion, fmtDateDMY(p.fecha)].filter(Boolean).join(' · ')).join('\n'))}">${esc(ocPuntoCodigo(o.descargas[0]))}${mas(o.descargas)}</td>
               <td style="white-space:nowrap;" data-sort-value="${esc(ocServicioTxt(o))}">${ocServicioTxt(o) ? esc(ocServicioTxt(o)) : '<span style="color:var(--mutedFaint);">—</span>'}</td>
-              <td class="tf-precio" data-sort-value="${o.precio == null ? '' : o.precio}"${o.precioCliente != null ? ` title="${esc('Cliente paga ' + eur2(o.precioCliente) + (o.precio != null ? ' · margen ' + eur2(o.precioCliente - o.precio) : ''))}"` : ''}>${o.precio == null ? '—' : esc(eur2(o.precio))}</td>
+              <td class="tf-precio" data-sort-value="${o.precio == null ? '' : o.precio}" title="Precio del servicio contratado (lo que se paga al transportista)">${o.precio == null ? '—' : esc(eur2(o.precio))}</td>
+              <td class="tf-precio" data-sort-value="${o.precioCliente == null ? '' : o.precioCliente}" title="Lo que cobramos al cliente">${o.precioCliente == null ? '<span style="color:var(--mutedFaint);font-weight:400;">—</span>' : esc(eur2(o.precioCliente))}</td>
+              <td class="tf-precio" data-sort-value="${o.precioCliente != null && o.precio != null ? o.precioCliente - o.precio : ''}" title="Lo que cobramos menos lo que pagamos al transportista">${o.precioCliente != null && o.precio != null ? `<span style="color:${o.precioCliente - o.precio < 0 ? 'var(--danger)' : 'var(--success)'};">${esc(eur2(o.precioCliente - o.precio))}</span>` : '<span style="color:var(--mutedFaint);font-weight:400;">—</span>'}</td>
               <td data-sort-value="${esc(o.estado)}">${pill(o)}</td>
               <td style="white-space:nowrap;">${d ? `<button class="deca-code-pill" style="font-size:12px;cursor:pointer;border:none;" onclick="openDecaViewModal('${d.id}')" title="Ver el DeCA">${esc(d.codigo || 'DeCA')}</button>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
               <td style="white-space:nowrap;">
@@ -12468,7 +12477,7 @@ function tplOcFormPage(){
               <div class="field" style="flex:2;min-width:260px;"><label>Cliente</label>
                 ${decaCampoConCrearHtml(decaInputIcon('building', `<input id="oc-cli-nombre" maxlength="150" data-combo="oc-clientes-datalist" autocomplete="off" placeholder="Elige entre tus clientes de transporte" value="${esc(e.clienteNombre != null ? e.clienteNombre : ((contactos.find(c => c.id === e.clienteId) || {}).nombre || ''))}" />`), 'ocIrACrearCliente()', 'Crear un cliente nuevo (no está en la lista)')}
                 <datalist id="oc-clientes-datalist">${contactos.filter(c => !c.archived && c.esClienteTransporte).map(c => `<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('')}</datalist></div>
-              <div class="field" style="flex:1;min-width:190px;"><label>Precio que nos paga el cliente</label>${decaInputIcon('weight', `<input id="oc-precio-cli" inputmode="decimal" maxlength="12" placeholder="Ej. 850" value="${esc(e.precioCliente == null ? '' : String(e.precioCliente).replace('.', ','))}" />`, '€')}</div>
+              <div class="field" style="flex:1;min-width:190px;"><label>Lo que cobramos al cliente <span class="oc-tag int">Solo interno</span></label>${decaInputIcon('weight', `<input id="oc-precio-cli" inputmode="decimal" maxlength="12" placeholder="Ej. 850" value="${esc(e.precioCliente == null ? '' : String(e.precioCliente).replace('.', ','))}" />`, '€')}</div>
             </div>
             <div style="display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start;">
               <div class="field" style="margin-bottom:0;"><label>Servicio</label>
@@ -12499,7 +12508,7 @@ function tplOcFormPage(){
             <div style="border-top:1px solid var(--border);margin:4px 0 16px;"></div>
             <div style="display:flex;gap:14px;flex-wrap:wrap;">
               <div class="field" style="flex:1;min-width:150px;"><label>Fecha del pedido ${req}</label>${decaInputIcon('calendar', `<input id="oc-fecha" type="date" value="${esc(e.fechaPedido || today())}" />`)}</div>
-              <div class="field" style="flex:1;min-width:150px;"><label>Precio ${req}</label>${decaInputIcon('weight', `<input id="oc-precio" inputmode="decimal" maxlength="12" placeholder="Ej. 700" value="${esc(e.precio == null ? '' : String(e.precio).replace('.', ','))}" />`, '€')}</div>
+              <div class="field" style="flex:1;min-width:150px;"><label>Precio del servicio contratado ${req} <span class="oc-tag pdf">Sale en el PDF</span></label>${decaInputIcon('weight', `<input id="oc-precio" inputmode="decimal" maxlength="12" placeholder="Ej. 700" value="${esc(e.precio == null ? '' : String(e.precio).replace('.', ','))}" />`, '€')}</div>
               <div class="field" style="flex:1.4;min-width:200px;"><label>Referencia de facturación <small style="color:var(--mutedFaint);font-weight:400;">· la que irá en la factura</small></label>${decaInputIcon('tag', `<input id="oc-ref-fact" maxlength="60" placeholder="Ej. S12284" value="${esc(e.refFacturacion || '')}" />`)}</div>
               <div class="field" style="flex:2;min-width:240px;"><label>Mercancía</label>${decaInputIcon('box', `<input id="oc-mercancia" maxlength="250" placeholder="Ej. 2 cajas etiquetadas" value="${esc(e.mercancia || '')}" />`)}</div>
             </div>
