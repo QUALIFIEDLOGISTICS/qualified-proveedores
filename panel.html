@@ -490,6 +490,31 @@
   .cg-tabla input.cg-in:focus,.cg-tabla select.cg-in:focus{border-color:var(--primary);background:var(--panel);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 15%,transparent);}
   .cg-tabla tr.cg-edit{background:color-mix(in srgb,var(--primary) 7%,var(--panel));}
   .cg-tabla .deca-act.cg-on{background:var(--success);border-color:var(--success);color:#fff;}
+  /* Catálogo SGA: tabla con producto + referencia, etiquetas, stock con punto y acciones en la fila */
+  .cg-tabla tbody tr:nth-child(even){background:color-mix(in srgb,var(--primary) 4%,var(--panel));}
+  .cg-tabla tbody tr:hover{background:color-mix(in srgb,var(--primary) 8%,var(--panel));}
+  .cg-tabla tbody tr.cg-edit{background:color-mix(in srgb,var(--primary) 10%,var(--panel));}
+  .cg-tabla tbody tr.arch{opacity:.6;}
+  .cg-tabla td{vertical-align:middle;}
+  .cg-prod{min-width:230px;}
+  .cg-nom{font-weight:700;font-size:13.5px;color:var(--text);}
+  .cg-nom-b{background:none;border:none;padding:0;cursor:pointer;font-family:var(--body);text-align:left;}
+  .cg-nom-b:hover{color:var(--primary);}
+  .cg-ref{font-size:12px;color:var(--muted);margin-top:2px;}
+  .cg-donde{margin-top:8px;padding:8px 10px;border-radius:9px;background:var(--panel);border:1px solid var(--border);font-size:12.5px;display:flex;flex-direction:column;gap:3px;}
+  .cg-donde span{color:var(--mutedFaint);margin-left:6px;}
+  .cg-chip{display:inline-block;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:999px;background:color-mix(in srgb,var(--primary) 11%,var(--panel));color:var(--primary);vertical-align:middle;}
+  .cg-st{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;white-space:nowrap;}
+  .cg-st i{width:8px;height:8px;border-radius:50%;display:inline-block;}
+  .cg-st.ok{color:var(--success);}.cg-st.ok i{background:var(--success);}
+  .cg-st.no{color:var(--mutedFaint);font-weight:500;}.cg-st.no i{background:var(--border);}
+  .cg-acc{text-align:right;white-space:nowrap;}
+  .cg-entrada{border:1px solid color-mix(in srgb,var(--primary) 40%,var(--border));background:color-mix(in srgb,var(--primary) 8%,var(--panel));color:var(--primary);border-radius:8px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer;margin-right:4px;font-family:var(--body);}
+  .cg-entrada:hover{background:var(--primary);color:#fff;border-color:var(--primary);}
+  .cg-menu{display:none;position:fixed;z-index:1200;min-width:170px;padding:5px;border-radius:10px;background:var(--panel);border:1px solid var(--border);box-shadow:0 12px 30px rgba(0,0,0,.2);}
+  .cg-menu button{display:block;width:100%;text-align:left;border:none;background:none;padding:8px 11px;border-radius:7px;font-size:13px;cursor:pointer;color:var(--text);font-family:var(--body);}
+  .cg-menu button:hover{background:var(--panel2);}
+  .cg-menu button.danger{color:var(--danger);}
   .cg-tabla input.cg-ok{background:color-mix(in srgb,#3F8F5F 14%,var(--panel));border-color:#3F8F5F;}
   .cg-nuevo td{background:color-mix(in srgb,var(--primary) 6%,var(--panel));position:sticky;top:37px;z-index:2;}
   .cg-nuevo input,.cg-nuevo select{border-color:var(--border);background:var(--panel);}
@@ -3839,14 +3864,18 @@ function stockBodyHtml(){
   if (!filas.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q ? 'Ningún cliente coincide con la búsqueda.' : 'Todavía no hay stock. Registra una entrada, o una regularización si ya tienes mercancía en el almacén.'}</div>`;
   return filas.map(c => stockClienteRowHtml(c, porCliente[c.id])).join('');
 }
-function refreshStockBody(){ const el = document.getElementById('stock-body'); if (el) el.innerHTML = stockBodyHtml(); }
+function refreshStockBody(){ const el = document.getElementById('stock-body'); if (el) el.innerHTML = stockBodyHtml(); if (typeof catRefrescarFiltros === 'function') catRefrescarFiltros(); }
 function stockToggle(id){
   const o = (window.__stockOpen = window.__stockOpen || {});
   o[id] = !o[id];
   refreshStockBody();
 }
 /* ---- Catálogo de artículos dentro de Stock: un cliente abierto cada vez, con su tabla y sus botones ---- */
-function stockCatalogoCoincide(a, q){ return !q || sgaArticuloTxt(a).toLowerCase().includes(q) || sgaFinalidad(a).toLowerCase().includes(q); }
+function stockCatalogoCoincide(a, q){
+  if (!q) return true;
+  return sgaArticuloTxt(a).toLowerCase().includes(q) || sgaFinalidad(a).toLowerCase().includes(q)
+    || Object.values(a.atributos || {}).some(v => String(v == null ? '' : v).toLowerCase().includes(q));   // proveedor y demás datos adicionales
+}
 /* ---- Catálogo como hoja de cálculo ----
    Cliente arriba (recuerda el último), tabla siempre visible, celdas editables (Intro guarda), una fila al principio para
    dar de alta artículos sin salir, y el stock actual de cada artículo. */
@@ -3904,8 +3933,8 @@ async function catGuardarCeldaCampo(el){
 function catCeldaInput(a, campo, valor, extra){
   return `<input class="cg-in" ${extra || ''} data-id="${a.id}" data-f="${campo}" value="${esc(valor)}" onchange="catGuardarCelda(this)" onkeydown="catTecla(event, this)" ${sgaPuedeEditarStock() ? '' : 'readonly'} />`;
 }
-// El catálogo se ve solo para leer. Para cambiar un artículo se pulsa el lápiz de su fila (botón lateral): esa fila pasa a
-// editarse en la propia tabla y, al pulsar el visto, vuelve a quedar bloqueada.
+// El catálogo se ve solo para leer. Para cambiar un artículo se pulsa el lápiz de su fila: esa fila pasa a editarse en la propia
+// tabla y, al pulsar el visto, vuelve a quedar bloqueada.
 function catEditando(id){ return !!(window.__catEdit && window.__catEdit[id]); }
 function catEditarFila(id){
   const el = document.activeElement;
@@ -3916,6 +3945,52 @@ function catEditarFila(id){
     refreshStockBody();
   }, 120);
 }
+// «Dónde está»: al pulsar un producto con stock se despliegan sus palets (cuántos, en qué almacén y sitio, y desde cuándo).
+function catAbrirDonde(id){
+  window.__catOpen = window.__catOpen || {};
+  window.__catOpen[id] = !window.__catOpen[id];
+  refreshStockBody();
+}
+function catDondeHtml(a){
+  const ps = sgaPartidas.filter(p => p.articuloId === a.id && p.actual > 0).sort((x, y) => x.fechaEntrada.localeCompare(y.fechaEntrada));
+  if (!ps.length) return '';
+  return `<div class="cg-donde">${ps.map(p => `<div><b>${p.actual}</b> palet${p.actual === 1 ? '' : 's'} · ${esc(whNombre(p.warehouseId))}${sgaSitioTxt(p) !== '—' ? ' · ' + esc(sgaSitioTxt(p)) : ''} <span>entrada ${fmtDateDMY(p.fechaEntrada)}</span></div>`).join('')}</div>`;
+}
+// Menú «⋯» de cada fila (formulario completo, duplicar, archivar): se pinta fijo para que no lo recorte la tabla.
+function catMenu(id, ev){
+  ev.stopPropagation();
+  const m = document.getElementById('cg-menu');
+  if (!m) return;
+  if (m.dataset.id === id && m.style.display === 'block') { m.style.display = 'none'; return; }
+  const a = sgaArticulos.find(x => x.id === id);
+  if (!a) return;
+  m.dataset.id = id;
+  m.innerHTML = `
+    <button type="button" onclick="catMenuCerrar(); openSgaArticuloForm('${a.clienteId}', '${a.id}')">Formulario completo</button>
+    <button type="button" onclick="catMenuCerrar(); catDuplicar('${a.id}')">Duplicar</button>
+    <button type="button" class="danger" onclick="catMenuCerrar(); setSgaArticuloArchivado('${a.id}', ${!a.archived})">${a.archived ? 'Restaurar' : 'Archivar'}</button>`;
+  const r = ev.currentTarget.getBoundingClientRect();
+  m.style.display = 'block';
+  m.style.top = Math.min(window.innerHeight - m.offsetHeight - 8, r.bottom + 4) + 'px';
+  m.style.left = Math.max(8, r.right - m.offsetWidth) + 'px';
+}
+function catMenuCerrar(){ const m = document.getElementById('cg-menu'); if (m) { m.style.display = 'none'; m.dataset.id = ''; } }
+document.addEventListener('click', () => catMenuCerrar());
+// «Dar entrada» desde el artículo: abre Nueva entrada con el cliente y el artículo ya elegidos.
+function catDarEntrada(id){
+  const a = sgaArticulos.find(x => x.id === id);
+  if (!a) return;
+  if (!sgaClientesAlmacenLista().some(c => c.id === a.clienteId)) { appToast('Este cliente todavía no está activo en el SGA: actívalo en su ficha para darle entradas.', 'error'); return; }
+  sgaEntradaAbrir();
+  const sel = document.getElementById('se-cliente');
+  if (!sel) return;
+  sel.value = a.clienteId;
+  sgaEntradaClienteCambio();
+  const art = document.getElementById('se-0-art');
+  if (art) { art.value = a.id; sgaEntradaArticuloCambio(0); }
+  const cant = document.getElementById('se-0-cant') || document.getElementById('se-0-codigo');
+  if (cant) cant.focus();
+}
 function catFilaHtml(a, cols, conCliente){
   const puede = sgaPuedeEditarStock();
   const edit = puede && catEditando(a.id);
@@ -3923,48 +3998,56 @@ function catFilaHtml(a, cols, conCliente){
   const cl = conCliente ? contactos.find(c => c.id === a.clienteId) : null;
   const num = v => (v == null ? '' : String(v).replace('.', ','));
   const prods = sgaProductosCliente(a.clienteId, a.productoId);
-  const prodTxt = a.productoId && almacenajeProducto(a.productoId) ? almacenajeProductoTexto(almacenajeProducto(a.productoId)) : '';
+  const prod = a.productoId ? almacenajeProducto(a.productoId) : null;
+  const prodTxt = prod ? almacenajeProductoTexto(prod) : '';
   const vacio = '<span style="color:var(--mutedFaint);">—</span>';
-  const txt = v => (v == null || v === '') ? vacio : esc(v);
-  const dato = (campo, valor, extra, claseNum) => edit ? `<td>${catCeldaInput(a, campo, valor, extra)}</td>` : `<td${claseNum ? ' style="text-align:right;"' : ''}>${txt(valor)}</td>`;
-  const campoX = f => edit ? catCeldaCampo(a, f) : `<td>${(a.atributos && a.atributos[f.id] != null && a.atributos[f.id] !== '') ? esc(sgaCampoMostrar(f, a.atributos[f.id])) : vacio}</td>`;
+  const abierto = !edit && st.mod > 0 && !!(window.__catOpen && window.__catOpen[a.id]);
+  const dato = (campo, valor, extra) => edit ? `<td>${catCeldaInput(a, campo, valor, extra)}</td>` : `<td style="text-align:right;white-space:nowrap;" data-sort-value="${esc(valor)}">${valor === '' ? vacio : esc(valor)}</td>`;
+  const campoX = f => {
+    const v = a.atributos ? a.atributos[f.id] : null;
+    return edit ? catCeldaCampo(a, f) : `<td data-sort-value="${esc(v == null ? '' : v)}">${v != null && v !== '' ? esc(sgaCampoMostrar(f, v)) : vacio}</td>`;
+  };
+  const nombreCelda = edit
+    ? `<td class="cg-prod">${catCeldaInput(a, 'nombre', a.nombre, 'data-mayusc style="min-width:210px;text-transform:uppercase;"')}${cols.referencia ? `<div style="margin-top:5px;">${catCeldaInput(a, 'referencia', a.referencia, 'data-mayusc placeholder="Referencia" style="min-width:210px;text-transform:uppercase;"')}</div>` : ''}</td>`
+    : `<td class="cg-prod" data-sort-value="${esc(a.nombre)}">
+        ${st.mod > 0 ? `<button type="button" class="cg-nom cg-nom-b" onclick="catAbrirDonde('${a.id}')" title="Ver dónde está">${abierto ? '▾' : '▸'} ${esc(a.nombre)}</button>` : `<span class="cg-nom">${esc(a.nombre)}</span>`}
+        ${cols.referencia && a.referencia ? `<div class="cg-ref">${esc(a.referencia)}</div>` : ''}
+        ${abierto ? catDondeHtml(a) : ''}
+      </td>`;
   return `
     <tr class="cg-row${a.archived ? ' arch' : ''}${edit ? ' cg-edit' : ''}" data-id="${a.id}">
-      ${conCliente ? `<td class="cg-cli">${esc(cl ? ((cl.nombreComercial || '').trim() || cl.nombre) : '—')}</td>` : ''}
-      ${edit ? `<td>${catCeldaInput(a, 'nombre', a.nombre, 'data-mayusc style="min-width:200px;text-transform:uppercase;"')}</td>` : `<td><b>${esc(a.nombre)}</b></td>`}
-      ${cols.referencia ? dato('referencia', a.referencia, 'data-mayusc style="min-width:140px;text-transform:uppercase;"') : ''}
+      ${conCliente ? `<td class="cg-cli" data-sort-value="${esc(cl ? cl.nombre : '')}">${esc(cl ? ((cl.nombreComercial || '').trim() || cl.nombre) : '—')}</td>` : ''}
+      ${nombreCelda}
       ${edit
         ? `<td><select class="cg-in" data-id="${a.id}" data-f="productoId" onchange="catGuardarCelda(this)"><option value="">—</option>${prods.map(p => `<option value="${p.id}" ${a.productoId === p.id ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></td>`
-        : `<td>${txt(prodTxt)}</td>`}
-      ${cols.bultos ? dato('bultos', num(a.bultos), 'inputmode="decimal" style="width:70px;text-align:right;"', true) : ''}
-      ${cols.ml ? dato('metrosLineales', num(a.metrosLineales), 'inputmode="decimal" style="width:70px;text-align:right;"', true) : ''}
-      ${cols.peso ? dato('peso', num(a.peso), 'inputmode="decimal" style="width:80px;text-align:right;"', true) : ''}
+        : `<td data-sort-value="${esc(prodTxt)}">${prodTxt ? `<span class="cg-chip" title="${esc(prodTxt)}">${esc(prodTxt.replace(/\s*·\s*sin subtipo definido/i, ''))}</span>` : vacio}</td>`}
+      ${cols.bultos ? dato('bultos', num(a.bultos), 'inputmode="decimal" style="width:70px;text-align:right;"') : ''}
+      ${cols.ml ? dato('metrosLineales', num(a.metrosLineales), 'inputmode="decimal" style="width:70px;text-align:right;"') : ''}
+      ${cols.peso ? dato('peso', num(a.peso), 'inputmode="decimal" style="width:80px;text-align:right;"') : ''}
       ${cols.x.map(campoX).join('')}
-      <td class="cg-stock" ${st.almacenes ? `title="${esc(st.almacenes)}"` : ''}>${st.mod ? `<b>${st.mod}</b> palet${st.mod === 1 ? '' : 's'}${cols.bultos && (a.bultos !== 1 || st.bul !== st.mod) ? ` <small>· ${sgaNumTxt(st.bul)} bultos</small>` : ''}` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+      <td class="cg-stock" data-sort-value="${st.mod}" ${st.almacenes ? `title="${esc(st.almacenes)}"` : ''}>${st.mod
+        ? `<span class="cg-st ok"><i></i><b>${st.mod}</b> palet${st.mod === 1 ? '' : 's'}</span>${cols.bultos && (a.bultos !== 1 || st.bul !== st.mod) ? `<div class="cg-ref">${sgaNumTxt(st.bul)} bultos</div>` : ''}`
+        : '<span class="cg-st no"><i></i>Sin stock</span>'}</td>
       <td class="cg-acc">${puede ? `
+        ${!a.archived ? `<button type="button" class="cg-entrada" title="Nueva entrada de este artículo" onclick="catDarEntrada('${a.id}')">Dar entrada</button>` : ''}
         <button class="deca-act${edit ? ' cg-on' : ''}" title="${edit ? 'Listo: bloquear la fila otra vez' : 'Editar este artículo en la tabla'}" onclick="catEditarFila('${a.id}')">${homeIcon(edit ? HOME_ICON_PATHS.check : HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
-        <button class="deca-act" title="Abrir el formulario completo (medidas, datos adicionales…)" onclick="openSgaArticuloForm('${a.clienteId}', '${a.id}')">${homeIcon(HOME_ICON_PATHS.file, 15, 'currentColor', 2)}</button>
-        <button class="deca-act" title="Duplicar este artículo" onclick="catDuplicar('${a.id}')">${homeIcon(HOME_ICON_PATHS.copy, 15, 'currentColor', 2)}</button>
-        <button class="deca-act" title="${a.archived ? 'Restaurar' : 'Archivar'}" onclick="setSgaArticuloArchivado('${a.id}', ${!a.archived})">${homeIcon(a.archived ? HOME_ICON_PATHS.check : HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>` : ''}</td>
+        <button class="deca-act" title="Más: formulario completo, duplicar, archivar" onclick="catMenu('${a.id}', event)">⋯</button>` : ''}</td>
     </tr>`;
 }
-function catFilaNuevaHtml(cols){
-  const prods = sgaProductosCliente(catClienteSel());
-  const zonas = sgaZonas.filter(z => !z.archived);
-  const k = 'onkeydown="catNuevaTecla(event)"';
-  return `
-    <tr class="cg-nuevo">
-      <td><input id="cg-n-nombre" data-mayusc ${k} placeholder="+ Producto nuevo" style="min-width:200px;" /></td>
-      ${cols.referencia ? `<td><input id="cg-n-ref" data-mayusc ${k} placeholder="Referencia" style="min-width:140px;" /></td>` : ''}
-      <td><select id="cg-n-prod"><option value="">Tipo de carga…</option>${prods.map(p => `<option value="${p.id}">${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></td>
-      ${cols.bultos ? `<td><input id="cg-n-bultos" ${k} inputmode="decimal" placeholder="Bultos" value="1" style="width:70px;text-align:right;" /></td>` : ''}
-      ${cols.ml ? `<td><input id="cg-n-ml" ${k} inputmode="decimal" placeholder="M.L." style="width:70px;text-align:right;" /></td>` : ''}
-      ${cols.peso ? `<td><input id="cg-n-peso" ${k} inputmode="decimal" placeholder="Peso" style="width:80px;text-align:right;" /></td>` : ''}
-      ${cols.x.map(f => `<td>${sgaCampoControl(f, '', `id="cg-n-x-${f.id}" ${k} placeholder="${esc(f.nombre)}" style="min-width:${f.tipo === 'fecha' ? 130 : 100}px;"`)}</td>`).join('')}
-      <td></td>
-      <td class="cg-acc"><button class="btn btn-primary" style="padding:6px 12px;font-size:12px;" onclick="catCrearNuevo()" title="Crear el artículo (Intro)">Crear</button></td>
-    </tr>`;
+// Botones de filtro con su contador.
+function catConteos(){
+  const cid = catClienteSel();
+  const base = cid ? sgaArticulosDe(cid, true) : sgaArticulos.filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && c.esClienteAlmacen && !c.archived; });
+  const act = base.filter(a => !a.archived);
+  const conStock = act.filter(a => catStockArticulo(a).mod > 0).length;
+  return { todos: act.length, stock: conStock, sin: act.length - conStock, arch: base.length - act.length };
 }
+function catFiltrosHtml(){
+  const n = catConteos();
+  return [['todos', 'Todos'], ['stock', 'Con stock'], ['sin', 'Sin stock'], ['arch', 'Archivados']].map(([k, t]) =>
+    `<button type="button" class="${catFiltro() === k ? 'on' : ''}" data-k="${k}" onclick="window.__catFiltro='${k}'; refreshStockBody();">${t}<span class="cl-n">${n[k]}</span></button>`).join('');
+}
+function catRefrescarFiltros(){ const f = document.getElementById('cat-filtros'); if (f) f.innerHTML = catFiltrosHtml(); }
 function stockCatalogoBodyHtml(){
   const cid = catClienteSel();
   const q = (window.__stockSearch || '').trim().toLowerCase();
@@ -3979,22 +4062,21 @@ function stockCatalogoBodyHtml(){
   lista.sort((a, b) => (cid ? 0 : nombreDe(contactos.find(c => c.id === a.clienteId) || {}).localeCompare(nombreDe(contactos.find(c => c.id === b.clienteId) || {}), 'es')) || sgaArticuloTxt(a).localeCompare(sgaArticuloTxt(b), 'es'));
   const puede = sgaPuedeEditarStock();
   const conCliente = !cid;
-  const thc = t => `<th>${t}</th>`;
-  const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:12.5px;padding:14px 4px;">${q ? 'Ningún artículo coincide con la búsqueda.' : filtro === 'arch' ? 'No hay artículos archivados.' : cid ? 'Este cliente todavía no tiene artículos. Escribe el primero en la fila de arriba o usa «Alta rápida (Excel)».' : 'Todavía no hay artículos.'}</div>` : '';
+  const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${q ? 'Ningún artículo coincide con la búsqueda.' : filtro === 'arch' ? 'No hay artículos archivados.' : filtro === 'stock' ? 'Ningún artículo tiene stock ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : cid ? 'Este cliente todavía no tiene artículos. Crea el primero con «+ Artículo» (o pega varios con «Alta rápida»).' : 'Todavía no hay artículos. Elige un cliente y crea el primero.'}</div>` : '';
   return `
-    ${cid ? '' : `<div class="card" style="padding:12px 16px;margin-bottom:12px;font-size:13.5px;color:var(--text);border-left:4px solid var(--primary);">Estás viendo los artículos de <b>todos los clientes</b>. Para <b>crear</b> uno, elige primero el cliente en el desplegable de arriba.</div>`}
+    ${cid ? '' : `<div class="card" style="padding:11px 16px;margin-bottom:12px;font-size:13.5px;color:var(--text);border-left:4px solid var(--primary);">Estás viendo los artículos de <b>todos los clientes</b>. Para <b>crear</b> uno, elige primero el cliente en el desplegable de arriba.</div>`}
     <div class="card" style="padding:0;">
-      <div class="tc-hist-box" style="max-height:640px;border:none;border-radius:10px;">
+      <div class="tc-hist-box" style="max-height:660px;border:none;border-radius:10px;">
         <table class="tf-table cg-tabla">
-          <thead><tr>${conCliente ? thc('Cliente') : ''}${thc('Producto')}${cols.referencia ? thc('Referencia') : ''}${thc('Tipo de carga')}${cols.bultos ? thc('Bultos / palet') : ''}${cols.ml ? thc('M. lineales') : ''}${cols.peso ? thc('Peso (kg)') : ''}${cols.x.map(f => thc(esc(f.label))).join('')}${thc('Stock actual')}<th style="width:112px;"></th></tr></thead>
+          <thead><tr>${conCliente ? thSort('Cliente', 'text') : ''}${thSort('Producto', 'text')}${thSort('Tipo de carga', 'text')}${cols.bultos ? thSort('Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thSort('Peso (kg)', 'number', 'style="text-align:right;"') : ''}${cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSort('Stock', 'number')}<th></th></tr></thead>
           <tbody>
-            ${cid && puede && filtro !== 'arch' ? catFilaNuevaHtml(cols) : ''}
             ${lista.map(a => catFilaHtml(a, cols, conCliente)).join('')}
           </tbody>
         </table>
       </div>
       ${vacio}
     </div>
+    <div id="cg-menu" class="cg-menu" onclick="event.stopPropagation();"></div>
     ${cid && filtro === 'arch' ? '<div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">Estás viendo los archivados: para crear artículos vuelve a «Todos».</div>' : ''}`;
 }
 function catTecla(ev, el){
@@ -4038,7 +4120,7 @@ async function catGuardarCelda(el){
   if (f === 'productoId' || f === 'zonaId') return;
   if (f === 'bultos') refreshStockBody(); // cambia la columna de stock
 }
-// Botón «+ Artículo»: abre el formulario completo del cliente elegido (si no hay ninguno, avisa y señala el desplegable).
+// Botón «+ Artículo»: abre un panel corto para crearlo sin salir del catálogo (si no hay cliente elegido, avisa y señala el desplegable).
 function catNuevoArticulo(){
   const cid = catClienteSel();
   if (!cid) {
@@ -4046,10 +4128,45 @@ function catNuevoArticulo(){
     const s = document.getElementById('cat-cliente'); if (s) { s.focus(); s.style.outline = '2px solid var(--primary)'; setTimeout(() => { s.style.outline = ''; }, 2500); }
     return;
   }
-  openSgaArticuloForm(cid);
+  const c = contactos.find(x => x.id === cid);
+  const cols = catColumnas(cid);
+  const prods = sgaProductosCliente(cid, '');
+  const cfg = sgaClienteCfg(cid);
+  const k = 'onkeydown="if(event.key===\'Enter\'){ event.preventDefault(); catCrearNuevo(false); }"';
+  const campo = (label, inner, flex) => `<div class="field" style="flex:${flex || 1};min-width:150px;"><label>${label}</label>${inner}</div>`;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:600px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.list, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Artículo nuevo</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">${esc((c.nombreComercial || '').trim() || c.nombre)} · queda en su catálogo</div></div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            ${campo('Producto <span class="dc-req">*</span>', decaInputIcon('tag', `<input id="cg-n-nombre" data-mayusc maxlength="150" placeholder="Ej. CARPA GREEN 9.15X20X4.5" ${k} />`), 2)}
+            ${cols.referencia ? campo('Referencia', decaInputIcon('file', `<input id="cg-n-ref" data-mayusc maxlength="80" placeholder="Ej. 306515RG" ${k} />`)) : ''}
+          </div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            ${campo('Tipo de carga', `<select id="cg-n-prod"><option value="">— Sin definir —</option>${prods.map(p => `<option value="${p.id}" ${prods.length === 1 ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select>`, 2)}
+            ${cols.bultos ? campo('Bultos por palet <span class="dc-req">*</span>', `<input id="cg-n-bultos" inputmode="decimal" maxlength="8" value="1" ${k} />`) : '<input type="hidden" id="cg-n-bultos" value="1" />'}
+            ${cols.peso ? campo('Peso (kg)', `<input id="cg-n-peso" inputmode="decimal" maxlength="10" placeholder="Opcional" ${k} />`) : ''}
+            ${cols.ml ? campo('M. lineales', `<input id="cg-n-ml" inputmode="decimal" maxlength="8" placeholder="Opcional" ${k} />`) : ''}
+          </div>
+          ${cols.x.length ? `<div style="display:flex;gap:12px;flex-wrap:wrap;">${cols.x.map(f => campo(esc(f.label) + (cfg.campos[f.id] === 'obligatorio' ? ' <span class="dc-req">*</span>' : ''), sgaCampoControl(f, '', `id="cg-n-x-${f.id}" ${k}`))).join('')}</div>` : ''}
+          <div style="font-size:12px;color:var(--mutedFaint);margin-bottom:10px;">Las medidas y demás datos se completan luego en «Formulario completo» (menú ⋯ de la fila).</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-ghost" onclick="catCrearNuevo(true)" title="Lo crea y deja el panel abierto para el siguiente">Crear y añadir otro</button>
+            <button class="btn btn-primary deca-submit" onclick="catCrearNuevo(false)">Crear</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const el = document.getElementById('cg-n-nombre'); if (el) el.focus(); }, 0);
 }
-function catNuevaTecla(ev){ if (ev.key === 'Enter') { ev.preventDefault(); catCrearNuevo(); } }
-async function catCrearNuevo(){
+async function catCrearNuevo(otro){
   const cid = catClienteSel();
   if (!cid) return;
   const val = id => ((document.getElementById(id) || {}).value || '').trim();
@@ -4074,11 +4191,16 @@ async function catCrearNuevo(){
   if (error || !data) { appToast('No se pudo crear: ' + (error && error.message ? error.message : 'error desconocido.'), 'error'); return; }
   sgaArticulos.push({ id: data.id, clienteId: cid, nombre, referencia, productoId: row.producto_id || '', zonaId: row.zona_id || '', bultos, metrosLineales: ml, peso, medidas: '', finalidad: '', atributos, archived: false });
   await logContactoHistorial(cid, `SGA · ha añadido el artículo ${sgaArticuloTxt({ nombre, referencia })}.`);
-  const keep = { prod: row.producto_id || '' };
   refreshStockBody();
-  const p = document.getElementById('cg-n-prod');
-  if (p) p.value = keep.prod;     // la fila de alta conserva el tipo de carga para el siguiente
-  const n = document.getElementById('cg-n-nombre'); if (n) n.focus();
+  catRefrescarFiltros();
+  appToast(`Artículo «${nombre}» creado.`, 'ok');
+  if (otro && document.getElementById('cg-n-nombre')) {
+    // «Crear y añadir otro»: el panel se queda abierto, vacío salvo el tipo de carga, para teclear el siguiente
+    ['cg-n-nombre', 'cg-n-ref', 'cg-n-peso', 'cg-n-ml'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    const b = document.getElementById('cg-n-bultos'); if (b && b.type !== 'hidden') b.value = '1';
+    document.querySelectorAll('[id^="cg-n-x-"]').forEach(el => { el.value = ''; });
+    const n = document.getElementById('cg-n-nombre'); if (n) n.focus();
+  } else closeModal();
 }
 async function catDuplicar(id){
   const a = sgaArticulos.find(x => x.id === id);
@@ -4091,6 +4213,7 @@ async function catDuplicar(id){
   if (error || !data) { appToast('No se pudo duplicar: ' + (error && error.message ? error.message : 'error desconocido.'), 'error'); return; }
   sgaArticulos.push({ id: data.id, clienteId: a.clienteId, nombre, referencia: '', productoId: a.productoId, zonaId: a.zonaId, bultos: a.bultos, metrosLineales: a.metrosLineales, peso: a.peso, medidas: a.medidas, atributos: Object.assign({}, a.atributos), archived: false });
   refreshStockBody();
+  window.__catEdit = window.__catEdit || {}; window.__catEdit[data.id] = true; refreshStockBody();
   const el = document.querySelector(`.cg-row[data-id="${data.id}"] [data-f="nombre"]`);
   if (el) { el.focus(); el.select(); appToast('Duplicado: cámbiale el nombre y la referencia.', 'info'); }
 }
@@ -4160,14 +4283,14 @@ function tplStock(){
     <div class="sga-tabs">${segBtn('catalogo', 'Catálogo')}${segBtn('stock', 'Stock')}${segBtn('entradas', 'Entradas')}${segBtn('salidas', 'Salidas')}${segBtn('resumen', 'Resumen mensual')}</div>
     <div class="card deca-toolbar">
       ${seg === 'catalogo' ? `
-      <select id="cat-cliente" onchange="catElegirCliente(this.value)" style="min-width:240px;"><option value="">Todos los clientes</option>${contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es')).map(c => `<option value="${c.id}" ${c.id === catClienteSel() ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)} (${sgaArticulosDe(c.id).length})</option>`).join('')}</select>
-      <div class="deca-search">
-        <input id="cat-buscar" placeholder="Buscar por referencia o producto…" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
+      <select id="cat-cliente" onchange="catElegirCliente(this.value)" style="width:auto;flex:0 0 210px;min-width:0;"><option value="">Todos los clientes</option>${contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es')).map(c => `<option value="${c.id}" ${c.id === catClienteSel() ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)} (${sgaArticulosDe(c.id).length})</option>`).join('')}</select>
+      <div class="deca-search" style="flex:1 1 230px;">
+        <input id="cat-buscar" placeholder="Buscar producto, referencia o proveedor…" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      <div class="doc-seg" id="cat-filtros">${[["todos", "Todos"], ['stock', 'Con stock'], ['sin', 'Sin stock'], ['arch', 'Archivados']].map(([k, t]) => `<button type="button" class="${catFiltro() === k ? 'on' : ''}" onclick="window.__catFiltro='${k}'; refreshStockBody(); document.querySelectorAll('#cat-filtros button').forEach(b => b.classList.toggle('on', b.dataset.k === '${k}'));" data-k="${k}">${t}</button>`).join('')}</div>
-      ${sgaPuedeEditarStock() ? `<button class="btn btn-primary" onclick="catNuevoArticulo()" title="Crear un artículo con el formulario completo">+ Artículo</button>` : ''}
-      ${catClienteSel() && sgaPuedeEditarStock() ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaArtRapida('${catClienteSel()}')" title="Pega varios artículos de golpe desde tu Excel">Alta rápida (Excel)</button>` : ''}` : seg === 'resumen' ? `
+      <div class="doc-seg" id="cat-filtros">${catFiltrosHtml()}</div>
+      ${catClienteSel() && sgaPuedeEditarStock() ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaArtRapida('${catClienteSel()}')" title="Pega varios artículos de golpe desde tu Excel">Alta rápida</button>` : ''}
+      ${sgaPuedeEditarStock() ? `<button class="btn btn-primary" onclick="catNuevoArticulo()" title="Crear un artículo nuevo">+ Artículo</button>` : ''}` : seg === 'resumen' ? `
       <select id="rm-cliente" onchange="sgaResumenElegir()" style="min-width:230px;"><option value="">Elige el cliente…</option>${sgaClientesAlmacenLista().map(c => `<option value="${c.id}" ${c.id === sgaResumenEstado().clienteId ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
       <input id="rm-mes" type="month" value="${esc(sgaResumenEstado().periodo)}" onchange="sgaResumenElegir()" style="width:170px;" />
       <button class="btn btn-ghost" onclick="sgaResumenImprimir()" title="Imprimir o guardar como PDF en blanco y negro">${homeIcon(HOME_ICON_PATHS.file, 16, 'currentColor', 1.8)}<span>Imprimir / PDF</span></button>` : `
