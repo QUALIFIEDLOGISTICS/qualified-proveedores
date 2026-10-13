@@ -11970,6 +11970,13 @@ async function loadOrdenesCarga(){
 }
 function ocRef(o){ return 'OC-' + String(o.numero).padStart(4, '0'); }   // OC-0001: distinto del S0xxxxx del otro programa, para no confundirlos
 function ocPuntoResumen(p){ return p ? [p.poblacion, p.pais].filter(Boolean).join(', ') || p.empresa || '—' : '—'; }
+// En el listado cada punto se ve por su código: país + código postal (ES08272). Sin código postal, se usa el pueblo y el país.
+function ocPuntoCodigo(p){
+  if (!p) return '—';
+  const cp = String(p.cp || '').replace(/\s+/g, '').toUpperCase();
+  if (!cp) return ocPuntoResumen(p);
+  return (CONTACTO_PAIS_CODIGOS[String(p.pais || '').trim()] || '') + cp;
+}
 
 /* ---- Listado ---- */
 function ocFiltro(){ return ['emitida', 'anulada'].includes(window.__ocFiltro) ? window.__ocFiltro : 'todas'; }
@@ -12001,7 +12008,7 @@ function ocListBodyHtml(){
   const q = (window.__ocSearch || '').toLowerCase();
   const f = ocFiltro();
   const list = ordenesCarga.filter(o => (f === 'todas' || o.estado === f) && (!q || [ocRef(o), o.refFacturacion, o.transportistaNombre, o.matriculaTractora, o.matriculaRemolque, o.mercancia,
-    ...o.cargas.map(p => [p.empresa, p.poblacion].join(' ')), ...o.descargas.map(p => [p.empresa, p.poblacion].join(' '))].some(v => String(v || '').toLowerCase().includes(q))));
+    ...o.cargas.map(p => [p.empresa, p.poblacion, ocPuntoCodigo(p)].join(' ')), ...o.descargas.map(p => [p.empresa, p.poblacion, ocPuntoCodigo(p)].join(' '))].some(v => String(v || '').toLowerCase().includes(q))));
   if (!list.length) {
     return `<div class="card deca-table-card"><div class="deca-empty"><span class="ico">${homeIcon(HOME_ICON_PATHS.file, 26, '#C1443D', 1.6)}</span><div style="font-size:14px;color:var(--text);font-weight:600;">${q || f !== 'todas' ? 'Ninguna orden coincide' : 'Todavía no hay ninguna orden de carga'}</div><div style="font-size:12.5px;">${q || f !== 'todas' ? 'Prueba con otra búsqueda o cambia el filtro.' : 'Pulsa «Nueva orden» para crear la primera.'}</div></div></div>`;
   }
@@ -12013,16 +12020,17 @@ function ocListBodyHtml(){
     <div class="card deca-table-card"><div class="deca-table-scroll">
       <table class="deca-table">
         <thead><tr>
-          ${thSort('Nº', 'text')}${thSort('Fecha', 'date')}${thSort('Transportista', 'text')}${thSort('Carga', 'text')}${thSort('Descarga', 'text')}${thSort('Precio', 'number', 'style="text-align:right;"')}${thSort('Estado', 'text')}<th>DeCA</th><th>Acciones</th>
+          ${thSort('Nº', 'text')}${thSort('Ref. facturación', 'text')}${thSort('Fecha', 'date')}${thSort('Transportista', 'text')}${thSort('Carga', 'text')}${thSort('Descarga', 'text')}${thSort('Precio', 'number', 'style="text-align:right;"')}${thSort('Estado', 'text')}<th>DeCA</th><th>Acciones</th>
         </tr></thead>
         <tbody>
           ${list.map(o => { const d = o.decaId ? decaDocuments.find(x => x.id === o.decaId) : null; return `
             <tr class="dr-row"${o.estado === 'anulada' ? ' style="opacity:.6;"' : ''}>
               <td data-sort-value="${o.numero}" style="white-space:nowrap;"><span class="deca-code-pill" style="font-size:12px;">${esc(ocRef(o))}</span></td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(o.refFacturacion)}">${o.refFacturacion ? `<b>${esc(o.refFacturacion)}</b>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(o.fechaPedido)}">${fmtDateDMY(o.fechaPedido)}</td>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(o.transportistaNombre)}" title="${esc(o.transportistaNombre)}">${esc(truncateText(o.transportistaNombre, 24))}</td>
-              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(ocPuntoResumen(o.cargas[0]))}" title="${esc(o.cargas.map(p => [p.empresa, p.poblacion, fmtDateDMY(p.fecha)].filter(Boolean).join(' · ')).join('\n'))}">${esc(truncateText(ocPuntoResumen(o.cargas[0]), 22))}${mas(o.cargas)}</td>
-              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(ocPuntoResumen(o.descargas[0]))}" title="${esc(o.descargas.map(p => [p.empresa, p.poblacion, fmtDateDMY(p.fecha)].filter(Boolean).join(' · ')).join('\n'))}">${esc(truncateText(ocPuntoResumen(o.descargas[0]), 22))}${mas(o.descargas)}</td>
+              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(ocPuntoCodigo(o.cargas[0]))}" title="${esc(o.cargas.map(p => [p.empresa, p.poblacion, fmtDateDMY(p.fecha)].filter(Boolean).join(' · ')).join('\n'))}">${esc(ocPuntoCodigo(o.cargas[0]))}${mas(o.cargas)}</td>
+              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(ocPuntoCodigo(o.descargas[0]))}" title="${esc(o.descargas.map(p => [p.empresa, p.poblacion, fmtDateDMY(p.fecha)].filter(Boolean).join(' · ')).join('\n'))}">${esc(ocPuntoCodigo(o.descargas[0]))}${mas(o.descargas)}</td>
               <td class="tf-precio" data-sort-value="${o.precio == null ? '' : o.precio}">${o.precio == null ? '—' : esc(eur2(o.precio))}</td>
               <td data-sort-value="${esc(o.estado)}">${pill(o)}</td>
               <td style="white-space:nowrap;">${d ? `<button class="deca-code-pill" style="font-size:12px;cursor:pointer;border:none;" onclick="openDecaViewModal('${d.id}')" title="Ver el DeCA">${esc(d.codigo || 'DeCA')}</button>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
