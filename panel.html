@@ -480,6 +480,8 @@
   .cg-tabla input.cg-in,.cg-tabla select.cg-in,.cg-nuevo input,.cg-nuevo select{border:1px solid transparent;background:transparent;padding:6px 8px;border-radius:7px;font-size:13px;width:100%;}
   .cg-tabla input.cg-in:hover,.cg-tabla select.cg-in:hover{border-color:var(--border);background:var(--panel);}
   .cg-tabla input.cg-in:focus,.cg-tabla select.cg-in:focus{border-color:var(--primary);background:var(--panel);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 15%,transparent);}
+  .cg-tabla tr.cg-edit{background:color-mix(in srgb,var(--primary) 7%,var(--panel));}
+  .cg-tabla .deca-act.cg-on{background:var(--success);border-color:var(--success);color:#fff;}
   .cg-tabla input.cg-ok{background:color-mix(in srgb,#3F8F5F 14%,var(--panel));border-color:#3F8F5F;}
   .cg-nuevo td{background:color-mix(in srgb,var(--primary) 6%,var(--panel));position:sticky;top:37px;z-index:2;}
   .cg-nuevo input,.cg-nuevo select{border-color:var(--border);background:var(--panel);}
@@ -3894,26 +3896,46 @@ async function catGuardarCeldaCampo(el){
 function catCeldaInput(a, campo, valor, extra){
   return `<input class="cg-in" ${extra || ''} data-id="${a.id}" data-f="${campo}" value="${esc(valor)}" onchange="catGuardarCelda(this)" onkeydown="catTecla(event, this)" ${sgaPuedeEditarStock() ? '' : 'readonly'} />`;
 }
+// El catálogo se ve solo para leer. Para cambiar un artículo se pulsa el lápiz de su fila (botón lateral): esa fila pasa a
+// editarse en la propia tabla y, al pulsar el visto, vuelve a quedar bloqueada.
+function catEditando(id){ return !!(window.__catEdit && window.__catEdit[id]); }
+function catEditarFila(id){
+  const el = document.activeElement;
+  if (el && el.blur) el.blur();   // si se estaba escribiendo, se guarda antes de cerrar la fila
+  setTimeout(() => {
+    window.__catEdit = window.__catEdit || {};
+    if (window.__catEdit[id]) delete window.__catEdit[id]; else window.__catEdit[id] = true;
+    refreshStockBody();
+  }, 120);
+}
 function catFilaHtml(a, cols, conCliente){
   const puede = sgaPuedeEditarStock();
+  const edit = puede && catEditando(a.id);
   const st = catStockArticulo(a);
   const cl = conCliente ? contactos.find(c => c.id === a.clienteId) : null;
   const num = v => (v == null ? '' : String(v).replace('.', ','));
   const prods = sgaProductosCliente(a.clienteId, a.productoId);
-  const dis = puede ? '' : 'disabled';
+  const prodTxt = a.productoId && almacenajeProducto(a.productoId) ? almacenajeProductoTexto(almacenajeProducto(a.productoId)) : '';
+  const vacio = '<span style="color:var(--mutedFaint);">—</span>';
+  const txt = v => (v == null || v === '') ? vacio : esc(v);
+  const dato = (campo, valor, extra, claseNum) => edit ? `<td>${catCeldaInput(a, campo, valor, extra)}</td>` : `<td${claseNum ? ' style="text-align:right;"' : ''}>${txt(valor)}</td>`;
+  const campoX = f => edit ? catCeldaCampo(a, f) : `<td>${(a.atributos && a.atributos[f.id] != null && a.atributos[f.id] !== '') ? esc(sgaCampoMostrar(f, a.atributos[f.id])) : vacio}</td>`;
   return `
-    <tr class="cg-row${a.archived ? ' arch' : ''}" data-id="${a.id}">
+    <tr class="cg-row${a.archived ? ' arch' : ''}${edit ? ' cg-edit' : ''}" data-id="${a.id}">
       ${conCliente ? `<td class="cg-cli">${esc(cl ? ((cl.nombreComercial || '').trim() || cl.nombre) : '—')}</td>` : ''}
-      <td>${catCeldaInput(a, 'nombre', a.nombre, 'data-mayus style="min-width:200px;"')}</td>
-      ${cols.referencia ? `<td>${catCeldaInput(a, 'referencia', a.referencia, 'style="min-width:140px;"')}</td>` : ''}
-      <td><select class="cg-in" ${dis} data-id="${a.id}" data-f="productoId" onchange="catGuardarCelda(this)"><option value="">—</option>${prods.map(p => `<option value="${p.id}" ${a.productoId === p.id ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></td>
-      ${cols.bultos ? `<td>${catCeldaInput(a, 'bultos', num(a.bultos), 'inputmode="decimal" style="width:70px;text-align:right;"')}</td>` : ''}
-      ${cols.ml ? `<td>${catCeldaInput(a, 'metrosLineales', num(a.metrosLineales), 'inputmode="decimal" style="width:70px;text-align:right;"')}</td>` : ''}
-      ${cols.peso ? `<td>${catCeldaInput(a, 'peso', num(a.peso), 'inputmode="decimal" style="width:80px;text-align:right;"')}</td>` : ''}
-      ${cols.x.map(f => catCeldaCampo(a, f)).join('')}
+      ${edit ? `<td>${catCeldaInput(a, 'nombre', a.nombre, 'data-mayus style="min-width:200px;"')}</td>` : `<td><b>${esc(a.nombre)}</b></td>`}
+      ${cols.referencia ? dato('referencia', a.referencia, 'style="min-width:140px;"') : ''}
+      ${edit
+        ? `<td><select class="cg-in" data-id="${a.id}" data-f="productoId" onchange="catGuardarCelda(this)"><option value="">—</option>${prods.map(p => `<option value="${p.id}" ${a.productoId === p.id ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></td>`
+        : `<td>${txt(prodTxt)}</td>`}
+      ${cols.bultos ? dato('bultos', num(a.bultos), 'inputmode="decimal" style="width:70px;text-align:right;"', true) : ''}
+      ${cols.ml ? dato('metrosLineales', num(a.metrosLineales), 'inputmode="decimal" style="width:70px;text-align:right;"', true) : ''}
+      ${cols.peso ? dato('peso', num(a.peso), 'inputmode="decimal" style="width:80px;text-align:right;"', true) : ''}
+      ${cols.x.map(campoX).join('')}
       <td class="cg-stock" ${st.almacenes ? `title="${esc(st.almacenes)}"` : ''}>${st.mod ? `<b>${st.mod}</b> palet${st.mod === 1 ? '' : 's'}${cols.bultos && (a.bultos !== 1 || st.bul !== st.mod) ? ` <small>· ${sgaNumTxt(st.bul)} bultos</small>` : ''}` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
       <td class="cg-acc">${puede ? `
-        <button class="deca-act" title="Abrir el formulario completo (medidas, datos adicionales…)" onclick="openSgaArticuloForm('${a.clienteId}', '${a.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+        <button class="deca-act${edit ? ' cg-on' : ''}" title="${edit ? 'Listo: bloquear la fila otra vez' : 'Editar este artículo en la tabla'}" onclick="catEditarFila('${a.id}')">${homeIcon(edit ? HOME_ICON_PATHS.check : HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+        <button class="deca-act" title="Abrir el formulario completo (medidas, datos adicionales…)" onclick="openSgaArticuloForm('${a.clienteId}', '${a.id}')">${homeIcon(HOME_ICON_PATHS.file, 15, 'currentColor', 2)}</button>
         <button class="deca-act" title="Duplicar este artículo" onclick="catDuplicar('${a.id}')">${homeIcon(HOME_ICON_PATHS.copy, 15, 'currentColor', 2)}</button>
         <button class="deca-act" title="${a.archived ? 'Restaurar' : 'Archivar'}" onclick="setSgaArticuloArchivado('${a.id}', ${!a.archived})">${homeIcon(a.archived ? HOME_ICON_PATHS.check : HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>` : ''}</td>
     </tr>`;
