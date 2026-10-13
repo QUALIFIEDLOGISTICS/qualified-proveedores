@@ -12467,11 +12467,22 @@ function ocPdfTxt(s){
 const OC_PDF_DENS = [
 { fs: 8.6, lab: 6.6, lh: 10.4, pad: 8, rowPad: 5, tail: 3, strip: 16, stripGap: 21, rotH: 13, gap: 8, tit: 20, titH: 54, precioH: 36 },  { fs: 8,   lab: 6.3, lh: 9.6,  pad: 7, rowPad: 4, tail: 3, strip: 14, stripGap: 18, rotH: 12, gap: 6, tit: 18, titH: 48, precioH: 32 },  { fs: 7.5, lab: 6,   lh: 9,    pad: 6, rowPad: 3, tail: 2, strip: 13, stripGap: 16, rotH: 11, gap: 5, tit: 17, titH: 44, precioH: 30 },
   { fs: 7,   lab: 5.7, lh: 8.3,  pad: 5, rowPad: 2, tail: 1.5, strip: 12, stripGap: 14, rotH: 10, gap: 3, tit: 15, titH: 38, precioH: 26 },
+  // Órdenes con muchos puntos: siguen entrando en la primera hoja, con letra más pequeña.
+  { fs: 6.4, lab: 5.3, lh: 7.5,  pad: 4, rowPad: 1.5, tail: 1, strip: 11, stripGap: 12, rotH: 9, gap: 2, tit: 14, titH: 34, precioH: 22 },
+  { fs: 5.8, lab: 4.9, lh: 6.8,  pad: 3.5, rowPad: 1, tail: 0.5, strip: 10, stripGap: 11, rotH: 8, gap: 1.5, tit: 13, titH: 30, precioH: 20 },
 ];
 async function ocBuildPdf(o){
+  // Siempre dos hojas: la orden entera en la primera (si no cabe, se va reduciendo la letra) y facturación y condiciones en la segunda.
   let ultimo = null;
   for (let d = 0; d < OC_PDF_DENS.length; d++) {
     ultimo = await ocBuildPdfDens(o, OC_PDF_DENS[d]);
+    if (ultimo.cabe) return ultimo.bytes;
+  }
+  const ultimaD = OC_PDF_DENS[OC_PDF_DENS.length - 1];
+  for (let k = 0.92; k >= 0.6; k -= 0.04) {
+    const D = {};
+    Object.keys(ultimaD).forEach(c => { D[c] = ultimaD[c] * k; });
+    ultimo = await ocBuildPdfDens(o, D);
     if (ultimo.cabe) break;
   }
   return ultimo.bytes;
@@ -12624,14 +12635,19 @@ async function ocBuildPdfDens(o, D){
   linFA.forEach(([t, f], i) => txt(t, M + 16, y - 33 - introLs.length * 11 - 10 - i * 12.5, 9, f, INK));
   y -= hFA + 18;
 
+  // Las condiciones siempre caben en esta segunda hoja: si el texto es largo, la letra se reduce hasta que entre todo.
   seccion('Condiciones del servicio');
-  ocCfgCondiciones().forEach(([tit, cuerpo], i) => {
-    const ls = wrapPdfText(T(cuerpo), font, 8, CW - 18);
-    asegurar(ls.length * 10.4 + 24);
-    txt(`${i + 1}.`, M + 2, y - 8, 8.2, bold, NAVY);
-    txt(tit, M + 18, y - 8, 8.2, bold, NAVY);
-    ls.forEach((ln, k) => page.drawText(ln, { x: M + 18, y: y - 20 - k * 10.4, size: 8, font, color: INK }));
-    y -= ls.length * 10.4 + 20;
+  const conds = ocCfgCondiciones();
+  const altoCond = s => conds.reduce((suma, [, cuerpo]) => suma + wrapPdfText(T(cuerpo), font, 8 * s, CW - 18).length * 10.4 * s + 20 * s, 0);
+  const libre = y - BOTTOM;
+  let s = 1;
+  while (s > 0.4 && altoCond(s) > libre) s = Math.round((s - 0.02) * 100) / 100;
+  conds.forEach(([tit, cuerpo], i) => {
+    const ls = wrapPdfText(T(cuerpo), font, 8 * s, CW - 18);
+    txt(`${i + 1}.`, M + 2, y - 8 * s, 8.2 * s, bold, NAVY);
+    txt(tit, M + 18, y - 8 * s, 8.2 * s, bold, NAVY);
+    ls.forEach((ln, k) => page.drawText(ln, { x: M + 18, y: y - 20 * s - k * 10.4 * s, size: 8 * s, font, color: INK }));
+    y -= ls.length * 10.4 * s + 20 * s;
   });
 
   // Pie de todas las páginas
