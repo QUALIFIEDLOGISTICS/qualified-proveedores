@@ -388,6 +388,13 @@
   table.oc-tabla th,table.oc-tabla td{text-align:center !important;}
   table.oc-tabla th{white-space:nowrap;}
   table.oc-tabla td.tf-precio{text-align:center !important;}
+  /* Orden de carga: datos internos (servicio FTL/LTL, metros y margen) */
+  .oc-chips{display:flex;gap:6px;flex-wrap:wrap;}
+  .oc-chips button{min-width:42px;padding:8px 12px;border:1px solid var(--border);border-radius:9px;background:var(--panel);color:var(--text);font-family:var(--body);font-size:13.5px;font-weight:600;cursor:pointer;}
+  .oc-chips button:hover{border-color:var(--primary);}
+  .oc-chips button.on{background:var(--primary);border-color:var(--primary);color:#fff;}
+  #oc-servicio-grp button{min-width:78px;}
+  .oc-margen{align-self:flex-end;font-size:13px;color:var(--muted);padding-bottom:10px;}
   /* Órdenes de carga: filtros y filtros guardados */
   .ocf-panel{position:absolute;top:calc(100% + 8px);right:0;z-index:35;width:min(520px,86vw);padding:14px;border-radius:12px;background:var(--panel);border:1px solid var(--border);box-shadow:0 12px 32px rgba(0,0,0,.18);}
   .ocf-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;}
@@ -11980,6 +11987,7 @@ function ocDeFila(r){
     precio: r.precio == null ? null : Number(r.precio),
     cargas: Array.isArray(r.cargas) ? r.cargas : [], descargas: Array.isArray(r.descargas) ? r.descargas : [],
     pesoKg: r.peso_kg || '', decaId: r.deca_id || '', refFacturacion: r.ref_facturacion || '',
+    precioCliente: r.precio_cliente == null ? null : Number(r.precio_cliente), servicio: r.servicio || '', metros: r.metros == null ? '' : String(r.metros),
   };
 }
 async function loadOrdenesCarga(){
@@ -11988,6 +11996,9 @@ async function loadOrdenesCarga(){
 }
 function ocRef(o){ return 'OC-' + String(o.numero).padStart(4, '0'); }   // OC-0001: distinto del S0xxxxx del otro programa, para no confundirlos
 function ocPuntoResumen(p){ return p ? [p.poblacion, p.pais].filter(Boolean).join(', ') || p.empresa || '—' : '—'; }
+// Datos internos de la orden (no salen en el PDF).
+function ocClienteNombre(o){ const c = o.clienteId ? contactos.find(x => x.id === o.clienteId) : null; return c ? c.nombre : ''; }
+function ocServicioTxt(o){ return [o.servicio, o.metros ? o.metros + ' m' : ''].filter(Boolean).join(' · '); }
 // En el listado cada punto se ve por su código: país + código postal (ES08272). Sin código postal, se usa el pueblo y el país.
 function ocPuntoCodigo(p){
   if (!p) return '—';
@@ -12002,7 +12013,7 @@ function ocFiltro(){ return ['emitida', 'anulada'].includes(window.__ocFiltro) ?
    Junto a Todas / Emitidas / Anuladas: «Filtros» abre un panel para filtrar las órdenes ya creadas (transportista, carga,
    descarga, referencia, fechas, precio, DeCA). Un filtro se puede guardar con nombre y aparece como botón debajo de la barra
    para aplicarlo con un clic. Los guardados están en la tabla oc_filtros (los ve todo el que tiene Transporte). */
-const OC_FILTRO_VACIO = { transportista: '', carga: '', descarga: '', ref: '', desde: '', hasta: '', precioMin: '', precioMax: '', deca: '' };
+const OC_FILTRO_VACIO = { transportista: '', cliente: '', servicio: '', carga: '', descarga: '', ref: '', desde: '', hasta: '', precioMin: '', precioMax: '', deca: '' };
 let ocFiltrosGuardados = [];
 async function loadOcFiltros(){
   const { data, error } = await supabaseClient.from('oc_filtros').select('*').order('nombre', { ascending: true });
@@ -12016,6 +12027,8 @@ function ocCumpleFiltro(o, F){
   const textoPuntos = ps => ps.map(p => sinEsp([p.empresa, p.poblacion, p.cp, p.pais, p.direccion, ocPuntoCodigo(p)].join(' '))).join('|');
   if (low(F.transportista) && !low(o.transportistaNombre).includes(low(F.transportista))) return false;
   if (low(F.ref) && !low(o.refFacturacion).includes(low(F.ref))) return false;
+  if (low(F.cliente) && !low(ocClienteNombre(o)).includes(low(F.cliente))) return false;
+  if (F.servicio && o.servicio !== F.servicio) return false;
   if (sinEsp(F.carga) && !textoPuntos(o.cargas).includes(sinEsp(F.carga))) return false;
   if (sinEsp(F.descarga) && !textoPuntos(o.descargas).includes(sinEsp(F.descarga))) return false;
   if (F.desde && !(o.fechaPedido >= F.desde)) return false;
@@ -12051,6 +12064,13 @@ function ocFiltrosPanelHtml(){
       <div class="field" style="margin-bottom:0;grid-column:1 / -1;"><label>Transportista</label>
         <input id="ocf-transportista" list="ocf-transportistas" value="${esc(F.transportista || '')}" placeholder="Nombre o parte del nombre" oninput="ocFiltroSet('transportista', this.value)" />
         <datalist id="ocf-transportistas">${nombres.map(n => `<option value="${esc(n)}">`).join('')}</datalist></div>
+      ${campo('cliente', 'Cliente', 'Nombre o parte del nombre')}
+      <div class="field" style="margin-bottom:0;"><label>Servicio</label>
+        <select id="ocf-servicio" onchange="ocFiltroSet('servicio', this.value)">
+          <option value=""${F.servicio ? '' : ' selected'}>Todos</option>
+          <option value="FTL"${F.servicio === 'FTL' ? ' selected' : ''}>FTL</option>
+          <option value="LTL"${F.servicio === 'LTL' ? ' selected' : ''}>LTL</option>
+        </select></div>
       ${campo('carga', 'Carga', 'ES08650, Sallent, empresa…')}
       ${campo('descarga', 'Descarga', 'FR69001, Lyon, empresa…')}
       ${campo('ref', 'Ref. facturación', 'S12284')}
@@ -12174,7 +12194,7 @@ function ocListBodyHtml(){
   const q = (window.__ocSearch || '').toLowerCase();
   const f = ocFiltro();
   const FA = ocFiltroAv(), hayFiltro = ocFiltroAvCount() > 0;
-  const list = ordenesCarga.filter(o => (f === 'todas' || o.estado === f) && (!hayFiltro || ocCumpleFiltro(o, FA)) && (!q || [ocRef(o), o.refFacturacion, o.transportistaNombre, o.matriculaTractora, o.matriculaRemolque, o.mercancia,
+  const list = ordenesCarga.filter(o => (f === 'todas' || o.estado === f) && (!hayFiltro || ocCumpleFiltro(o, FA)) && (!q || [ocRef(o), o.refFacturacion, ocClienteNombre(o), o.servicio, o.transportistaNombre, o.matriculaTractora, o.matriculaRemolque, o.mercancia,
     ...o.cargas.map(p => [p.empresa, p.poblacion, ocPuntoCodigo(p)].join(' ')), ...o.descargas.map(p => [p.empresa, p.poblacion, ocPuntoCodigo(p)].join(' '))].some(v => String(v || '').toLowerCase().includes(q))));
   if (!list.length) {
     return `<div class="card deca-table-card"><div class="deca-empty"><span class="ico">${homeIcon(HOME_ICON_PATHS.file, 26, '#C1443D', 1.6)}</span><div style="font-size:14px;color:var(--text);font-weight:600;">${q || f !== 'todas' || hayFiltro ? 'Ninguna orden coincide' : 'Todavía no hay ninguna orden de carga'}</div><div style="font-size:12.5px;">${q || f !== 'todas' || hayFiltro ? 'Prueba con otra búsqueda o cambia los filtros.' : 'Pulsa «Nueva orden» para crear la primera.'}</div></div></div>`;
@@ -12187,7 +12207,7 @@ function ocListBodyHtml(){
     <div class="card deca-table-card"><div class="deca-table-scroll">
       <table class="deca-table oc-tabla">
         <thead><tr>
-          ${thSort('Nº', 'text')}${thSort('Ref. facturación', 'text')}${thSort('Fecha', 'date')}${thSort('Transportista', 'text')}${thSort('Carga', 'text')}${thSort('Descarga', 'text')}${thSort('Precio', 'number')}${thSort('Estado', 'text')}<th>DeCA</th><th>Acciones</th>
+          ${thSort('Nº', 'text')}${thSort('Ref. facturación', 'text')}${thSort('Fecha', 'date')}${thSort('Cliente', 'text')}${thSort('Transportista', 'text')}${thSort('Carga', 'text')}${thSort('Descarga', 'text')}${thSort('Servicio', 'text')}${thSort('Precio', 'number')}${thSort('Estado', 'text')}<th>DeCA</th><th>Acciones</th>
         </tr></thead>
         <tbody>
           ${list.map(o => { const d = o.decaId ? decaDocuments.find(x => x.id === o.decaId) : null; return `
@@ -12195,10 +12215,12 @@ function ocListBodyHtml(){
               <td data-sort-value="${o.numero}" style="white-space:nowrap;"><span class="deca-code-pill" style="font-size:12px;">${esc(ocRef(o))}</span></td>
               <td style="white-space:nowrap;" data-sort-value="${esc(o.refFacturacion)}">${o.refFacturacion ? `<b>${esc(o.refFacturacion)}</b>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(o.fechaPedido)}">${fmtDateDMY(o.fechaPedido)}</td>
+              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(ocClienteNombre(o))}" title="${esc(ocClienteNombre(o))}">${ocClienteNombre(o) ? esc(truncateText(ocClienteNombre(o), 22)) : '<span style="color:var(--mutedFaint);">—</span>'}</td>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(o.transportistaNombre)}" title="${esc(o.transportistaNombre)}">${esc(truncateText(o.transportistaNombre, 24))}</td>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(ocPuntoCodigo(o.cargas[0]))}" title="${esc(o.cargas.map(p => [p.empresa, p.poblacion, fmtDateDMY(p.fecha)].filter(Boolean).join(' · ')).join('\n'))}">${esc(ocPuntoCodigo(o.cargas[0]))}${mas(o.cargas)}</td>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(ocPuntoCodigo(o.descargas[0]))}" title="${esc(o.descargas.map(p => [p.empresa, p.poblacion, fmtDateDMY(p.fecha)].filter(Boolean).join(' · ')).join('\n'))}">${esc(ocPuntoCodigo(o.descargas[0]))}${mas(o.descargas)}</td>
-              <td class="tf-precio" data-sort-value="${o.precio == null ? '' : o.precio}">${o.precio == null ? '—' : esc(eur2(o.precio))}</td>
+              <td style="white-space:nowrap;" data-sort-value="${esc(ocServicioTxt(o))}">${ocServicioTxt(o) ? esc(ocServicioTxt(o)) : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+              <td class="tf-precio" data-sort-value="${o.precio == null ? '' : o.precio}"${o.precioCliente != null ? ` title="${esc('Cliente paga ' + eur2(o.precioCliente) + (o.precio != null ? ' · margen ' + eur2(o.precioCliente - o.precio) : ''))}"` : ''}>${o.precio == null ? '—' : esc(eur2(o.precio))}</td>
               <td data-sort-value="${esc(o.estado)}">${pill(o)}</td>
               <td style="white-space:nowrap;">${d ? `<button class="deca-code-pill" style="font-size:12px;cursor:pointer;border:none;" onclick="openDecaViewModal('${d.id}')" title="Ver el DeCA">${esc(d.codigo || 'DeCA')}</button>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
               <td style="white-space:nowrap;">
@@ -12297,6 +12319,7 @@ function ocSnapshotForm(){
     fechaPedido: v('oc-fecha'), precio: v('oc-precio').replace(/\s*€$/, '').replace(',', '.'), mercancia: v('oc-mercancia'), indicaciones: v('oc-indicaciones'),
     transportistaNombre: v('oc-transp-nombre'), transportistaNif: v('oc-transp-nif'), transportistaPoblacion: v('oc-transp-pob'), transportistaDireccion: v('oc-transp-dir'),
     matriculaTractora: v('oc-mat-tractora'), matriculaRemolque: v('oc-mat-remolque'), observacionesEspeciales: v('oc-obs'),
+    clienteNombre: v('oc-cli-nombre'), precioCliente: v('oc-precio-cli').replace(/\s*€$/, '').replace(',', '.'), servicio: v('oc-servicio'), metros: v('oc-metros'),
     refFacturacion: v('oc-ref-fact'), pesoKg: v('oc-peso'), decaOn: !!(document.getElementById('oc-deca-on') && document.getElementById('oc-deca-on').checked),
     cargas: ocLeerPuntos('carga'), descargas: ocLeerPuntos('descarga'),
   };
@@ -12343,14 +12366,26 @@ function ocVolverDesdeDireccion(direccionCreada){
 function ocIrACrearTransportista(){
   window.__ocFormDraft = ocSnapshotForm();
   window.__ocReturnContacto = true;
+  window.__ocReturnContactoRol = 'transportista';
   window.__ocReturnEditId = window.__ocFormId;
   window.__contactoNavContext = { label: 'Proveedores Transporte', ids: [] };
   openContactoModal(null, contactoPresetForNavLabel('Proveedores Transporte'));
 }
+// Igual para el cliente (datos internos de la orden): ficha de «Nuevo contacto» ya como cliente de transporte.
+function ocIrACrearCliente(){
+  window.__ocFormDraft = ocSnapshotForm();
+  window.__ocReturnContacto = true;
+  window.__ocReturnContactoRol = 'cliente';
+  window.__ocReturnEditId = window.__ocFormId;
+  window.__contactoNavContext = { label: 'Comercial', ids: [] };
+  openContactoModal(null, contactoPresetForNavLabel('Comercial'));
+}
 // contactoCreado: el contacto recién guardado, o null si se ha cancelado sin crear nada (lo gestiona closeContactoDetail).
 function ocVolverDesdeContacto(contactoCreado){
   const draft = window.__ocFormDraft || {};
-  if (contactoCreado) {
+  if (contactoCreado && window.__ocReturnContactoRol === 'cliente') {
+    draft.clienteNombre = contactoCreado.nombre;
+  } else if (contactoCreado) {
     draft.transportistaNombre = contactoCreado.nombre;
     draft.transportistaNif = contactoCreado.nif || '';
     draft.transportistaDireccion = [contactoCreado.calle1, contactoCreado.calle2].filter(Boolean).join(', ');
@@ -12359,6 +12394,28 @@ function ocVolverDesdeContacto(contactoCreado){
   window.__ocFormDraft = draft;
   window.__contactoFormDirty = false;   // ya se ha guardado: no preguntar por cambios sin guardar
   closeContactoDetail();
+}
+// Datos internos de la orden: servicio (FTL/LTL) y metros se eligen con botones; el margen se calcula solo.
+function ocElegirChip(inputId, v){
+  const h = document.getElementById(inputId);
+  if (!h) return;
+  h.value = h.value === v ? '' : v;   // pulsar el elegido otra vez lo quita
+  document.querySelectorAll(`#${inputId}-grp button`).forEach(b => b.classList.toggle('on', b.dataset.v === h.value));
+  window.__ocFormDirty = true;
+}
+function ocNumTxt(s){ const t = String(s == null ? '' : s).trim().replace(/\s*€$/, '').replace(',', '.'); return t === '' ? null : Number(t); }
+function ocMargenTxt(precioCliente, precioTransportista){
+  const pc = ocNumTxt(precioCliente), pt = ocNumTxt(precioTransportista);
+  if (pc == null || pt == null || !isFinite(pc) || !isFinite(pt)) return '';
+  const m = pc - pt;
+  const pct = pc > 0 ? ` (${(m / pc * 100).toLocaleString('es-ES', { maximumFractionDigits: 1 })} %)` : '';
+  return `Margen: <b style="color:${m < 0 ? 'var(--danger)' : 'var(--success)'};">${esc(eur2(m))}</b>${pct}`;
+}
+function ocMargenActualizar(){
+  const el = document.getElementById('oc-margen');
+  if (!el) return;
+  const v = id => (document.getElementById(id) || {}).value || '';
+  el.innerHTML = ocMargenTxt(v('oc-precio-cli'), v('oc-precio'));
 }
 function ocPuntoAdd(tipo){
   const cont = document.getElementById(tipo === 'carga' ? 'oc-cargas' : 'oc-descargas');
@@ -12401,9 +12458,29 @@ function tplOcFormPage(){
         <div class="deca-banner-sub">${o ? 'Al guardar cambia la orden; el número se mantiene.' : 'El número se asigna al guardar. Después puedes descargar el PDF para enviárselo al transportista.'}</div>
       </div>
     </div>
-    <div class="deca-form" oninput="window.__ocFormDirty=true;" onchange="window.__ocFormDirty=true;">
+    <div class="deca-form" oninput="window.__ocFormDirty=true; ocMargenActualizar();" onchange="window.__ocFormDirty=true;">
       <datalist id="oc-direcciones-datalist">${decaDireccionesOptionsHtml()}</datalist>
       <div class="deca-grid" style="margin-bottom:6px;">
+        <div class="card deca-card" style="grid-column:1 / -1;--dc-accent:#7C5CBF;">
+          ${decaCardHead('tag', 'Datos internos', 'Para nuestro control · no salen en el PDF')}
+          <div class="deca-card-body">
+            <div style="display:flex;gap:14px;flex-wrap:wrap;">
+              <div class="field" style="flex:2;min-width:260px;"><label>Cliente</label>
+                ${decaCampoConCrearHtml(decaInputIcon('building', `<input id="oc-cli-nombre" maxlength="150" data-combo="oc-clientes-datalist" autocomplete="off" placeholder="Elige entre tus clientes de transporte" value="${esc(e.clienteNombre != null ? e.clienteNombre : ((contactos.find(c => c.id === e.clienteId) || {}).nombre || ''))}" />`), 'ocIrACrearCliente()', 'Crear un cliente nuevo (no está en la lista)')}
+                <datalist id="oc-clientes-datalist">${contactos.filter(c => !c.archived && c.esClienteTransporte).map(c => `<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('')}</datalist></div>
+              <div class="field" style="flex:1;min-width:190px;"><label>Precio que nos paga el cliente</label>${decaInputIcon('weight', `<input id="oc-precio-cli" inputmode="decimal" maxlength="12" placeholder="Ej. 850" value="${esc(e.precioCliente == null ? '' : String(e.precioCliente).replace('.', ','))}" />`, '€')}</div>
+            </div>
+            <div style="display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start;">
+              <div class="field" style="margin-bottom:0;"><label>Servicio</label>
+                <input type="hidden" id="oc-servicio" value="${esc(e.servicio || '')}" />
+                <div class="oc-chips" id="oc-servicio-grp">${['FTL', 'LTL'].map(k => `<button type="button" class="${e.servicio === k ? 'on' : ''}" data-v="${k}" onclick="ocElegirChip('oc-servicio', '${k}')">${k}</button>`).join('')}</div></div>
+              <div class="field" style="margin-bottom:0;flex:1;min-width:280px;"><label>Metros</label>
+                <input type="hidden" id="oc-metros" value="${esc(e.metros || '')}" />
+                <div class="oc-chips" id="oc-metros-grp">${Array.from({ length: 13 }, (_, i) => String(i + 1)).map(k => `<button type="button" class="${String(e.metros) === k ? 'on' : ''}" data-v="${k}" onclick="ocElegirChip('oc-metros', '${k}')">${k}</button>`).join('')}</div></div>
+              <div id="oc-margen" class="oc-margen">${ocMargenTxt(e.precioCliente, e.precio)}</div>
+            </div>
+          </div>
+        </div>
         <div class="card deca-card" style="grid-column:1 / -1;--dc-accent:var(--primary);">
           ${decaCardHead('truck', 'Transportista y pedido', 'A quién se le encarga el viaje y en qué condiciones')}
           <div class="deca-card-body">
@@ -12482,6 +12559,12 @@ async function submitOcForm(editId){
   const conDeca = !!(document.getElementById('oc-deca-on') && document.getElementById('oc-deca-on').checked);
   const pesoTxt = v('oc-peso').replace(/\s*kg\.?$/i, '');
   const errores = [];
+  // Datos internos (no salen en el PDF)
+  const cliTxt = v('oc-cli-nombre');
+  const cli = cliTxt ? contactos.find(c => !c.archived && c.esClienteTransporte && c.nombre === cliTxt) : null;
+  const precioCli = ocNumTxt(v('oc-precio-cli'));
+  if (cliTxt && !cli) errores.push('Cliente: elige uno de la lista o créalo con el botón +.');
+  if (precioCli != null && (!isFinite(precioCli) || precioCli < 0)) errores.push('El precio que paga el cliente no es válido (un número).');
   if (!v('oc-fecha')) errores.push('Indica la fecha del pedido.');
   if (precio == null || !isFinite(precio) || precio < 0) errores.push('Indica el precio (un número).');
   if (!v('oc-transp-nombre')) errores.push('Elige el transportista.');
@@ -12508,6 +12591,13 @@ async function submitOcForm(editId){
   const refFact = v('oc-ref-fact');
   const refAntes = editId ? ((ordenesCarga.find(x => x.id === editId) || {}).refFacturacion || '') : '';
   if (refFact || refAntes) fila.ref_facturacion = refFact || null;
+  // Datos internos: igual que la referencia, solo se mandan si hay algo que guardar o que borrar.
+  const previa = editId ? (ordenesCarga.find(x => x.id === editId) || {}) : {};
+  const servicio = v('oc-servicio'), metros = v('oc-metros');
+  if (cli || previa.clienteId) fila.cliente_id = cli ? cli.id : null;
+  if (precioCli != null || previa.precioCliente != null) fila.precio_cliente = precioCli;
+  if (servicio || previa.servicio) fila.servicio = servicio || null;
+  if (metros || previa.metros) fila.metros = metros ? Number(metros) : null;
   try {
     let oc;
     if (editId) {
@@ -12536,7 +12626,7 @@ async function submitOcForm(editId){
     appToast(`Orden ${ocRef(oc)} ${editId ? 'actualizada' : 'creada'}.${avisoDeca}`, avisoDeca ? 'error' : 'ok');
   } catch (err) {
     const m = err && err.message ? err.message : 'error desconocido.';
-    errEl.textContent = 'No se pudo guardar: ' + (/ref_facturacion/i.test(m) ? 'falta ejecutar el SQL «Referencia de facturación» en Supabase.' : /ordenes_carga|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL «Órdenes de carga» en Supabase.' : m);
+    errEl.textContent = 'No se pudo guardar: ' + (/precio_cliente|servicio|metros/i.test(m) ? 'falta ejecutar el SQL «Datos internos de la orden» en Supabase.' : /ref_facturacion/i.test(m) ? 'falta ejecutar el SQL «Referencia de facturación» en Supabase.' : /ordenes_carga|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL «Órdenes de carga» en Supabase.' : m);
     if (btn) { btn.disabled = false; btn.textContent = editId ? 'Guardar cambios' : 'Crear orden'; }
   }
 }
