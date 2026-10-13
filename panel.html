@@ -3392,7 +3392,7 @@ function sgaFinalidad(a){ return String((a && a.atributos && a.atributos.finalid
 // Un artículo tal como viene de la base de datos
 function sgaArticuloDeFila(r){
   const atributos = Object.assign(r.finalidad ? { finalidad: r.finalidad } : {}, r.atributos || {});
-  return { id: r.id, clienteId: r.cliente_id, nombre: r.nombre, referencia: r.referencia || '', productoId: r.producto_id || '', zonaId: r.zona_id || '', bultos: Number(r.bultos_por_unidad), metrosLineales: r.metros_lineales == null ? null : Number(r.metros_lineales), peso: r.peso == null ? null : Number(r.peso), medidas: r.medidas || '', atributos, archived: !!r.archived };
+  return { id: r.id, clienteId: r.cliente_id, nombre: r.nombre, referencia: r.referencia || '', productoId: r.producto_id || '', zonaId: r.zona_id || '', bultos: Number(r.bultos_por_unidad), metrosLineales: r.metros_lineales == null ? null : Number(r.metros_lineales), peso: r.peso == null ? null : Number(r.peso), medidas: r.medidas || '', atributos, archived: false };   // los productos no se archivan
 }
 const SGA_CAMPOS_COLUMNA = ['referencia', 'descripcion', 'lote'];   // se guardan en columnas de la partida
 const SGA_CAMPO_NIVELES = { no: 'No se usa', opcional: 'Opcional', obligatorio: 'Obligatorio' };
@@ -3893,7 +3893,7 @@ function catElegirCliente(id){
   window.__catFiltro = 'todos';
   renderTab();
 }
-function catFiltro(){ return ['stock', 'sin', 'arch'].includes(window.__catFiltro) ? window.__catFiltro : 'todos'; }
+function catFiltro(){ return ['stock', 'sin'].includes(window.__catFiltro) ? window.__catFiltro : 'todos'; }
 // Almacenes donde hay mercancía ahora (del cliente elegido, si hay uno): en el catálogo solo se puede mirar dónde hay algo.
 // Si solo hay uno no hace falta elegir, y si el almacén elegido se quedó vacío se vuelve a «todos».
 function catAlmacenesConMercancia(){
@@ -4002,8 +4002,7 @@ function catMenu(id, ev){
   m.dataset.id = id;
   m.innerHTML = `
     <button type="button" onclick="catMenuCerrar(); openSgaArticuloForm('${a.clienteId}', '${a.id}')">Formulario completo</button>
-    <button type="button" onclick="catMenuCerrar(); catDuplicar('${a.id}')">Duplicar</button>
-    <button type="button" class="danger" onclick="catMenuCerrar(); setSgaArticuloArchivado('${a.id}', ${!a.archived})">${a.archived ? 'Restaurar' : 'Archivar'}</button>`;
+    <button type="button" onclick="catMenuCerrar(); catDuplicar('${a.id}')">Duplicar</button>`;
   const r = ev.currentTarget.getBoundingClientRect();
   m.style.display = 'block';
   m.style.top = Math.min(window.innerHeight - m.offsetHeight - 8, r.bottom + 4) + 'px';
@@ -4075,11 +4074,11 @@ function catConteos(){
   const base = cid ? sgaArticulosDe(cid, true) : sgaArticulos.filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && c.esClienteAlmacen && !c.archived; });
   const act = base.filter(a => !a.archived).concat(catArticulosVirtuales(cid));
   const conStock = act.filter(a => catStockArticulo(a).mod > 0).length;
-  return { todos: act.length, stock: conStock, sin: act.length - conStock, arch: base.filter(a => a.archived).length };
+  return { todos: act.length, stock: conStock, sin: act.length - conStock };
 }
 function catFiltrosHtml(){
   const n = catConteos();
-  return [['todos', 'Todos'], ['stock', 'Con stock'], ['sin', 'Sin stock'], ['arch', 'Archivados']].map(([k, t]) =>
+  return [['todos', 'Todos'], ['stock', 'Con stock'], ['sin', 'Sin stock']].map(([k, t]) =>
     `<button type="button" class="${catFiltro() === k ? 'on' : ''}" data-k="${k}" onclick="window.__catFiltro='${k}'; refreshStockBody();">${t}<span class="cl-n">${n[k]}</span></button>`).join('');
 }
 function catRefrescarFiltros(){ const f = document.getElementById('cat-filtros'); if (f) f.innerHTML = catFiltrosHtml(); }
@@ -4090,14 +4089,14 @@ function stockCatalogoBodyHtml(){
   const cols = catColumnas(cid);
   const nombreDe = c => ((c.nombreComercial || '').trim() || c.nombre);
   let lista = (cid ? sgaArticulosDe(cid, true) : sgaArticulos.filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && c.esClienteAlmacen && !c.archived; })).concat(catArticulosVirtuales(cid))
-    .filter(a => filtro === 'arch' ? a.archived : !a.archived)
+    .filter(a => !a.archived)
     .filter(a => stockCatalogoCoincide(a, q) || (!cid && (nombreDe(contactos.find(c => c.id === a.clienteId) || {}) || '').toLowerCase().includes(q)));
   if (filtro === 'stock') lista = lista.filter(a => catStockArticulo(a).mod > 0);
   if (filtro === 'sin') lista = lista.filter(a => catStockArticulo(a).mod === 0);
   lista.sort((a, b) => (cid ? 0 : nombreDe(contactos.find(c => c.id === a.clienteId) || {}).localeCompare(nombreDe(contactos.find(c => c.id === b.clienteId) || {}), 'es')) || sgaArticuloTxt(a).localeCompare(sgaArticuloTxt(b), 'es'));
   const puede = sgaPuedeEditarStock();
   const conCliente = !cid;
-  const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${q ? 'Ningún artículo coincide con la búsqueda.' : filtro === 'arch' ? 'No hay artículos archivados.' : filtro === 'stock' ? 'Ningún artículo tiene stock ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : cid ? 'Este cliente todavía no tiene artículos. Crea el primero con «+ Artículo» (o pega varios con «Alta rápida»).' : 'Todavía no hay artículos. Elige un cliente y crea el primero.'}</div>` : '';
+  const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${q ? 'Ningún artículo coincide con la búsqueda.' : filtro === 'stock' ? 'Ningún artículo tiene stock ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : cid ? 'Este cliente todavía no tiene artículos. Crea el primero con «+ Artículo» (o pega varios con «Alta rápida»).' : 'Todavía no hay artículos. Elige un cliente y crea el primero.'}</div>` : '';
   return `
     ${cid ? '' : `<div class="card" style="padding:11px 16px;margin-bottom:12px;font-size:13.5px;color:var(--text);border-left:4px solid var(--primary);">Estás viendo los artículos de <b>todos los clientes</b>. Para <b>crear</b> uno, elige primero el cliente en el desplegable de arriba.</div>`}
     <div class="card" style="padding:0;">
@@ -4111,8 +4110,7 @@ function stockCatalogoBodyHtml(){
       </div>
       ${vacio}
     </div>
-    <div id="cg-menu" class="cg-menu" onclick="event.stopPropagation();"></div>
-    ${cid && filtro === 'arch' ? '<div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">Estás viendo los archivados: para crear artículos vuelve a «Todos».</div>' : ''}`;
+    <div id="cg-menu" class="cg-menu" onclick="event.stopPropagation();"></div>`;
 }
 function catTecla(ev, el){
   if (ev.key === 'Enter') {
@@ -5330,14 +5328,13 @@ function sgaPuedeEditarStock(){ return !!(PROFILE.isAdmin || PROFILE.allowedTabs
 function sgaNumTxt(n){ return n == null || n === '' ? '—' : Number(n).toLocaleString('es-ES', { maximumFractionDigits: 2 }); }
 function sgaArticulosFilasHtml(c){
   const q = (window.__sgaArtSearch || '').trim().toLowerCase();
-  const verArch = !!window.__sgaArtArch;
-  const lista = sgaArticulosDe(c.id, true).filter(a => !!a.archived === verArch && (!q || sgaArticuloTxt(a).toLowerCase().includes(q) || sgaFinalidad(a).toLowerCase().includes(q)))
+  const lista = sgaArticulosDe(c.id).filter(a => (!q || sgaArticuloTxt(a).toLowerCase().includes(q) || sgaFinalidad(a).toLowerCase().includes(q)))
     .sort((a, b) => sgaArticuloTxt(a).localeCompare(sgaArticuloTxt(b), 'es'));
-  if (!lista.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;padding:6px 2px;">${q ? 'Ningún artículo coincide con la búsqueda.' : verArch ? 'No hay artículos archivados.' : 'Este cliente todavía no tiene artículos. Crea el primero con «+ Artículo».'}</div>`;
+  if (!lista.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;padding:6px 2px;">${q ? 'Ningún artículo coincide con la búsqueda.' : 'Este cliente todavía no tiene artículos. Crea el primero con «+ Artículo».'}</div>`;
   return `<div class="tc-hist-box" style="max-height:380px;"><table class="tf-table">
     <thead><tr>${thSort('Producto','text')}${thSort('Referencia','text')}${thSort('Tipo de carga','text')}${thSort('Bultos / palet','number','style="text-align:right;"')}${thSort('M. lineales','number','style="text-align:right;"')}${thSort('Peso (kg)','number','style="text-align:right;"')}${thSort('Zona','text')}<th style="width:120px;"></th></tr></thead>
     <tbody>${lista.map(a => { const z = sgaZonaDe(a.zonaId); return `
-      <tr${a.archived ? ' style="opacity:.6;"' : ''}>
+      <tr>
         <td data-sort-value="${esc(a.nombre)}"><b>${esc(a.nombre)}</b>${sgaFinalidad(a) ? `<div style="font-size:11.5px;color:var(--muted);">${esc(sgaFinalidad(a))}</div>` : ''}</td>
         <td data-sort-value="${esc(a.referencia)}">${esc(a.referencia) || '—'}</td>
         <td data-sort-value="${esc(a.productoId ? sgaProdTxt(a.productoId) : '')}">${a.productoId ? esc(sgaProdTxt(a.productoId)) : '—'}</td>
@@ -5347,14 +5344,12 @@ function sgaArticulosFilasHtml(c){
         <td data-sort-value="${esc(z ? sgaZonaNombre(z) : '')}">${z ? esc(sgaZonaNombre(z)) : '—'}</td>
         <td style="text-align:right;white-space:nowrap;">
           <button class="deca-act" onclick="openSgaArticuloForm('${c.id}', '${a.id}')" title="Editar el artículo">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
-          <button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="setSgaArticuloArchivado('${a.id}', ${!a.archived})">${a.archived ? 'Restaurar' : 'Archivar'}</button>
         </td>
       </tr>`; }).join('')}</tbody></table></div>`;
 }
 function sgaArticulosRefrescar(clienteId){ const el = document.getElementById('sga-art-body'); const c = contactos.find(x => x.id === clienteId); if (el && c) el.innerHTML = sgaArticulosFilasHtml(c); }
 function tplSgaArticulosCard(c){
   const n = sgaArticulosDe(c.id).length;
-  const arch = sgaArticulosDe(c.id, true).length - n;
   const puede = sgaPuedeEditarStock();
   return `
     <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:20px;">
@@ -5362,7 +5357,6 @@ function tplSgaArticulosCard(c){
       <div class="deca-card-body">
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
           <div class="deca-search" style="flex:1;min-width:220px;"><input placeholder="Buscar por producto o referencia…" value="${esc(window.__sgaArtSearch || '')}" oninput="window.__sgaArtSearch=this.value; sgaArticulosRefrescar('${c.id}');" /><span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span></div>
-          ${arch || window.__sgaArtArch ? `<button type="button" class="tl-chg" onclick="window.__sgaArtArch=${!window.__sgaArtArch}; renderTab();">${window.__sgaArtArch ? 'Ver los activos' : `Ver archivados (${arch})`}</button>` : ''}
         </div>
         <div id="sga-art-body">${sgaArticulosFilasHtml(c)}</div>
       </div>
@@ -5493,17 +5487,6 @@ async function submitSgaArticulo(){
     if (btn) btn.disabled = false;
   }
 }
-async function setSgaArticuloArchivado(id, archivar){
-  const a = sgaArticulos.find(x => x.id === id);
-  if (!a) return;
-  if (archivar && !(await appConfirm({ title: 'Archivar artículo', name: sgaArticuloTxt(a), message: 'Dejará de ofrecerse en las entradas nuevas. El stock que ya tenga se sigue viendo.', confirmLabel: 'Archivar', tone: 'warn', icon: 'warn' }))) return;
-  const { error } = await supabaseClient.from('sga_articulos').update({ archived: archivar }).eq('id', id);
-  if (error) { appToast('No se pudo guardar: ' + error.message, 'error'); return; }
-  a.archived = archivar;
-  await logContactoHistorial(a.clienteId, `SGA · ha ${archivar ? 'archivado' : 'restaurado'} el artículo ${sgaArticuloTxt(a)}.`);
-  renderTab();
-}
-
 /* ---- SGA · Alta rápida de artículos (pegando desde el Excel) ----
    Se copian en el Excel las columnas de la hoja «BASE DE DATOS» (Producto, Referencia, Bultos, Metros lineales, Peso, Nave,
    Información, Finalidad), se pegan en un cuadro y el SGA enseña lo que va a crear antes de guardar nada. */
