@@ -6418,7 +6418,7 @@ async function loadDirecciones(){
   direcciones = (data||[]).map(d => ({
     id: d.id, nombre: d.nombre, calle1: d.calle1 || '', calle2: d.calle2 || '', codigoPostal: d.codigo_postal || '',
     ciudad: d.ciudad || '', provincia: d.provincia || '', pais: d.pais || '',
-    telefono: d.telefono || '', horarios: d.horarios || '', observaciones: d.observaciones || '', mapsUrl: d.google_maps_url || '', archived: !!d.archived,
+    telefono: d.telefono || '', horarios: d.horarios || '', observaciones: d.observaciones || '', observacionesOc: d.observaciones_oc || '', mapsUrl: d.google_maps_url || '', archived: !!d.archived,
     createdBy: d.created_by || '', verificada: !!d.verificada, verificadaPor: d.verificada_por || '', verificadaAt: d.verificada_at || '',
   }));
 }
@@ -6810,7 +6810,7 @@ async function logDireccionHistorial(direccionId, resumen){
 const DIRECCION_FIELD_LABELS = {
   nombre: 'Nombre del lugar', calle1: 'Calle 1', calle2: 'Calle 2', codigoPostal: 'Código postal',
   ciudad: 'Ciudad', provincia: 'Provincia', pais: 'País', mapsUrl: 'Enlace de Google Maps',
-  telefono: 'Teléfono', horarios: 'Horarios', observaciones: 'Observaciones',
+  telefono: 'Teléfono', horarios: 'Horarios', observaciones: 'Observaciones', observacionesOc: 'Observaciones para órdenes de carga',
 };
 function safeMapsUrl(url){ return /^https?:\/\//i.test(url||'') ? url : ''; }
 function buildDireccionChangeSummary(before, after){
@@ -6884,6 +6884,7 @@ function tplDireccionViewCard(d){
       ${decaViewRow('link', 'Google Maps', maps, '#4A90C2')}
       ${decaViewRow('clock', 'Horarios', horarios, '#C98A2E', true)}
       ${d.observaciones ? decaViewRow('file', 'Observaciones', `<span style="white-space:pre-line;">${esc(d.observaciones)}</span>`, '#5C6670', true) : ''}
+      ${d.observacionesOc ? decaViewRow('file', 'Obs. órdenes de carga', `<span style="white-space:pre-line;">${esc(d.observacionesOc)}</span>`, '#C1443D', true) : ''}
     </div>`;
 }
 function direccionHistorialBodyHtml(){
@@ -6988,6 +6989,10 @@ function tplDireccionFormPage(){
         ${decaCardHead('file', 'Observaciones', 'Opcional · cómo llegar, indicaciones para el conductor')}
         <div class="deca-card-body"><textarea id="dr-observaciones" maxlength="500" placeholder="Cómo llegar, indicaciones para el conductor…" style="min-height:90px;resize:vertical;">${esc(d.observaciones||'')}</textarea></div>
       </div>
+      <div class="card deca-card" style="--dc-accent:var(--primary);">
+        ${decaCardHead('file', 'Observaciones para órdenes de carga', 'Opcional · se copia sola en la orden de carga cada vez que se elige esta dirección')}
+        <div class="deca-card-body"><textarea id="dr-observaciones-oc" maxlength="500" placeholder="Lo que siempre tiene que saber el transportista: avisar antes de llegar, pedir cita, qué documentos llevar…" style="min-height:80px;resize:vertical;">${esc(d.observacionesOc||'')}</textarea></div>
+      </div>
     </div>
     <div class="deca-actions">
       <div id="dr-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
@@ -7027,6 +7032,11 @@ async function submitDireccionForm(editId){
     pais: val('dr-pais') || null, telefono: phoneCollect('dr-telefono').value || null, horarios: val('dr-horarios') || null,
     observaciones: val('dr-observaciones') || null, google_maps_url: mapsUrl || null,
   };
+  // Observaciones para órdenes de carga: solo se mandan si hay algo que guardar o que borrar, para que guardar
+  // direcciones siga funcionando aunque todavía no se haya ejecutado el SQL de la columna.
+  const obsOc = val('dr-observaciones-oc');
+  const obsOcAntes = editId ? ((direcciones.find(d => d.id === editId) || {}).observacionesOc || '') : '';
+  if (obsOc || obsOcAntes) payload.observaciones_oc = obsOc || null;
   const btns = [...document.querySelectorAll('.dr-submit-btn')];
   btns.forEach(b => b.disabled = true);
   const before = editId ? { ...direcciones.find(d=>d.id===editId) } : null;
@@ -7048,14 +7058,14 @@ async function submitDireccionForm(editId){
     res = await supabaseClient.from('direcciones').insert(sinAutor).select();
   }
   if (res.error || !res.data || !res.data.length) {
-    showFormError(errEl, 'No se pudo guardar: ' + (res.error && res.error.message ? res.error.message : 'sin permiso o error desconocido.'));
+    showFormError(errEl, 'No se pudo guardar: ' + (res.error && /observaciones_oc/i.test(res.error.message || '') ? 'falta ejecutar el SQL «Observaciones para órdenes de carga» en Supabase.' : res.error && res.error.message ? res.error.message : 'sin permiso o error desconocido.'));
     btns.forEach(b => b.disabled = false);
     return;
   }
   const after = {
     nombre, calle1: payload.calle1 || '', calle2: payload.calle2 || '', codigoPostal: payload.codigo_postal || '',
     ciudad: payload.ciudad || '', provincia: payload.provincia || '', pais: payload.pais || '',
-    observaciones: payload.observaciones || '', mapsUrl: payload.google_maps_url || '', telefono: payload.telefono || '', horarios: payload.horarios || '',
+    observaciones: payload.observaciones || '', observacionesOc: payload.observaciones_oc !== undefined ? (payload.observaciones_oc || '') : ((before && before.observacionesOc) || ''), mapsUrl: payload.google_maps_url || '', telefono: payload.telefono || '', horarios: payload.horarios || '',
   };
   const changeLines = before ? buildDireccionChangeSummary(before, after) : ['Dirección creada.'];
   if (vuelveAPendiente) { changeLines.push('Vuelve a estar sin verificar porque se ha cambiado el lugar.'); appToast('Al cambiar el lugar, la dirección vuelve a quedar sin verificar.', 'info'); }
@@ -12078,7 +12088,7 @@ function ocPuntoRowHtml(tipo, p, quitar){
       ${grupo('De la ficha de la dirección')}
       <div class="oc-g">
         ${f('horario', 'Horario', 'Se rellena con la ficha', 6)}${f('maps', 'Google Maps', 'Enlace de la ficha', 6)}
-        ${f('observaciones', 'Observaciones <small style="color:var(--mutedFaint);font-weight:400;">· salen de la ficha; puedes escribir o cambiar lo que quieras</small>', 'Ej. Avisar 24 h antes de llegar', 12, 'oninput="this.dataset.auto=\'\'"')}
+        ${f('observaciones', 'Observaciones <small style="color:var(--mutedFaint);font-weight:400;">· salen de «Observaciones para órdenes de carga» de la dirección; puedes escribir o cambiar lo que quieras</small>', 'Ej. Avisar 24 h antes de llegar', 12, 'oninput="this.dataset.auto=\'\'"')}
       </div>
     </div>`;
 }
@@ -12101,7 +12111,7 @@ function ocElegirDireccion(el){
   set('cp', d.codigoPostal); set('poblacion', d.ciudad); set('pais', d.pais);
   set('horario', d.horarios); set('maps', d.mapsUrl);
   const obs = row.querySelector('[data-k="observaciones"]');
-  if (obs && (!obs.value.trim() || obs.dataset.auto === '1')) { obs.value = d.observaciones || ''; obs.dataset.auto = d.observaciones ? '1' : ''; }
+  if (obs && (!obs.value.trim() || obs.dataset.auto === '1')) { obs.value = d.observacionesOc || ''; obs.dataset.auto = d.observacionesOc ? '1' : ''; }
   window.__ocFormDirty = true;
 }
 // Crear una dirección desde una carga o una descarga: se va a la página real de «Nueva dirección» y, al guardar o cancelar,
@@ -12138,7 +12148,7 @@ function ocVolverDesdeDireccion(direccionCreada){
     const lista = (draft[clave] || []).slice();
     lista[t.i] = Object.assign({}, lista[t.i], {
       empresa: d.nombre || '', direccion: [d.calle1, d.calle2].filter(Boolean).join(', '),
-      cp: d.codigoPostal || '', poblacion: d.ciudad || '', pais: d.pais || '', horario: d.horarios || '', maps: d.mapsUrl || '', observaciones: (lista[t.i] && lista[t.i].observaciones) || d.observaciones || '',
+      cp: d.codigoPostal || '', poblacion: d.ciudad || '', pais: d.pais || '', horario: d.horarios || '', maps: d.mapsUrl || '', observaciones: (lista[t.i] && lista[t.i].observaciones) || d.observacionesOc || '',
     });
     draft[clave] = lista;
   }
