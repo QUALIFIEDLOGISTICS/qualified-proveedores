@@ -2546,7 +2546,7 @@ function computeBreadcrumbSegments(){
     const cerrar = window.__stockView === 'articulo' ? 'sgaArticuloCerrar()' : 'sgaArtRapidaCerrar()';
     return [{label:'Catálogo', onclick:cerrar}, {label: cl ? ((cl.nombreComercial || '').trim() || cl.nombre) : 'Cliente', onclick:cerrar}, {label: window.__stockView === 'rapida' ? 'Alta rápida de artículos' : (pg && pg.id ? 'Artículo' : 'Nuevo artículo'), onclick:null}];
   }
-  if (currentTab === 'stock' && window.__stockView === 'salida') return [{label:'Control Stock SGA', onclick:'sgaSalidaCancelar()'}, {label:'Nueva salida', onclick:null}];
+  if (currentTab === 'stock' && window.__stockView === 'salida') return [{label:'Control Stock SGA', onclick:'sgaSalidaCancelar()'}, {label: window.__slEdit ? 'Editar salida' : 'Nueva salida', onclick:null}];
   if (currentTab === 'stock' && window.__stockView === 'regul') return [{label:'Control Stock SGA', onclick:'sgaRegulCancelar()'}, {label:'Regularizar stock', onclick:null}];
   if (currentTab === ALMACEN_CONFIG_TAB) {
     if (window.__sgaPage && window.__sgaPage.kind === 'campo') {
@@ -3721,13 +3721,8 @@ async function loadSgaStock(){
     supabaseClient.from('sga_partidas').select('*').eq('estado', 'activa').order('fecha_entrada', { ascending: true }),
     supabaseClient.from('sga_albaranes').select('*').order('fecha', { ascending: false }).limit(100),
   ]);
-  sgaPartidas = (p.data || []).map(r => ({
-    id: r.id, clienteId: r.cliente_id, warehouseId: r.warehouse_id, zonaId: r.zona_id, ubicacionId: r.ubicacion_id, productoId: r.producto_id,
-    referencia: r.referencia || '', descripcion: r.descripcion || '', lote: r.lote || '', codigo: r.codigo || '',
-    inicial: Number(r.cantidad_inicial), actual: Number(r.cantidad_actual), fechaEntrada: r.fecha_entrada, albaranId: r.albaran_entrada_id,
-    atributos: r.atributos || {}, createdAt: r.created_at, articuloId: r.articulo_id || '', bultos: r.bultos == null ? null : Number(r.bultos),
-  }));
-  sgaAlbaranes = (a.data || []).map(r => ({
+  sgaPartidas = (p.data || []).map(sgaPartidaDeFila);
+  sgaAlbaranes =(a.data || []).map(r => ({
     id: r.id, numero: r.numero, tipo: r.tipo, clienteId: r.cliente_id, warehouseId: r.warehouse_id, fecha: r.fecha, referencia: r.referencia || '',
     modalidad: r.modalidad, transportista: r.transportista || '', matricula: r.matricula || '', observaciones: r.observaciones || '', estado: r.estado, createdAt: r.created_at, numeroTexto: r.numero_texto || '', destinatario: r.destinatario || '', destinatarioDireccion: r.destinatario_direccion || '', anuladoMotivo: r.anulado_motivo || '',
   }));
@@ -3826,7 +3821,7 @@ function stockBodyHtml(){
           <td data-sort-value="${esc(a.modalidad)}">${a.tipo === 'regularizacion' ? 'Regularización' : a.tipo === 'apertura' ? 'Stock inicial' : esc(SGA_MODALIDADES[a.modalidad] || a.modalidad)}</td>
           <td class="tf-precio" data-sort-value="${Math.abs(sgaMovsAlbaran[a.id] || 0)}">${sgaMovsAlbaran[a.id] == null ? '—' : a.tipo === 'regularizacion' ? (sgaMovsAlbaran[a.id] > 0 ? '+' : '') + sgaMovsAlbaran[a.id] : Math.abs(sgaMovsAlbaran[a.id])}</td>
           <td data-sort-value="${esc(a.estado)}"${a.estado === 'anulado' ? ` title="${esc(a.anuladoMotivo)}" style="color:var(--danger);"` : ''}>${a.estado === 'confirmado' ? 'Confirmada' : a.estado === 'anulado' ? 'Anulada' : 'Borrador'}</td>
-          <td style="text-align:right;white-space:nowrap;">${a.estado === 'confirmado' && a.tipo === 'salida' ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="sgaAlbaranImprimir('${a.id}')" title="Imprimir el albarán o guardarlo en PDF">Albarán</button>` : ''} ${a.estado === 'confirmado' && a.tipo !== 'regularizacion' && sgaPuedeEditarStock() ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:var(--danger);" onclick="sgaAnularAbrir('${a.id}')">Anular</button>` : ''}</td>
+          <td style="text-align:right;white-space:nowrap;">${a.estado === 'confirmado' && a.tipo === 'salida' ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="sgaAlbaranImprimir('${a.id}')" title="Imprimir el albarán o guardarlo en PDF">Albarán</button>` : ''} ${a.estado === 'confirmado' && a.tipo === 'salida' && sgaPuedeEditarStock() ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="sgaSalidaEditar('${a.id}')" title="Cambiar esta salida: al guardar se recalcula todo">Editar</button>` : ''} ${a.estado === 'confirmado' && a.tipo !== 'regularizacion' && sgaPuedeEditarStock() ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:var(--danger);" onclick="sgaAnularAbrir('${a.id}')">Anular</button>` : ''}</td>
         </tr>`; }).join('')}</tbody></table></div>`;
   }
   const porCliente = {};
@@ -4140,6 +4135,7 @@ function tplStock(){
     </div>`;
 }
 function stockVolver(){
+  if (window.__slEdit) { window.__slEdit = null; loadSgaStock().then(() => { if (currentTab === 'stock') renderTab(); }); }
   window.__stockView = 'home';
   window.__stockDirty = false;
   renderHeader(); renderTab();
@@ -4751,9 +4747,77 @@ function sgaSalidaAbrir(){
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
 }
+/* ---- Editar una salida ya confirmada ----
+   Se abre el mismo formulario de la salida con todo rellenado. Mientras se edita, en pantalla el stock vuelve a como estaba antes
+   de esta salida (así se puede cambiar lo que sale). Al guardar, la función sga_editar_salida deshace la salida anterior y aplica la
+   nueva de golpe: stock, movimientos, servicios y cobros se recalculan. El albarán conserva su número. */
+function sgaPartidaDeFila(r){
+  return {
+    id: r.id, clienteId: r.cliente_id, warehouseId: r.warehouse_id, zonaId: r.zona_id, ubicacionId: r.ubicacion_id, productoId: r.producto_id,
+    referencia: r.referencia || '', descripcion: r.descripcion || '', lote: r.lote || '', codigo: r.codigo || '',
+    inicial: Number(r.cantidad_inicial), actual: Number(r.cantidad_actual), fechaEntrada: r.fecha_entrada, albaranId: r.albaran_entrada_id,
+    atributos: r.atributos || {}, createdAt: r.created_at, articuloId: r.articulo_id || '', bultos: r.bultos == null ? null : Number(r.bultos),
+  };
+}
+async function sgaSalidaEditar(id){
+  const a = sgaAlbaranes.find(x => x.id === id);
+  if (!a || a.tipo !== 'salida' || a.estado !== 'confirmado') return;
+  const [m, s] = await Promise.all([
+    supabaseClient.from('sga_movimientos').select('partida_id,cantidad').eq('albaran_id', id).eq('tipo', 'salida'),
+    supabaseClient.from('sga_servicios').select('producto_id,cantidad,nota').eq('albaran_id', id),
+  ]);
+  if (m.error) { appToast('No se pudo abrir la salida: ' + m.error.message, 'error'); return; }
+  const prev = {};
+  (m.data || []).forEach(r => { prev[r.partida_id] = (prev[r.partida_id] || 0) + Math.abs(Number(r.cantidad)); });
+  const pids = Object.keys(prev);
+  // las partidas que esta salida dejó a cero no están cargadas: se traen
+  const faltan = pids.filter(pid => !sgaPartidas.some(p => p.id === pid));
+  if (faltan.length) {
+    const { data } = await supabaseClient.from('sga_partidas').select('*').in('id', faltan);
+    (data || []).forEach(r => sgaPartidas.push(sgaPartidaDeFila(r)));
+  }
+  pids.forEach(pid => { const p = sgaPartidas.find(x => x.id === pid); if (p) p.actual += prev[pid]; });
+  window.__slEdit = { id, albaran: a, prev, servicios: s.data || [] };
+  window.__stockView = 'salida';
+  window.__stockDirty = false;
+  renderHeader(); renderTab();
+  sgaSalidaRellenar();
+  window.scrollTo(0, 0);
+}
+// Rellena el formulario con los datos de la salida que se edita.
+function sgaSalidaRellenar(){
+  const e = window.__slEdit;
+  if (!e) return;
+  const a = e.albaran;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v == null ? '' : v; };
+  const cli = document.getElementById('sl-cliente');
+  if (cli) {
+    if (![...cli.options].some(o => o.value === a.clienteId)) {
+      const c = contactos.find(x => x.id === a.clienteId);
+      cli.insertAdjacentHTML('beforeend', `<option value="${a.clienteId}">${esc(c ? ((c.nombreComercial || '').trim() || c.nombre) : '—')}</option>`);
+    }
+    cli.value = a.clienteId;
+    cli.disabled = true;   // el cliente de una salida no se cambia
+  }
+  sgaSalidaClienteCambio();
+  const alm = document.getElementById('sl-almacen');
+  if (alm) alm.value = a.warehouseId;
+  sgaSalidaAlmacenCambio();
+  set('sl-fecha', a.fecha); set('sl-ref', a.referencia); set('sl-transp', a.transportista); set('sl-matr', a.matricula); set('sl-obs', a.observaciones);
+  if (a.modalidad) sgaSalidaModalidad(a.modalidad);
+  set('sl-dest', a.destinatario);
+  if (sgaDireccionPorNombre(a.destinatario)) sgaSalidaDestinatarioCambio(); else set('sl-destdir', a.destinatarioDireccion);   // destinatario escrito a mano en su día
+  Object.keys(e.prev).forEach(pid => sgaSalidaPonerCantidad(pid, e.prev[pid]));
+  (e.servicios || []).forEach(s => {
+    const j = (window.__stockJ = (window.__stockJ || 0) + 1);
+    document.getElementById('se-servicios').insertAdjacentHTML('beforeend', sgaServicioFilaHtml(j, { prod: s.producto_id, cant: String(s.cantidad).replace('.', ','), nota: s.nota || '' }));
+  });
+  window.__stockDirty = false;
+  sgaSalidaRefrescar();
+}
 async function sgaSalidaCancelar(){
   if (window.__stockDirty && !(await appConfirm({ title: 'Descartar la salida', message: 'Has empezado a rellenar esta salida. Si sales, se pierde lo escrito.', confirmLabel: 'Descartar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
-  stockVolver();
+  stockVolver();   // si se estaba editando, stockVolver recarga el stock real
 }
 function sgaSalidaStockHtml(clienteId){
   const cfg = sgaClienteCfg(clienteId);
@@ -4932,8 +4996,8 @@ function tplStockSalidaPage(){
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
-        <div class="deca-banner-title">Nueva salida</div>
-        <div class="deca-banner-sub">La mercancía que sale de un cliente, del almacén donde la tiene.</div>
+        <div class="deca-banner-title">${window.__slEdit ? 'Editar salida ' + esc(sgaNumAlbaran(window.__slEdit.albaran)) : 'Nueva salida'}</div>
+        <div class="deca-banner-sub">${window.__slEdit ? 'Cambia lo que necesites: al guardar se recalculan el stock y lo que se cobra. El albarán conserva su número.' : 'La mercancía que sale de un cliente, del almacén donde la tiene.'}</div>
       </div>
     </div>
     <div class="deca-form" oninput="window.__stockDirty=true; sgaSalidaRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
@@ -4982,7 +5046,7 @@ function tplStockSalidaPage(){
       <div id="sl-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
       <div class="deca-actions-row">
         <button class="btn btn-ghost deca-cancel" onclick="sgaSalidaCancelar()">Cancelar</button>
-        <button class="btn btn-primary deca-submit sl-save" onclick="sgaSalidaConfirmar()">Confirmar salida</button>
+        <button class="btn btn-primary deca-submit sl-save" onclick="sgaSalidaConfirmar()">${window.__slEdit ? 'Guardar cambios' : 'Confirmar salida'}</button>
       </div>
     </div>
     </div>`;
@@ -4995,7 +5059,8 @@ async function sgaSalidaConfirmar(){
   if (!d.clienteId) errores.push('Elige el cliente.');
   if (!d.fecha) errores.push('Indica la fecha de salida.');
   if (d.clienteId && !sgaSalidaWh()) errores.push('Elige el almacén de donde sale la mercancía.');
-  if (d.destinatario && !sgaDireccionPorNombre(d.destinatario)) errores.push('Destinatario: elige uno de la lista de Direcciones (Transporte → Direcciones). Si no está, créalo allí primero.');
+  const destOriginal = window.__slEdit ? window.__slEdit.albaran.destinatario : '';
+  if (d.destinatario && d.destinatario !== destOriginal && !sgaDireccionPorNombre(d.destinatario)) errores.push('Destinatario: elige uno de la lista de Direcciones (Transporte → Direcciones). Si no está, créalo allí primero.');
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const cfg = sgaClienteCfg(d.clienteId);
   const sale = [];
@@ -5023,15 +5088,26 @@ async function sgaSalidaConfirmar(){
     salidas: sale.map(x => ({ partida_id: x.p.id, cantidad: x.n, bultos: sgaBultosSalida(x.p, x.n), fifo_saltado: fifo.saltados.has(x.p.id) })),
     servicios, cobros: calc.activo ? calc.cobros : [],
   };
-  const { data: albId, error } = await supabaseClient.rpc('sga_confirmar_salida', { p: payload });
+  const edit = window.__slEdit;
+  const { data: albId, error } = edit
+    ? await supabaseClient.rpc('sga_editar_salida', { p_id: edit.id, p: payload })
+    : await supabaseClient.rpc('sga_confirmar_salida', { p: payload });
   if (error) {
     const m = error.message || 'error desconocido.';
-    errEl.textContent = 'No se pudo guardar: ' + (/function .*sga_confirmar_salida|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL de «confirmar salida» en Supabase.' : m);
+    errEl.textContent = 'No se pudo guardar: ' + (/function .*sga_editar_salida/i.test(m) ? 'falta ejecutar el SQL de «editar salida» en Supabase.' : /function .*sga_confirmar_salida|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL de «confirmar salida» en Supabase.' : m);
     if (btn) btn.disabled = false;
     return;
   }
   await loadSgaStock();
   const total = sale.reduce((s, x) => s + x.n, 0);
+  if (edit) {
+    window.__slEdit = null;   // el stock ya está recargado de la base de datos
+    await logContactoHistorial(d.clienteId, `SGA · ha editado la salida ${sgaNumAlbaran(edit.albaran)}: ahora ${total} palet${total !== 1 ? 's' : ''} el ${fmtDateDMY(d.fecha)}${d.referencia ? ', ref. ' + d.referencia : ''}${fifo.saltados.size ? ' (FIFO saltado)' : ''}. Stock y cobros recalculados.`);
+    appToast(`Salida ${sgaNumAlbaran(edit.albaran)} actualizada: stock y cobros recalculados.`, 'ok');
+    window.__stockSeg = 'salidas';
+    stockVolver();
+    return;
+  }
   await logContactoHistorial(d.clienteId, `SGA · ha registrado una salida de ${total} palet${total !== 1 ? 's' : ''} el ${fmtDateDMY(d.fecha)}${d.referencia ? ', ref. ' + d.referencia : ''}${fifo.saltados.size ? ' (FIFO saltado)' : ''}.`);
   appToast(`Salida registrada: ${total} palet${total !== 1 ? 's' : ''}.`, 'ok');
   window.__stockSeg = 'salidas';
