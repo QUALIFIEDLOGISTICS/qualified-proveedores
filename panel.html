@@ -11950,7 +11950,7 @@ function ocDeFila(r){
     mercancia: r.mercancia || '', indicaciones: r.indicaciones || '', observacionesEspeciales: r.observaciones_especiales || '',
     precio: r.precio == null ? null : Number(r.precio),
     cargas: Array.isArray(r.cargas) ? r.cargas : [], descargas: Array.isArray(r.descargas) ? r.descargas : [],
-    pesoKg: r.peso_kg || '', decaId: r.deca_id || '',
+    pesoKg: r.peso_kg || '', decaId: r.deca_id || '', refFacturacion: r.ref_facturacion || '',
   };
 }
 async function loadOrdenesCarga(){
@@ -11989,7 +11989,7 @@ function refreshOcListBody(){ const el = document.getElementById('oc-list-body')
 function ocListBodyHtml(){
   const q = (window.__ocSearch || '').toLowerCase();
   const f = ocFiltro();
-  const list = ordenesCarga.filter(o => (f === 'todas' || o.estado === f) && (!q || [ocRef(o), o.transportistaNombre, o.matriculaTractora, o.matriculaRemolque, o.mercancia,
+  const list = ordenesCarga.filter(o => (f === 'todas' || o.estado === f) && (!q || [ocRef(o), o.refFacturacion, o.transportistaNombre, o.matriculaTractora, o.matriculaRemolque, o.mercancia,
     ...o.cargas.map(p => [p.empresa, p.poblacion].join(' ')), ...o.descargas.map(p => [p.empresa, p.poblacion].join(' '))].some(v => String(v || '').toLowerCase().includes(q))));
   if (!list.length) {
     return `<div class="card deca-table-card"><div class="deca-empty"><span class="ico">${homeIcon(HOME_ICON_PATHS.file, 26, '#C1443D', 1.6)}</span><div style="font-size:14px;color:var(--text);font-weight:600;">${q || f !== 'todas' ? 'Ninguna orden coincide' : 'Todavía no hay ninguna orden de carga'}</div><div style="font-size:12.5px;">${q || f !== 'todas' ? 'Prueba con otra búsqueda o cambia el filtro.' : 'Pulsa «Nueva orden» para crear la primera.'}</div></div></div>`;
@@ -12111,7 +12111,7 @@ function ocSnapshotForm(){
     fechaPedido: v('oc-fecha'), precio: v('oc-precio').replace(/\s*€$/, '').replace(',', '.'), mercancia: v('oc-mercancia'), indicaciones: v('oc-indicaciones'),
     transportistaNombre: v('oc-transp-nombre'), transportistaNif: v('oc-transp-nif'), transportistaPoblacion: v('oc-transp-pob'), transportistaDireccion: v('oc-transp-dir'),
     matriculaTractora: v('oc-mat-tractora'), matriculaRemolque: v('oc-mat-remolque'), observacionesEspeciales: v('oc-obs'),
-    pesoKg: v('oc-peso'), decaOn: !!(document.getElementById('oc-deca-on') && document.getElementById('oc-deca-on').checked),
+    refFacturacion: v('oc-ref-fact'), pesoKg: v('oc-peso'), decaOn: !!(document.getElementById('oc-deca-on') && document.getElementById('oc-deca-on').checked),
     cargas: ocLeerPuntos('carga'), descargas: ocLeerPuntos('descarga'),
   };
 }
@@ -12237,6 +12237,7 @@ function tplOcFormPage(){
             <div style="display:flex;gap:14px;flex-wrap:wrap;">
               <div class="field" style="flex:1;min-width:150px;"><label>Fecha del pedido ${req}</label>${decaInputIcon('calendar', `<input id="oc-fecha" type="date" value="${esc(e.fechaPedido || today())}" />`)}</div>
               <div class="field" style="flex:1;min-width:150px;"><label>Precio ${req}</label>${decaInputIcon('weight', `<input id="oc-precio" inputmode="decimal" maxlength="12" placeholder="Ej. 700" value="${esc(e.precio == null ? '' : String(e.precio).replace('.', ','))}" />`, '€')}</div>
+              <div class="field" style="flex:1.4;min-width:200px;"><label>Referencia de facturación <small style="color:var(--mutedFaint);font-weight:400;">· la que irá en la factura</small></label>${decaInputIcon('tag', `<input id="oc-ref-fact" maxlength="60" placeholder="Ej. S12284" value="${esc(e.refFacturacion || '')}" />`)}</div>
               <div class="field" style="flex:2;min-width:240px;"><label>Mercancía</label>${decaInputIcon('box', `<input id="oc-mercancia" maxlength="250" placeholder="Ej. 2 cajas etiquetadas" value="${esc(e.mercancia || '')}" />`)}</div>
             </div>
             <div class="field" style="margin-bottom:0;"><label>Indicaciones</label>${decaInputIcon('file', `<input id="oc-indicaciones" maxlength="250" value="${esc(e.indicaciones || '')}" />`)}</div>
@@ -12316,6 +12317,11 @@ async function submitOcForm(editId){
     mercancia: v('oc-mercancia') || null, indicaciones: v('oc-indicaciones') || null, observaciones_especiales: (document.getElementById('oc-obs') || {}).value ? document.getElementById('oc-obs').value.trim() : null,
     precio, cargas, descargas, peso_kg: pesoTxt || null, updated_at: new Date().toISOString(),
   };
+  // La referencia de facturación es un dato propio (no el número de orden). Solo se manda si hay algo que guardar o que borrar,
+  // para que guardar órdenes siga funcionando aunque todavía no se haya ejecutado el SQL de la columna.
+  const refFact = v('oc-ref-fact');
+  const refAntes = editId ? ((ordenesCarga.find(x => x.id === editId) || {}).refFacturacion || '') : '';
+  if (refFact || refAntes) fila.ref_facturacion = refFact || null;
   try {
     let oc;
     if (editId) {
@@ -12344,7 +12350,7 @@ async function submitOcForm(editId){
     appToast(`Orden ${ocRef(oc)} ${editId ? 'actualizada' : 'creada'}.${avisoDeca}`, avisoDeca ? 'error' : 'ok');
   } catch (err) {
     const m = err && err.message ? err.message : 'error desconocido.';
-    errEl.textContent = 'No se pudo guardar: ' + (/ordenes_carga|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL «Órdenes de carga» en Supabase.' : m);
+    errEl.textContent = 'No se pudo guardar: ' + (/ref_facturacion/i.test(m) ? 'falta ejecutar el SQL «Referencia de facturación» en Supabase.' : /ordenes_carga|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL «Órdenes de carga» en Supabase.' : m);
     if (btn) { btn.disabled = false; btn.textContent = editId ? 'Guardar cambios' : 'Crear orden'; }
   }
 }
@@ -12582,11 +12588,11 @@ async function ocBuildPdfDens(o, D){
   ]);
   seccion('Pedido');
   celdas([
-    [{ l: 'Ref. facturación', v: ref, w: 0.58 }, { l: 'Fecha del pedido', v: fmtDateDMY(o.fechaPedido), w: 0.42 }],
+    [{ l: 'Ref. facturación', v: o.refFacturacion, w: 0.58 }, { l: 'Fecha del pedido', v: fmtDateDMY(o.fechaPedido), w: 0.42 }],
     [{ l: 'Mercancía', v: o.mercancia, w: 1 }],
     [{ l: 'Indicaciones', v: o.indicaciones, w: 1 }],
   ]);
-  if (FA.notaRef) txt(FA.notaRef, M + 2, y + D.gap - 8, 7.4, font, MUTED);
+  if (FA.notaRef && o.refFacturacion) txt(FA.notaRef, M + 2, y + D.gap - 8, 7.4, font, MUTED);
   y -= 6;
 
   seccion('Cargas');
