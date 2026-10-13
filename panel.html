@@ -515,6 +515,8 @@
   .cg-menu button{display:block;width:100%;text-align:left;border:none;background:none;padding:8px 11px;border-radius:7px;font-size:13px;cursor:pointer;color:var(--text);font-family:var(--body);}
   .cg-menu button:hover{background:var(--panel2);}
   .cg-menu button.danger{color:var(--danger);}
+  .cg-sinart{display:inline-block;margin-left:6px;font-size:10.5px;font-weight:700;letter-spacing:.2px;padding:2px 8px;border-radius:999px;background:color-mix(in srgb,#C98A2E 18%,var(--panel));color:#8A5C14;vertical-align:1px;}
+  .cg-donde code{font-family:var(--mono);font-size:11.5px;background:var(--panel2);border-radius:5px;padding:1px 6px;}
   .cg-tabla input.cg-ok{background:color-mix(in srgb,#3F8F5F 14%,var(--panel));border-color:#3F8F5F;}
   .cg-nuevo td{background:color-mix(in srgb,var(--primary) 6%,var(--panel));position:sticky;top:37px;z-index:2;}
   .cg-nuevo input,.cg-nuevo select{border-color:var(--border);background:var(--panel);}
@@ -3774,7 +3776,7 @@ function sgaSitioTxt(p){
   const z = sgaZonaDe(p.zonaId), u = sgaUbicDe(p.ubicacionId);
   return z ? sgaZonaNombre(z) + (u ? ' · ' + u.codigo : '') : '—';
 }
-function stockSeg(){ return ['catalogo', 'entradas', 'salidas', 'resumen'].includes(window.__stockSeg) ? window.__stockSeg : 'stock'; }
+function stockSeg(){ return ['entradas', 'salidas', 'resumen'].includes(window.__stockSeg) ? window.__stockSeg : 'catalogo'; }   // «Stock» se fusionó con el catálogo
 
 /* ---- Pantalla principal: stock por cliente y entradas ---- */
 function whNombre(id){ const w = allWarehouses.find(x => x.id === id); return w ? w.name : '—'; }
@@ -3892,12 +3894,36 @@ function catElegirCliente(id){
   renderTab();
 }
 function catFiltro(){ return ['stock', 'sin', 'arch'].includes(window.__catFiltro) ? window.__catFiltro : 'todos'; }
+// Palets de un artículo (los de su catálogo, o los de una línea «sin artículo»), solo del almacén elegido si hay uno.
+function catPartidasArticulo(a){
+  const wid = window.__stockAlm || '';
+  const ps = a.virtual ? a._partidas : sgaPartidas.filter(p => p.articuloId === a.id);
+  return ps.filter(p => p.actual > 0 && (!wid || p.warehouseId === wid));
+}
 // Stock actual de un artículo (módulos y bultos, y en qué almacenes)
 function catStockArticulo(a){
-  const ps = sgaPartidas.filter(p => p.articuloId === a.id && p.actual > 0);
+  const ps = catPartidasArticulo(a);
   const mod = ps.reduce((s, p) => s + p.actual, 0);
   const bul = Math.round(ps.reduce((s, p) => s + (p.bultos != null ? sgaBultosSalida(p, p.actual) : p.actual), 0) * 100) / 100;
   return { mod, bul, almacenes: [...new Set(ps.map(p => whNombre(p.warehouseId)))].join(', ') };
+}
+// Mercancía que está en el almacén pero no tiene artículo en el catálogo (clientes sin catálogo o entradas antiguas): se ve
+// igualmente en la tabla, agrupada por producto y referencia, para que el catálogo y el stock sean una sola pantalla.
+function catArticulosVirtuales(clienteId){
+  const grupos = {};
+  sgaPartidas.filter(p => !p.articuloId && p.actual > 0 && (!clienteId || p.clienteId === clienteId)).forEach(p => {
+    const c = contactos.find(x => x.id === p.clienteId);
+    if (!c || !c.esClienteAlmacen || c.archived) return;
+    const k = [p.clienteId, p.productoId, (p.referencia || '').trim().toLowerCase(), (p.descripcion || '').trim().toLowerCase()].join('|');
+    (grupos[k] = grupos[k] || { p, ps: [] }).ps.push(p);
+  });
+  return Object.keys(grupos).map(k => {
+    const { p, ps } = grupos[k];
+    let h = 5381; for (let i = 0; i < k.length; i++) h = ((h << 5) + h + k.charCodeAt(i)) | 0;
+    const nombre = (p.descripcion || '').trim() || (p.referencia || '').trim() || sgaProdTxt(p.productoId);
+    return { id: 'sin' + (h >>> 0).toString(36), virtual: true, clienteId: p.clienteId, nombre, referencia: (p.descripcion || '').trim() ? (p.referencia || '').trim() : '', productoId: p.productoId,
+      zonaId: '', bultos: 1, metrosLineales: null, peso: null, medidas: '', atributos: {}, archived: false, _partidas: ps };
+  });
 }
 function catColumnas(clienteId){
   const arts = clienteId ? sgaArticulosDe(clienteId, true) : sgaArticulos;
@@ -3952,9 +3978,9 @@ function catAbrirDonde(id){
   refreshStockBody();
 }
 function catDondeHtml(a){
-  const ps = sgaPartidas.filter(p => p.articuloId === a.id && p.actual > 0).sort((x, y) => x.fechaEntrada.localeCompare(y.fechaEntrada));
+  const ps = catPartidasArticulo(a).slice().sort((x, y) => x.fechaEntrada.localeCompare(y.fechaEntrada));
   if (!ps.length) return '';
-  return `<div class="cg-donde">${ps.map(p => `<div><b>${p.actual}</b> palet${p.actual === 1 ? '' : 's'} · ${esc(whNombre(p.warehouseId))}${sgaSitioTxt(p) !== '—' ? ' · ' + esc(sgaSitioTxt(p)) : ''} <span>entrada ${fmtDateDMY(p.fechaEntrada)}</span></div>`).join('')}</div>`;
+  return `<div class="cg-donde">${ps.map(p => `<div><b>${p.actual}</b> palet${p.actual === 1 ? '' : 's'} · ${esc(whNombre(p.warehouseId))}${sgaSitioTxt(p) !== '—' ? ' · ' + esc(sgaSitioTxt(p)) : ''}${p.codigo ? ' · <code>' + esc(p.codigo) + '</code>' : ''} <span>entrada ${fmtDateDMY(p.fechaEntrada)}</span></div>`).join('')}</div>`;
 }
 // Menú «⋯» de cada fila (formulario completo, duplicar, archivar): se pinta fijo para que no lo recorte la tabla.
 function catMenu(id, ev){
@@ -3993,7 +4019,7 @@ function catDarEntrada(id){
 }
 function catFilaHtml(a, cols, conCliente){
   const puede = sgaPuedeEditarStock();
-  const edit = puede && catEditando(a.id);
+  const edit = puede && !a.virtual && catEditando(a.id);
   const st = catStockArticulo(a);
   const cl = conCliente ? contactos.find(c => c.id === a.clienteId) : null;
   const num = v => (v == null ? '' : String(v).replace('.', ','));
@@ -4010,7 +4036,7 @@ function catFilaHtml(a, cols, conCliente){
   const nombreCelda = edit
     ? `<td class="cg-prod">${catCeldaInput(a, 'nombre', a.nombre, 'data-mayusc style="min-width:210px;text-transform:uppercase;"')}${cols.referencia ? `<div style="margin-top:5px;">${catCeldaInput(a, 'referencia', a.referencia, 'data-mayusc placeholder="Referencia" style="min-width:210px;text-transform:uppercase;"')}</div>` : ''}</td>`
     : `<td class="cg-prod" data-sort-value="${esc(a.nombre)}">
-        ${st.mod > 0 ? `<button type="button" class="cg-nom cg-nom-b" onclick="catAbrirDonde('${a.id}')" title="Ver dónde está">${abierto ? '▾' : '▸'} ${esc(a.nombre)}</button>` : `<span class="cg-nom">${esc(a.nombre)}</span>`}
+        ${st.mod > 0 ? `<button type="button" class="cg-nom cg-nom-b" onclick="catAbrirDonde('${a.id}')" title="Ver dónde está">${abierto ? '▾' : '▸'} ${esc(a.nombre)}</button>` : `<span class="cg-nom">${esc(a.nombre)}</span>`}${a.virtual ? ' <span class="cg-sinart" title="Esta mercancía no tiene artículo en el catálogo">Sin artículo</span>' : ''}
         ${cols.referencia && a.referencia ? `<div class="cg-ref">${esc(a.referencia)}</div>` : ''}
         ${abierto ? catDondeHtml(a) : ''}
       </td>`;
@@ -4028,7 +4054,7 @@ function catFilaHtml(a, cols, conCliente){
       <td class="cg-stock" data-sort-value="${st.mod}" ${st.almacenes ? `title="${esc(st.almacenes)}"` : ''}>${st.mod
         ? `<span class="cg-st ok"><i></i><b>${st.mod}</b> palet${st.mod === 1 ? '' : 's'}</span>${cols.bultos && (a.bultos !== 1 || st.bul !== st.mod) ? `<div class="cg-ref">${sgaNumTxt(st.bul)} bultos</div>` : ''}`
         : '<span class="cg-st no"><i></i>Sin stock</span>'}</td>
-      <td class="cg-acc">${puede ? `
+      <td class="cg-acc">${puede && !a.virtual ? `
         ${!a.archived ? `<button type="button" class="cg-entrada" title="Nueva entrada de este artículo" onclick="catDarEntrada('${a.id}')">Dar entrada</button>` : ''}
         <button class="deca-act${edit ? ' cg-on' : ''}" title="${edit ? 'Listo: bloquear la fila otra vez' : 'Editar este artículo en la tabla'}" onclick="catEditarFila('${a.id}')">${homeIcon(edit ? HOME_ICON_PATHS.check : HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
         <button class="deca-act" title="Más: formulario completo, duplicar, archivar" onclick="catMenu('${a.id}', event)">⋯</button>` : ''}</td>
@@ -4038,9 +4064,9 @@ function catFilaHtml(a, cols, conCliente){
 function catConteos(){
   const cid = catClienteSel();
   const base = cid ? sgaArticulosDe(cid, true) : sgaArticulos.filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && c.esClienteAlmacen && !c.archived; });
-  const act = base.filter(a => !a.archived);
+  const act = base.filter(a => !a.archived).concat(catArticulosVirtuales(cid));
   const conStock = act.filter(a => catStockArticulo(a).mod > 0).length;
-  return { todos: act.length, stock: conStock, sin: act.length - conStock, arch: base.length - act.length };
+  return { todos: act.length, stock: conStock, sin: act.length - conStock, arch: base.filter(a => a.archived).length };
 }
 function catFiltrosHtml(){
   const n = catConteos();
@@ -4054,7 +4080,7 @@ function stockCatalogoBodyHtml(){
   const filtro = catFiltro();
   const cols = catColumnas(cid);
   const nombreDe = c => ((c.nombreComercial || '').trim() || c.nombre);
-  let lista = (cid ? sgaArticulosDe(cid, true) : sgaArticulos.filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && c.esClienteAlmacen && !c.archived; }))
+  let lista = (cid ? sgaArticulosDe(cid, true) : sgaArticulos.filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && c.esClienteAlmacen && !c.archived; })).concat(catArticulosVirtuales(cid))
     .filter(a => filtro === 'arch' ? a.archived : !a.archived)
     .filter(a => stockCatalogoCoincide(a, q) || (!cid && (nombreDe(contactos.find(c => c.id === a.clienteId) || {}) || '').toLowerCase().includes(q)));
   if (filtro === 'stock') lista = lista.filter(a => catStockArticulo(a).mod > 0);
@@ -4280,7 +4306,7 @@ function tplStock(){
       ${acc('#C0721A', 'salida', 'Nueva salida', 'Sacar mercancía y emitir albarán', 'sgaSalidaAbrir()', 'Sacar mercancía del almacén y generar el albarán')}
       ${acc('#2F7F86', 'regul', 'Regularizar', 'Ajustar el stock a lo contado', 'sgaRegulAbrir()', 'Ajustar el stock a lo que hay de verdad')}
     </div>
-    <div class="sga-tabs">${segBtn('catalogo', 'Catálogo')}${segBtn('stock', 'Stock')}${segBtn('entradas', 'Entradas')}${segBtn('salidas', 'Salidas')}${segBtn('resumen', 'Resumen mensual')}</div>
+    <div class="sga-tabs">${segBtn('catalogo', 'Catálogo y stock')}${segBtn('entradas', 'Entradas')}${segBtn('salidas', 'Salidas')}${segBtn('resumen', 'Resumen mensual')}</div>
     <div class="card deca-toolbar">
       ${seg === 'catalogo' ? `
       <select id="cat-cliente" onchange="catElegirCliente(this.value)" style="width:auto;flex:0 0 210px;min-width:0;"><option value="">Todos los clientes</option>${contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es')).map(c => `<option value="${c.id}" ${c.id === catClienteSel() ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)} (${sgaArticulosDe(c.id).length})</option>`).join('')}</select>
@@ -4298,7 +4324,7 @@ function tplStock(){
         <input placeholder="${seg === 'catalogo' ? 'Buscar cliente o artículo…' : 'Buscar cliente por nombre o NIF…'}" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>`}
-      ${seg === 'catalogo' || seg === 'resumen' ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${allWarehouses.filter(w => !w.archived).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
+      ${seg === 'resumen' ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${allWarehouses.filter(w => !w.archived).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
     </div>
     <div id="stock-body">${stockBodyHtml()}</div>
     </div>`;
