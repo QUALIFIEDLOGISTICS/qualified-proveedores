@@ -4818,6 +4818,25 @@ function sgaSalidaAlmacenCambio(){
   window.__stockDirty = true;
   sgaSalidaRefrescar();
 }
+/* ---- Destinatario de la salida: vinculado a Transporte → Direcciones ----
+   El destinatario se elige de la agenda de Direcciones (la misma que usan el DeCA y las órdenes de carga) y su dirección
+   se rellena sola, para que el albarán salga siempre con datos correctos y no se escriban a mano. */
+function sgaDireccionPorNombre(txt){
+  const t = String(txt || '').trim().toLowerCase();
+  return t ? direcciones.find(d => !d.archived && d.nombre.trim().toLowerCase() === t) || null : null;
+}
+function sgaDestinatariosOptionsHtml(){
+  return direcciones.filter(d => !d.archived).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+    .map(d => `<option value="${esc(d.nombre)}" label="${esc([d.ciudad, d.pais].filter(Boolean).join(', '))}">`).join('');
+}
+function sgaSalidaDestinatarioCambio(){
+  const d = sgaDireccionPorNombre((document.getElementById('sl-dest') || {}).value);
+  const dir = document.getElementById('sl-destdir');
+  if (dir) dir.value = d ? cargadorDireccionCompleta(d) : '';
+  const ok = document.getElementById('sl-dest-ok');
+  if (ok) ok.style.display = d ? '' : 'none';
+  window.__stockDirty = true;
+}
 function sgaSalidaModalidad(m){
   document.getElementById('sl-modalidad').value = m;
   document.querySelectorAll('#sl-mod button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
@@ -4934,8 +4953,10 @@ function tplStockSalidaPage(){
             <div class="doc-seg" id="sl-mod">${sgaModalidadesCliente('', 'salida').map(m => `<button type="button" data-m="${m}" class="${m === 'palet' ? 'on' : ''}" onclick="sgaSalidaModalidad('${m}')">${esc(SGA_MODALIDADES[m])}</button>`).join('')}</div>
           </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;">
-            <div class="field" style="flex:1;min-width:240px;"><label>Para (destinatario)</label>${decaInputIcon('users', `<input id="sl-dest" data-mayus maxlength="150" placeholder="Quién recibe la mercancía (sale en el albarán)" />`)}</div>
-            <div class="field" style="flex:2;min-width:260px;"><label>Dirección del destinatario</label>${decaInputIcon('pin', `<input id="sl-destdir" data-mayus maxlength="250" placeholder="Calle, código postal, ciudad" />`)}</div>
+            <div class="field" style="flex:1;min-width:240px;"><label>Para (destinatario) <small style="color:var(--mutedFaint);font-weight:400;">· de Transporte → Direcciones</small></label>${decaInputIcon('users', `<input id="sl-dest" data-combo="sl-destinatarios-datalist" autocomplete="off" maxlength="150" placeholder="Elige entre tus direcciones" oninput="sgaSalidaDestinatarioCambio()" />`)}
+              <datalist id="sl-destinatarios-datalist">${sgaDestinatariosOptionsHtml()}</datalist>
+              <div id="sl-dest-ok" style="display:none;font-size:11.5px;color:var(--success);margin-top:4px;">✓ Vinculado a una dirección</div></div>
+            <div class="field" style="flex:2;min-width:260px;"><label>Dirección del destinatario</label>${decaInputIcon('pin', `<input id="sl-destdir" readonly maxlength="250" placeholder="Se rellena sola al elegir el destinatario" />`)}</div>
           </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:0;">
             <div class="field" style="flex:1;min-width:200px;"><label>Transportista</label>${decaInputIcon('truck', `<input id="sl-transp" data-mayus maxlength="120" placeholder="Opcional" />`)}</div>
@@ -4974,6 +4995,7 @@ async function sgaSalidaConfirmar(){
   if (!d.clienteId) errores.push('Elige el cliente.');
   if (!d.fecha) errores.push('Indica la fecha de salida.');
   if (d.clienteId && !sgaSalidaWh()) errores.push('Elige el almacén de donde sale la mercancía.');
+  if (d.destinatario && !sgaDireccionPorNombre(d.destinatario)) errores.push('Destinatario: elige uno de la lista de Direcciones (Transporte → Direcciones). Si no está, créalo allí primero.');
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const cfg = sgaClienteCfg(d.clienteId);
   const sale = [];
