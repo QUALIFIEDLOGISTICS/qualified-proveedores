@@ -492,6 +492,10 @@
   .cg-tabla input.cg-in:focus,.cg-tabla select.cg-in:focus{border-color:var(--primary);background:var(--panel);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 15%,transparent);}
   .cg-th-ed{display:inline-flex;align-items:center;gap:5px;margin-right:10px;padding:4px 10px;border-radius:7px;border:1px solid var(--primary);background:var(--panel);color:var(--primary);font-family:var(--body);font-size:12px;font-weight:700;letter-spacing:0;text-transform:none;cursor:pointer;vertical-align:middle;}
   .cg-th-ed:hover{background:var(--primary);color:#fff;}
+  .cfg-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px;}
+  .cfg-chip{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.2px;padding:2px 9px;border-radius:999px;white-space:nowrap;}
+  .ap-grp-h{display:flex;align-items:center;gap:10px;width:100%;padding:12px 16px;border:none;background:none;cursor:pointer;font-family:var(--body);text-align:left;color:var(--text);}
+  .ap-grp-h b{font-size:14px;} .ap-grp-h span{font-size:12px;color:var(--muted);} .ap-grp-h i{margin-left:auto;font-style:normal;color:var(--muted);transition:transform .15s;} .ap-grp.cerrada .ap-grp-h i{transform:rotate(-90deg);}
   .dr-dup{border:1px solid #C98A2E;border-left-width:4px;background:color-mix(in srgb,#C98A2E 12%,var(--panel));border-radius:10px;padding:9px 13px;margin-bottom:12px;font-size:13px;line-height:1.45;}
   .dr-dup b{display:block;margin-bottom:2px;} .dr-dup small{display:block;margin-top:3px;color:var(--muted);}
   /* Pantalla «Editar catálogo»: rejilla tipo Excel, una columna por dato y todas las casillas editables */
@@ -3090,15 +3094,27 @@ function tplWarehousesPage(){
    Una sola lista con todos los campos (los que trae el SGA y los que se crean): todos se pueden editar, archivar y
    restaurar. Cada cliente elige cuáles usa en su ficha SGA. */
 function sgaCampoClientesQueLoUsan(clave){ return Object.keys(sgaClientes).filter(id => ((sgaClientes[id].campos || {})[clave] || 'no') !== 'no').length; }
+// Pastilla corta de color para las listas de configuración (campos y productos)
+function chipHtml(txt, color, titulo){
+  const c = color || 'var(--muted)';
+  return `<span class="cfg-chip" style="color:${c};background:color-mix(in srgb, ${c} 13%, var(--panel));"${titulo ? ` title="${esc(titulo)}"` : ''}>${esc(txt)}</span>`;
+}
 function sgaCampoFilaHtml(f){
   const n = sgaCampoClientesQueLoUsan(f.clave);
-  const flags = [f.enStock ? 'sale en Stock' : '', f.enAlbaran ? 'sale en el albarán' : ''].filter(Boolean).join(' · ');
-  const extra = f.tipo === 'lista' ? ` · ${f.opciones.length} opciones` : f.tipo === 'numero' && f.unidad ? ` · en ${esc(f.unidad)}` : '';
+  const chips = [
+    chipHtml(SGA_CAMPO_TIPOS[f.tipo] || f.tipo, 'var(--muted)'),
+    f.tipo === 'lista' ? chipHtml(`${f.opciones.length} opciones`, 'var(--muted)') : '',
+    f.tipo === 'numero' && f.unidad ? chipHtml(f.unidad, 'var(--muted)') : '',
+    f.ambito === 'articulo' ? chipHtml('Del artículo', '#1B3A6B', 'Se rellena en el catálogo, en el artículo') : chipHtml('De la entrada', '#C0721A', 'Se pide al recibir la mercancía'),
+    f.enStock ? chipHtml('En stock', '#2F7F86', 'Sale en las tablas de stock') : '',
+    f.enAlbaran ? chipHtml('En albarán', '#6B4FA3', 'Sale en el albarán impreso') : '',
+    n ? chipHtml(n === 1 ? '1 cliente' : `${n} clientes`, '#3F8F5F', 'Clientes que lo usan') : chipHtml('Sin usar', '#B26B00', 'Ningún cliente lo usa todavía'),
+  ].filter(Boolean).join('');
   return `
     <div class="sga-zona${f.archived ? ' arch' : ''}">
       <div style="min-width:0;flex:1;">
         <div class="sga-zona-n">${esc(f.nombre)}${f.archived ? '<span class="dir-card-arch">archivado</span>' : ''}</div>
-        <div class="sga-zona-s">${esc(SGA_CAMPO_TIPOS[f.tipo] || f.tipo)}${extra} · ${n ? (n === 1 ? 'lo usa 1 cliente' : `lo usan ${n} clientes`) : 'ningún cliente lo usa todavía'}${flags ? ' · ' + flags : ''}</div>
+        <div class="cfg-chips">${chips}</div>
       </div>
       <div style="display:flex;gap:2px;flex-shrink:0;">
         <button class="deca-act" onclick="openSgaCampoForm('${f.id}')" title="Editar el campo">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
@@ -14555,45 +14571,61 @@ async function eliminarAlmacenajeProducto(id){
   if (typeof window.__apView !== 'undefined' && window.__apView === 'form') { window.__apView = 'list'; window.__apFormId = null; }
   renderHeader(); renderTab();
 }
-function tplAlmacenajeProductosPage(){
-  const list = almacenajeProductosOrdenados();
-  const activos = list.filter(p => !p.archived).length;
+function apToggleGrupo(cat){
+  window.__apCerradas = window.__apCerradas || {};
+  window.__apCerradas[cat] = !window.__apCerradas[cat];
+  renderTab();
+}
+function apFilaProductoHtml(p){
   return `
-    <div style="--bn-accent:var(--primary);">
-    <div class="deca-banner">
-      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.tag, 26, '#fff', 1.8)}</span>
-      <div style="min-width:0;flex:1 1 280px;">
-        <div class="deca-banner-title">Productos</div>
-        <div class="deca-banner-sub">Los conceptos que se pueden tarifar en Almacenaje. Añade uno nuevo sin tocar código.</div>
-      </div>
-      <div class="deca-banner-actions">
-        <div class="deca-stat"><b>${activos}</b><span>Activos</span></div>
-        <div class="deca-stat"><b>${list.length - activos}</b><span>Archivados</span></div>
-        <button class="btn btn-primary deca-new-btn" onclick="openAlmacenajeProductoForm()">${homeIcon(HOME_ICON_PATHS.tag, 17, 'currentColor', 1.8)}<span>Nuevo producto</span></button>
-      </div>
-    </div>
-    ${list.length ? `
-    <div class="card" style="padding:0;overflow-x:auto;">
-    <table class="tf-table">
-      <thead><tr>${thSort('Actividad','text')}${thSort('Nombre','text')}${thSort('Subtipo','text')}${thSort('Unidad','text')}${thSort('Se cobra al…','text')}${thSort('Familia','text')}${thSort('Estado','text')}<th>Acciones</th></tr></thead>
-      <tbody>
-        ${list.map(p => `
           <tr style="${p.archived?'opacity:0.6;':''}">
-            <td data-sort-value="${esc(almacenajeCategoriaLabel(p.categoria))}">${almacenajeCategoriaBadgeHtml(p.categoria)}</td>
             <td data-sort-value="${esc(p.nombre)}"><b>${esc(p.nombre)}</b></td>
             <td style="color:var(--muted);" data-sort-value="${esc(p.subtipoValor || p.subtipoLabel)}">${p.usaSubtipo ? (p.subtipoValor ? esc(p.subtipoValor) : '<span style="color:var(--mutedFaint);" title="Sin subtipo definido: en las tarifas se escribe a mano">Sin definir</span>') : '—'}</td>
             <td data-sort-value="${esc(ALMACENAJE_UNIDAD_LABELS[p.unidad]||'')}">${esc(ALMACENAJE_UNIDAD_LABELS[p.unidad]||'—')}</td>
             <td data-sort-value="${esc(p.disparador||'')}">${p.disparador && ALMACENAJE_DISPARADORES[p.disparador] ? esc(ALMACENAJE_DISPARADORES[p.disparador].corto) : '<span style="color:var(--danger);">Sin definir</span>'}</td>
             <td data-sort-value="${esc(p.familia||'')}" style="color:var(--muted);">${p.familia && ALMACENAJE_FAMILIAS[p.familia] ? esc(ALMACENAJE_FAMILIAS[p.familia]) : '—'}</td>
             <td data-sort-value="${p.archived?'Archivado':'Activo'}">${p.archived ? '<span style="color:var(--mutedFaint);">Archivado</span>' : '<span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--success);"></span>Activo</span>'}</td>
-            <td style="white-space:nowrap;">
+            <td style="white-space:nowrap;text-align:right;">
               <button class="deca-act" onclick="openAlmacenajeProductoForm('${p.id}')" title="Editar">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
               ${p.archived ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="setAlmacenajeProductoArchived('${p.id}', false)" title="Volver a activarlo">Activar</button>` : ''}<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:var(--danger);" onclick="eliminarAlmacenajeProducto('${p.id}')" title="Eliminar el producto (solo si nada lo usa)">Eliminar</button>
             </td>
-          </tr>`).join('')}
-      </tbody>
-    </table>
-    </div>` : `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Todavía no hay ningún producto creado.</div>`}
+          </tr>`;
+}
+function tplAlmacenajeProductosPage(){
+  const list = almacenajeProductosOrdenados();
+  const activos = list.filter(p => !p.archived).length;
+  const orden = ['movimiento', 'almacenaje', 'extra'];
+  const cats = [...new Set([...orden.filter(c => list.some(p => p.categoria === c)), ...list.map(p => p.categoria)])];
+  const grupos = cats.map(cat => {
+    const ps = list.filter(p => p.categoria === cat);
+    const cerrada = !!(window.__apCerradas && window.__apCerradas[cat]);
+    const color = ALMACENAJE_CATEGORIA_COLORS[cat] || 'var(--muted)';
+    return `
+    <div class="card ap-grp${cerrada ? ' cerrada' : ''}" style="padding:0;margin-bottom:14px;overflow:hidden;border-left:4px solid ${color};">
+      <button type="button" class="ap-grp-h" onclick="apToggleGrupo('${cat}')">
+        <b>${esc(almacenajeCategoriaLabel(cat))}</b><span>${ps.length} producto${ps.length === 1 ? '' : 's'}</span><i>▾</i>
+      </button>
+      ${cerrada ? '' : `<div style="overflow-x:auto;border-top:1px solid var(--border);"><table class="tf-table">
+        <thead><tr>${thSort('Nombre','text')}${thSort('Subtipo','text')}${thSort('Unidad','text')}${thSort('Se cobra al…','text')}${thSort('Familia','text')}${thSort('Estado','text')}<th></th></tr></thead>
+        <tbody>${ps.map(apFilaProductoHtml).join('')}</tbody>
+      </table></div>`}
+    </div>`;
+  }).join('');
+  return `
+    <div style="--bn-accent:var(--primary);">
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.tag, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 280px;">
+        <div class="deca-banner-title">Productos</div>
+        <div class="deca-banner-sub">Los conceptos que se pueden tarifar en Almacenaje, agrupados por actividad. Añade uno nuevo sin tocar código.</div>
+      </div>
+      <div class="deca-banner-actions">
+        <div class="deca-stat"><b>${activos}</b><span>Activos</span></div>
+        ${list.length - activos ? `<div class="deca-stat"><b>${list.length - activos}</b><span>Archivados</span></div>` : ''}
+        <button class="btn btn-primary deca-new-btn" onclick="openAlmacenajeProductoForm()">${homeIcon(HOME_ICON_PATHS.tag, 17, 'currentColor', 1.8)}<span>Nuevo producto</span></button>
+      </div>
+    </div>
+    ${list.length ? grupos : `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Todavía no hay ningún producto creado.</div>`}
     </div>`;
 }
 function tplAlmacenajeProductoFormPage(){
