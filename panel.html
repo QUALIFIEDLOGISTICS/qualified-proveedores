@@ -3137,13 +3137,29 @@ function tplSgaCamposPage(){
     </div>`;
 }
 /* ---- Pantalla completa: nuevo campo / editar campo ---- */
-function openSgaCampoForm(id){
+function openSgaCampoForm(id, keepNav){
   const f = id ? sgaCampos.find(x => x.id === id) : null;
+  if (!keepNav) {   // lista de campos tal como se ve en pantalla (activos u archivados), para pasar de uno a otro con las flechas
+    const verArch = !!window.__sgaCamposArch;
+    window.__sgaCampoNavIds = sgaCamposPropios(null, true).filter(x => verArch ? x.archived : !x.archived).slice().sort((p, q) => (p.orden - q.orden) || p.nombre.localeCompare(q.nombre, 'es')).map(x => x.id);
+  }
+  window.__sgaCampoDirty = false;
   window.__sgaPage = { kind: 'campo', id: id || null, tipo: f ? f.tipo : 'texto', ambito: f ? f.ambito : 'articulo' };
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
   if (!id) setTimeout(() => { const el = document.getElementById('sgacp-nombre'); if (el) el.focus(); }, 0);
 }
+// Flechas ← → del formulario de un campo: pasar al anterior o al siguiente de la lista sin volver a ella.
+async function sgaCampoNavGoto(offset){
+  const ids = window.__sgaCampoNavIds || [];
+  const pg = window.__sgaPage || {};
+  const idx = ids.indexOf(pg.id);
+  if (idx === -1 || ids.length < 2) return;
+  if (window.__sgaCampoDirty && !(await appConfirm({ title: 'Cambios sin guardar', message: 'Has cambiado datos de este campo y no los has guardado. Si pasas al siguiente se pierden.', confirmLabel: 'Pasar igualmente', cancelLabel: 'Seguir aquí', tone: 'warn', icon: 'warn' }))) return;
+  openSgaCampoForm(ids[(idx + offset + ids.length) % ids.length], true);
+}
+document.addEventListener('input', ev => { if (ev.target && ev.target.closest && ev.target.closest('#sgacp-nombre, #sgacp-unidad, #sgacp-opciones')) window.__sgaCampoDirty = true; });
+document.addEventListener('change', ev => { if (ev.target && ev.target.id && ev.target.id.startsWith('sgacp-')) window.__sgaCampoDirty = true; });
 function sgaCampoFormCambio(){
   const pg = window.__sgaPage || {};
   const tipoEl = document.getElementById('sgacp-tipo');
@@ -3174,6 +3190,12 @@ function tplSgaCampoFormPage(){
         <div class="deca-banner-title">${f ? esc(f.nombre) : 'Nuevo campo'}</div>
         <div class="deca-banner-sub">Un dato más que se guarda de la mercancía.</div>
       </div>
+      ${f ? (() => {
+        const ids = window.__sgaCampoNavIds || [];
+        const idx = ids.indexOf(f.id);
+        const arrow = (offset, title, ch) => `<button onclick="sgaCampoNavGoto(${offset})" title="${title}" style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 11px;cursor:pointer;color:var(--muted);font-size:13px;">${ch}</button>`;
+        return idx > -1 && ids.length > 1 ? `<div class="deca-banner-actions"><div style="display:flex;align-items:center;gap:4px;">${arrow(-1, 'Campo anterior', '←')}<span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${idx + 1}/${ids.length}</span>${arrow(1, 'Campo siguiente', '→')}</div></div>` : '';
+      })() : ''}
     </div>
     <div class="deca-form" style="max-width:640px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
       <div class="card deca-card">
