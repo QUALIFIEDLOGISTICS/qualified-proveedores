@@ -490,9 +490,17 @@
   .cg-tabla input.cg-in:focus,.cg-tabla select.cg-in:focus{border-color:var(--primary);background:var(--panel);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 15%,transparent);}
   .cg-th-ed{display:inline-flex;align-items:center;gap:5px;margin-right:10px;padding:4px 10px;border-radius:7px;border:1px solid var(--primary);background:var(--panel);color:var(--primary);font-family:var(--body);font-size:12px;font-weight:700;letter-spacing:0;text-transform:none;cursor:pointer;vertical-align:middle;}
   .cg-th-ed:hover{background:var(--primary);color:#fff;}
-  .cg-tabla.cg-todo input.cg-in,.cg-tabla.cg-todo select.cg-in{border-color:var(--border);background:var(--panel);}
-  .cg-tabla.cg-todo tbody tr.cg-edit{background:transparent;}
-  .cg-tabla.cg-todo tbody tr.cg-edit:nth-child(even){background:color-mix(in srgb,var(--primary) 4%,var(--panel));}
+  /* Pantalla «Editar catálogo»: rejilla tipo Excel, una columna por dato y todas las casillas editables */
+  .cg-tabla.cg-todo{border-collapse:collapse;}
+  .cg-tabla.cg-todo th{background:var(--panel2);border:1px solid var(--border);text-align:left;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;padding:8px 10px;white-space:nowrap;position:sticky;top:0;z-index:2;}
+  .cg-tabla.cg-todo td{border:1px solid var(--border);padding:0;vertical-align:middle;background:var(--panel);}
+  .cg-tabla.cg-todo tbody tr.cg-edit,.cg-tabla.cg-todo tbody tr.cg-edit:nth-child(even){background:transparent;}
+  .cg-tabla.cg-todo tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--primary) 3%,var(--panel));}
+  .cg-tabla.cg-todo td.cg-prod{padding:0;}
+  .cg-tabla.cg-todo input.cg-in,.cg-tabla.cg-todo select.cg-in{border:none;border-radius:0;background:transparent;width:100%;padding:9px 10px;}
+  .cg-tabla.cg-todo input.cg-in:focus,.cg-tabla.cg-todo select.cg-in:focus{background:var(--panel);box-shadow:inset 0 0 0 2px var(--primary);}
+  .cg-tabla.cg-todo td.cg-stock{padding:6px 10px;color:var(--muted);}
+  .cg-tabla.cg-todo td.cg-acc{padding:0 6px;text-align:center;}
   .cg-tabla tr.cg-edit{background:color-mix(in srgb,var(--primary) 7%,var(--panel));}
   .cg-tabla .deca-act.cg-on{background:var(--success);border-color:var(--success);color:#fff;}
   /* Catálogo SGA: tabla con producto + referencia, etiquetas, stock con punto y acciones en la fila */
@@ -4009,6 +4017,12 @@ function catCeldaInput(a, campo, valor, extra){
 // El catálogo se ve solo para leer. Con «Editar» (arriba a la derecha) se abre una pantalla completa donde todos los artículos
 // del cliente se pueden cambiar a la vez; cada celda se guarda al salir de ella.
 function catEditarTodo(){
+  if (!catClienteSel()) {
+    appToast('Elige primero el cliente en el desplegable para editar su catálogo.', 'error');
+    const s = document.getElementById('cat-cliente'); if (s) { s.focus(); s.style.outline = '2px solid var(--primary)'; setTimeout(() => { s.style.outline = ''; }, 2500); }
+    return;
+  }
+  window.__catFiltro = 'todos'; window.__stockSearch = '';
   window.__catEditAll = true;
   window.__stockView = 'catedit';
   renderHeader(); renderTab();
@@ -4026,7 +4040,6 @@ function catEditarSalir(){
 }
 function tplCatEditPage(){
   const cid = catClienteSel();
-  const clientes = contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es'));
   const c = cid ? contactos.find(x => x.id === cid) : null;
   return `
     <div style="--bn-accent:var(--primary);">
@@ -4039,12 +4052,10 @@ function tplCatEditPage(){
       <button class="btn btn-primary" style="flex:0 0 auto;" onclick="catEditarSalir()">Listo</button>
     </div>
     <div class="card deca-toolbar">
-      <select id="cat-cliente" onchange="catElegirCliente(this.value)" style="width:auto;flex:0 0 210px;min-width:0;"><option value="">Todos los clientes</option>${clientes.map(x => `<option value="${x.id}" ${x.id === cid ? 'selected' : ''}>${esc((x.nombreComercial || '').trim() || x.nombre)}</option>`).join('')}</select>
       <div class="deca-search" style="flex:1 1 230px;">
         <input id="cat-buscar" placeholder="Buscar producto, referencia o proveedor…" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      <div class="doc-seg" id="cat-filtros">${catFiltrosHtml()}</div>
       ${cid ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaArtRapida('${cid}')" title="Pega varios artículos de golpe desde tu Excel">Alta rápida</button>` : ''}
       <button class="btn btn-primary" onclick="catNuevoArticulo()" title="Crear un artículo nuevo">+ Artículo</button>
     </div>
@@ -4113,7 +4124,7 @@ function catFilaHtml(a, cols, conCliente){
     return edit ? catCeldaCampo(a, f) : `<td data-sort-value="${esc(v == null ? '' : v)}">${v != null && v !== '' ? esc(sgaCampoMostrar(f, v)) : vacio}</td>`;
   };
   const nombreCelda = edit
-    ? `<td class="cg-prod">${catCeldaInput(a, 'nombre', a.nombre, 'data-mayusc style="min-width:210px;text-transform:uppercase;"')}${cols.referencia ? `<div style="margin-top:5px;">${catCeldaInput(a, 'referencia', a.referencia, 'data-mayusc placeholder="Referencia" style="min-width:210px;text-transform:uppercase;"')}</div>` : ''}</td>`
+    ? `<td class="cg-prod">${catCeldaInput(a, 'nombre', a.nombre, 'data-mayusc style="min-width:220px;text-transform:uppercase;"')}</td>${cols.referencia ? `<td>${catCeldaInput(a, 'referencia', a.referencia, 'data-mayusc style="min-width:130px;text-transform:uppercase;"')}</td>` : ''}`
     : `<td class="cg-prod" data-sort-value="${esc(a.nombre)}">
         ${st.mod > 0 ? `<button type="button" class="cg-nom cg-nom-b" onclick="catAbrirDonde('${a.id}')" title="Ver dónde está">${abierto ? '▾' : '▸'} ${esc(a.nombre)}</button>` : `<span class="cg-nom">${esc(a.nombre)}</span>`}${a.virtual ? ' <span class="cg-sinart" title="Esta mercancía no tiene artículo en el catálogo">Sin artículo</span>' : ''}
         ${cols.referencia && a.referencia ? `<div class="cg-ref">${esc(a.referencia)}</div>` : ''}
@@ -4170,9 +4181,9 @@ function stockCatalogoBodyHtml(){
   return `
     ${cid ? '' : `<div class="card" style="padding:11px 16px;margin-bottom:12px;font-size:13.5px;color:var(--text);border-left:4px solid var(--primary);">Estás viendo los artículos de <b>todos los clientes</b>. Para <b>crear</b> uno, elige primero el cliente en el desplegable de arriba.</div>`}
     <div class="card" style="padding:0;">
-      <div class="tc-hist-box" style="max-height:660px;border:none;border-radius:10px;">
+      <div class="tc-hist-box" style="max-height:${window.__catEditAll ? 'calc(100vh - 290px)' : '660px'};min-height:${window.__catEditAll ? '320px' : '0'};border:none;border-radius:10px;">
         <table class="tf-table cg-tabla${window.__catEditAll ? ' cg-todo' : ''}">
-          <thead><tr>${conBotonEditar(conCliente ? thSort('Cliente', 'text') : '')}${conBotonEditar(conCliente ? '' : thSort('Producto', 'text'))}${conCliente ? thSort('Producto', 'text') : ''}${thSort('Tipo de carga', 'text')}${cols.bultos ? thSort('Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thSort('Peso (kg)', 'number', 'style="text-align:right;"') : ''}${cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSort('Stock', 'number')}${window.__catEditAll && puede ? '<th></th>' : ''}</tr></thead>
+          <thead><tr>${window.__catEditAll ? `<th>Producto</th>${cols.referencia ? '<th>Referencia</th>' : ''}<th>Tipo de carga</th>${cols.bultos ? '<th style="text-align:right;">Bultos / palet</th>' : ''}${cols.ml ? '<th style="text-align:right;">M. lineales</th>' : ''}${cols.peso ? '<th style="text-align:right;">Peso (kg)</th>' : ''}${cols.x.map(f => `<th>${esc(f.label)}</th>`).join('')}<th>Stock</th>${puede ? '<th></th>' : ''}` : `${conBotonEditar(conCliente ? thSort('Cliente', 'text') : '')}${conBotonEditar(conCliente ? '' : thSort('Producto', 'text'))}${conCliente ? thSort('Producto', 'text') : ''}${thSort('Tipo de carga', 'text')}${cols.bultos ? thSort('Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thSort('Peso (kg)', 'number', 'style="text-align:right;"') : ''}${cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSort('Stock', 'number')}${window.__catEditAll && puede ? '<th></th>' : ''}`}</tr></thead>
           <tbody>
             ${lista.map(a => catFilaHtml(a, cols, conCliente)).join('')}
           </tbody>
