@@ -488,6 +488,9 @@
   .cg-tabla input.cg-in,.cg-tabla select.cg-in,.cg-nuevo input,.cg-nuevo select{border:1px solid transparent;background:transparent;padding:6px 8px;border-radius:7px;font-size:13px;width:100%;}
   .cg-tabla input.cg-in:hover,.cg-tabla select.cg-in:hover{border-color:var(--border);background:var(--panel);}
   .cg-tabla input.cg-in:focus,.cg-tabla select.cg-in:focus{border-color:var(--primary);background:var(--panel);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 15%,transparent);}
+  .cg-tabla.cg-todo input.cg-in,.cg-tabla.cg-todo select.cg-in{border-color:var(--border);background:var(--panel);}
+  .cg-tabla.cg-todo tbody tr.cg-edit{background:transparent;}
+  .cg-tabla.cg-todo tbody tr.cg-edit:nth-child(even){background:color-mix(in srgb,var(--primary) 4%,var(--panel));}
   .cg-tabla tr.cg-edit{background:color-mix(in srgb,var(--primary) 7%,var(--panel));}
   .cg-tabla .deca-act.cg-on{background:var(--success);border-color:var(--success);color:#fff;}
   /* Catálogo SGA: tabla con producto + referencia, etiquetas, stock con punto y acciones en la fila */
@@ -2584,6 +2587,7 @@ function computeBreadcrumbSegments(){
     return [{label:'Catálogo', onclick:cerrar}, {label: cl ? ((cl.nombreComercial || '').trim() || cl.nombre) : 'Cliente', onclick:cerrar}, {label: window.__stockView === 'rapida' ? 'Alta rápida de artículos' : (pg && pg.id ? 'Artículo' : 'Nuevo artículo'), onclick:null}];
   }
   if (currentTab === 'stock' && window.__stockView === 'salida') return [{label:'Control Stock SGA', onclick:'sgaSalidaCancelar()'}, {label: window.__slEdit ? 'Editar salida' : 'Nueva salida', onclick:null}];
+  if (currentTab === 'stock' && window.__stockView === 'catedit') return [{label:'Catálogo', onclick:'catEditarSalir()'}, {label:'Editar catálogo', onclick:null}];
   if (currentTab === 'stock' && window.__stockView === 'regul') return [{label:'Control Stock SGA', onclick:'sgaRegulCancelar()'}, {label:'Regularizar stock', onclick:null}];
   if (currentTab === ALMACEN_CONFIG_TAB) {
     if (window.__sgaPage && window.__sgaPage.kind === 'campo') {
@@ -2757,7 +2761,7 @@ function tplAlmacenBar(){
    y un historial de quién cambió qué y cuándo. */
 const WAREHOUSE_COLORS = ['#2E6F95', '#C98A2E', '#8A4A35', '#3F8F5F', '#7C5CBF', '#C1443D', '#2C9A93', '#D9A72C', '#5C6670', '#1B3A6B'];
 const WAREHOUSES_PAGE_SIZE = 80;
-function almacenIsSubpage(){ return (currentTab === ALMACEN_CONFIG_TAB && (window.__whView === "form" || window.__apView === "form" || !!window.__sgaPage)) || (currentTab === "stock" && ["entrada", "salida", "articulo", "rapida", "regul"].includes(window.__stockView)); }
+function almacenIsSubpage(){ return (currentTab === ALMACEN_CONFIG_TAB && (window.__whView === "form" || window.__apView === "form" || !!window.__sgaPage)) || (currentTab === "stock" && ["entrada", "salida", "articulo", "rapida", "regul", "catedit"].includes(window.__stockView)); }
 function warehouseConfirmLeaveForm(){
   if (currentTab === ALMACEN_CONFIG_TAB && window.__whView === 'form' && window.__whEditMode && window.__whFormDirty) {
     return leaveGuard();
@@ -4000,17 +4004,50 @@ async function catGuardarCeldaCampo(el){
 function catCeldaInput(a, campo, valor, extra){
   return `<input class="cg-in" ${extra || ''} data-id="${a.id}" data-f="${campo}" value="${esc(valor)}" onchange="catGuardarCelda(this)" onkeydown="catTecla(event, this)" ${sgaPuedeEditarStock() ? '' : 'readonly'} />`;
 }
-// El catálogo se ve solo para leer. Para cambiar un artículo se pulsa el lápiz de su fila: esa fila pasa a editarse en la propia
-// tabla y, al pulsar el visto, vuelve a quedar bloqueada.
-function catEditando(id){ return !!(window.__catEdit && window.__catEdit[id]); }
-function catEditarFila(id){
+// El catálogo se ve solo para leer. Con «Editar» (arriba a la derecha) se abre una pantalla completa donde todos los artículos
+// del cliente se pueden cambiar a la vez; cada celda se guarda al salir de ella.
+function catEditarTodo(){
+  window.__catEditAll = true;
+  window.__stockView = 'catedit';
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
+}
+function catEditarSalir(){
   const el = document.activeElement;
-  if (el && el.blur) el.blur();   // si se estaba escribiendo, se guarda antes de cerrar la fila
+  if (el && el.blur) el.blur();   // si se estaba escribiendo, se guarda antes de salir
   setTimeout(() => {
-    window.__catEdit = window.__catEdit || {};
-    if (window.__catEdit[id]) delete window.__catEdit[id]; else window.__catEdit[id] = true;
-    refreshStockBody();
+    window.__catEditAll = false;
+    window.__stockView = 'home';
+    renderHeader(); renderTab();
+    window.scrollTo(0, 0);
   }, 120);
+}
+function tplCatEditPage(){
+  const cid = catClienteSel();
+  const clientes = contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es'));
+  const c = cid ? contactos.find(x => x.id === cid) : null;
+  return `
+    <div style="--bn-accent:var(--primary);">
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.edit, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 260px;">
+        <div class="deca-banner-title">Editar catálogo${c ? ' · ' + esc((c.nombreComercial || '').trim() || c.nombre) : ''}</div>
+        <div class="deca-banner-sub">Cambia lo que necesites directamente en la tabla: cada dato se guarda al salir de la casilla. Enter baja a la fila siguiente.</div>
+      </div>
+      <button class="btn btn-primary" style="flex:0 0 auto;" onclick="catEditarSalir()">Listo</button>
+    </div>
+    <div class="card deca-toolbar">
+      <select id="cat-cliente" onchange="catElegirCliente(this.value)" style="width:auto;flex:0 0 210px;min-width:0;"><option value="">Todos los clientes</option>${clientes.map(x => `<option value="${x.id}" ${x.id === cid ? 'selected' : ''}>${esc((x.nombreComercial || '').trim() || x.nombre)}</option>`).join('')}</select>
+      <div class="deca-search" style="flex:1 1 230px;">
+        <input id="cat-buscar" placeholder="Buscar producto, referencia o proveedor…" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
+        <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
+      </div>
+      <div class="doc-seg" id="cat-filtros">${catFiltrosHtml()}</div>
+      ${cid ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaArtRapida('${cid}')" title="Pega varios artículos de golpe desde tu Excel">Alta rápida</button>` : ''}
+      <button class="btn btn-primary" onclick="catNuevoArticulo()" title="Crear un artículo nuevo">+ Artículo</button>
+    </div>
+    <div id="stock-body">${stockCatalogoBodyHtml()}</div>
+    </div>`;
 }
 // «Dónde está»: al pulsar un producto con stock se despliegan sus palets (cuántos, en qué almacén y sitio, y desde cuándo).
 function catAbrirDonde(id){
@@ -4059,7 +4096,7 @@ function catDarEntrada(id){
 }
 function catFilaHtml(a, cols, conCliente){
   const puede = sgaPuedeEditarStock();
-  const edit = puede && !a.virtual && catEditando(a.id);
+  const edit = puede && !a.virtual && !!window.__catEditAll;   // solo se edita en la pantalla «Editar catálogo»
   const st = catStockArticulo(a);
   const cl = conCliente ? contactos.find(c => c.id === a.clienteId) : null;
   const num = v => (v == null ? '' : String(v).replace('.', ','));
@@ -4094,10 +4131,7 @@ function catFilaHtml(a, cols, conCliente){
       <td class="cg-stock" data-sort-value="${st.mod}" ${st.almacenes ? `title="${esc(st.almacenes)}"` : ''}>${st.mod
         ? `<span class="cg-st ok"><i></i><b>${st.mod}</b> palet${st.mod === 1 ? '' : 's'}</span>${cols.bultos && (a.bultos !== 1 || st.bul !== st.mod) ? `<div class="cg-ref">${sgaNumTxt(st.bul)} bultos</div>` : ''}`
         : '<span class="cg-st no"><i></i>Sin stock</span>'}</td>
-      <td class="cg-acc">${puede && !a.virtual ? `
-        ${!a.archived ? `<button type="button" class="cg-entrada" title="Nueva entrada de este artículo" onclick="catDarEntrada('${a.id}')">Dar entrada</button>` : ''}
-        <button class="deca-act${edit ? ' cg-on' : ''}" title="${edit ? 'Listo: bloquear la fila otra vez' : 'Editar este artículo en la tabla'}" onclick="catEditarFila('${a.id}')">${homeIcon(edit ? HOME_ICON_PATHS.check : HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
-        <button class="deca-act" title="Más: formulario completo, duplicar, archivar" onclick="catMenu('${a.id}', event)">⋯</button>` : ''}</td>
+      ${window.__catEditAll && puede ? `<td class="cg-acc">${!a.virtual ? `<button class="deca-act" title="Más: formulario completo, duplicar" onclick="catMenu('${a.id}', event)">⋯</button>` : ''}</td>` : ''}
     </tr>`;
 }
 // Botones de filtro con su contador.
@@ -4128,13 +4162,13 @@ function stockCatalogoBodyHtml(){
   lista.sort((a, b) => (cid ? 0 : nombreDe(contactos.find(c => c.id === a.clienteId) || {}).localeCompare(nombreDe(contactos.find(c => c.id === b.clienteId) || {}), 'es')) || sgaArticuloTxt(a).localeCompare(sgaArticuloTxt(b), 'es'));
   const puede = sgaPuedeEditarStock();
   const conCliente = !cid;
-  const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${q ? 'Ningún artículo coincide con la búsqueda.' : filtro === 'stock' ? 'Ningún artículo tiene stock ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : cid ? 'Este cliente todavía no tiene artículos. Crea el primero con «+ Artículo» (o pega varios con «Alta rápida»).' : 'Todavía no hay artículos. Elige un cliente y crea el primero.'}</div>` : '';
+  const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${q ? 'Ningún artículo coincide con la búsqueda.' : filtro === 'stock' ? 'Ningún artículo tiene stock ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : cid ? 'Este cliente todavía no tiene artículos. Pulsa «Editar» (arriba a la derecha) para crear el primero o pegar varios desde Excel.' : 'Todavía no hay artículos. Elige un cliente y pulsa «Editar» para crear el primero.'}</div>` : '';
   return `
     ${cid ? '' : `<div class="card" style="padding:11px 16px;margin-bottom:12px;font-size:13.5px;color:var(--text);border-left:4px solid var(--primary);">Estás viendo los artículos de <b>todos los clientes</b>. Para <b>crear</b> uno, elige primero el cliente en el desplegable de arriba.</div>`}
     <div class="card" style="padding:0;">
       <div class="tc-hist-box" style="max-height:660px;border:none;border-radius:10px;">
-        <table class="tf-table cg-tabla">
-          <thead><tr>${conCliente ? thSort('Cliente', 'text') : ''}${thSort('Producto', 'text')}${thSort('Tipo de carga', 'text')}${cols.bultos ? thSort('Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thSort('Peso (kg)', 'number', 'style="text-align:right;"') : ''}${cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSort('Stock', 'number')}<th></th></tr></thead>
+        <table class="tf-table cg-tabla${window.__catEditAll ? ' cg-todo' : ''}">
+          <thead><tr>${conCliente ? thSort('Cliente', 'text') : ''}${thSort('Producto', 'text')}${thSort('Tipo de carga', 'text')}${cols.bultos ? thSort('Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thSort('Peso (kg)', 'number', 'style="text-align:right;"') : ''}${cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSort('Stock', 'number')}${window.__catEditAll && puede ? '<th></th>' : ''}</tr></thead>
           <tbody>
             ${lista.map(a => catFilaHtml(a, cols, conCliente)).join('')}
           </tbody>
@@ -4278,7 +4312,7 @@ async function catDuplicar(id){
   if (error || !data) { appToast('No se pudo duplicar: ' + (error && error.message ? error.message : 'error desconocido.'), 'error'); return; }
   sgaArticulos.push({ id: data.id, clienteId: a.clienteId, nombre, referencia: '', productoId: a.productoId, zonaId: a.zonaId, bultos: a.bultos, metrosLineales: a.metrosLineales, peso: a.peso, medidas: a.medidas, atributos: Object.assign({}, a.atributos), archived: false });
   refreshStockBody();
-  window.__catEdit = window.__catEdit || {}; window.__catEdit[data.id] = true; refreshStockBody();
+
   const el = document.querySelector(`.cg-row[data-id="${data.id}"] [data-f="nombre"]`);
   if (el) { el.focus(); el.select(); appToast('Duplicado: cámbiale el nombre y la referencia.', 'info'); }
 }
@@ -4337,6 +4371,7 @@ function tplStock(){
   if (window.__stockView === 'entrada') return tplStockEntradaPage();
   if (window.__stockView === 'salida') return tplStockSalidaPage();
   if (window.__stockView === 'regul') return tplStockRegulPage();
+  if (window.__stockView === 'catedit') return tplCatEditPage();
   if (window.__stockView === 'articulo') { const c = contactos.find(x => x.id === (window.__sgaArtForm || {}).clienteId); return c ? tplSgaArticuloPage(c) : ''; }
   if (window.__stockView === 'rapida') { const c = contactos.find(x => x.id === (window.__sgaArtRapida || {}).clienteId); return c ? tplSgaArtRapidaPage(c) : ''; }
   const wid = window.__stockAlm || '';
@@ -4351,6 +4386,7 @@ function tplStock(){
         <div class="deca-banner-title">Control Stock SGA</div>
         <div class="deca-banner-sub">El catálogo de artículos, el stock de cada cliente en el almacén donde lo tiene, y sus entradas y salidas.</div>
       </div>
+      ${seg === 'catalogo' && sgaPuedeEditarStock() ? `<button class="btn btn-ghost" style="flex:0 0 auto;background:var(--panel);" onclick="catEditarTodo()" title="Abrir una pantalla completa para editar todo el catálogo">${homeIcon(HOME_ICON_PATHS.edit, 16, 'currentColor', 2)}<span>Editar</span></button>` : ''}
     </div>
     <div class="sga-acc-grid">
       ${acc('#1B3A6B', 'entrada', 'Nueva entrada', 'Recibir mercancía de un cliente', 'sgaEntradaAbrir()', 'Registrar la mercancía que llega al almacén')}
@@ -4366,8 +4402,7 @@ function tplStock(){
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
       <div class="doc-seg" id="cat-filtros">${catFiltrosHtml()}</div>
-      ${catClienteSel() && sgaPuedeEditarStock() ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaArtRapida('${catClienteSel()}')" title="Pega varios artículos de golpe desde tu Excel">Alta rápida</button>` : ''}
-      ${sgaPuedeEditarStock() ? `<button class="btn btn-primary" onclick="catNuevoArticulo()" title="Crear un artículo nuevo">+ Artículo</button>` : ''}` : seg === 'resumen' ? `
+      ` : seg === 'resumen' ? `
       <select id="rm-cliente" onchange="sgaResumenElegir()" style="min-width:230px;"><option value="">Elige el cliente…</option>${sgaClientesAlmacenLista().map(c => `<option value="${c.id}" ${c.id === sgaResumenEstado().clienteId ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
       <input id="rm-mes" type="month" value="${esc(sgaResumenEstado().periodo)}" onchange="sgaResumenElegir()" style="width:170px;" />
       <button class="btn btn-ghost" onclick="sgaResumenImprimir()" title="Imprimir o guardar como PDF en blanco y negro">${homeIcon(HOME_ICON_PATHS.file, 16, 'currentColor', 1.8)}<span>Imprimir / PDF</span></button>` : `
@@ -4384,6 +4419,7 @@ function tplStock(){
 function stockVolver(){
   window.__seEdit = null;
   if (window.__slEdit) { window.__slEdit = null; loadSgaStock().then(() => { if (currentTab === 'stock') renderTab(); }); }
+  window.__catEditAll = false;
   window.__stockView = 'home';
   window.__stockDirty = false;
   renderHeader(); renderTab();
@@ -5590,7 +5626,7 @@ function tplSgaArticulosCard(c){
     </div>`;
 }
 function sgaArticuloCerrar(){
-  window.__stockView = 'home';
+  window.__stockView = window.__catEditAll ? 'catedit' : 'home';
   window.__sgaArtForm = null;
   window.__sgaArtRapida = null;
   renderHeader(); renderTab();
@@ -5725,7 +5761,7 @@ function openSgaArtRapida(clienteId){
   setTimeout(() => { const el = document.getElementById('sgar-txt'); if (el) el.focus(); }, 0);
 }
 function sgaArtRapidaCerrar(){
-  window.__stockView = 'home';
+  window.__stockView = window.__catEditAll ? 'catedit' : 'home';
   window.__sgaArtRapida = null;
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
