@@ -5094,6 +5094,68 @@ function sgaSalidaRellenar(){
   window.__stockDirty = false;
   sgaSalidaRefrescar();
 }
+/* ---- Crear la dirección del destinatario desde la salida ----
+   Mismo patrón que el DeCA y las órdenes de carga: se va a «Nueva dirección» (Transporte → Direcciones) y, al guardarla o cancelar,
+   se vuelve a la salida con todo lo que ya estaba rellenado y la dirección nueva puesta como destinatario. */
+function sgaSalidaPuedeCrearDireccion(){ return !!(PROFILE.isAdmin || sectionAllowedFor(PROFILE, 'trafico', 'direcciones') || (PROFILE.allowedTabs || []).includes('administracion')); }
+function sgaSalidaSnapshot(){
+  const d = sgaSalidaLeer();
+  return {
+    clienteId: d.clienteId, almacen: sgaSalidaWh(), fecha: d.fecha, modalidad: d.modalidad, transportista: d.transportista, matricula: d.matricula,
+    observaciones: d.observaciones, destinatario: d.destinatario,
+    items: d.items.filter(x => x.n > 0).map(x => ({ pid: x.p.id, n: x.n })),
+    servicios: d.servicios,
+  };
+}
+function sgaSalidaIrACrearDireccion(){
+  window.__slBorrador = sgaSalidaSnapshot();
+  window.__slReturnTarget = { tab: currentTab };
+  currentTab = 'trafico';
+  window.__traficoSection = 'direcciones';
+  openDireccionForm(null, true);
+}
+// dir: la dirección recién guardada (o null si se ha cancelado sin crear nada).
+function sgaSalidaVolverDesdeDireccion(dir){
+  const t = window.__slReturnTarget || {};
+  const b = window.__slBorrador;
+  window.__slReturnTarget = null;
+  window.__slBorrador = null;
+  currentTab = t.tab || 'stock';
+  window.__administracionView = 'direcciones';
+  window.__stockView = 'salida';
+  renderHeader(); renderTab();
+  sgaSalidaRestaurar(b, dir);
+}
+function sgaSalidaRestaurar(b, dir){
+  if (!b) return;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v == null ? '' : v; };
+  const cli = document.getElementById('sl-cliente');
+  if (cli && b.clienteId) {
+    if (![...cli.options].some(o => o.value === b.clienteId)) {
+      const c = contactos.find(x => x.id === b.clienteId);
+      cli.insertAdjacentHTML('beforeend', `<option value="${b.clienteId}">${esc(c ? ((c.nombreComercial || '').trim() || c.nombre) : '—')}</option>`);
+    }
+    cli.value = b.clienteId;
+    if (window.__slEdit) cli.disabled = true;
+  }
+  sgaSalidaClienteCambio();
+  const alm = document.getElementById('sl-almacen');
+  if (alm && b.almacen) alm.value = b.almacen;
+  sgaSalidaAlmacenCambio();
+  set('sl-fecha', b.fecha); set('sl-transp', b.transportista); set('sl-matr', b.matricula); set('sl-obs', b.observaciones);
+  if (b.modalidad) sgaSalidaModalidad(b.modalidad);
+  (b.items || []).forEach(x => sgaSalidaPonerCantidad(x.pid, x.n));
+  (b.servicios || []).forEach(s => {
+    if (!s.productoId && !s.cantidadTxt) return;
+    const j = (window.__stockJ = (window.__stockJ || 0) + 1);
+    document.getElementById('se-servicios').insertAdjacentHTML('beforeend', sgaServicioFilaHtml(j, { prod: s.productoId, cant: s.cantidadTxt, nota: s.nota }));
+  });
+  set('sl-dest', dir ? dir.nombre : b.destinatario);
+  sgaSalidaDestinatarioCambio();
+  window.__stockDirty = true;
+  sgaSalidaRefrescar();
+  if (dir) appToast(`Dirección «${dir.nombre}» creada y puesta como destinatario.`, 'ok');
+}
 async function sgaSalidaCancelar(){
   if (window.__stockDirty && !(await appConfirm({ title: 'Descartar la salida', message: 'Has empezado a rellenar esta salida. Si sales, se pierde lo escrito.', confirmLabel: 'Descartar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
   stockVolver();   // si se estaba editando, stockVolver recarga el stock real
@@ -5308,7 +5370,7 @@ function tplStockSalidaPage(){
             <div class="doc-seg" id="sl-mod">${sgaModalidadesCliente('', 'salida').map(m => `<button type="button" data-m="${m}" class="${m === 'palet' ? 'on' : ''}" onclick="sgaSalidaModalidad('${m}')">${esc(SGA_MODALIDADES[m])}</button>`).join('')}</div>
           </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;">
-            <div class="field" style="flex:1;min-width:240px;"><label>Para (destinatario) <small style="color:var(--mutedFaint);font-weight:400;">· de Transporte → Direcciones</small></label>${decaInputIcon('users', `<input id="sl-dest" data-combo="sl-destinatarios-datalist" autocomplete="off" maxlength="150" placeholder="Elige entre tus direcciones" oninput="sgaSalidaDestinatarioCambio()" />`)}
+            <div class="field" style="flex:1;min-width:240px;"><label>Para (destinatario) <small style="color:var(--mutedFaint);font-weight:400;">· de Transporte → Direcciones</small></label>${sgaSalidaPuedeCrearDireccion() ? decaCampoConCrearHtml(decaInputIcon('users', `<input id="sl-dest" data-combo="sl-destinatarios-datalist" autocomplete="off" maxlength="150" placeholder="Elige entre tus direcciones" oninput="sgaSalidaDestinatarioCambio()" />`), 'sgaSalidaIrACrearDireccion()', 'Crear una dirección nueva (no está en la lista)') : decaInputIcon('users', `<input id="sl-dest" data-combo="sl-destinatarios-datalist" autocomplete="off" maxlength="150" placeholder="Elige entre tus direcciones" oninput="sgaSalidaDestinatarioCambio()" />`)}
               <datalist id="sl-destinatarios-datalist">${sgaDestinatariosOptionsHtml()}</datalist>
               <div id="sl-dest-ok" style="display:none;font-size:11.5px;color:var(--success);margin-top:4px;">✓ Vinculado a una dirección</div></div>
             <div class="field" style="flex:2;min-width:260px;"><label>Dirección del destinatario</label>${decaInputIcon('pin', `<input id="sl-destdir" readonly maxlength="250" placeholder="Se rellena sola al elegir el destinatario" />`)}</div>
@@ -6873,6 +6935,7 @@ function backToDirecciones(){
   // DeCA (con lo que ya tenía escrito), no a la lista de Direcciones.
   if (window.__decaReturnTarget) { decaVolverDesdeDireccion(null); return; }
   if (window.__ocReturnTarget) { ocVolverDesdeDireccion(null); return; }
+  if (window.__slReturnTarget) { sgaSalidaVolverDesdeDireccion(null); return; }
   window.__administracionView = 'direcciones';
   renderHeader(); renderTab();
 }
@@ -7517,6 +7580,7 @@ async function submitDireccionForm(editId){
   // el campo (Origen o Destino) ya relleno, en vez de quedarse en Direcciones.
   if (!editId && window.__decaReturnTarget) { decaVolverDesdeDireccion(direcciones.find(d=>d.id===savedId)); return; }
   if (!editId && window.__ocReturnTarget) { ocVolverDesdeDireccion(direcciones.find(d=>d.id===savedId)); return; }
+  if (!editId && window.__slReturnTarget) { sgaSalidaVolverDesdeDireccion(direcciones.find(d=>d.id===savedId)); return; }
   openDireccionForm(savedId, true);
 }
 async function setDireccionArchived(id, archived){
