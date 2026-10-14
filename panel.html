@@ -5082,7 +5082,7 @@ function sgaSalidaRellenar(){
   const alm = document.getElementById('sl-almacen');
   if (alm) alm.value = a.warehouseId;
   sgaSalidaAlmacenCambio();
-  set('sl-fecha', a.fecha); set('sl-ref', a.referencia); set('sl-transp', a.transportista); set('sl-matr', a.matricula); set('sl-obs', a.observaciones);
+  set('sl-fecha', a.fecha); set('sl-transp', a.transportista); set('sl-matr', a.matricula); set('sl-obs', a.observaciones);
   if (a.modalidad) sgaSalidaModalidad(a.modalidad);
   set('sl-dest', a.destinatario);
   if (sgaDireccionPorNombre(a.destinatario)) sgaSalidaDestinatarioCambio(); else set('sl-destdir', a.destinatarioDireccion);   // destinatario escrito a mano en su día
@@ -5222,7 +5222,7 @@ function sgaSalidaLeer(){
     const n = el.type === 'checkbox' ? (el.checked ? 1 : 0) : el.value.trim();
     return { p, txt: n, n: typeof n === 'number' ? n : (n === '' ? 0 : Number(n)) };
   }).filter(x => x.p);
-  return { clienteId: val('sl-cliente'), fecha: val('sl-fecha'), referencia: val('sl-ref'), modalidad: val('sl-modalidad') || 'palet', transportista: val('sl-transp'), matricula: val('sl-matr'), observaciones: val('sl-obs'), destinatario: val('sl-dest'), destinatarioDireccion: val('sl-destdir'), items, servicios: sgaServiciosLeer() };
+  return { clienteId: val('sl-cliente'), fecha: val('sl-fecha'), referencia: window.__slEdit ? (window.__slEdit.albaran.referencia || '') : '', modalidad: val('sl-modalidad') || 'palet', transportista: val('sl-transp'), matricula: val('sl-matr'), observaciones: val('sl-obs'), destinatario: val('sl-dest'), destinatarioDireccion: val('sl-destdir'), items, servicios: sgaServiciosLeer() };
 }
 // FIFO dentro de cada tipo de carga + referencia: no se puede sacar de una partida más nueva si hay otra más antigua sin vaciar.
 function sgaSalidaFifo(clienteId, items){
@@ -5255,8 +5255,20 @@ function sgaSalidaResumenHtml(d){
     <div class="op-total-row" style="margin-top:10px;"><span>Total de la salida</span><b>${esc(eur2(total))}</b></div>` : '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay nada que cobrar.</div>'}
     ${calc.avisos.map(a => `<div class="se-aviso">⚠ ${esc(a)}</div>`).join('')}${avisosFifo}`;
 }
+// Nº de albarán que se le va a asignar a la salida (el programa lo genera al guardar: 3 letras del cliente + fecha + orden del día).
+function sgaNumeroSalidaPrevisto(clienteId, fecha){
+  if (window.__slEdit) return sgaNumAlbaran(window.__slEdit.albaran);   // al editar, conserva el suyo
+  const c = contactos.find(x => x.id === clienteId);
+  if (!c || !fecha) return '';
+  const pref = String(sgaClienteCfg(clienteId).prefijo || sgaPrefijoPorDefecto(c)).toUpperCase();
+  const [y, m, d] = fecha.split('-');
+  const orden = sgaAlbaranes.filter(a => a.tipo === 'salida' && a.clienteId === clienteId && a.fecha === fecha && a.numeroTexto).length + 1;
+  return `${pref}${d}${m}${y}-${orden}`;
+}
 function sgaSalidaRefrescar(){
   const d = sgaSalidaLeer();
+  const numEl = document.getElementById('sl-num');
+  if (numEl) numEl.value = sgaNumeroSalidaPrevisto(d.clienteId, d.fecha);
   const el = document.getElementById('sl-resumen');
   if (el) el.innerHTML = sgaSalidaResumenHtml(d);
   const tot = d.items.reduce((s, x) => s + (x.n > 0 && isFinite(x.n) ? x.n : 0), 0);
@@ -5288,7 +5300,7 @@ function tplStockSalidaPage(){
               <select id="sl-cliente" onchange="sgaSalidaClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos con stock'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
             <div class="field" style="flex:1;min-width:190px;"><label>Almacén de salida <span class="dc-req">*</span></label><select id="sl-almacen" onchange="sgaSalidaAlmacenCambio()"><option value="">Elige primero el cliente</option></select></div>
             <div class="field" style="flex:1;min-width:150px;"><label>Fecha de salida <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="sl-fecha" type="date" value="${today()}" />`)}</div>
-            <div class="field" style="flex:1;min-width:180px;"><label>Referencia / nº de albarán</label>${decaInputIcon('file', `<input id="sl-ref" maxlength="60" placeholder="Opcional" />`)}</div>
+            <div class="field" style="flex:1;min-width:190px;"><label>Nº de albarán <small style="color:var(--mutedFaint);font-weight:400;">· lo asigna el programa</small></label>${decaInputIcon('file', `<input id="sl-num" readonly placeholder="Elige el cliente" style="font-family:var(--mono);font-weight:700;" />`)}</div>
           </div>
           <input type="hidden" id="sl-modalidad" value="palet" />
           <div id="sl-mod-wrap" style="display:none;">
@@ -5379,15 +5391,16 @@ async function sgaSalidaConfirmar(){
   }
   await loadSgaStock();
   const total = sale.reduce((s, x) => s + x.n, 0);
+  const numAlb = (sgaAlbaranes.find(x => x.id === albId) || {}).numeroTexto || '';
   if (edit) {
     window.__slEdit = null;   // el stock ya está recargado de la base de datos
-    await logContactoHistorial(d.clienteId, `SGA · ha editado la salida ${sgaNumAlbaran(edit.albaran)}: ahora ${total} palet${total !== 1 ? 's' : ''} el ${fmtDateDMY(d.fecha)}${d.referencia ? ', ref. ' + d.referencia : ''}${fifo.saltados.size ? ' (FIFO saltado)' : ''}. Stock y cobros recalculados.`);
+    await logContactoHistorial(d.clienteId, `SGA · ha editado la salida ${sgaNumAlbaran(edit.albaran)}: ahora ${total} palet${total !== 1 ? 's' : ''} el ${fmtDateDMY(d.fecha)}${fifo.saltados.size ? ' (FIFO saltado)' : ''}. Stock y cobros recalculados.`);
     appToast(`Salida ${sgaNumAlbaran(edit.albaran)} actualizada: stock y cobros recalculados.`, 'ok');
     window.__stockSeg = 'salidas';
     stockVolver();
     return;
   }
-  await logContactoHistorial(d.clienteId, `SGA · ha registrado una salida de ${total} palet${total !== 1 ? 's' : ''} el ${fmtDateDMY(d.fecha)}${d.referencia ? ', ref. ' + d.referencia : ''}${fifo.saltados.size ? ' (FIFO saltado)' : ''}.`);
+  await logContactoHistorial(d.clienteId, `SGA · ha registrado la salida ${numAlb ? numAlb + ' ' : ''}de ${total} palet${total !== 1 ? 's' : ''} el ${fmtDateDMY(d.fecha)}${fifo.saltados.size ? ' (FIFO saltado)' : ''}.`);
   appToast(`Salida registrada: ${total} palet${total !== 1 ? 's' : ''}.`, 'ok');
   window.__stockSeg = 'salidas';
   stockVolver();
