@@ -548,6 +548,13 @@
   .rm-tabla .rm-sin td{color:var(--mutedFaint);}
   .rm-tabla .rm-act td{font-weight:600;color:var(--text);}
   .rm-tabla .rm-ini td{font-style:italic;color:var(--muted);}
+  .rm-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;}
+  .rm-kpi{border:1px solid var(--border);border-radius:12px;padding:10px 14px;background:var(--panel);display:flex;flex-direction:column;gap:2px;}
+  .rm-kpi small{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);}
+  .rm-kpi b{font-size:22px;font-family:var(--mono);color:var(--text);}
+  .rm-kpi span{font-size:12px;color:var(--mutedFaint);}
+  .rm-kpi.tot{background:var(--primary);border-color:var(--primary);} .rm-kpi.tot small,.rm-kpi.tot b,.rm-kpi.tot span{color:#fff;}
+  .rm-solo{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);cursor:pointer;white-space:nowrap;}
   .rm-tabla tfoot td{font-weight:700;border-top:2px solid var(--text);position:sticky;bottom:0;background:var(--panel2);}
   .se-aviso{margin-top:8px;padding:8px 12px;border-radius:8px;background:#FBF7E8;border:1px solid #E8D9A8;color:#8A6D1A;font-size:12.5px;}
   .sga-zona{display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--border);border-radius:12px;background:var(--panel);}
@@ -6113,50 +6120,73 @@ function sgaResumenHtml(d, paraImprimir){
   const num = n => (n ? String(sgaNumTxt(n)) : '·');
   const th = (t, right) => `<th style="${right ? 'text-align:right;' : ''}">${t}</th>`;
   const colsB = r.usaBultos, reg = r.hayReg;
+  const hayCobros = r.filas.some(f => f.mov || f.serv);   // la columna «Cobrado €» solo sale si ese mes se cobró algo
+  const soloAct = !!window.__rmSoloAct;                   // «solo días con movimiento»: por defecto salen todos
   const tot = k => sgaR2(r.filas.reduce((s, f) => s + f[k], 0));
   const mesCorto = SGA_MESES[Number(d.periodo.split('-')[1]) - 1].slice(0, 3);
+  const blt = n => (colsB ? ` <small>(${sgaNumTxt(n)} bultos)</small>` : '');
+
+  // 1) Lo importante, de un vistazo
+  const kpi = (t, v, sub, cls) => `<div class="rm-kpi ${cls || ''}"><small>${t}</small><b>${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
+  const kpis = `
+    <div class="rm-kpis">
+      ${kpi('Stock inicial', sgaNumTxt(r.inicial.mod), colsB ? sgaNumTxt(r.inicial.bul) + ' bultos' : '')}
+      ${kpi('Entradas', '+' + sgaNumTxt(tot('entMod')), colsB ? sgaNumTxt(tot('entBul')) + ' bultos' : '')}
+      ${kpi('Salidas', '−' + sgaNumTxt(tot('salMod')), colsB ? sgaNumTxt(tot('salBul')) + ' bultos' : '')}
+      ${reg ? kpi('Regularizado', (tot('regMod') > 0 ? '+' : '') + sgaNumTxt(tot('regMod')), '') : ''}
+      ${kpi('Stock final', sgaNumTxt(r.final.mod), colsB ? sgaNumTxt(r.final.bul) + ' bultos' : '')}
+      ${kpi('Total a facturar', eur(total), 'sin IVA', 'tot')}
+    </div>`;
+
+  // 2) Lo que se cobra: una sola tabla con los conceptos y, si el cliente tiene tarifa de m², su línea
+  const lineas = r.conceptos.map(c => `<tr><td>${esc(sgaProdTxt(c.productoId))}${c.origen === 'stock' ? ` <small style="color:var(--muted);">· almacenaje (${esc(c.detalle)})</small>` : ''}</td><td class="r">${sgaNumTxt(c.cantidad)}</td><td class="r">${esc(eurPrecio(c.precio))}</td><td class="r">${eur(c.importe)}</td></tr>`);
+  if (r.prodM2 && r.tM2) {
+    const cant = paraImprimir
+      ? (r.m2 != null ? `${sgaNumTxt(r.m2)} m²` : '—')
+      : `<input id="rm-m2" inputmode="decimal" maxlength="8" value="${r.m2 != null ? esc(String(r.m2).replace('.', ',')) : ''}" placeholder="m²" onchange="sgaResumenGuardarM2()" style="width:86px;text-align:right;" title="m² contratados este mes" /> m²`;
+    const aviso = !paraImprimir && !r.m2Guardado && r.m2 != null ? ' <small style="color:var(--mutedFaint);">· los del mes anterior: pulsa fuera para confirmarlos</small>' : '';
+    lineas.push(`<tr><td>${esc(sgaProdTxt(r.prodM2.id))} <small style="color:var(--muted);">· superficie</small>${aviso}</td><td class="r" style="white-space:nowrap;">${cant}</td><td class="r">${esc(eurPrecio(r.tM2.precio))}</td><td class="r">${r.m2 != null ? eur(fijo) : '—'}</td></tr>`);
+  }
+  const cobro = lineas.length ? `
+    <table class="${paraImprimir ? '' : 'tf-table'} rm-tabla">
+      <thead><tr>${th('Concepto')}${th('Cantidad', 1)}${th('Precio', 1)}${th('Importe', 1)}</tr></thead>
+      <tbody>${lineas.join('')}</tbody>
+      <tfoot><tr><td colspan="3">TOTAL A FACTURAR (sin IVA)</td><td class="r">${eur(total)}</td></tr></tfoot>
+    </table>` : '<div style="color:var(--mutedFaint);font-size:12.5px;">No hay cobros este mes.</div>';
+
+  // 3) Día a día: solo las columnas que usa este cliente
+  const filasDia = r.filas.filter(f => !soloAct || f.entMod || f.salMod || f.regMod || f.mov || f.serv);
+  const nCols = 1 + 1 + (colsB ? 1 : 0) + 1 + (colsB ? 1 : 0) + (reg ? 1 : 0) + 1 + (colsB ? 1 : 0) + (hayCobros ? 1 : 0);
   const tabla = `
     <table class="${paraImprimir ? '' : 'tf-table'} rm-tabla">
-      <thead><tr>${th('Día')}${th('Entradas', 1)}${colsB ? th('Bultos', 1) : ''}${th('Salidas', 1)}${colsB ? th('Bultos', 1) : ''}${reg ? th('Regul.', 1) : ''}${th('Saldo', 1)}${colsB ? th('Bultos', 1) : ''}${th('Movimientos €', 1)}${th('Servicios €', 1)}</tr></thead>
+      <thead><tr>${th('Día')}${th('Entradas', 1)}${colsB ? th('Bultos', 1) : ''}${th('Salidas', 1)}${colsB ? th('Bultos', 1) : ''}${reg ? th('Regul.', 1) : ''}${th('Saldo', 1)}${colsB ? th('Bultos', 1) : ''}${hayCobros ? th('Cobrado €', 1) : ''}</tr></thead>
       <tbody>
-        <tr class="rm-ini"><td>Stock inicial</td><td></td>${colsB ? '<td></td>' : ''}<td></td>${colsB ? '<td></td>' : ''}${reg ? '<td></td>' : ''}<td class="r">${sgaNumTxt(r.inicial.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.inicial.bul)}</td>` : ''}<td></td><td></td></tr>
-        ${r.filas.map(f => { const act = f.entMod || f.salMod || f.regMod || f.mov || f.serv; return `
+        <tr class="rm-ini"><td>Stock inicial</td><td></td>${colsB ? '<td></td>' : ''}<td></td>${colsB ? '<td></td>' : ''}${reg ? '<td></td>' : ''}<td class="r">${sgaNumTxt(r.inicial.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.inicial.bul)}</td>` : ''}${hayCobros ? '<td></td>' : ''}</tr>
+        ${filasDia.map(f => { const act = f.entMod || f.salMod || f.regMod || f.mov || f.serv; return `
         <tr class="${act ? 'rm-act' : 'rm-sin'}"><td>${f.n} ${mesCorto}</td>
           <td class="r">${num(f.entMod)}</td>${colsB ? `<td class="r">${num(f.entBul)}</td>` : ''}
           <td class="r">${num(f.salMod)}</td>${colsB ? `<td class="r">${num(f.salBul)}</td>` : ''}
           ${reg ? `<td class="r">${f.regMod ? (f.regMod > 0 ? '+' : '') + sgaNumTxt(f.regMod) : '·'}</td>` : ''}
           <td class="r">${sgaNumTxt(f.saldoMod)}</td>${colsB ? `<td class="r">${sgaNumTxt(f.saldoBul)}</td>` : ''}
-          <td class="r">${f.mov ? eur(f.mov) : '·'}</td><td class="r">${f.serv ? eur(f.serv) : '·'}</td></tr>`; }).join('')}
+          ${hayCobros ? `<td class="r">${f.mov || f.serv ? eur(f.mov + f.serv) : '·'}</td>` : ''}</tr>`; }).join('')}
+        ${!filasDia.length ? `<tr><td colspan="${nCols}" style="color:var(--mutedFaint);">Sin movimientos este mes.</td></tr>` : ''}
       </tbody>
-      <tfoot><tr><td>TOTAL</td><td class="r">${sgaNumTxt(tot('entMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('entBul'))}</td>` : ''}<td class="r">${sgaNumTxt(tot('salMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('salBul'))}</td>` : ''}${reg ? `<td class="r">${sgaNumTxt(tot('regMod'))}</td>` : ''}<td class="r">${sgaNumTxt(r.final.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.final.bul)}</td>` : ''}<td class="r">${eur(r.totMov)}</td><td class="r">${eur(r.totServ)}</td></tr></tfoot>
+      <tfoot><tr><td>TOTAL</td><td class="r">${sgaNumTxt(tot('entMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('entBul'))}</td>` : ''}<td class="r">${sgaNumTxt(tot('salMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('salBul'))}</td>` : ''}${reg ? `<td class="r">${sgaNumTxt(tot('regMod'))}</td>` : ''}<td class="r">${sgaNumTxt(r.final.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.final.bul)}</td>` : ''}${hayCobros ? `<td class="r">${eur(r.totMov + r.totServ)}</td>` : ''}</tr></tfoot>
     </table>`;
-  const desglose = r.conceptos.length ? `
-    <table class="${paraImprimir ? '' : 'tf-table'} rm-tabla" style="margin-top:6px;">
-      <thead><tr>${th('Concepto')}${th('Cantidad', 1)}${th('Precio', 1)}${th('Importe', 1)}</tr></thead>
-      <tbody>${r.conceptos.map(c => `<tr><td>${esc(sgaProdTxt(c.productoId))}${c.origen === 'stock' ? ` <small style="color:var(--muted);">· almacenaje (${esc(c.detalle)})</small>` : ''}</td><td class="r">${sgaNumTxt(c.cantidad)}</td><td class="r">${esc(eurPrecio(c.precio))}</td><td class="r">${eur(c.importe)}</td></tr>`).join('')}</tbody>
-    </table>` : '<div style="color:var(--mutedFaint);font-size:12.5px;">No hay cobros este mes.</div>';
-  const m2Html = paraImprimir
-    ? (r.m2 != null && r.tM2 ? `<table class="rm-tabla"><tbody><tr><td>${esc(sgaProdTxt(r.prodM2.id))}</td><td class="r">${sgaNumTxt(r.m2)} m²</td><td class="r">${esc(eurPrecio(r.tM2.precio))}</td><td class="r">${eur(fijo)}</td></tr></tbody></table>` : '<div>Sin m² fijos este mes.</div>')
-    : `<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
-        <div class="field" style="width:150px;margin-bottom:0;"><label>m² del mes</label><input id="rm-m2" inputmode="decimal" maxlength="8" value="${r.m2 != null ? esc(String(r.m2).replace('.', ',')) : ''}" placeholder="Ej. 300" onchange="sgaResumenGuardarM2()" /></div>
-        <div style="font-size:13px;color:var(--muted);padding-bottom:9px;">${r.tM2 ? `× ${esc(eurPrecio(r.tM2.precio))}/m² = <b style="color:var(--text);">${eur(fijo)}</b>${r.m2Guardado ? '' : (r.m2 != null ? ' <span style="color:var(--mutedFaint);">(los del mes anterior: pulsa fuera para confirmarlos)</span>' : '')}` : (r.prodM2 ? '' : 'Este cliente no tiene tarifa de «M² ocupado»: no hay costes fijos por superficie.')}</div>
-      </div>`;
+  const interruptor = `<label class="rm-solo"><input type="checkbox" ${soloAct ? 'checked' : ''} onchange="window.__rmSoloAct=this.checked; refreshStockBody();" /> Solo días con movimiento</label>`;
+  const flat = paraImprimir ? 'border:none;box-shadow:none;' : '';
   return `
     <div class="rm-doc">
       ${paraImprimir ? `<div class="rm-cab"><h1>Resumen mensual · ${esc(sgaPeriodoTxt(d.periodo))}</h1><div>${esc(nombre)}</div></div>` : ''}
-      <div class="card deca-card" style="--dc-accent:var(--primary);${paraImprimir ? 'border:none;box-shadow:none;' : ''}">
-        ${paraImprimir ? '' : decaCardHead('calendar', `${esc(nombre)} · ${esc(sgaPeriodoTxt(d.periodo))}`, 'Día a día: lo que entra, lo que sale y lo que se cobra')}
+      ${kpis}
+      <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:14px;${flat}">
+        ${paraImprimir ? '<h2>A facturar</h2>' : decaCardHead('tag', 'A facturar', 'Movimientos, servicios, almacenaje y superficie, por concepto y precio')}
+        <div class="${paraImprimir ? '' : 'deca-card-body'}">${cobro}</div>
+      </div>
+      <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:14px;${flat}">
+        ${paraImprimir ? '<h2>Día a día</h2>' : decaCardHead('calendar', `${esc(nombre)} · ${esc(sgaPeriodoTxt(d.periodo))}`, 'Día a día: lo que entra, lo que sale y lo que se cobra', interruptor)}
         <div class="${paraImprimir ? '' : 'deca-card-body'}"><div class="${paraImprimir ? '' : 'tc-hist-box'}" ${paraImprimir ? '' : 'style="max-height:560px;"'}>${tabla}</div></div>
       </div>
-      <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:16px;${paraImprimir ? 'border:none;box-shadow:none;' : ''}">
-        ${paraImprimir ? '<h2>Desglose por concepto</h2>' : decaCardHead('tag', 'Desglose por concepto', 'Movimientos, servicios y almacenaje del stock, agrupados por producto y precio')}
-        <div class="${paraImprimir ? '' : 'deca-card-body'}">${desglose}</div>
-      </div>
-      <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:16px;${paraImprimir ? 'border:none;box-shadow:none;' : ''}">
-        ${paraImprimir ? '<h2>Costes fijos (superficie)</h2>' : decaCardHead('home', 'Costes fijos', 'Superficie contratada este mes')}
-        <div class="${paraImprimir ? '' : 'deca-card-body'}">${m2Html}</div>
-      </div>
-      <div class="op-total-row" style="margin-top:16px;${paraImprimir ? 'border:2px solid #000;background:none;' : ''}"><span>Total a facturar (sin IVA)</span><b>${eur(total)}</b></div>
       ${!paraImprimir && r.totStock ? `<div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">El almacenaje del stock (palet por día o máximo del mes) se calcula aquí con la tarifa vigente de cada día; no queda guardado como cobro.</div>` : ''}
     </div>`;
 }
@@ -6196,6 +6226,9 @@ function sgaResumenImprimir(){
     tfoot td{border-top:1.5px solid #000;border-bottom:none;font-weight:700;}
     .op-total-row{display:flex;justify-content:space-between;align-items:baseline;padding:8px 10px;margin-top:12px;} .op-total-row span{font-size:11px;font-weight:700;text-transform:uppercase;} .op-total-row b{font-size:17px;}
     .card{background:none;} .op-lines{display:block;}
+    .rm-kpis{display:flex;border:1.5px solid #000;margin-bottom:6px;} .rm-kpi{flex:1;padding:5px 8px;border-right:1px solid #000;display:flex;flex-direction:column;} .rm-kpi:last-child{border-right:none;}
+    .rm-kpi small{font-size:8px;text-transform:uppercase;font-weight:700;} .rm-kpi b{font-size:15px;} .rm-kpi span{font-size:8px;color:#444;}
+    .rm-kpi.tot{background:#EEE;}
   `;
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Resumen mensual ${esc(sgaPeriodoTxt(rm.periodo))}</title><style>${css}</style></head><body>${sgaResumenHtml(rm.datos, true)}</body></html>`;
   const f = document.createElement('iframe');
