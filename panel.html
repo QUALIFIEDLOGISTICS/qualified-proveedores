@@ -3903,9 +3903,9 @@ function stockBodyHtml(){
   const okCli = c => !q || c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q);
   if (stockSeg() !== 'stock') {
     const esSal = stockSeg() === 'salidas';
-    const emp = window.__stockEmp || '';
-    const lista = sgaAlbaranes.filter(a => (!wid || a.warehouseId === wid) && (!emp || a.clienteId === emp) && (esSal ? a.tipo === 'salida' : a.tipo !== 'salida')).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && okCli(c); });
-    if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q || emp ? 'Ningún albarán coincide con la búsqueda o el filtro.' : esSal ? 'Todavía no hay salidas. Registra la primera con «Nueva salida».' : 'Todavía no hay entradas. Registra la primera con «Nueva entrada».'}</div>`;
+    const emp = window.__stockEmp || '', est = window.__stockEstado || '';
+    const lista = sgaAlbaranes.filter(a => (!wid || a.warehouseId === wid) && (!emp || a.clienteId === emp) && (!est || sgaAlbaranEstadoClave(a) === est) && (esSal ? a.tipo === 'salida' : a.tipo !== 'salida')).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && okCli(c); });
+    if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q || emp || est ? 'Ningún albarán coincide con la búsqueda o el filtro.' : esSal ? 'Todavía no hay salidas. Registra la primera con «Nueva salida».' : 'Todavía no hay entradas. Registra la primera con «Nueva entrada».'}</div>`;
     return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
       <thead><tr>${thSort('Nº','number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Almacén','text')}${thSort('Referencia','text')}${thSort('Modalidad','text')}${thSort('Palets','number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
       <tbody>${lista.map(a => { const c = contactos.find(x => x.id === a.clienteId); return `
@@ -4423,6 +4423,13 @@ function stockEmpresasConAlbaran(seg){
   return contactos.filter(c => ids.has(c.id))
     .sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es'));
 }
+// Estado de un albarán para el filtro: borrador (salida pendiente de confirmar), confirmada o anulada.
+function sgaAlbaranEstadoClave(a){ return a.estado === 'anulado' ? 'anulada' : (a.estado === 'confirmado' && a.borrador ? 'borrador' : 'confirmada'); }
+function stockEstadoSelectHtml(seg){
+  const ops = [['', 'Todos los estados'], ['confirmada', 'Confirmadas'], ...(seg === 'salidas' ? [['borrador', 'Borradores']] : []), ['anulada', 'Anuladas']];
+  if (window.__stockEstado && !ops.some(o => o[0] === window.__stockEstado)) window.__stockEstado = '';
+  return `<select id="stock-estado" onchange="window.__stockEstado=this.value; refreshStockBody();" style="width:auto;flex:0 0 170px;min-width:0;" title="Ver solo los albaranes en un estado">${ops.map(([v, t]) => `<option value="${v}" ${v === (window.__stockEstado || '') ? 'selected' : ''}>${t}</option>`).join('')}</select>`;
+}
 function stockEmpresaSelectHtml(seg){
   const lista = stockEmpresasConAlbaran(seg);
   if (window.__stockEmp && !lista.some(c => c.id === window.__stockEmp)) window.__stockEmp = '';
@@ -4470,7 +4477,7 @@ function tplStock(){
         <input placeholder="${seg === 'catalogo' ? 'Buscar cliente o artículo…' : 'Buscar cliente por nombre o NIF…'}" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      ${seg === 'entradas' || seg === 'salidas' ? stockEmpresaSelectHtml(seg) : ''}`}
+      ${seg === 'entradas' || seg === 'salidas' ? stockEmpresaSelectHtml(seg) + stockEstadoSelectHtml(seg) : ''}`}
       ${seg === 'resumen' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
     </div>
     <div id="stock-body">${stockBodyHtml()}</div>
