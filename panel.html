@@ -4116,7 +4116,7 @@ function stockBodyHtml(){
     return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
       <thead><tr>${thSort('Nº','number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Almacén','text')}${thSort('Referencia','text')}${thSort('Modalidad','text')}${thSort('Palets','number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
       <tbody>${lista.map(a => { const c = contactos.find(x => x.id === a.clienteId); return `
-        <tr>
+        <tr data-alb="${a.id}">
           <td data-sort-value="${a.numero}"><b>${esc(sgaNumAlbaran(a))}</b></td>
           <td style="white-space:nowrap;" data-sort-value="${esc(a.fecha)}">${fmtDateDMY(a.fecha)}</td>
           <td data-sort-value="${esc(c ? c.nombre : '')}">${esc(c ? ((c.nombreComercial || '').trim() || c.nombre) : '—')}</td>
@@ -4691,7 +4691,7 @@ function tplStock(){
     </div>`;
 }
 function stockVolver(){
-  window.__seEdit = null;
+  window.__seEdit = null; window.__slNavIds = null;
   if (window.__slEdit) { window.__slEdit = null; loadSgaStock().then(() => { if (currentTab === 'stock') renderTab(); }); }
   window.__catEditAll = false;
   window.__stockView = 'home';
@@ -5410,9 +5410,14 @@ function sgaPartidaDeFila(r){
     atributos: r.atributos || {}, createdAt: r.created_at, articuloId: r.articulo_id || '', bultos: r.bultos == null ? null : Number(r.bultos),
   };
 }
-async function sgaSalidaEditar(id, confirmar){
+async function sgaSalidaEditar(id, confirmar, keepNav){
   const a = sgaAlbaranes.find(x => x.id === id);
   if (!a || a.tipo !== 'salida' || a.estado !== 'confirmado') return;
+  if (!keepNav) {   // las salidas que se ven ahora en la lista (con el filtro y el orden que tenga), para pasar de una a otra con las flechas
+    window.__slNavIds = [...document.querySelectorAll('#stock-body tbody tr[data-alb]')].map(r => r.dataset.alb)
+      .filter(x => { const al = sgaAlbaranes.find(y => y.id === x); return al && al.tipo === 'salida' && al.estado === 'confirmado'; });
+    window.__slNavConfirmar = confirmar === true;
+  }
   const [m, s] = await Promise.all([
     supabaseClient.from('sga_movimientos').select('partida_id,cantidad').eq('albaran_id', id).eq('tipo', 'salida'),
     supabaseClient.from('sga_servicios').select('producto_id,cantidad,nota').eq('albaran_id', id),
@@ -5434,6 +5439,20 @@ async function sgaSalidaEditar(id, confirmar){
   renderHeader(); renderTab();
   sgaSalidaRellenar();
   window.scrollTo(0, 0);
+}
+// Flechas ← → de la pantalla de una salida abierta desde la lista (por ejemplo, con el filtro «Borradores»): pasar a la anterior o a
+// la siguiente sin volver a la lista. El stock se recarga antes de abrir otra para que no se arrastren los cambios de la anterior.
+async function sgaSalidaNavGoto(offset){
+  const ids = window.__slNavIds || [];
+  const e = window.__slEdit;
+  if (!e) return;
+  const idx = ids.indexOf(e.id);
+  if (idx === -1 || ids.length < 2) return;
+  if (window.__stockDirty && !(await appConfirm({ title: 'Cambios sin guardar', message: 'Has cambiado datos de esta salida y no los has guardado. Si pasas a otra se pierden.', confirmLabel: 'Pasar igualmente', cancelLabel: 'Seguir aquí', tone: 'warn', icon: 'warn' }))) return;
+  await loadSgaStock();
+  const nextId = ids[(idx + offset + ids.length) % ids.length];
+  const al = sgaAlbaranes.find(x => x.id === nextId);
+  await sgaSalidaEditar(nextId, !!(window.__slNavConfirmar && al && al.borrador), true);
 }
 // Rellena el formulario con los datos de la salida que se edita.
 function sgaSalidaRellenar(){
@@ -5730,6 +5749,11 @@ function tplStockSalidaPage(){
         <div class="deca-banner-title">${window.__slEdit ? (window.__slEdit.confirmar ? 'Confirmar salida ' : window.__slEdit.albaran.borrador ? 'Borrador de salida ' : 'Editar salida ') + esc(sgaNumAlbaran(window.__slEdit.albaran)) : 'Nueva salida'}</div>
         <div class="deca-banner-sub">${window.__slEdit ? (window.__slEdit.confirmar ? 'Comprueba la fecha real de salida (se ha puesto la de hoy) y confirma: el albarán conserva su número.' : window.__slEdit.albaran.borrador ? 'Sigue en borrador: la mercancía está apartada pero todavía no se cobra. Confírmalo cuando salga de verdad.' : 'Cambia lo que necesites: al guardar se recalculan el stock y lo que se cobra. El albarán conserva su número.') : 'La mercancía que sale de un cliente, del almacén donde la tiene.'}</div>
       </div>
+      ${window.__slEdit && (window.__slNavIds || []).length > 1 && (window.__slNavIds || []).includes(window.__slEdit.id) ? (() => {
+        const ids = window.__slNavIds, idx = ids.indexOf(window.__slEdit.id);
+        const arrow = (offset, title, ch) => `<button onclick="sgaSalidaNavGoto(${offset})" title="${title}" style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 11px;cursor:pointer;color:var(--muted);font-size:13px;">${ch}</button>`;
+        return `<div class="deca-banner-actions"><div style="display:flex;align-items:center;gap:4px;">${arrow(-1, 'Salida anterior', '←')}<span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${idx + 1}/${ids.length}</span>${arrow(1, 'Salida siguiente', '→')}</div></div>`;
+      })() : ''}
     </div>
     <div class="deca-form" oninput="window.__stockDirty=true; sgaSalidaRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
       <div class="card deca-card">
@@ -5843,6 +5867,15 @@ async function sgaSalidaConfirmar(comoBorrador){
     await logContactoHistorial(d.clienteId, `SGA · ${verbo} la salida ${sgaNumAlbaran(edit.albaran)}: ${total} palet${total !== 1 ? 's' : ''} el ${fmtDateDMY(d.fecha)}${fifo.saltados.size ? ' (FIFO saltado)' : ''}.${comoBorrador ? ' Pendiente de confirmar.' : ' Stock y cobros recalculados.'}`);
     appToast(comoBorrador ? `Borrador ${sgaNumAlbaran(edit.albaran)} guardado.` : eraBorrador ? `Salida ${sgaNumAlbaran(edit.albaran)} confirmada con fecha ${fmtDateDMY(d.fecha)}.` : `Salida ${sgaNumAlbaran(edit.albaran)} actualizada: stock y cobros recalculados.`, 'ok');
     window.__stockSeg = 'salidas';
+    // Confirmando borradores desde la lista: al confirmar uno se abre directamente el siguiente pendiente, sin volver a la lista
+    if (!comoBorrador && eraBorrador && edit.confirmar) {
+      const ids = (window.__slNavIds || []).filter(x => x !== edit.id);
+      const i = (window.__slNavIds || []).indexOf(edit.id);
+      const orden = ids.slice(Math.max(0, i)).concat(ids.slice(0, Math.max(0, i)));
+      const sig = orden.find(x => { const al = sgaAlbaranes.find(y => y.id === x); return al && al.estado === 'confirmado' && al.borrador; });
+      window.__slNavIds = ids;
+      if (sig) { await sgaSalidaEditar(sig, true, true); return; }
+    }
     stockVolver();
     if (comoBorrador && await appConfirm({ title: 'Albarán de salida', message: `Borrador guardado con el nº ${sgaNumAlbaran(edit.albaran)}. ¿Quieres imprimir el albarán (o guardarlo en PDF)?`, confirmLabel: 'Imprimir albarán', cancelLabel: 'Ahora no', tone: 'info', icon: 'file' })) sgaAlbaranImprimir(edit.id);
     return;
