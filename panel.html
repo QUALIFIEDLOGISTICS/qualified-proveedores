@@ -544,6 +544,10 @@
   .sl-aviso{color:var(--danger);font-weight:600;}
   .sl-vacia{padding:18px;text-align:center;color:var(--mutedFaint);font-size:13px;}
   .sl-det{margin-top:6px;}
+  .sl-modo{font-size:12.5px;color:var(--muted);background:color-mix(in srgb,var(--primary) 7%,transparent);border:1px solid var(--border);border-radius:10px;padding:7px 12px;margin-bottom:10px;}
+  .sl-modo b{color:var(--primary);}
+  .sl-det-man>summary{pointer-events:none;}
+  .sl-det-man>summary::before{content:'';}
   .sl-det>summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--primary);padding:8px 2px;list-style:none;}
   .sl-det>summary::-webkit-details-marker{display:none;}
   .sl-det>summary::before{content:'▸ ';}
@@ -3685,6 +3689,24 @@ function sgacNivel(id, nivel){
   const el = document.getElementById('sgac-campos');
   if (el) el.innerHTML = sgacCamposHtml();
 }
+/* ---- Cómo sale la mercancía de cada cliente (Ficha SGA del cliente) ----
+   FIFO: sale primero lo más antiguo (lo habitual). LIFO: sale primero lo más reciente. Manual: sin cálculo, se marca a mano de qué
+   entrada sale cada palet y no hay avisos. Se guarda dentro de la configuración del cliente (campos.__salida). */
+const SGA_SALIDA_MODOS = {
+  fifo: { corto: 'FIFO', nombre: 'FIFO', txt: 'Sale primero lo más antiguo.' },
+  lifo: { corto: 'LIFO', nombre: 'LIFO', txt: 'Sale primero lo más reciente.' },
+  manual: { corto: 'Manual', nombre: 'Sin cálculo', txt: 'Se marca a mano de qué entrada sale cada palet; sin reparto automático ni avisos.' },
+};
+function sgaClienteSalida(clienteId){
+  const v = (sgaClienteCfg(clienteId).campos || {}).__salida;
+  return SGA_SALIDA_MODOS[v] ? v : 'fifo';
+}
+function sgacSalida(v){
+  const h = document.getElementById('sgac-salida');
+  if (h) h.value = v;
+  document.querySelectorAll('.sgac-sg[data-g="salida"] button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  document.querySelectorAll('.sgac-h[data-g="salida"] span').forEach(s => s.classList.toggle('on', s.dataset.v === v));
+}
 function tplSgaClientePage(c){
   const cfg = sgaClienteCfg(c.id);
   const nombre = (c.nombreComercial || '').trim() || c.nombre;
@@ -3719,6 +3741,12 @@ function tplSgaClientePage(c){
             <div class="sgac-rq">¿Un palet lleva varias cajas y se cobra por caja?</div>
             ${sgacSegHtml('bultos', sgaClienteConBultos(c.id) ? 1 : 0, [[0, 'No'], [1, 'Sí']])}
             ${sgacHintHtml('bultos', sgaClienteConBultos(c.id) ? 1 : 0, [[0, 'No', '1 palet = 1 bulto.'], [1, 'Sí', 'Ej. carpa de 3 cajas: cuenta 1 palet en el stock y se cobran 3 bultos.']])}
+          </div>
+          <div class="sgac-row">
+            <input type="hidden" id="sgac-salida" value="${sgaClienteSalida(c.id)}" />
+            <div class="sgac-rq">¿Cómo sale la mercancía?</div>
+            <div class="doc-seg sgac-sg" data-g="salida">${Object.keys(SGA_SALIDA_MODOS).map(k => `<button type="button" data-v="${k}" class="${sgaClienteSalida(c.id) === k ? 'on' : ''}" onclick="sgacSalida('${k}')">${SGA_SALIDA_MODOS[k].nombre}</button>`).join('')}</div>
+            <div class="sgac-h" data-g="salida">${Object.keys(SGA_SALIDA_MODOS).map(k => `<span data-v="${k}" class="${sgaClienteSalida(c.id) === k ? 'on' : ''}">${SGA_SALIDA_MODOS[k].txt}</span>`).join('')}</div>
           </div>
         </div>
       </div>
@@ -3762,6 +3790,8 @@ async function submitSgaCliente(){
   const campos = Object.assign({}, previa.campos);   // se conservan los niveles de los campos archivados
   sgaCamposCliente().forEach(f => { campos[f.id] = (window.__sgacCampos || {})[f.id] || 'no'; });
   campos.__bultos = document.getElementById('sgac-bultos').checked ? 'si' : 'no';
+  campos.__salida = (document.getElementById('sgac-salida') || {}).value || 'fifo';
+  const salidaAntes = sgaClienteSalida(id);
   const observaciones = document.getElementById('sgac-obs').value.trim();
   const prefijo = ((document.getElementById('sgac-prefijo') || {}).value || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
   const btn = document.querySelector('.sgac-save');
@@ -3774,6 +3804,7 @@ async function submitSgaCliente(){
   if (previa.codigosUnicos !== codigosUnicos) dif.push(`códigos únicos ${codigosUnicos ? 'sí' : 'no'}`);
   if (sgaCamposCliente().some(f => (previa.campos[f.id] || 'no') !== campos[f.id])) dif.push('datos de la mercancía');
   if (bultosAntes !== (campos.__bultos === 'si')) dif.push(`bultos por palet ${campos.__bultos === 'si' ? 'sí' : 'no'}`);
+  if (salidaAntes !== campos.__salida) dif.push(`salida de la mercancía a ${(SGA_SALIDA_MODOS[campos.__salida] || {}).nombre}`);
   if (dif.length) await logContactoHistorial(id, `SGA · ha cambiado ${dif.join(', ')}.`);
   sgaClienteCerrar();
 }
@@ -5213,12 +5244,14 @@ async function sgaSalidaCancelar(){
 }
 function sgaSalidaStockHtml(clienteId){
   const cfg = sgaClienteCfg(clienteId);
+  const modo = sgaClienteSalida(clienteId), manual = modo === 'manual';
   const ps = sgaStockCliente(clienteId, sgaSalidaWh());
   const conDesc = ps.some(p => p.descripcion);
   const grupos = sgaSalidaGrupos(clienteId, sgaSalidaWh());
   window.__slGrupos = grupos;
   return `
-    ${grupos.length ? `
+    <div class="sl-modo sl-modo-${modo}"><b>${SGA_SALIDA_MODOS[modo].nombre}</b> · ${SGA_SALIDA_MODOS[modo].txt}</div>
+    ${!grupos.length ? '<div style="color:var(--mutedFaint);font-size:13px;padding:6px 2px;">Este cliente no tiene mercancía en este almacén.</div>' : manual ? '<div class="sl-add"><button type="button" class="btn btn-ghost" onclick="sgaSalidaLimpiar()">Limpiar todo</button></div>' : `
     <div class="sl-add">
       <select id="sl-add-art" onchange="sgaSalidaAddLinea(this.value); this.value='';">
         <option value="">＋ Añadir un artículo…</option>
@@ -5226,8 +5259,8 @@ function sgaSalidaStockHtml(clienteId){
       </select>
       <button type="button" class="btn btn-ghost" onclick="sgaSalidaLimpiar()">Limpiar todo</button>
     </div>
-    <div id="sl-lineas" class="sl-lineas"></div>` : '<div style="color:var(--mutedFaint);font-size:13px;padding:6px 2px;">Este cliente no tiene mercancía en este almacén.</div>'}
-    <details id="sl-detalle" class="sl-det">
+    <div id="sl-lineas" class="sl-lineas"></div>`}
+    <details id="sl-detalle" class="sl-det${manual ? ' sl-det-man' : ''}"${manual ? ' open' : ''}>
       <summary>Ajustar por partida <span>elige de qué entrada sale cada palet</span></summary>
     <div class="tc-hist-box" style="max-height:420px;">
     <table class="tf-table" style="min-width:640px;">
@@ -5278,7 +5311,8 @@ function sgaSalidaCantidadPartida(pid){
 function sgaSalidaAsignar(g, q){
   g.partidas.forEach(p => sgaSalidaPonerCantidad(p.id, 0));
   let resto = Math.max(0, q);
-  g.partidas.forEach(p => { const n = Math.min(resto, p.actual); if (n > 0) sgaSalidaPonerCantidad(p.id, n); resto -= n; });
+  const orden = sgaClienteSalida(sgaSalidaClienteId()) === 'lifo' ? g.partidas.slice().reverse() : g.partidas;   // LIFO: primero lo más reciente
+  orden.forEach(p => { const n = Math.min(resto, p.actual); if (n > 0) sgaSalidaPonerCantidad(p.id, n); resto -= n; });
 }
 function sgaSalidaAddLinea(idx){
   const g = (window.__slGrupos || [])[parseInt(idx, 10)];
@@ -5412,20 +5446,24 @@ function sgaSalidaLeer(){
   }).filter(x => x.p);
   return { clienteId: val('sl-cliente'), fecha: val('sl-fecha'), referencia: window.__slEdit ? (window.__slEdit.albaran.referencia || '') : '', modalidad: val('sl-modalidad') || 'palet', transportista: val('sl-transp'), matricula: sgaMatriculaJoin(val('sl-matr'), val('sl-matr2')), observaciones: val('sl-obs'), destinatario: val('sl-dest'), destinatarioDireccion: val('sl-destdir'), items, servicios: sgaServiciosLeer() };
 }
-// FIFO dentro de cada tipo de carga + referencia: no se puede sacar de una partida más nueva si hay otra más antigua sin vaciar.
+// FIFO (o LIFO, según el cliente) dentro de cada tipo de carga + referencia: no se puede sacar de una partida más nueva (o más antigua,
+// en LIFO) si hay otra anterior sin vaciar. En «sin cálculo» no se avisa de nada.
 function sgaSalidaFifo(clienteId, items){
+  const modo = sgaClienteSalida(clienteId);
   const toma = new Map(items.map(x => [x.p.id, x.n > 0 ? x.n : 0]));
   const saltados = new Set(), avisos = [];
+  if (modo === 'manual') return { saltados, avisos };
   const grupos = {};
   sgaStockCliente(clienteId, sgaSalidaWh()).forEach(p => { (grupos[p.productoId + '|' + p.referencia] = grupos[p.productoId + '|' + p.referencia] || []).push(p); });
   Object.keys(grupos).forEach(k => {
+    const lista = modo === 'lifo' ? grupos[k].slice().reverse() : grupos[k];   // el primero de la lista es el que toca sacar antes
     let incompleta = false, viola = false;
-    grupos[k].forEach(p => {
+    lista.forEach(p => {
       const n = toma.get(p.id) || 0;
       if (incompleta && n > 0) { saltados.add(p.id); viola = true; }
       if (n < p.actual) incompleta = true;
     });
-    if (viola) { const p0 = grupos[k][0]; avisos.push(`No sigues el FIFO en «${sgaProdTxt(p0.productoId)}${p0.referencia ? ' · ref. ' + p0.referencia : ''}»: hay mercancía más antigua sin sacar.`); }
+    if (viola) { const p0 = lista[0]; avisos.push(`No sigues el ${modo === 'lifo' ? 'LIFO' : 'FIFO'} en «${sgaProdTxt(p0.productoId)}${p0.referencia ? ' · ref. ' + p0.referencia : ''}»: hay mercancía más ${modo === 'lifo' ? 'reciente' : 'antigua'} sin sacar.`); }
   });
   return { saltados, avisos };
 }
@@ -5519,7 +5557,7 @@ function tplStockSalidaPage(){
         </div>
       </div>
       <div class="card deca-card">
-        ${decaCardHead('box', 'Qué sale', 'Elige el artículo y la cantidad: el programa reparte el stock por FIFO (lo más antiguo primero)')}
+        ${decaCardHead('box', 'Qué sale', 'Cada cliente sale a su manera (se cambia en su ficha de cliente SGA)')}
         <div class="deca-card-body"><div id="sl-stock"><div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div></div></div>
       </div>
       <div class="card deca-card">
