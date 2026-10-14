@@ -490,6 +490,8 @@
   .cg-tabla input.cg-in:focus,.cg-tabla select.cg-in:focus{border-color:var(--primary);background:var(--panel);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 15%,transparent);}
   .cg-th-ed{display:inline-flex;align-items:center;gap:5px;margin-right:10px;padding:4px 10px;border-radius:7px;border:1px solid var(--primary);background:var(--panel);color:var(--primary);font-family:var(--body);font-size:12px;font-weight:700;letter-spacing:0;text-transform:none;cursor:pointer;vertical-align:middle;}
   .cg-th-ed:hover{background:var(--primary);color:#fff;}
+  .dr-dup{border:1px solid #C98A2E;border-left-width:4px;background:color-mix(in srgb,#C98A2E 12%,var(--panel));border-radius:10px;padding:9px 13px;margin-bottom:12px;font-size:13px;line-height:1.45;}
+  .dr-dup b{display:block;margin-bottom:2px;} .dr-dup small{display:block;margin-top:3px;color:var(--muted);}
   /* Pantalla «Editar catálogo»: rejilla tipo Excel, una columna por dato y todas las casillas editables */
   .cg-tabla.cg-todo{border-collapse:collapse;}
   .cg-tabla.cg-todo th{background:var(--panel2);border:1px solid var(--border);text-align:center !important;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;padding:8px 10px;white-space:nowrap;position:sticky;top:0;z-index:2;}
@@ -7382,6 +7384,35 @@ function tplDireccionesPage(){
     </div>`;
 }
 function onDireccionCpInput(){ return autofillCiudadProvinciaFromCp('dr'); }
+/* ---- Direcciones: aviso de duplicadas ----
+   Se compara el nombre del lugar y el código postal sin fijarse en mayúsculas, acentos, espacios ni signos.
+   Avisa (en directo y al guardar) pero no impide guardar: un mismo sitio puede tener dos muelles con el mismo nombre. */
+function direccionNorm(s){ return String(s == null ? '' : s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function direccionesParecidas(nombre, cp, calle1, exceptoId){
+  const n = direccionNorm(nombre), c = direccionNorm(cp), k = direccionNorm(calle1);
+  if (!n || !c) return [];
+  return direcciones.filter(d => d.id !== exceptoId && direccionNorm(d.nombre) === n && direccionNorm(d.codigoPostal) === c)
+    .map(d => ({ d, mismaCalle: !!k && direccionNorm(d.calle1) === k }));
+}
+function direccionParecidaTxt(x){
+  const d = x.d;
+  const lugar = [d.calle1, d.calle2, [d.codigoPostal, d.ciudad].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  return `«${d.nombre}»${lugar ? ' · ' + lugar : ''}${d.archived ? ' (archivada)' : ''}`;
+}
+function direccionDupCheck(){
+  const box = document.getElementById('dr-dup');
+  if (!box) return;
+  const v = id => (document.getElementById(id) || {}).value || '';
+  const editId = window.__direccionFormId || '';
+  const lista = direccionesParecidas(v('dr-nombre'), v('dr-cp'), v('dr-calle1'), editId);
+  if (!lista.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const igual = lista.some(x => x.mismaCalle);
+  box.style.display = 'block';
+  box.innerHTML = `<b>${igual ? 'Parece la misma dirección.' : 'Ya hay una dirección con ese nombre y ese código postal.'}</b>
+    ${lista.slice(0, 3).map(x => `<div>${esc(direccionParecidaTxt(x))}</div>`).join('')}
+    <small>Si es otro punto del mismo sitio (otro muelle, otra nave), puedes guardarla igualmente.</small>`;
+}
+document.addEventListener('input', ev => { const t = ev.target; if (t && ['dr-nombre', 'dr-cp', 'dr-calle1'].includes(t.id)) direccionDupCheck(); });
 /* ---- Direcciones: selector semanal de horarios ----
    Se elige por día (abierto/cerrado y hasta dos tramos) y se guarda como
    texto legible en la columna "horarios", p. ej.
@@ -7573,6 +7604,7 @@ function openDireccionForm(editId, keepNav){
   window.__direccionHistorial = editId ? (direccionHistorialCache[editId] || null) : [];
   renderHeader(); renderTab();
   hrRender();
+  direccionDupCheck();
   window.scrollTo(0, 0);
   if (editId) {
     loadDireccionHistorial(editId).then(list => {
@@ -7706,6 +7738,7 @@ function tplDireccionFormPage(){
       <div class="card deca-card" style="--dc-accent:var(--primary);">
         ${decaCardHead('pin', 'Dirección', 'Calle, código postal y población')}
         <div class="deca-card-body">
+          <div id="dr-dup" class="dr-dup" style="display:none;"></div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
             <div class="field" style="flex:1;min-width:220px;"><label>Calle 1 ${req}</label>${icoIn('pin', `<input id="dr-calle1" maxlength="150" style="text-transform:uppercase;" oninput="uppercaseInput(this)" value="${esc(d.calle1||'')}" />`)}</div>
             <div class="field" style="flex:1;min-width:220px;"><label>Calle 2</label>${icoIn('pin', `<input id="dr-calle2" maxlength="150" style="text-transform:uppercase;" oninput="uppercaseInput(this)" value="${esc(d.calle2||'')}" />`)}</div>
@@ -7765,6 +7798,20 @@ async function submitDireccionForm(editId){
   if (window.__hrError) { showFormError(errEl, 'Revisa los horarios: ' + window.__hrError); return; }
   const mapsUrl = val('dr-maps');
   if (mapsUrl && !safeMapsUrl(mapsUrl)) { showFormError(errEl, 'El enlace de Google Maps debe empezar por http:// o https://.'); return; }
+  // Aviso de direcciones duplicadas: si es nueva, o si se ha cambiado el nombre o el código postal
+  const antesDup = editId ? direcciones.find(d => d.id === editId) : null;
+  if (!antesDup || direccionNorm(antesDup.nombre) !== direccionNorm(nombre) || direccionNorm(antesDup.codigoPostal) !== direccionNorm(val('dr-cp'))) {
+    const parecidas = direccionesParecidas(nombre, val('dr-cp'), val('dr-calle1'), editId);
+    if (parecidas.length) {
+      const igual = parecidas.some(x => x.mismaCalle);
+      const ok = await appConfirm({
+        title: igual ? 'Parece la misma dirección' : 'Ya hay una dirección parecida',
+        message: (igual ? 'Ya existe una dirección con el mismo nombre, código postal y calle:\n' : 'Ya existe una dirección con el mismo nombre y código postal:\n') + parecidas.slice(0, 3).map(x => '• ' + direccionParecidaTxt(x)).join('\n') + '\n\nSi es otro punto del mismo sitio (otro muelle, otra nave) puedes guardarla igualmente.',
+        confirmLabel: 'Guardar igualmente', cancelLabel: 'Revisar', tone: 'warn', icon: 'warn',
+      });
+      if (!ok) return;
+    }
+  }
   const payload = {
     nombre, calle1: val('dr-calle1') || null, calle2: (val('dr-calle2') || '').toUpperCase() || null,
     codigo_postal: val('dr-cp') || null, ciudad: val('dr-ciudad') || null, provincia: val('dr-provincia') || null,
