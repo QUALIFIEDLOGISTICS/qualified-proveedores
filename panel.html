@@ -30,6 +30,8 @@
   th.th-sort{cursor:pointer;user-select:none;white-space:nowrap;}
   th.th-sort:hover{color:var(--text);}
   th.th-sort .th-sort-arrow{display:inline-block;margin-left:4px;font-size:10px;opacity:.3;}
+  th[data-col-mov]{cursor:grab;} th.col-drag{opacity:.45;} th.col-over{box-shadow:inset 3px 0 0 var(--primary);}
+  .cols-reset{font-size:11.5px;color:var(--mutedFaint);text-align:right;padding:4px 10px 2px;} .cols-reset a{color:var(--primary);font-weight:600;text-decoration:none;}
   td{padding:11px 12px;font-size:13.5px;border-bottom:1px solid var(--border);}
   tr:last-child td{border-bottom:none;}
   .dr-row:hover td{background:var(--panel2);}
@@ -1928,6 +1930,155 @@ function sortTableByHeader(th){
     arrow.style.opacity = i === colIndex ? '1' : '.3';
   });
 }
+/* ---- Mover las columnas de las tablas arrastrando su título ----
+   Vale para las tablas normales de la app (listas y catálogo). El orden elegido se guarda en este navegador, por pantalla,
+   y se aplica solo cada vez que la tabla se vuelve a pintar. Se actúa sobre el DOM ya pintado: no toca los datos.
+   Las tablas del resumen mensual (rm-tabla) no se mueven. */
+const COLS_LS = 'qualified.cols.v1';
+function colsLeer(){ try { return JSON.parse(localStorage.getItem(COLS_LS) || '{}') || {}; } catch (e) { return {}; } }
+function colsGuardar(k, ids){
+  try { const o = colsLeer(); if (ids) o[k] = ids; else delete o[k]; localStorage.setItem(COLS_LS, JSON.stringify(o)); } catch (e) { /* sin almacenamiento: no pasa nada */ }
+}
+function colsPantalla(){
+  return [currentTab, window.__stockSeg, window.__administracionView, window.__traficoView, window.__autonomosView, window.__fichajesView]
+    .map(v => (v && typeof v === 'string') ? v : '').join('|');
+}
+function colsEtiqueta(th){
+  const c = th.cloneNode(true);
+  c.querySelectorAll('.th-sort-arrow, button, input, select, small').forEach(n => n.remove());
+  return c.textContent.replace(/\s+/g, ' ').trim();
+}
+// Identificadores únicos por columna (si dos se llaman igual: «Bultos», «Bultos#2»)
+function colsIds(table){
+  const cuenta = {};
+  return [...table._colsHead.cells].map(th => {
+    const l = colsEtiqueta(th); if (!l) return '';
+    cuenta[l] = (cuenta[l] || 0) + 1;
+    return cuenta[l] > 1 ? `${l}#${cuenta[l]}` : l;
+  });
+}
+function colsFilasDatos(table){   // filas con una celda por columna (las que tienen colspan se dejan como están)
+  const n = table._colsHead.cells.length;
+  return [...table.rows].filter(r => r.cells.length === n && ![...r.cells].some(c => c.colSpan > 1));
+}
+// Coloca las celdas de una fila según «perm» (posición nueva → índice de celda actual)
+function colsReordenarFila(row, perm){
+  const cells = [...row.cells];
+  perm.forEach(i => row.appendChild(cells[i]));
+}
+// Pone las columnas en el orden de «destino» (lista de ids por posición actual → deseada)
+function colsAplicarOrden(table, destino){
+  const actual = colsIds(table);
+  const perm = destino.map((id, p) => (id === '' ? p : actual.indexOf(id)));
+  if (perm.some(i => i < 0) || perm.every((i, p) => i === p)) return false;
+  colsFilasDatos(table).forEach(r => { r.dataset.coOk = '1'; colsReordenarFila(r, perm); });
+  table.removeAttribute('data-sort-col'); table.removeAttribute('data-sort-dir');
+  [...table._colsHead.cells].forEach(h => { const a = h.querySelector('.th-sort-arrow'); if (a) { a.textContent = '⇅'; a.style.opacity = '.3'; } });
+  return true;
+}
+// Orden deseado: el guardado (los que existan) y, detrás, las columnas nuevas; las casillas sin título no se mueven
+function colsDestino(actual, guardado){
+  const mov = actual.filter(Boolean);
+  const orden = [...guardado.filter(id => mov.includes(id)), ...mov.filter(id => !guardado.includes(id))];
+  let k = 0;
+  return actual.map(id => id === '' ? '' : orden[k++]);
+}
+function colsAvisoRestablecer(table){
+  const original = table._colsOriginal.join('\u0001');
+  const hay = colsIds(table).join('\u0001') !== original;
+  const caja = table.closest('.tc-hist-box') || table;
+  let av = caja.previousElementSibling && caja.previousElementSibling.classList.contains('cols-reset') ? caja.previousElementSibling : null;
+  if (hay && !av) {
+    av = document.createElement('div');
+    av.className = 'cols-reset';
+    av.innerHTML = '<span>Columnas en tu orden</span> · <a href="#" onclick="colsRestablecer(this); return false;">Restablecer</a>';
+    av._tabla = table;
+    caja.parentNode.insertBefore(av, caja);
+  } else if (hay && av) av._tabla = table;
+  else if (!hay && av) av.remove();
+}
+function colsRestablecer(a){
+  const table = a.parentNode._tabla;
+  if (!table || !table.isConnected) return;
+  colsAplicarOrden(table, table._colsOriginal);
+  colsGuardar(table._colsKey, null);
+  colsAvisoRestablecer(table);
+}
+function colsPreparar(table){
+  const head = table.tHead && table.tHead.rows.length === 1 ? table.tHead.rows[0] : null;
+  if (!head || head.cells.length < 3) { table.dataset.colsIni = 'no'; return; }
+  table._colsHead = head;
+  table._colsOriginal = colsIds(table);
+  const todas = [...document.querySelectorAll('#tab-content table.tf-table, #tab-content table.cg-tabla')].filter(t => !t.classList.contains('rm-tabla'));
+  table._colsKey = colsPantalla() + '#' + Math.max(0, todas.indexOf(table));
+  table.dataset.colsIni = 'si';
+  [...head.cells].forEach(th => { if (colsEtiqueta(th)) { th.draggable = true; th.dataset.colMov = '1'; if (!th.title) th.title = 'Arrastra para mover la columna'; } });
+  const guardado = colsLeer()[table._colsKey];
+  if (guardado && guardado.length) colsAplicarOrden(table, colsDestino(table._colsOriginal, guardado));
+  colsFilasDatos(table).forEach(r => { r.dataset.coOk = '1'; });
+  colsAvisoRestablecer(table);
+}
+// Filas que se añaden después (p. ej. «Añadir artículo»): se colocan en el orden actual de la tabla
+function colsAjustarNuevas(table){
+  const nuevas = colsFilasDatos(table).filter(r => !r.dataset.coOk);
+  if (!nuevas.length) return;
+  const orig = table._colsOriginal, act = colsIds(table);
+  const perm = act.map((id, p) => (id === '' ? p : orig.indexOf(id)));
+  nuevas.forEach(r => { r.dataset.coOk = '1'; if (!perm.some(i => i < 0)) colsReordenarFila(r, perm); });
+}
+let colsTimer = null;
+function colsBarrer(){
+  colsTimer = null;
+  document.querySelectorAll('#tab-content table.tf-table, #tab-content table.cg-tabla').forEach(t => {
+    if (t.classList.contains('rm-tabla')) return;
+    if (!t.dataset.colsIni) colsPreparar(t);
+    else if (t.dataset.colsIni === 'si') colsAjustarNuevas(t);
+  });
+}
+function colsProgramar(){ if (!colsTimer) colsTimer = setTimeout(colsBarrer, 30); }
+(function colsIniciar(){
+  const arrancar = () => {
+    const cont = document.getElementById('tab-content');
+    if (!cont) return;
+    new MutationObserver(colsProgramar).observe(cont, { childList: true, subtree: true });
+    colsProgramar();
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', arrancar); else arrancar();
+  let origen = null;
+  document.addEventListener('dragstart', ev => {
+    const th = ev.target && ev.target.closest ? ev.target.closest('th[data-col-mov]') : null;
+    if (!th) return;
+    origen = th;
+    th.classList.add('col-drag');
+    try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', 'columna'); } catch (e) { /* sin dataTransfer */ }
+  });
+  document.addEventListener('dragover', ev => {
+    const th = ev.target && ev.target.closest ? ev.target.closest('th[data-col-mov]') : null;
+    if (!origen || !th || th.closest('table') !== origen.closest('table')) return;
+    ev.preventDefault();
+    document.querySelectorAll('th.col-over').forEach(h => { if (h !== th) h.classList.remove('col-over'); });
+    th.classList.toggle('col-over', th !== origen);
+  });
+  document.addEventListener('drop', ev => {
+    const th = ev.target && ev.target.closest ? ev.target.closest('th[data-col-mov]') : null;
+    if (!origen || !th || th === origen || th.closest('table') !== origen.closest('table')) return;
+    ev.preventDefault();
+    const table = th.closest('table');
+    const ids = colsIds(table);
+    const i = [...table._colsHead.cells].indexOf(origen), j = [...table._colsHead.cells].indexOf(th);
+    // solo se mueven las columnas con título: las casillas sin título (acciones) se quedan donde están
+    const pos = ids.map((id, p) => (id ? p : -1)).filter(p => p >= 0);
+    const lista = pos.map(p => ids[p]);
+    const a = lista.indexOf(ids[i]), b = lista.indexOf(ids[j]);
+    lista.splice(b, 0, lista.splice(a, 1)[0]);
+    pos.forEach((p, k) => { ids[p] = lista[k]; });
+    if (colsAplicarOrden(table, ids)) { colsGuardar(table._colsKey, colsIds(table).filter(Boolean)); colsAvisoRestablecer(table); }
+  });
+  document.addEventListener('dragend', () => {
+    origen = null;
+    document.querySelectorAll('th.col-drag, th.col-over').forEach(h => h.classList.remove('col-drag', 'col-over'));
+  });
+})();
 // dd/mm/aaaa — para el listado del DeCA, donde se pidió este formato exacto.
 function fmtDateDMY(d){
   if (!d) return '—';
