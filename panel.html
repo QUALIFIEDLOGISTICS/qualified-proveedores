@@ -6132,44 +6132,85 @@ async function sgaAlbaranImprimir(id){
   const totCajas = sgaR2(lineas.reduce((s, l) => s + l.cajas, 0));
   const totPeso = sgaR2(lineas.reduce((s, l) => s + (l.peso || 0), 0));
   const w = allWarehouses.find(x => x.id === a.warehouseId);
+  const clienteNombre = cliente ? ((cliente.nombreComercial || '').trim() || cliente.nombre || '') : '';
+  const logoCliente = cliente && cliente.logoStoragePath ? (contactoLogoUrlCache[cliente.id] || await signedUrl(cliente.logoStoragePath)) : null;
+  const logoPropio = new URL('logo-full.png', location.href).href;   // ruta absoluta: el iframe del albarán no conoce la de la página
+  const mat = sgaMatriculaSplit(a.matricula);
+  const esSal = a.tipo === 'salida';
   const css = `
-    @page{size:A4 portrait;margin:14mm;}
+    @page{size:A4 portrait;margin:10mm;}
     *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-    body{font-family:Arial,Helvetica,sans-serif;color:#000;margin:0;font-size:11px;}
-    .cab{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #000;padding-bottom:10px;margin-bottom:14px;}
-    .marca{font-size:20px;font-weight:800;letter-spacing:.5px;} .marca small{display:block;font-size:10px;font-weight:600;letter-spacing:2px;margin-top:2px;}
-    .titulo{text-align:right;} .titulo h1{font-size:18px;margin:0 0 4px;} .titulo div{font-size:12px;}
-    .cajas{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
-    .caja{border:1px solid #000;padding:8px 10px;min-height:62px;} .caja b{display:block;font-size:9px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;} .caja div{font-size:12px;line-height:1.35;}
-    table{width:100%;border-collapse:collapse;margin-top:6px;}
-    th{border-bottom:2px solid #000;border-top:1px solid #000;text-align:left;font-size:9.5px;text-transform:uppercase;padding:5px 6px;}
-    td{border-bottom:1px solid #999;padding:6px;vertical-align:top;font-size:11px;}
-    .r{text-align:right;white-space:nowrap;} tfoot td{border-top:2px solid #000;border-bottom:none;font-weight:700;}
-    .pie{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px;}
-    .firma{border:1px solid #000;height:90px;padding:6px 8px;font-size:9px;text-transform:uppercase;font-weight:700;}
-    .obs{margin-top:12px;font-size:11px;}
+    :root{--az:#1B3A6B;--az2:#E8EDF5;--gr:#5B6472;--li:#C9D1DD;}
+    html,body{margin:0;padding:0;}
+    body{font-family:"Segoe UI",Arial,Helvetica,sans-serif;color:#111;font-size:11.5px;}
+    .hoja{min-height:272mm;display:flex;flex-direction:column;}
+    .cab{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14px;padding-bottom:12px;border-bottom:4px solid var(--az);}
+    .cab .l img{max-height:17mm;max-width:62mm;display:block;}
+    .cab .c{text-align:center;}
+    .cab .c .t{font-size:11px;font-weight:700;letter-spacing:3px;color:var(--gr);}
+    .cab .c .n{font-size:22px;font-weight:800;color:var(--az);margin-top:2px;white-space:nowrap;}
+    .cab .r{display:flex;justify-content:flex-end;align-items:center;}
+    .cab .r img{max-height:17mm;max-width:58mm;display:block;object-fit:contain;}
+    .cab .r .nom{font-size:15px;font-weight:800;text-align:right;line-height:1.15;color:var(--az);}
+    .tipo{display:flex;justify-content:space-between;align-items:center;background:var(--az);color:#fff;padding:8px 14px;margin-top:12px;border-radius:3px;}
+    .tipo h1{margin:0;font-size:17px;letter-spacing:2px;font-weight:800;}
+    .tipo div{font-size:13px;} .tipo b{font-size:15px;}
+    .cajas{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;}
+    .caja{border:1px solid var(--li);border-top:3px solid var(--az);border-radius:3px;padding:8px 11px 9px;min-height:66px;}
+    .caja>b{display:block;font-size:9px;text-transform:uppercase;letter-spacing:1.2px;color:var(--gr);margin-bottom:4px;}
+    .caja .v{font-size:13px;font-weight:700;line-height:1.3;}
+    .caja .s{font-size:11.5px;color:#333;line-height:1.4;margin-top:1px;}
+    .mats{display:flex;gap:18px;margin-top:3px;font-size:11.5px;} .mats span{color:var(--gr);} .mats b{font-family:Consolas,"Courier New",monospace;font-size:13px;letter-spacing:.5px;}
+    .centro{flex:1;margin-top:14px;}
+    table{width:100%;border-collapse:collapse;}
+    th{background:var(--az2);color:var(--az);border-bottom:2px solid var(--az);text-align:left;font-size:9.5px;text-transform:uppercase;letter-spacing:.6px;padding:7px 8px;}
+    td{border-bottom:1px solid var(--li);padding:9px 8px;vertical-align:top;font-size:12px;}
+    tbody tr:nth-child(even) td{background:#F7F9FC;}
+    .r{text-align:right;white-space:nowrap;}
+    tfoot td{border-top:2px solid var(--az);border-bottom:none;font-weight:800;font-size:13px;color:var(--az);background:var(--az2);}
+    .obs{margin-top:12px;border:1px dashed var(--li);border-radius:3px;padding:8px 11px;font-size:11.5px;}
+    .obs b{font-size:9px;text-transform:uppercase;letter-spacing:1.2px;color:var(--gr);display:block;margin-bottom:3px;}
+    .pie{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px;}
+    .firma{border:1px solid var(--li);border-radius:3px;height:34mm;padding:7px 10px;font-size:9px;text-transform:uppercase;font-weight:700;letter-spacing:1px;color:var(--gr);display:flex;flex-direction:column;justify-content:space-between;}
+    .firma small{font-weight:400;letter-spacing:0;text-transform:none;font-size:9.5px;border-top:1px solid var(--li);padding-top:4px;}
+    .legal{margin-top:10px;padding-top:7px;border-top:1px solid var(--li);display:flex;justify-content:space-between;font-size:9px;color:var(--gr);}
   `;
-  const filas = lineas.length ? lineas.map(l => `<tr><td><b>${esc(l.producto)}</b>${l.codigo ? `<div style="font-size:10px;">Código: ${esc(l.codigo)}</div>` : ''}</td><td>${esc(l.modelo) || '—'}</td><td style="white-space:pre-line;">${esc(l.medidas) || '—'}</td>${extraCols.map(c => `<td>${esc(l.extra[c.k])}</td>`).join('')}<td class="r">${sgaNumTxt(l.cajas)}</td><td class="r">${l.peso != null ? sgaNumTxt(l.peso) + ' kg' : '—'}</td></tr>`).join('') : `<tr><td colspan="${5 + extraCols.length}">Sin líneas.</td></tr>`;
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Albarán ${esc(sgaNumAlbaran(a))}</title><style>${css}</style></head><body>
-    <div class="cab"><div class="marca">QUALIFIED<small>LOGISTICS &amp; TRANSPORT</small></div>
-      <div class="titulo"><h1>ALBARÁN DE ${a.tipo === 'salida' ? 'SALIDA' : 'ENTRADA'}</h1><div>Nº <b>${esc(sgaNumAlbaran(a))}</b></div><div>Fecha: <b>${esc(fmtDateDMY(a.fecha))}</b></div></div></div>
-    <div class="cajas">
-      <div class="caja"><b>Ship from</b><div>QUALIFIED LOGISTICS<br>${esc(w ? w.name : '')}${w && sgaDirWh(w) ? '<br>' + esc(sgaDirWh(w)) : ''}</div></div>
-      <div class="caja"><b>Cliente</b><div>${esc(cliente ? ((cliente.nombreComercial || '').trim() || cliente.nombre) : '')}${cliente && cliente.nif ? '<br>NIF ' + esc(cliente.nif) : ''}</div></div>
-      <div class="caja"><b>Para</b><div>${esc(a.destinatario) || '—'}${a.destinatarioDireccion ? '<br>' + esc(a.destinatarioDireccion) : ''}</div></div>
-      <div class="caja"><b>Transporte</b><div>${esc(SGA_MODALIDADES[a.modalidad] || a.modalidad)}${a.transportista ? '<br>' + esc(a.transportista) : ''}${a.matricula ? '<br>Matrícula: ' + esc(a.matricula) : ''}${a.referencia ? '<br>Ref.: ' + esc(a.referencia) : ''}</div></div>
+  const filas = lineas.length ? lineas.map(l => `<tr><td><b>${esc(l.producto)}</b>${l.codigo ? `<div style="font-size:10.5px;color:#444;">Código: ${esc(l.codigo)}</div>` : ''}</td><td>${esc(l.modelo) || '—'}</td><td style="white-space:pre-line;">${esc(l.medidas) || '—'}</td>${extraCols.map(c => `<td>${esc(l.extra[c.k])}</td>`).join('')}<td class="r"><b>${sgaNumTxt(l.cajas)}</b></td><td class="r">${l.peso != null ? sgaNumTxt(l.peso) + ' kg' : '—'}</td></tr>`).join('') : `<tr><td colspan="${5 + extraCols.length}">Sin líneas.</td></tr>`;
+  const dirAlm = w && sgaDirWh(w) ? esc(sgaDirWh(w)) : '';
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Albarán ${esc(sgaNumAlbaran(a))}</title><style>${css}</style></head><body><div class="hoja">
+    <div class="cab">
+      <div class="l"><img src="${logoPropio}" alt="Qualified Logistics" /></div>
+      <div class="c"><div class="t">ALBARÁN</div><div class="n">${esc(sgaNumAlbaran(a))}</div></div>
+      <div class="r">${logoCliente ? `<img src="${esc(logoCliente)}" alt="${esc(clienteNombre)}" />` : `<div class="nom">${esc(clienteNombre)}</div>`}</div>
     </div>
-    <table><thead><tr><th>Producto</th><th>Modelo</th><th>Medidas</th>${extraCols.map(c => `<th>${esc(c.nombre)}</th>`).join('')}<th class="r">Cajas</th><th class="r">Peso</th></tr></thead><tbody>${filas}</tbody>
-      <tfoot><tr><td colspan="${3 + extraCols.length}">TOTAL</td><td class="r">${sgaNumTxt(totCajas)}</td><td class="r">${totPeso ? sgaNumTxt(totPeso) + ' kg' : '—'}</td></tr></tfoot></table>
-    ${a.observaciones ? `<div class="obs"><b>Observaciones:</b> ${esc(a.observaciones)}</div>` : ''}
-    <div class="pie"><div class="firma">Entregado (Qualified Logistics)</div><div class="firma">Recibí (nombre, firma y fecha)</div></div>
-  </body></html>`;
+    <div class="tipo"><h1>ALBARÁN DE ${esSal ? 'SALIDA' : 'ENTRADA'}</h1><div>Fecha: <b>${esc(fmtDateDMY(a.fecha))}</b></div></div>
+    <div class="cajas">
+      <div class="caja"><b>Origen · Ship from</b><div class="v">QUALIFIED LOGISTICS</div><div class="s">${esc(w ? w.name : '')}${dirAlm ? '<br>' + dirAlm : ''}</div></div>
+      <div class="caja"><b>Cliente</b><div class="v">${esc(clienteNombre)}</div><div class="s">${cliente && cliente.nif ? 'NIF ' + esc(cliente.nif) : ''}${a.referencia ? (cliente && cliente.nif ? '<br>' : '') + 'Ref.: ' + esc(a.referencia) : ''}</div></div>
+      <div class="caja"><b>${esSal ? 'Destinatario · Para' : 'Procedencia'}</b><div class="v">${esc(a.destinatario) || '—'}</div><div class="s">${esc(a.destinatarioDireccion)}</div></div>
+      <div class="caja"><b>Transporte</b><div class="v">${esc(a.transportista) || '—'}</div><div class="s">${esc(SGA_MODALIDADES[a.modalidad] || a.modalidad)}</div>
+        ${mat.tractora || mat.remolque ? `<div class="mats">${mat.tractora ? `<div><span>Tractora </span><b>${esc(mat.tractora)}</b></div>` : ''}${mat.remolque ? `<div><span>Remolque </span><b>${esc(mat.remolque)}</b></div>` : ''}</div>` : ''}</div>
+    </div>
+    <div class="centro">
+      <table><thead><tr><th>Producto</th><th>Modelo</th><th>Medidas</th>${extraCols.map(c => `<th>${esc(c.nombre)}</th>`).join('')}<th class="r">Cajas</th><th class="r">Peso</th></tr></thead><tbody>${filas}</tbody>
+        <tfoot><tr><td colspan="${3 + extraCols.length}">TOTAL</td><td class="r">${sgaNumTxt(totCajas)}</td><td class="r">${totPeso ? sgaNumTxt(totPeso) + ' kg' : '—'}</td></tr></tfoot></table>
+      ${a.observaciones ? `<div class="obs"><b>Observaciones</b>${esc(a.observaciones)}</div>` : ''}
+    </div>
+    <div class="pie"><div class="firma">Entregado · Qualified Logistics<small>Nombre, firma y sello</small></div><div class="firma">Recibí conforme<small>Nombre, firma y fecha</small></div></div>
+    <div class="legal"><span>Qualified Logistics &amp; Transport${w && w.name ? ' · ' + esc(w.name) : ''}</span><span>Albarán ${esc(sgaNumAlbaran(a))} · ${esc(fmtDateDMY(a.fecha))}</span></div>
+  </div></body></html>`;
   const f = document.createElement('iframe');
   f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
   document.body.appendChild(f);
   const doc = f.contentWindow.document;
   doc.open(); doc.write(html); doc.close();
-  setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 3000); }, 300);
+  // se imprime cuando los logos ya se han cargado (con un tope de 3 s para no quedarse esperando)
+  const imgs = [...doc.images];
+  await Promise.race([
+    Promise.all(imgs.map(im => im.complete ? null : new Promise(res => { im.onload = im.onerror = res; }))),
+    new Promise(res => setTimeout(res, 3000)),
+  ]);
+  setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 3000); }, 150);
 }
 /* ---- Anular un albarán ---- */
 function sgaAnularAbrir(id){
