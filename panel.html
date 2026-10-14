@@ -502,6 +502,9 @@
   .cg-tabla.cg-todo input.cg-in:focus,.cg-tabla.cg-todo select.cg-in:focus{background:var(--panel);box-shadow:inset 0 0 0 2px var(--primary);}
   .cg-tabla.cg-todo td.cg-stock{padding:6px 10px;color:var(--muted);text-align:center;}
   .cg-tabla.cg-todo td.cg-acc{padding:0 6px;text-align:center;}
+  .cg-tabla.cg-todo input.cg-in.cg-mod,.cg-tabla.cg-todo select.cg-in.cg-mod{background:color-mix(in srgb,#C98A2E 20%,var(--panel));box-shadow:inset 0 0 0 1px #C98A2E;}
+  .cg-tabla.cg-todo input.cg-in.cg-err,.cg-tabla.cg-todo select.cg-in.cg-err{background:color-mix(in srgb,var(--danger) 16%,var(--panel));box-shadow:inset 0 0 0 2px var(--danger);}
+  .cg-tabla.cg-todo input.cg-in[readonly],.cg-tabla.cg-todo select.cg-in:disabled{cursor:default;opacity:1;color:var(--text);}
   .cg-tabla tr.cg-edit{background:color-mix(in srgb,var(--primary) 7%,var(--panel));}
   .cg-tabla .deca-act.cg-on{background:var(--success);border-color:var(--success);color:#fff;}
   /* Catálogo SGA: tabla con producto + referencia, etiquetas, stock con punto y acciones en la fila */
@@ -3995,25 +3998,26 @@ function catColumnas(clienteId){
 // Celda editable de un campo propio del artículo (se guarda al salir de la celda)
 function catCeldaCampo(a, f){
   const v = a.atributos ? a.atributos[f.id] : '';
-  return `<td>${sgaCampoControl(f, v, `class="cg-in" data-id="${a.id}" data-x="${f.id}" style="min-width:${f.tipo === 'fecha' ? 130 : 100}px;" onchange="catGuardarCeldaCampo(this)" onkeydown="catTecla(event, this)" ${sgaPuedeEditarStock() ? '' : (f.tipo === 'lista' || f.tipo === 'si_no' ? 'disabled' : 'readonly')}`)}</td>`;
+  return `<td>${sgaCampoControl(f, v, `class="cg-in" data-id="${a.id}" data-x="${f.id}" style="min-width:${f.tipo === 'fecha' ? 130 : 100}px;" onchange="${window.__catEditAll ? 'catMarcarCambio(this)' : 'catGuardarCeldaCampo(this)'}" onkeydown="catTecla(event, this)" ${sgaPuedeEditarStock() && !window.__catLocked ? '' : (f.tipo === 'lista' || f.tipo === 'si_no' ? 'disabled' : 'readonly')}`)}</td>`;
 }
 async function catGuardarCeldaCampo(el){
   const a = sgaArticulos.find(x => x.id === el.dataset.id);
   const f = sgaCamposArticulo(a ? a.clienteId : '').find(x => x.id === el.dataset.x);
-  if (!a || !f) return;
+  if (!a || !f) return false;
   const r = sgaCampoParsear(f, el.value);
-  if (r.error) { appToast(r.error, 'error'); renderTab(); return; }
-  if (r.valor == null && sgaClienteCfg(a.clienteId).campos[f.id] === 'obligatorio') { appToast(`«${f.label}» es obligatorio para este cliente.`, 'error'); renderTab(); return; }
+  if (r.error) { appToast(r.error, 'error'); if (!window.__catLote) renderTab(); return false; }
+  if (r.valor == null && sgaClienteCfg(a.clienteId).campos[f.id] === 'obligatorio') { appToast(`«${f.label}» es obligatorio para este cliente.`, 'error'); if (!window.__catLote) renderTab(); return false; }
   const atributos = Object.assign({}, a.atributos);
   if (r.valor == null) delete atributos[f.id]; else atributos[f.id] = r.valor;
-  if (JSON.stringify(atributos) === JSON.stringify(a.atributos || {})) return;
+  if (JSON.stringify(atributos) === JSON.stringify(a.atributos || {})) return true;
   const { error } = await supabaseClient.from('sga_articulos').update({ atributos }).eq('id', a.id);
-  if (error) { appToast('No se pudo guardar: ' + error.message, 'error'); renderTab(); return; }
+  if (error) { appToast('No se pudo guardar: ' + error.message, 'error'); if (!window.__catLote) renderTab(); return false; }
   a.atributos = atributos;
   el.classList.add('cg-ok'); setTimeout(() => el.classList.remove('cg-ok'), 900);
+  return true;
 }
 function catCeldaInput(a, campo, valor, extra){
-  return `<input class="cg-in" ${extra || ''} data-id="${a.id}" data-f="${campo}" value="${esc(valor)}" onchange="catGuardarCelda(this)" onkeydown="catTecla(event, this)" ${sgaPuedeEditarStock() ? '' : 'readonly'} />`;
+  return `<input class="cg-in" ${extra || ''} data-id="${a.id}" data-f="${campo}" value="${esc(valor)}" onchange="${window.__catEditAll ? 'catMarcarCambio(this)' : 'catGuardarCelda(this)'}" onkeydown="catTecla(event, this)" ${sgaPuedeEditarStock() && !window.__catLocked ? '' : 'readonly'} />`;
 }
 // El catálogo se ve solo para leer. Con «Editar» (arriba a la derecha) se abre una pantalla completa donde todos los artículos
 // del cliente se pueden cambiar a la vez; cada celda se guarda al salir de ella.
@@ -4025,41 +4029,95 @@ function catEditarTodo(){
   }
   window.__catFiltro = 'todos'; window.__stockSearch = '';
   window.__catEditAll = true;
+  window.__catLocked = true;      // se abre bloqueada: hay que pulsar «Editar» para cambiar algo
+  window.__catDirty = {};
   window.__stockView = 'catedit';
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
 }
-function catEditarSalir(){
-  const el = document.activeElement;
-  if (el && el.blur) el.blur();   // si se estaba escribiendo, se guarda antes de salir
-  setTimeout(() => {
-    window.__catEditAll = false;
-    window.__stockView = 'home';
-    renderHeader(); renderTab();
-    window.scrollTo(0, 0);
-  }, 120);
+// «Editar» desbloquea las casillas; los cambios quedan marcados y solo se escriben al pulsar «Guardar».
+function catActivarEdicion(){
+  window.__catLocked = false;
+  window.__catDirty = {};
+  renderTab();
+}
+function catMarcarCambio(el){
+  window.__catDirty = window.__catDirty || {};
+  const k = el.dataset.id + '|' + (el.dataset.f || 'x:' + el.dataset.x);
+  window.__catDirty[k] = { id: el.dataset.id, f: el.dataset.f || '', x: el.dataset.x || '' };
+  el.classList.add('cg-mod'); el.classList.remove('cg-err');
+  const n = document.getElementById('cat-ncambios');
+  if (n) n.textContent = `${Object.keys(window.__catDirty).length} cambio${Object.keys(window.__catDirty).length === 1 ? '' : 's'} sin guardar`;
+}
+function catNumCambios(){ return Object.keys(window.__catDirty || {}).length; }
+async function catGuardarTodo(){
+  const act = document.activeElement;
+  if (act && act.blur) act.blur();   // el último dato escrito se marca antes de guardar
+  await new Promise(r => setTimeout(r, 80));
+  const lista = Object.keys(window.__catDirty || {});
+  if (!lista.length) { appToast('No hay cambios que guardar.', 'info'); window.__catLocked = true; renderTab(); return; }
+  window.__catLote = true;
+  let ok = 0, fallos = 0;
+  try {
+    for (const k of lista) {
+      const d = window.__catDirty[k];
+      const el = document.querySelector(`#stock-body ${d.f ? `[data-id="${d.id}"][data-f="${d.f}"]` : `[data-id="${d.id}"][data-x="${d.x}"]`}`);
+      if (!el) { delete window.__catDirty[k]; continue; }
+      const res = d.f ? await catGuardarCelda(el) : await catGuardarCeldaCampo(el);
+      if (res === false) { fallos++; el.classList.add('cg-err'); } else { ok++; el.classList.remove('cg-mod', 'cg-err'); delete window.__catDirty[k]; }
+    }
+  } finally { window.__catLote = false; }
+  if (fallos) { appToast(`${fallos} cambio${fallos === 1 ? '' : 's'} no se ha podido guardar: revisa las casillas en rojo.`, 'error'); return; }
+  appToast(`Catálogo guardado: ${ok} cambio${ok === 1 ? '' : 's'}.`, 'ok');
+  window.__catDirty = {};
+  window.__catLocked = true;
+  renderTab();
+}
+async function catCancelarEdicion(){
+  if (catNumCambios() && !(await appConfirm({ title: 'Descartar cambios', message: `Tienes ${catNumCambios()} cambio${catNumCambios() === 1 ? '' : 's'} sin guardar. ¿Quieres descartarlos?`, confirmLabel: 'Descartar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
+  window.__catDirty = {};
+  window.__catLocked = true;
+  renderTab();
+}
+async function catEditarSalir(){
+  if (catNumCambios() && !(await appConfirm({ title: 'Cambios sin guardar', message: `Tienes ${catNumCambios()} cambio${catNumCambios() === 1 ? '' : 's'} sin guardar. Si sales ahora se pierden.`, confirmLabel: 'Salir sin guardar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
+  window.__catDirty = {};
+  window.__catLocked = true;
+  window.__catEditAll = false;
+  window.__stockView = 'home';
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
 }
 function tplCatEditPage(){
   const cid = catClienteSel();
   const c = cid ? contactos.find(x => x.id === cid) : null;
+  const bloqueada = !!window.__catLocked;
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.edit, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
-        <div class="deca-banner-title">Editar catálogo${c ? ' · ' + esc((c.nombreComercial || '').trim() || c.nombre) : ''}</div>
-        <div class="deca-banner-sub">Cambia lo que necesites directamente en la tabla: cada dato se guarda al salir de la casilla. Enter baja a la fila siguiente.</div>
+        <div class="deca-banner-title">${bloqueada ? 'Catálogo' : 'Editar catálogo'}${c ? ' · ' + esc((c.nombreComercial || '').trim() || c.nombre) : ''}</div>
+        <div class="deca-banner-sub">${bloqueada ? 'Pulsa «Editar» para cambiar datos. Los cambios no se guardan hasta que pulses «Guardar».' : 'Cambia lo que necesites en la tabla (las casillas cambiadas se marcan). Al terminar, pulsa «Guardar».'}</div>
       </div>
-      <button class="btn btn-primary" style="flex:0 0 auto;" onclick="catEditarSalir()">Listo</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;flex:0 0 auto;">
+        ${bloqueada ? `
+          ${sgaPuedeEditarStock() ? `<button class="btn btn-primary" onclick="catActivarEdicion()" title="Desbloquear las casillas para cambiar datos">${homeIcon(HOME_ICON_PATHS.edit, 16, 'currentColor', 2)}<span>Editar</span></button>` : ''}
+          <button class="btn btn-ghost" style="background:var(--panel);" onclick="catEditarSalir()">Cerrar</button>` : `
+          <span id="cat-ncambios" style="font-size:12.5px;color:#fff;opacity:.9;">${catNumCambios() ? catNumCambios() + ' cambios sin guardar' : ''}</span>
+          <button class="btn btn-ghost" style="background:var(--panel);" onclick="catCancelarEdicion()">Cancelar</button>
+          <button class="btn btn-primary" onclick="catGuardarTodo()" title="Guardar todos los cambios">${homeIcon(HOME_ICON_PATHS.check, 16, 'currentColor', 2)}<span>Guardar</span></button>`}
+      </div>
     </div>
+    ${bloqueada ? `
     <div class="card deca-toolbar">
       <div class="deca-search" style="flex:1 1 230px;">
         <input id="cat-buscar" placeholder="Buscar producto, referencia o proveedor…" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      ${cid ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaArtRapida('${cid}')" title="Pega varios artículos de golpe desde tu Excel">Alta rápida</button>` : ''}
-      <button class="btn btn-primary" onclick="catNuevoArticulo()" title="Crear un artículo nuevo">+ Artículo</button>
-    </div>
+      ${cid && sgaPuedeEditarStock() ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaArtRapida('${cid}')" title="Pega varios artículos de golpe desde tu Excel">Alta rápida</button>` : ''}
+      ${sgaPuedeEditarStock() ? `<button class="btn btn-primary" onclick="catNuevoArticulo()" title="Crear un artículo nuevo">+ Artículo</button>` : ''}
+    </div>` : ''}
     <div id="stock-body">${stockCatalogoBodyHtml()}</div>
     </div>`;
 }
@@ -4136,7 +4194,7 @@ function catFilaHtml(a, cols, conCliente){
       ${conCliente ? `<td class="cg-cli" data-sort-value="${esc(cl ? cl.nombre : '')}">${esc(cl ? ((cl.nombreComercial || '').trim() || cl.nombre) : '—')}</td>` : ''}
       ${nombreCelda}
       ${edit
-        ? `<td><select class="cg-in" data-id="${a.id}" data-f="productoId" onchange="catGuardarCelda(this)"><option value="">—</option>${prods.map(p => `<option value="${p.id}" ${a.productoId === p.id ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></td>`
+        ? `<td><select class="cg-in" data-id="${a.id}" data-f="productoId" onchange="${window.__catEditAll ? 'catMarcarCambio(this)' : 'catGuardarCelda(this)'}" ${window.__catLocked ? 'disabled' : ''}><option value="">—</option>${prods.map(p => `<option value="${p.id}" ${a.productoId === p.id ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></td>`
         : `<td data-sort-value="${esc(prodTxt)}">${prodTxt ? `<span class="cg-chip" title="${esc(prodTxt)}">${esc(prodTxt.replace(/\s*·\s*sin subtipo definido/i, ''))}</span>` : vacio}</td>`}
       ${cols.bultos ? dato('bultos', num(a.bultos), 'inputmode="decimal" style="width:70px;text-align:right;"') : ''}
       ${cols.ml ? dato('metrosLineales', num(a.metrosLineales), 'inputmode="decimal" style="width:70px;text-align:right;"') : ''}
@@ -4145,7 +4203,7 @@ function catFilaHtml(a, cols, conCliente){
       <td class="cg-stock" data-sort-value="${st.mod}" ${st.almacenes ? `title="${esc(st.almacenes)}"` : ''}>${st.mod
         ? `<span class="cg-st ok"><i></i><b>${st.mod}</b> palet${st.mod === 1 ? '' : 's'}</span>${cols.bultos && (a.bultos !== 1 || st.bul !== st.mod) ? `<div class="cg-ref">${sgaNumTxt(st.bul)} bultos</div>` : ''}`
         : '<span class="cg-st no"><i></i>Sin stock</span>'}</td>
-      ${window.__catEditAll && puede ? `<td class="cg-acc">${!a.virtual ? `<button class="deca-act" title="Más: formulario completo, duplicar" onclick="catMenu('${a.id}', event)">⋯</button>` : ''}</td>` : ''}
+      ${window.__catEditAll && puede && window.__catLocked ? `<td class="cg-acc">${!a.virtual ? `<button class="deca-act" title="Más: formulario completo, duplicar" onclick="catMenu('${a.id}', event)">⋯</button>` : ''}</td>` : ''}
     </tr>`;
 }
 // Botones de filtro con su contador.
@@ -4184,7 +4242,7 @@ function stockCatalogoBodyHtml(){
     <div class="card" style="padding:0;">
       <div class="tc-hist-box" style="max-height:${window.__catEditAll ? 'calc(100vh - 290px)' : '660px'};min-height:${window.__catEditAll ? '320px' : '0'};border:none;border-radius:10px;">
         <table class="tf-table cg-tabla${window.__catEditAll ? ' cg-todo' : ''}">
-          <thead><tr>${window.__catEditAll ? `<th>Producto</th>${cols.referencia ? '<th>Referencia</th>' : ''}<th>Tipo de carga</th>${cols.bultos ? '<th style="text-align:right;">Bultos / palet</th>' : ''}${cols.ml ? '<th style="text-align:right;">M. lineales</th>' : ''}${cols.peso ? '<th style="text-align:right;">Peso (kg)</th>' : ''}${cols.x.map(f => `<th>${esc(f.label)}</th>`).join('')}<th>Stock</th>${puede ? '<th></th>' : ''}` : `${conBotonEditar(conCliente ? thSort('Cliente', 'text') : '')}${conBotonEditar(conCliente ? '' : thSort('Producto', 'text'))}${conCliente ? thSort('Producto', 'text') : ''}${thSort('Tipo de carga', 'text')}${cols.bultos ? thSort('Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thSort('Peso (kg)', 'number', 'style="text-align:right;"') : ''}${cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSort('Stock', 'number')}${window.__catEditAll && puede ? '<th></th>' : ''}`}</tr></thead>
+          <thead><tr>${window.__catEditAll ? `<th>Producto</th>${cols.referencia ? '<th>Referencia</th>' : ''}<th>Tipo de carga</th>${cols.bultos ? '<th style="text-align:right;">Bultos / palet</th>' : ''}${cols.ml ? '<th style="text-align:right;">M. lineales</th>' : ''}${cols.peso ? '<th style="text-align:right;">Peso (kg)</th>' : ''}${cols.x.map(f => `<th>${esc(f.label)}</th>`).join('')}<th>Stock</th>${puede && window.__catLocked ? '<th></th>' : ''}` : `${conBotonEditar(conCliente ? thSort('Cliente', 'text') : '')}${conBotonEditar(conCliente ? '' : thSort('Producto', 'text'))}${conCliente ? thSort('Producto', 'text') : ''}${thSort('Tipo de carga', 'text')}${cols.bultos ? thSort('Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thSort('Peso (kg)', 'number', 'style="text-align:right;"') : ''}${cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSort('Stock', 'number')}${window.__catEditAll && puede ? '<th></th>' : ''}`}</tr></thead>
           <tbody>
             ${lista.map(a => catFilaHtml(a, cols, conCliente)).join('')}
           </tbody>
@@ -4209,10 +4267,10 @@ function catTecla(ev, el){
 }
 async function catGuardarCelda(el){
   const a = sgaArticulos.find(x => x.id === el.dataset.id);
-  if (!a) return;
+  if (!a) return false;
   const f = el.dataset.f;
   const v = (f === 'nombre' || f === 'referencia') ? el.value.trim().toUpperCase() : el.value.trim();   // producto y referencia van siempre en mayúsculas
-  const volver = msg => { appToast(msg, 'error'); renderTab(); };
+  const volver = msg => { appToast(msg, 'error'); if (!window.__catLote) renderTab(); return false; };
   const campos = { nombre: 'nombre', referencia: 'referencia', productoId: 'producto_id', zonaId: 'zona_id', bultos: 'bultos_por_unidad', metrosLineales: 'metros_lineales', peso: 'peso' };
   let valor = v;
   if (f === 'nombre' && !v) return volver('El producto no puede quedar vacío.');
@@ -4226,14 +4284,15 @@ async function catGuardarCelda(el){
     const n = f === 'nombre' ? v : a.nombre, r = f === 'referencia' ? v : a.referencia;
     if (sgaArticulos.some(x => x.clienteId === a.clienteId && x.id !== a.id && (x.referencia || x.nombre).toLowerCase() === (r || n).toLowerCase())) return volver('Este cliente ya tiene un artículo con esa referencia (o ese nombre, si no tiene referencia).');
   }
-  if (a[f] === valor || (a[f] === '' && valor === '')) return;
+  if (a[f] === valor || (a[f] === '' && valor === '')) return true;
   const dbVal = (['productoId', 'zonaId', 'referencia'].includes(f) && v === '') ? null : valor;
   const { error } = await supabaseClient.from('sga_articulos').update({ [campos[f]]: dbVal }).eq('id', a.id);
   if (error) return volver('No se pudo guardar: ' + error.message);
   a[f] = valor == null ? (f === 'bultos' ? 1 : null) : valor;
   el.classList.add('cg-ok'); setTimeout(() => el.classList.remove('cg-ok'), 900);
-  if (f === 'productoId' || f === 'zonaId') return;
-  if (f === 'bultos') refreshStockBody(); // cambia la columna de stock
+  if (f === 'productoId' || f === 'zonaId') return true;
+  if (f === 'bultos' && !window.__catLote) refreshStockBody(); // cambia la columna de stock
+  return true;
 }
 // Botón «+ Artículo»: abre un panel corto para crearlo sin salir del catálogo (si no hay cliente elegido, avisa y señala el desplegable).
 function catNuevoArticulo(){
@@ -4327,7 +4386,7 @@ async function catDuplicar(id){
   const { data, error } = await supabaseClient.from('sga_articulos').insert(row).select().single();
   if (error || !data) { appToast('No se pudo duplicar: ' + (error && error.message ? error.message : 'error desconocido.'), 'error'); return; }
   sgaArticulos.push({ id: data.id, clienteId: a.clienteId, nombre, referencia: '', productoId: a.productoId, zonaId: a.zonaId, bultos: a.bultos, metrosLineales: a.metrosLineales, peso: a.peso, medidas: a.medidas, atributos: Object.assign({}, a.atributos), archived: false });
-  refreshStockBody();
+  if (window.__catEditAll && window.__catLocked) { window.__catLocked = false; window.__catDirty = {}; renderTab(); } else refreshStockBody();   // el duplicado se renombra al momento: se desbloquea la edición
 
   const el = document.querySelector(`.cg-row[data-id="${data.id}"] [data-f="nombre"]`);
   if (el) { el.focus(); el.select(); appToast('Duplicado: cámbiale el nombre y la referencia.', 'info'); }
