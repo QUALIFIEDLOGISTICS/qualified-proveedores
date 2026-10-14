@@ -3102,7 +3102,7 @@ function sgaCampoFilaHtml(f){
       </div>
       <div style="display:flex;gap:2px;flex-shrink:0;">
         <button class="deca-act" onclick="openSgaCampoForm('${f.id}')" title="Editar el campo">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
-        <button class="btn btn-ghost" style="padding:5px 10px;font-size:12px;" onclick="setSgaCampoArchivado('${f.id}', ${!f.archived})">${f.archived ? 'Restaurar' : 'Archivar'}</button>
+        ${f.archived ? `<button class="btn btn-ghost" style="padding:5px 10px;font-size:12px;" onclick="setSgaCampoArchivado('${f.id}', false)">Restaurar</button>` : `<button class="btn btn-ghost" style="padding:5px 10px;font-size:12px;color:var(--danger);" onclick="sgaCampoEliminar('${f.id}')">Eliminar</button>`}
       </div>
     </div>`;
 }
@@ -3261,6 +3261,35 @@ async function setSgaCampoArchivado(id, archivar){
       f.archived = archivar;
     }
   } catch (err) { appToast('No se pudo guardar: ' + (err && err.message ? err.message : 'error desconocido.'), 'error'); return; }
+  renderTab();
+}
+// Eliminar un campo de la mercancía. Los datos que ya se guardaron en palets y artículos no se borran; el campo deja de pedirse y de verse.
+// Los campos de serie (Descripción, Código de artículo, Lote, Peso…) no se pueden quitar de la base de datos del todo: se dejan
+// ocultos para siempre, que a efectos de uso es lo mismo que eliminarlos.
+async function sgaCampoEliminar(id){
+  const f = sgaCampos.find(x => x.id === id);
+  if (!f) return;
+  const n = sgaCampoClientesQueLoUsan(f.clave);
+  const msg = (n ? `Lo ${n === 1 ? 'usa 1 cliente' : 'usan ' + n + ' clientes'}: dejará de pedirse y de verse en sus entradas, catálogo y stock. ` : 'Dejará de pedirse y de verse. ') + 'Los datos que ya se guardaron en la mercancía no se borran.';
+  if (!(await appConfirm({ title: 'Eliminar campo', name: f.nombre, message: msg, confirmLabel: 'Eliminar', tone: 'danger', icon: 'trash' }))) return;
+  const deSerie = SGA_CAMPOS_BASE.some(b => b.clave === f.clave);
+  try {
+    if (deSerie) {
+      if (f.virtual) await sgaCampoMaterializar(f, { archived: true });
+      else {
+        const { error } = await supabaseClient.from('sga_campos').update({ archived: true }).eq('id', id);
+        if (error) throw error;
+        f.archived = true;
+      }
+    } else if (f.virtual) {
+      sgaCampos = sgaCampos.filter(x => x.id !== id);
+    } else {
+      const { error } = await supabaseClient.from('sga_campos').delete().eq('id', id);
+      if (error) throw error;
+      sgaCampos = sgaCampos.filter(x => x.id !== id);
+    }
+  } catch (err) { appToast('No se pudo eliminar: ' + (err && err.message ? err.message : 'error desconocido.'), 'error'); return; }
+  appToast(`Campo «${f.nombre}» eliminado.`, 'ok');
   renderTab();
 }
 // Un campo de serie que aún no estaba en la base de datos se guarda la primera vez que se toca.
@@ -14498,6 +14527,34 @@ async function setAlmacenajeProductoArchived(id, archived){
   p.archived = archived;
   renderTab();
 }
+// Eliminar un producto: solo si nada lo usa (tarifas, artículos, mercancía en stock, cobros o servicios). Si algo lo usa, se dice qué.
+async function eliminarAlmacenajeProducto(id){
+  const p = almacenajeProducto(id);
+  if (!p) return;
+  const usos = [];
+  const nT = almacenajeTarifas.filter(t => t.tipo === id).length;
+  if (nT) usos.push(`${nT} tarifa${nT === 1 ? '' : 's'}`);
+  const nA = sgaArticulos.filter(a => a.productoId === id).length;
+  if (nA) usos.push(`${nA} artículo${nA === 1 ? '' : 's'} del catálogo`);
+  const cuenta = async (tabla, col, txt) => {
+    try {
+      const r = await supabaseClient.from(tabla).select('id', { count: 'exact', head: true }).eq(col, id);
+      if (!r.error && r.count) usos.push(`${r.count} ${txt}`);
+    } catch (e) { /* si no se puede comprobar, lo decide la base de datos al borrar */ }
+  };
+  await Promise.all([cuenta('sga_partidas', 'producto_id', 'palets en el almacén o en el historial'), cuenta('sga_cobros', 'producto_id', 'cobros'), cuenta('sga_servicios', 'producto_id', 'servicios de albaranes')]);
+  if (usos.length) {
+    await appConfirm({ title: 'No se puede eliminar', name: p.nombre, message: 'Este producto se está usando en ' + usos.join(', ') + '. Quítalo de ahí primero y podrás eliminarlo.', confirmLabel: 'Entendido', cancelLabel: 'Cerrar', tone: 'warn', icon: 'warn' });
+    return;
+  }
+  if (!(await appConfirm({ title: 'Eliminar producto', name: p.nombre, message: 'Se eliminará definitivamente. Esta acción no se puede deshacer.', confirmLabel: 'Eliminar', tone: 'danger', icon: 'trash' }))) return;
+  const { error } = await supabaseClient.from('almacenaje_productos').delete().eq('id', id);
+  if (error) { appToast('No se pudo eliminar: ' + error.message, 'error'); return; }
+  almacenajeProductos = almacenajeProductos.filter(x => x.id !== id);
+  appToast(`Producto «${p.nombre}» eliminado.`, 'ok');
+  if (typeof window.__apView !== 'undefined' && window.__apView === 'form') { window.__apView = 'list'; window.__apFormId = null; }
+  renderHeader(); renderTab();
+}
 function tplAlmacenajeProductosPage(){
   const list = almacenajeProductosOrdenados();
   const activos = list.filter(p => !p.archived).length;
@@ -14531,7 +14588,7 @@ function tplAlmacenajeProductosPage(){
             <td data-sort-value="${p.archived?'Archivado':'Activo'}">${p.archived ? '<span style="color:var(--mutedFaint);">Archivado</span>' : '<span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--success);"></span>Activo</span>'}</td>
             <td style="white-space:nowrap;">
               <button class="deca-act" onclick="openAlmacenajeProductoForm('${p.id}')" title="Editar">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
-              <button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="setAlmacenajeProductoArchived('${p.id}', ${!p.archived})" title="${p.archived?'Activar':'Archivar'}">${p.archived?'Activar':'Archivar'}</button>
+              ${p.archived ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="setAlmacenajeProductoArchived('${p.id}', false)" title="Volver a activarlo">Activar</button>` : ''}<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:var(--danger);" onclick="eliminarAlmacenajeProducto('${p.id}')" title="Eliminar el producto (solo si nada lo usa)">Eliminar</button>
             </td>
           </tr>`).join('')}
       </tbody>
@@ -14558,7 +14615,7 @@ function tplAlmacenajeProductoFormPage(){
         const arrow = (offset, title, ch) => `<button onclick="almacenajeProductoNavGoto(${offset})" title="${title}" style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 11px;cursor:pointer;color:var(--muted);font-size:13px;">${ch}</button>`;
         return `<div class="deca-banner-actions">
           ${idx > -1 && ids.length > 1 ? `<div style="display:flex;align-items:center;gap:4px;">${arrow(-1, 'Producto anterior', '←')}<span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${idx + 1}/${ids.length}</span>${arrow(1, 'Producto siguiente', '→')}</div>` : ''}
-          <button class="btn btn-ghost" style="background:var(--panel);" onclick="setAlmacenajeProductoArchived('${editing.id}', ${!editing.archived})">${editing.archived?'Activar':'Archivar'}</button>
+          ${editing.archived ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="setAlmacenajeProductoArchived('${editing.id}', false)">Activar</button>` : ''}<button class="btn btn-ghost" style="background:var(--panel);color:var(--danger);" onclick="eliminarAlmacenajeProducto('${editing.id}')">Eliminar</button>
         </div>`;
       })() : ''}
     </div>
