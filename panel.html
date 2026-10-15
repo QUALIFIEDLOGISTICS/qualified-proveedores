@@ -4691,7 +4691,7 @@ function tplStock(){
     </div>`;
 }
 function stockVolver(){
-  window.__seEdit = null; window.__slNavIds = null;
+  window.__seEdit = null; window.__slNavIds = null; window.__seNavIds = null;
   if (window.__slEdit) { window.__slEdit = null; loadSgaStock().then(() => { if (currentTab === 'stock') renderTab(); }); }
   window.__catEditAll = false;
   window.__stockView = 'home';
@@ -5150,9 +5150,13 @@ function sgaEntradaAbrir(){
    Se abre el mismo formulario de la entrada con todo rellenado (una línea por cada partida). Al guardar, sga_editar_entrada actualiza
    las líneas en su sitio y rehace servicios y cobros. De una línea de la que ya ha salido mercancía no se pueden quitar palets
    de más ni borrarla. */
-async function sgaEntradaEditar(id){
+async function sgaEntradaEditar(id, keepNav){
   const a = sgaAlbaranes.find(x => x.id === id);
   if (!a || a.tipo !== 'entrada' || a.estado !== 'confirmado') return;
+  if (!keepNav) {   // las entradas que se ven ahora en la lista (con el filtro y el orden que tenga), para pasar de una a otra con las flechas
+    window.__seNavIds = [...document.querySelectorAll('#stock-body tbody tr[data-alb]')].map(r => r.dataset.alb)
+      .filter(x => { const al = sgaAlbaranes.find(y => y.id === x); return al && al.tipo === 'entrada' && al.estado === 'confirmado'; });
+  }
   const [p, s] = await Promise.all([
     supabaseClient.from('sga_partidas').select('*').eq('albaran_entrada_id', id).order('created_at', { ascending: true }),
     supabaseClient.from('sga_servicios').select('producto_id,cantidad,nota').eq('albaran_id', id),
@@ -5164,6 +5168,16 @@ async function sgaEntradaEditar(id){
   renderHeader(); renderTab();
   sgaEntradaRellenar();
   window.scrollTo(0, 0);
+}
+// Flechas ← → de la pantalla de una entrada abierta desde la lista: pasar a la anterior o a la siguiente sin volver a la lista.
+async function sgaEntradaNavGoto(offset){
+  const ids = window.__seNavIds || [];
+  const e = window.__seEdit;
+  if (!e) return;
+  const idx = ids.indexOf(e.id);
+  if (idx === -1 || ids.length < 2) return;
+  if (window.__stockDirty && !(await appConfirm({ title: 'Cambios sin guardar', message: 'Has cambiado datos de esta entrada y no los has guardado. Si pasas a otra se pierden.', confirmLabel: 'Pasar igualmente', cancelLabel: 'Seguir aquí', tone: 'warn', icon: 'warn' }))) return;
+  await sgaEntradaEditar(ids[(idx + offset + ids.length) % ids.length], true);
 }
 function sgaEntradaRellenar(){
   const e = window.__seEdit;
@@ -5225,6 +5239,11 @@ function tplStockEntradaPage(){
         <div class="deca-banner-title">${window.__seEdit ? 'Editar entrada ' + esc(sgaNumAlbaran(window.__seEdit.albaran)) : 'Nueva entrada'}</div>
         <div class="deca-banner-sub">${window.__seEdit ? 'Cambia lo que necesites: al guardar se recalculan el stock y lo que se cobra. De una línea de la que ya ha salido mercancía no se pueden quitar palets de más.' : 'La mercancía que llega a un cliente; eliges en cuál de sus almacenes se queda.'}</div>
       </div>
+      ${window.__seEdit && (window.__seNavIds || []).length > 1 && (window.__seNavIds || []).includes(window.__seEdit.id) ? (() => {
+        const ids = window.__seNavIds, idx = ids.indexOf(window.__seEdit.id);
+        const arrow = (offset, title, ch) => `<button onclick="sgaEntradaNavGoto(${offset})" title="${title}" style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 11px;cursor:pointer;color:var(--muted);font-size:13px;">${ch}</button>`;
+        return `<div class="deca-banner-actions"><div style="display:flex;align-items:center;gap:4px;">${arrow(-1, 'Entrada anterior', '←')}<span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${idx + 1}/${ids.length}</span>${arrow(1, 'Entrada siguiente', '→')}</div></div>`;
+      })() : ''}
     </div>
     <div class="deca-form" oninput="window.__stockDirty=true; sgaEntradaRefrescar();" onchange="sgaEntradaRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
       <div class="card deca-card">
