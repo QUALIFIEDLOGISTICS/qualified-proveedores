@@ -4653,10 +4653,11 @@ async function loadSgaOperativasHechas(){
   try {
     const { data, error } = await supabaseClient.from('sga_operativas_realizadas').select('*').order('fecha', { ascending: false }).limit(300);
     window.__sgaOpHechasOk = !error;
-    window.__sgaOpFacCol = error ? null : ((data || []).length ? 'facturada' in data[0] : null);   // false = falta ejecutar el SQL de facturación
+    window.__sgaOpFacCol = error ? null : ((data || []).length ? 'facturada' in data[0] : null);
+    window.__sgaOpRefCol = error ? null : ((data || []).length ? 'referencia' in data[0] : null);   // false = falta ejecutar el SQL de la referencia   // false = falta ejecutar el SQL de facturación
     sgaOperativasHechas = error ? [] : (data || []).map(r => ({
       id: r.id, createdAt: r.created_at, createdBy: r.created_by || '', clienteId: r.cliente_id, operativaId: r.operativa_id, nombre: r.nombre, fecha: r.fecha,
-      apartados: Array.isArray(r.apartados) ? r.apartados : [], importe: Number(r.importe), observaciones: r.observaciones || '', estado: r.estado, facturada: !!r.facturada, factura: r.factura || '',
+      apartados: Array.isArray(r.apartados) ? r.apartados : [], importe: Number(r.importe), observaciones: r.observaciones || '', estado: r.estado, facturada: !!r.facturada, factura: r.factura || '', referencia: r.referencia || '',
     }));
     if (!operativas.length) await loadOperativas();   // para poder elegirlas (si no hay permiso, queda vacío)
   } catch (e) { sgaOperativasHechas = []; }
@@ -4705,18 +4706,19 @@ function stockOperativasBodyHtml(){
   const okEst = o => !est || (est === 'anulada' ? o.estado === 'anulada' : o.estado === 'activa' && (est === 'facturada' ? !!o.facturada : !o.facturada));
   const lista = sgaOperativasHechas.filter(o => (!emp || o.clienteId === emp) && okEst(o)).filter(o => {
     const c = contactos.find(x => x.id === o.clienteId);
-    return !q || (c && (c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q))) || o.nombre.toLowerCase().includes(q);
+    return !q || (c && (c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q))) || o.nombre.toLowerCase().includes(q) || (o.referencia || '').toLowerCase().includes(q);
   });
   if (window.__sgaOpHechasOk === false) return '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Para anotar operativas falta ejecutar el SQL «sga-operativas-realizadas.sql» en Supabase.</div>';
   if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q || emp || est ? 'Ninguna operativa coincide con la búsqueda o el filtro.' : 'Todavía no hay operativas anotadas. Anota la primera con «Nueva operativa».'}</div>`;
   const puede = sgaPuedeEditarStock();
   return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
-    <thead><tr>${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Operativa','text')}${thSort('Importe','number','style="text-align:right;"')}${thSort('Facturación','text')}<th></th></tr></thead>
+    <thead><tr>${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Operativa','text')}${thSort('Albarán / contenedor','text')}${thSort('Importe','number','style="text-align:right;"')}${thSort('Facturación','text')}<th></th></tr></thead>
     <tbody>${lista.map(o => { const c = contactos.find(x => x.id === o.clienteId); return `
       <tr data-op="${o.id}" style="${o.estado === 'anulada' ? 'opacity:.6;' : (puede ? 'cursor:pointer;' : '')}"${puede && o.estado === 'activa' ? ` onclick="sgaOperativaAbrir('${o.id}')"` : ''}>
         <td style="white-space:nowrap;" data-sort-value="${esc(o.fecha)}">${fmtDateDMY(o.fecha)}</td>
         <td data-sort-value="${esc(c ? c.nombre : '')}">${esc(c ? ((c.nombreComercial || '').trim() || c.nombre) : '—')}</td>
         <td data-sort-value="${esc(o.nombre)}"><b>${esc(o.nombre)}</b></td>
+        <td data-sort-value="${esc(o.referencia)}" style="font-family:var(--mono);font-size:12.5px;">${esc(o.referencia) || '—'}</td>
         <td class="tf-precio" data-sort-value="${o.importe}">${eur2(o.importe)}</td>
         <td data-sort-value="${o.estado === 'anulada' ? 'Anulada' : o.facturada ? 'Facturada' : 'Pendiente'}">${sgaOperativaFacPillHtml(o)}</td>
         <td style="text-align:right;white-space:nowrap;">${puede && o.estado === 'activa' ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="event.stopPropagation(); sgaOperativaAbrir('${o.id}')">Editar</button> <button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:var(--danger);" onclick="event.stopPropagation(); sgaOperativaAnular('${o.id}')">Anular</button>` : ''}</td>
@@ -4727,8 +4729,8 @@ function sgaOperativaAbrir(id, keepNav){
   if (!keepNav) window.__opNavIds = id ? [...document.querySelectorAll('#stock-body tbody tr[data-op]')].filter(r => r.getAttribute('onclick')).map(r => r.dataset.op) : [];
   const o = id ? sgaOperativasHechas.find(x => x.id === id) : null;
   window.__opForm = o
-    ? { id: o.id, clienteId: o.clienteId, fecha: o.fecha, nombre: o.nombre, apartados: JSON.parse(JSON.stringify(o.apartados)), obs: o.observaciones, operativaId: o.operativaId, facturada: !!o.facturada, factura: o.factura || '' }
-    : { id: null, clienteId: '', fecha: today(), nombre: '', apartados: [], obs: '', operativaId: null, facturada: false, factura: '' };
+    ? { id: o.id, clienteId: o.clienteId, fecha: o.fecha, nombre: o.nombre, apartados: JSON.parse(JSON.stringify(o.apartados)), obs: o.observaciones, operativaId: o.operativaId, facturada: !!o.facturada, factura: o.factura || '', referencia: o.referencia || '' }
+    : { id: null, clienteId: '', fecha: today(), nombre: '', apartados: [], obs: '', operativaId: null, facturada: false, factura: '', referencia: '' };
   window.__stockView = 'operativa';
   window.__stockDirty = false;
   renderHeader(); renderTab();
@@ -4783,6 +4785,7 @@ function tplStockOperativaPage(){
           </div>
           <div class="field" style="margin-bottom:0;"><label>Operativa <span class="dc-req">*</span></label>
             <select id="op-f-sel" onchange="sgaOperativaCambio('operativa')"></select></div>
+          <div class="field" style="margin-top:12px;margin-bottom:0;"><label>Nº de albarán o contenedor <span style="color:var(--mutedFaint);font-weight:400;">(opcional)</span></label>${decaInputIcon('file', `<input id="op-f-ref" data-mayusc maxlength="40" style="text-transform:uppercase;" placeholder="Ej. MSKU1234567 o nº de albarán" value="${esc(f.referencia || '')}" oninput="window.__opForm.referencia=this.value; window.__stockDirty=true;" />`)}</div>
         </div>
       </div>
       <div class="card deca-card" id="op-f-detalle-card">
@@ -4876,6 +4879,7 @@ async function sgaOperativaGuardar(){
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const importe = sgaOperativaTotal(f.apartados);
   const fila = { cliente_id: f.clienteId, operativa_id: f.operativaId || null, nombre: f.nombre, fecha: f.fecha, apartados: f.apartados, importe, observaciones: (f.obs || '').trim() || null };
+  if (window.__sgaOpRefCol !== false && (window.__sgaOpRefCol === true || (f.referencia || '').trim())) fila.referencia = (f.referencia || '').trim().toUpperCase() || null;
   if (window.__sgaOpFacCol !== false && (window.__sgaOpFacCol === true || f.facturada || f.factura)) {
     fila.facturada = !!f.facturada; fila.factura = (f.factura || '').trim() || null;
     const antes = f.id ? sgaOperativasHechas.find(x => x.id === f.id) : null;
@@ -4886,7 +4890,7 @@ async function sgaOperativaGuardar(){
     ? await supabaseClient.from('sga_operativas_realizadas').update(fila).eq('id', f.id)
     : await supabaseClient.from('sga_operativas_realizadas').insert({ ...fila, created_by: currentUserEmail() });
   if (error) {
-    errEl.textContent = 'No se pudo guardar: ' + (/facturada|factura/i.test(error.message || '') ? 'falta ejecutar el SQL de «facturación de operativas» en Supabase.' : /relation|does not exist|schema cache/i.test(error.message || '') ? 'falta ejecutar el SQL «sga-operativas-realizadas.sql» en Supabase.' : error.message);
+    errEl.textContent = 'No se pudo guardar: ' + (/referencia/i.test(error.message || '') ? 'falta ejecutar el SQL de «referencia de operativas» en Supabase.' : /facturada|factura/i.test(error.message || '') ? 'falta ejecutar el SQL de «facturación de operativas» en Supabase.' : /relation|does not exist|schema cache/i.test(error.message || '') ? 'falta ejecutar el SQL «sga-operativas-realizadas.sql» en Supabase.' : error.message);
     if (btn) btn.disabled = false;
     return;
   }
@@ -6668,7 +6672,7 @@ async function sgaResumenCargar(){
     clienteId: cid, periodo: per, movs,
     cobros: (c.data || []).filter(x => x.estado !== 'anulado').map(x => ({ fecha: x.fecha, origen: x.origen, productoId: x.producto_id, cantidad: Number(x.cantidad), precio: Number(x.precio), importe: Number(x.importe) })),
     m2: (m2.data || []).map(x => ({ periodo: x.periodo, m2: Number(x.m2) })),
-    operativas: (op.data || []).map(x => ({ id: x.id, fecha: x.fecha, nombre: x.nombre, importe: Number(x.importe), facturada: !!x.facturada, apartados: Array.isArray(x.apartados) ? x.apartados : [] })),
+    operativas: (op.data || []).map(x => ({ id: x.id, fecha: x.fecha, nombre: x.nombre, importe: Number(x.importe), facturada: !!x.facturada, referencia: x.referencia || '', apartados: Array.isArray(x.apartados) ? x.apartados : [] })),
   };
   rm.cargando = false;
   refreshStockBody();
@@ -6779,7 +6783,7 @@ function sgaResumenHtml(d, paraImprimir){
   const lineas = r.conceptos.map(c => ({ g: grupoDe(c), o: ordenDe(c), importe: c.importe, html: `<tr><td>${esc(sgaProdTxt(c.productoId))}${c.origen === 'stock' ? ` <small style="color:var(--muted);">· almacenaje (${esc(c.detalle)})</small>` : ''}</td><td class="r">${sgaNumTxt(c.cantidad)}</td><td class="r">${esc(eurPrecio(c.precio))}</td><td class="r">${eur(c.importe)}</td></tr>` }));
   r.operativas.slice().sort((x, y) => x.fecha.localeCompare(y.fecha)).forEach(o => {
     const det = sgaOperativaDetalleTxt(o.apartados);
-    lineas.push({ g: 'operativa', o: 0, importe: o.importe, html: `<tr><td>${esc(o.nombre)} <small style="color:var(--muted);">· ${esc(fmtDateDMY(o.fecha).split('/').join('-'))}${o.facturada ? ' · facturada' : ' · pendiente'}</small></td><td class="r">1</td><td class="r">${eur(o.importe)}</td><td class="r">${eur(o.importe)}</td></tr>` });
+    lineas.push({ g: 'operativa', o: 0, importe: o.importe, html: `<tr><td>${esc(o.nombre)} <small style="color:var(--muted);">· ${esc(fmtDateDMY(o.fecha).split('/').join('-'))}${o.referencia ? ' · ' + esc(o.referencia) : ''}${o.facturada ? ' · facturada' : ' · pendiente'}</small></td><td class="r">1</td><td class="r">${eur(o.importe)}</td><td class="r">${eur(o.importe)}</td></tr>` });
   });
   if (r.prodM2 && r.tM2) {
     const cant = paraImprimir
