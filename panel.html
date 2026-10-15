@@ -6652,12 +6652,13 @@ async function sgaResumenCargar(){
   rm.cargando = true; refreshStockBody();
   const cid = rm.clienteId, per = rm.periodo, desde = per + '-01';
   const hasta = `${per}-${String(sgaDiasDelMes(per)).padStart(2, '0')}`;
-  const [a, c, m2, pt, op] = await Promise.all([
+  const [a, c, m2, pt, op, opAnt] = await Promise.all([
     supabaseClient.from('sga_albaranes').select('id,tipo,fecha,estado').eq('cliente_id', cid).eq('estado', 'confirmado').gte('fecha', desde),
     supabaseClient.from('sga_cobros').select('*').eq('cliente_id', cid).eq('periodo', per),
     supabaseClient.from('sga_m2').select('*').eq('cliente_id', cid).order('periodo', { ascending: false }).limit(24),
     supabaseClient.from('sga_partidas').select('id,producto_id').eq('cliente_id', cid),
     supabaseClient.from('sga_operativas_realizadas').select('*').eq('cliente_id', cid).eq('estado', 'activa').gte('fecha', desde).lte('fecha', hasta),
+    supabaseClient.from('sga_operativas_realizadas').select('*').eq('cliente_id', cid).eq('estado', 'activa').eq('facturada', false).lt('fecha', desde),   // de meses anteriores y aún sin facturar
   ]);
   const albaranes = a.data || [];
   const prodDe = {};
@@ -6672,7 +6673,8 @@ async function sgaResumenCargar(){
     clienteId: cid, periodo: per, movs,
     cobros: (c.data || []).filter(x => x.estado !== 'anulado').map(x => ({ fecha: x.fecha, origen: x.origen, productoId: x.producto_id, cantidad: Number(x.cantidad), precio: Number(x.precio), importe: Number(x.importe) })),
     m2: (m2.data || []).map(x => ({ periodo: x.periodo, m2: Number(x.m2) })),
-    operativas: (op.data || []).map(x => ({ id: x.id, fecha: x.fecha, nombre: x.nombre, importe: Number(x.importe), facturada: !!x.facturada, referencia: x.referencia || '', apartados: Array.isArray(x.apartados) ? x.apartados : [] })),
+    operativas: [...(opAnt.error ? [] : (opAnt.data || [])).map(x => ({ x, anterior: true })), ...(op.data || []).map(x => ({ x, anterior: false }))]
+      .map(({ x, anterior }) => ({ id: x.id, fecha: x.fecha, nombre: x.nombre, importe: Number(x.importe), facturada: !!x.facturada, referencia: x.referencia || '', anterior, apartados: Array.isArray(x.apartados) ? x.apartados : [] })),
   };
   rm.cargando = false;
   refreshStockBody();
@@ -6745,7 +6747,7 @@ function sgaResumenCalcular(d){
   const prodM2 = almacenajeProductos.find(p => !p.archived && p.disparador === 'stock_mes' && almacenajeTarifas.some(t => t.clienteId === d.clienteId && t.tipo === p.id));
   const finMes = `${d.periodo}-${String(dias).padStart(2, '0')}`;
   const tM2 = prodM2 ? sgaTarifaEn(d.clienteId, prodM2.id, finMes) : null;
-  return { cfg, usaBultos, filas, inicial, final: { mod: actualMod, bul: actualBul }, conceptos: [...Object.values(conceptos), ...stockLineas], hayReg: filas.some(x => x.regMod), totMov, totServ, totOper, operativas: d.operativas || [], totStock, m2, m2Guardado: !!guardado, prodM2, tM2, finMes };
+  return { cfg, usaBultos, filas, inicial, final: { mod: actualMod, bul: actualBul }, conceptos: [...Object.values(conceptos), ...stockLineas], hayReg: filas.some(x => x.regMod), totMov, totServ, totOper, totOperMes: sgaR2(filas.reduce((s, x) => s + (x.oper || 0), 0)), operativas: d.operativas || [], totStock, m2, m2Guardado: !!guardado, prodM2, tM2, finMes };
 }
 function sgaResumenHtml(d, paraImprimir){
   const r = sgaResumenCalcular(d);
@@ -6783,7 +6785,7 @@ function sgaResumenHtml(d, paraImprimir){
   const lineas = r.conceptos.map(c => ({ g: grupoDe(c), o: ordenDe(c), importe: c.importe, html: `<tr><td>${esc(sgaProdTxt(c.productoId))}${c.origen === 'stock' ? ` <small style="color:var(--muted);">· almacenaje (${esc(c.detalle)})</small>` : ''}</td><td class="r">${sgaNumTxt(c.cantidad)}</td><td class="r">${esc(eurPrecio(c.precio))}</td><td class="r">${eur(c.importe)}</td></tr>` }));
   r.operativas.slice().sort((x, y) => x.fecha.localeCompare(y.fecha)).forEach(o => {
     const det = sgaOperativaDetalleTxt(o.apartados);
-    lineas.push({ g: 'operativa', o: 0, importe: o.importe, html: `<tr><td>${esc(o.nombre)} <small style="color:var(--muted);">· ${esc(fmtDateDMY(o.fecha).split('/').join('-'))}${o.referencia ? ' · ' + esc(o.referencia) : ''}${o.facturada ? ' · facturada' : ' · pendiente'}</small></td><td class="r">1</td><td class="r">${eur(o.importe)}</td><td class="r">${eur(o.importe)}</td></tr>` });
+    lineas.push({ g: 'operativa', o: 0, importe: o.importe, html: `<tr><td>${esc(o.nombre)} <small style="color:var(--muted);">· ${esc(fmtDateDMY(o.fecha).split('/').join('-'))}${o.referencia ? ' · ' + esc(o.referencia) : ''}${o.facturada ? ' · facturada' : ' · pendiente'}${o.anterior ? ' · de un mes anterior' : ''}</small></td><td class="r">1</td><td class="r">${eur(o.importe)}</td><td class="r">${eur(o.importe)}</td></tr>` });
   });
   if (r.prodM2 && r.tM2) {
     const cant = paraImprimir
@@ -6824,7 +6826,7 @@ function sgaResumenHtml(d, paraImprimir){
           ${hayCobros ? `<td class="r">${f.mov || f.serv || f.oper ? eur(f.mov + f.serv + f.oper) : '·'}</td>` : ''}</tr>`; }).join('')}
         ${!filasDia.length ? `<tr><td colspan="${nCols}" style="color:var(--mutedFaint);">Sin movimientos este mes.</td></tr>` : ''}
       </tbody>
-      <tfoot><tr><td>TOTAL</td><td class="r">${sgaNumTxt(tot('entMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('entBul'))}</td>` : ''}<td class="r">${sgaNumTxt(tot('salMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('salBul'))}</td>` : ''}${reg ? `<td class="r">${sgaNumTxt(tot('regMod'))}</td>` : ''}<td class="r">${sgaNumTxt(r.final.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.final.bul)}</td>` : ''}${hayAlm ? `<td class="r">${eur(r.filas.reduce((s, x) => s + (x.alm || 0), 0))}</td>` : ''}${hayCobros ? `<td class="r">${eur(r.totMov + r.totServ + r.totOper)}</td>` : ''}</tr></tfoot>
+      <tfoot><tr><td>TOTAL</td><td class="r">${sgaNumTxt(tot('entMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('entBul'))}</td>` : ''}<td class="r">${sgaNumTxt(tot('salMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('salBul'))}</td>` : ''}${reg ? `<td class="r">${sgaNumTxt(tot('regMod'))}</td>` : ''}<td class="r">${sgaNumTxt(r.final.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.final.bul)}</td>` : ''}${hayAlm ? `<td class="r">${eur(r.filas.reduce((s, x) => s + (x.alm || 0), 0))}</td>` : ''}${hayCobros ? `<td class="r">${eur(r.totMov + r.totServ + r.totOperMes)}</td>` : ''}</tr></tfoot>
     </table>`;
   const interruptor = `<label class="rm-solo"><input type="checkbox" ${soloAct ? 'checked' : ''} onchange="window.__rmSoloAct=this.checked; refreshStockBody();" /> Solo días con movimiento</label>`;
   const flat = paraImprimir ? 'border:none;box-shadow:none;' : '';
