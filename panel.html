@@ -4691,20 +4691,20 @@ function stockOperativasBodyHtml(){
   if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q || emp || est ? 'Ninguna operativa coincide con la búsqueda o el filtro.' : 'Todavía no hay operativas anotadas. Anota la primera con «Nueva operativa».'}</div>`;
   const puede = sgaPuedeEditarStock();
   return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
-    <thead><tr>${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Operativa','text')}${thSort('Detalle','text')}${thSort('Importe','number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
+    <thead><tr>${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Operativa','text')}${thSort('Importe','number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
     <tbody>${lista.map(o => { const c = contactos.find(x => x.id === o.clienteId); return `
-      <tr data-op="${o.id}" style="${o.estado === 'anulada' ? 'opacity:.6;' : ''}">
+      <tr data-op="${o.id}" style="${o.estado === 'anulada' ? 'opacity:.6;' : (puede ? 'cursor:pointer;' : '')}"${puede && o.estado === 'activa' ? ` onclick="sgaOperativaAbrir('${o.id}')"` : ''}>
         <td style="white-space:nowrap;" data-sort-value="${esc(o.fecha)}">${fmtDateDMY(o.fecha)}</td>
         <td data-sort-value="${esc(c ? c.nombre : '')}">${esc(c ? ((c.nombreComercial || '').trim() || c.nombre) : '—')}</td>
         <td data-sort-value="${esc(o.nombre)}"><b>${esc(o.nombre)}</b></td>
-        <td style="color:var(--muted);font-size:12.5px;" data-sort-value="${esc(sgaOperativaDetalleTxt(o.apartados))}">${esc(sgaOperativaDetalleTxt(o.apartados)) || '—'}</td>
         <td class="tf-precio" data-sort-value="${o.importe}">${eur2(o.importe)}</td>
         <td data-sort-value="${o.estado}"${o.estado === 'anulada' ? ' style="color:var(--danger);"' : ''}>${o.estado === 'anulada' ? 'Anulada' : 'Activa'}</td>
-        <td style="text-align:right;white-space:nowrap;">${puede && o.estado === 'activa' ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="sgaOperativaAbrir('${o.id}')">Editar</button> <button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:var(--danger);" onclick="sgaOperativaAnular('${o.id}')">Anular</button>` : ''}</td>
+        <td style="text-align:right;white-space:nowrap;">${puede && o.estado === 'activa' ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="event.stopPropagation(); sgaOperativaAbrir('${o.id}')">Editar</button> <button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:var(--danger);" onclick="event.stopPropagation(); sgaOperativaAnular('${o.id}')">Anular</button>` : ''}</td>
       </tr>`; }).join('')}</tbody></table></div>`;
 }
 /* ---- Pantalla «Nueva operativa» / editar ---- */
-function sgaOperativaAbrir(id){
+function sgaOperativaAbrir(id, keepNav){
+  if (!keepNav) window.__opNavIds = id ? [...document.querySelectorAll('#stock-body tbody tr[data-op]')].filter(r => r.getAttribute('onclick')).map(r => r.dataset.op) : [];
   const o = id ? sgaOperativasHechas.find(x => x.id === id) : null;
   window.__opForm = o
     ? { id: o.id, clienteId: o.clienteId, fecha: o.fecha, nombre: o.nombre, apartados: JSON.parse(JSON.stringify(o.apartados)), obs: o.observaciones, operativaId: o.operativaId }
@@ -4714,6 +4714,16 @@ function sgaOperativaAbrir(id){
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
   sgaOperativaPintar();
+}
+// Flechas ← → de una operativa abierta desde la lista: pasar a la anterior o a la siguiente sin volver a la lista.
+async function sgaOperativaNavGoto(offset){
+  const ids = window.__opNavIds || [];
+  const f = window.__opForm;
+  if (!f || !f.id) return;
+  const idx = ids.indexOf(f.id);
+  if (idx === -1 || ids.length < 2) return;
+  if (window.__stockDirty && !(await appConfirm({ title: 'Cambios sin guardar', message: 'Has cambiado datos de esta operativa y no los has guardado. Si pasas a otra se pierden.', confirmLabel: 'Pasar igualmente', cancelLabel: 'Seguir aquí', tone: 'warn', icon: 'warn' }))) return;
+  sgaOperativaAbrir(ids[(idx + offset + ids.length) % ids.length], true);
 }
 async function sgaOperativaCancelar(){
   if (window.__stockDirty && !(await appConfirm({ title: 'Descartar la operativa', message: 'Has empezado a rellenar esta operativa. Si sales, se pierde.', confirmLabel: 'Descartar', cancelLabel: 'Seguir', tone: 'warn', icon: 'warn' }))) return;
@@ -4736,6 +4746,11 @@ function tplStockOperativaPage(){
         <div class="deca-banner-title">${f.id ? 'Editar operativa' : 'Nueva operativa'}</div>
         <div class="deca-banner-sub">Un servicio con precio cerrado que se le ha hecho a un cliente. Sale en su resumen mensual, en «A facturar».</div>
       </div>
+      ${f.id && (window.__opNavIds || []).length > 1 && (window.__opNavIds || []).includes(f.id) ? (() => {
+        const ids = window.__opNavIds, idx = ids.indexOf(f.id);
+        const arrow = (offset, title, ch) => `<button onclick="sgaOperativaNavGoto(${offset})" title="${title}" style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 11px;cursor:pointer;color:var(--muted);font-size:13px;">${ch}</button>`;
+        return `<div class="deca-banner-actions"><div style="display:flex;align-items:center;gap:4px;">${arrow(-1, 'Operativa anterior', '←')}<span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${idx + 1}/${ids.length}</span>${arrow(1, 'Operativa siguiente', '→')}</div></div>`;
+      })() : ''}
     </div>
     <div class="deca-form" style="max-width:820px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
       <div class="card deca-card">
@@ -6730,7 +6745,7 @@ function sgaResumenHtml(d, paraImprimir){
   const lineas = r.conceptos.map(c => ({ g: grupoDe(c), o: ordenDe(c), importe: c.importe, html: `<tr><td>${esc(sgaProdTxt(c.productoId))}${c.origen === 'stock' ? ` <small style="color:var(--muted);">· almacenaje (${esc(c.detalle)})</small>` : ''}</td><td class="r">${sgaNumTxt(c.cantidad)}</td><td class="r">${esc(eurPrecio(c.precio))}</td><td class="r">${eur(c.importe)}</td></tr>` }));
   r.operativas.slice().sort((x, y) => x.fecha.localeCompare(y.fecha)).forEach(o => {
     const det = sgaOperativaDetalleTxt(o.apartados);
-    lineas.push({ g: 'operativa', o: 0, importe: o.importe, html: `<tr><td>${esc(o.nombre)} <small style="color:var(--muted);">· ${esc(fmtDateDMY(o.fecha).split('/').join('-'))}${det ? ' · ' + esc(det) : ''}</small></td><td class="r">1</td><td class="r">${eur(o.importe)}</td><td class="r">${eur(o.importe)}</td></tr>` });
+    lineas.push({ g: 'operativa', o: 0, importe: o.importe, html: `<tr><td>${esc(o.nombre)} <small style="color:var(--muted);">· ${esc(fmtDateDMY(o.fecha).split('/').join('-'))}</small></td><td class="r">1</td><td class="r">${eur(o.importe)}</td><td class="r">${eur(o.importe)}</td></tr>` });
   });
   if (r.prodM2 && r.tM2) {
     const cant = paraImprimir
