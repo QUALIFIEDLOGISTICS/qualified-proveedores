@@ -571,6 +571,7 @@
   .rm-tabla .rm-sin td{color:var(--mutedFaint);}
   .rm-tabla .rm-act td{font-weight:600;color:var(--text);}
   .rm-tabla .rm-ini td{font-style:italic;color:var(--muted);}
+  .rm-tabla tr.rm-grp td{background:var(--panel2);font-weight:700;font-size:12px;letter-spacing:.3px;text-transform:uppercase;color:var(--muted);border-top:1px solid var(--border);}
   .rm-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;}
   .rm-kpi{border:1px solid var(--border);border-radius:12px;padding:10px 14px;background:var(--panel);display:flex;flex-direction:column;gap:2px;}
   .rm-kpi small{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);}
@@ -6491,18 +6492,28 @@ function sgaResumenHtml(d, paraImprimir){
     </div>`;
 
   // 2) Lo que se cobra: una sola tabla con los conceptos y, si el cliente tiene tarifa de m², su línea
-  const lineas = r.conceptos.map(c => `<tr><td>${esc(sgaProdTxt(c.productoId))}${c.origen === 'stock' ? ` <small style="color:var(--muted);">· almacenaje (${esc(c.detalle)})</small>` : ''}</td><td class="r">${sgaNumTxt(c.cantidad)}</td><td class="r">${esc(eurPrecio(c.precio))}</td><td class="r">${eur(c.importe)}</td></tr>`);
+  // Los conceptos van siempre en este orden: movimientos (entradas y luego salidas), almacenaje y, al final, extras
+  const grupoDe = c => { if (c.origen === 'stock') return 'almacenaje'; const cat = (almacenajeProducto(c.productoId) || {}).categoria; return cat || (c.origen === 'servicio' ? 'extra' : 'movimiento'); };
+  const ordenDe = c => { const p = almacenajeProducto(c.productoId) || {}; return c.origen === 'stock' ? 0 : p.disparador === 'descarga' ? 0 : p.disparador === 'carga' ? 1 : 2; };
+  const lineas = r.conceptos.map(c => ({ g: grupoDe(c), o: ordenDe(c), importe: c.importe, html: `<tr><td>${esc(sgaProdTxt(c.productoId))}${c.origen === 'stock' ? ` <small style="color:var(--muted);">· almacenaje (${esc(c.detalle)})</small>` : ''}</td><td class="r">${sgaNumTxt(c.cantidad)}</td><td class="r">${esc(eurPrecio(c.precio))}</td><td class="r">${eur(c.importe)}</td></tr>` }));
   if (r.prodM2 && r.tM2) {
     const cant = paraImprimir
       ? (r.m2 != null ? `${sgaNumTxt(r.m2)} m²` : '—')
       : `<input id="rm-m2" inputmode="decimal" maxlength="8" value="${r.m2 != null ? esc(String(r.m2).replace('.', ',')) : ''}" placeholder="m²" onchange="sgaResumenGuardarM2()" style="width:86px;text-align:right;" title="m² contratados este mes" /> m²`;
     const aviso = !paraImprimir && !r.m2Guardado && r.m2 != null ? ' <small style="color:var(--mutedFaint);">· los del mes anterior: pulsa fuera para confirmarlos</small>' : '';
-    lineas.push(`<tr><td>${esc(sgaProdTxt(r.prodM2.id))} <small style="color:var(--muted);">· superficie</small>${aviso}</td><td class="r" style="white-space:nowrap;">${cant}</td><td class="r">${esc(eurPrecio(r.tM2.precio))}</td><td class="r">${r.m2 != null ? eur(fijo) : '—'}</td></tr>`);
+    lineas.push({ g: 'almacenaje', o: 9, importe: r.m2 != null ? fijo : 0, html: `<tr><td>${esc(sgaProdTxt(r.prodM2.id))} <small style="color:var(--muted);">· superficie</small>${aviso}</td><td class="r" style="white-space:nowrap;">${cant}</td><td class="r">${esc(eurPrecio(r.tM2.precio))}</td><td class="r">${r.m2 != null ? eur(fijo) : '—'}</td></tr>` });
   }
+  const GRUPOS_COBRO = [['movimiento', 'Movimientos · entradas y salidas'], ['almacenaje', 'Almacenaje'], ['extra', 'Extras']];
+  const cuerpoCobro = GRUPOS_COBRO.map(([k, t]) => {
+    const ls = lineas.filter(l => l.g === k || (k === 'extra' && !['movimiento', 'almacenaje'].includes(l.g))).sort((x, y) => x.o - y.o);
+    if (!ls.length) return '';
+    const sub = sgaR2(ls.reduce((s, l) => s + (l.importe || 0), 0));
+    return `<tr class="rm-grp"><td colspan="3">${t}</td><td class="r">${eur(sub)}</td></tr>${ls.map(l => l.html).join('')}`;
+  }).join('');
   const cobro = lineas.length ? `
     <table class="${paraImprimir ? '' : 'tf-table'} rm-tabla">
       <thead><tr>${th('Concepto')}${th('Cantidad', 1)}${th('Precio', 1)}${th('Importe', 1)}</tr></thead>
-      <tbody>${lineas.join('')}</tbody>
+      <tbody>${cuerpoCobro}</tbody>
       <tfoot><tr><td colspan="3">TOTAL A FACTURAR (sin IVA)</td><td class="r">${eur(total)}</td></tr></tfoot>
     </table>` : '<div style="color:var(--mutedFaint);font-size:12.5px;">No hay cobros este mes.</div>';
 
@@ -6575,6 +6586,7 @@ function sgaResumenImprimir(){
     th,td{padding:3px 4px;border-bottom:1px solid #BBB;white-space:nowrap;}
     th{border-bottom:1.5px solid #000;text-align:left;font-size:9px;}
     .r{text-align:right;} .rm-sin td{color:#777;} .rm-act td{font-weight:700;} .rm-ini td{font-style:italic;}
+    .rm-grp td{background:#EEE;font-weight:700;font-size:9px;text-transform:uppercase;}
     tfoot td{border-top:1.5px solid #000;border-bottom:none;font-weight:700;}
     .op-total-row{display:flex;justify-content:space-between;align-items:baseline;padding:8px 10px;margin-top:12px;} .op-total-row span{font-size:11px;font-weight:700;text-transform:uppercase;} .op-total-row b{font-size:17px;}
     .card{background:none;} .op-lines{display:block;}
