@@ -495,6 +495,16 @@
   .cg-tabla input.cg-in:focus,.cg-tabla select.cg-in:focus{border-color:var(--primary);background:var(--panel);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 15%,transparent);}
   .cg-th-ed{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:7px;border:1px solid var(--primary);background:var(--panel);color:var(--primary);font-family:var(--body);font-size:12px;font-weight:700;letter-spacing:0;text-transform:none;cursor:pointer;vertical-align:middle;}
   .cg-th-ed:hover{background:var(--primary);color:#fff;}
+  /* Albarán de entrada/salida abierto para editar: formulario a la izquierda y su historial de cambios a la derecha */
+  .alb-layout.con-hist{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;align-items:start;}
+  .alb-layout.con-hist .alb-main .deca-form,.alb-layout.con-hist .alb-main .deca-actions{max-width:none !important;}
+  .alb-hist{position:sticky;top:12px;padding:14px 16px;max-height:calc(100vh - 40px);overflow:auto;}
+  .alb-hist-t{font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:10px;}
+  .alb-hist-i{padding:9px 0;border-top:1px solid var(--border);} .alb-hist-i:first-child{border-top:none;padding-top:0;}
+  .alb-hist-m{display:flex;justify-content:space-between;gap:8px;font-size:12px;} .alb-hist-m b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} .alb-hist-m span{color:var(--mutedFaint);white-space:nowrap;}
+  .alb-hist-x{font-size:13px;margin-top:3px;line-height:1.4;overflow-wrap:anywhere;}
+  .alb-hist-v{font-size:12.5px;color:var(--mutedFaint);}
+  @media (max-width:1100px){ .alb-layout.con-hist{grid-template-columns:1fr;} .alb-hist{position:static;max-height:none;} }
   .cg-th-flex{display:flex;align-items:center;justify-content:space-between;gap:14px;height:16px;position:relative;top:1px;}
   .cg-th-flex .cg-th-ed{margin:0;flex:0 0 auto;}
   .cfg-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px;}
@@ -4027,7 +4037,7 @@ async function loadSgaStock(){
   window.__sgaBorradorOk = (a.data || []).length ? 'borrador' in a.data[0] : null;   // false = falta ejecutar el SQL de borradores
   sgaAlbaranes =(a.data || []).map(r => ({
     id: r.id, numero: r.numero, tipo: r.tipo, clienteId: r.cliente_id, warehouseId: r.warehouse_id, fecha: r.fecha, referencia: r.referencia || '',
-    modalidad: r.modalidad, transportista: r.transportista || '', matricula: r.matricula || '', observaciones: r.observaciones || '', estado: r.estado, createdAt: r.created_at, numeroTexto: r.numero_texto || '', destinatario: r.destinatario || '', destinatarioDireccion: r.destinatario_direccion || '', anuladoMotivo: r.anulado_motivo || '', borrador: !!r.borrador,
+    modalidad: r.modalidad, transportista: r.transportista || '', matricula: r.matricula || '', observaciones: r.observaciones || '', estado: r.estado, createdAt: r.created_at, numeroTexto: r.numero_texto || '', createdBy: r.created_by || '', destinatario: r.destinatario || '', destinatarioDireccion: r.destinatario_direccion || '', anuladoMotivo: r.anulado_motivo || '', borrador: !!r.borrador,
   }));
   sgaMovsAlbaran = {};
   const ids = sgaAlbaranes.map(x => x.id);
@@ -5226,6 +5236,62 @@ async function sgaEntradaCancelar(){
   if (window.__stockDirty && !(await appConfirm({ title: 'Descartar la entrada', message: 'Has empezado a rellenar esta entrada. Si sales, se pierde lo escrito.', confirmLabel: 'Descartar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
   stockVolver();
 }
+/* ---- Historial de cambios de un albarán (entradas y salidas), en una columna a la derecha ---- */
+let albHistorialCache = {};
+async function logAlbaranHistorial(albaranId, resumen){
+  if (!albaranId || !resumen) return;
+  try {
+    const usuario = currentUserEmail();
+    const { data, error } = await supabaseClient.from('sga_albaran_historial').insert({ albaran_id: albaranId, usuario, resumen }).select().single();
+    if (error || !data) return;   // si todavía no se ha ejecutado el SQL, no pasa nada: el albarán se guarda igual
+    albHistorialCache[albaranId] = [{ id: data.id, createdAt: data.created_at, usuario, resumen }, ...(albHistorialCache[albaranId] || [])];
+  } catch (e) { /* sin historial */ }
+}
+// Texto con lo que ha cambiado entre dos versiones de un albarán
+function sgaAlbCambiosTxt(antes, despues){
+  const f = [];
+  const cmp = (campo, etiqueta, fmt) => {
+    const a = (antes[campo] == null ? '' : String(antes[campo])).trim(), b = (despues[campo] == null ? '' : String(despues[campo])).trim();
+    if (a === b) return;
+    const g = fmt || (v => v);
+    f.push(`${etiqueta}: ${a ? g(a) : '—'} → ${b ? g(b) : '—'}`);
+  };
+  cmp('fecha', 'Fecha', v => fmtDateDMY(v));
+  cmp('palets', 'Palets');
+  cmp('referencia', 'Referencia');
+  cmp('transportista', 'Transportista');
+  cmp('matricula', 'Matrícula');
+  cmp('destinatario', 'Destinatario');
+  cmp('modalidad', 'Modalidad', v => SGA_MODALIDADES[v] || v);
+  cmp('almacen', 'Almacén', v => whNombre(v));
+  cmp('observaciones', 'Observaciones');
+  return f.join(' · ');
+}
+function albLayoutAbre(id){ return `<div class="alb-layout${id ? ' con-hist' : ''}"><div class="alb-main">`; }
+function albLayoutCierra(id){ return `</div>${id ? albHistorialAsideHtml(id) : ''}</div>`; }
+function albHistorialAsideHtml(id){
+  setTimeout(() => albHistorialCargar(id), 0);
+  return `<aside class="card alb-hist"><div class="alb-hist-t">Historial de cambios</div><div id="alb-hist-body" class="alb-hist-b" data-id="${id}">${albHistorialCuerpoHtml(id, albHistorialCache[id] || null)}</div></aside>`;
+}
+function albHistorialCuerpoHtml(id, lista){
+  const a = sgaAlbaranes.find(x => x.id === id);
+  if (lista === null) return '<div class="alb-hist-v">Cargando…</div>';
+  if (lista === false) return '<div class="alb-hist-v">El historial se activará al ejecutar el SQL «sga-albaran-historial.sql» en Supabase.</div>';
+  const fecha = d => { const dt = new Date(d); return isNaN(dt.getTime()) ? '' : dt.toLocaleString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }); };
+  const items = lista.map(h => ({ fecha: h.createdAt, usuario: h.usuario, txt: h.resumen }));
+  if (a && a.createdAt && !items.some(i => /^(Creada|Entrada registrada|Salida registrada|Borrador creado)/.test(i.txt))) items.push({ fecha: a.createdAt, usuario: a.createdBy || '', txt: 'Creada' });
+  if (!items.length) return '<div class="alb-hist-v">Todavía no hay cambios.</div>';
+  return items.map(i => `<div class="alb-hist-i"><div class="alb-hist-m"><b>${esc(i.usuario || '—')}</b><span>${esc(fecha(i.fecha))}</span></div><div class="alb-hist-x">${esc(i.txt)}</div></div>`).join('');
+}
+async function albHistorialCargar(id){
+  const body = document.getElementById('alb-hist-body');
+  if (!body || body.dataset.id !== id) return;
+  const { data, error } = await supabaseClient.from('sga_albaran_historial').select('*').eq('albaran_id', id).order('created_at', { ascending: false });
+  const lista = error ? false : (data || []).map(h => ({ id: h.id, createdAt: h.created_at, usuario: h.usuario || '', resumen: h.resumen }));
+  if (lista) albHistorialCache[id] = lista;
+  const el = document.getElementById('alb-hist-body');
+  if (el && el.dataset.id === id) el.innerHTML = albHistorialCuerpoHtml(id, lista);
+}
 function tplStockEntradaPage(){
   const clientes = sgaClientesAlmacenLista();
   const wh = currentWh() || {};
@@ -5245,7 +5311,7 @@ function tplStockEntradaPage(){
         return `<div class="deca-banner-actions"><div style="display:flex;align-items:center;gap:4px;">${arrow(-1, 'Entrada anterior', '←')}<span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${idx + 1}/${ids.length}</span>${arrow(1, 'Entrada siguiente', '→')}</div></div>`;
       })() : ''}
     </div>
-    <div class="deca-form" oninput="window.__stockDirty=true; sgaEntradaRefrescar();" onchange="sgaEntradaRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
+    ${albLayoutAbre(window.__seEdit && window.__seEdit.id)}<div class="deca-form" oninput="window.__stockDirty=true; sgaEntradaRefrescar();" onchange="sgaEntradaRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
       <div class="card deca-card">
         ${decaCardHead('file', 'Datos de la entrada', 'Quién la trae y cuándo')}
         <div class="deca-card-body">
@@ -5298,6 +5364,7 @@ function tplStockEntradaPage(){
         <button class="btn btn-primary deca-submit se-save" onclick="sgaEntradaConfirmar()">${window.__seEdit ? 'Guardar cambios' : 'Confirmar entrada'}</button>
       </div>
     </div>
+    ${albLayoutCierra(window.__seEdit && window.__seEdit.id)}
     </div>`;
 }
 async function sgaEntradaConfirmar(){
@@ -5388,12 +5455,20 @@ async function sgaEntradaConfirmar(){
   if (editE) {
     window.__seEdit = null;
     await logContactoHistorial(d.clienteId, `SGA · ha editado la entrada ${sgaNumAlbaran(editE.albaran)}: ahora ${total} palet${total !== 1 ? 's' : ''} el ${fmtDateDMY(d.fecha)}${d.referencia ? ', ref. ' + d.referencia : ''}. Stock y cobros recalculados.`);
+    {
+      const antes = { fecha: editE.albaran.fecha, referencia: editE.albaran.referencia, transportista: editE.albaran.transportista, matricula: editE.albaran.matricula, modalidad: editE.albaran.modalidad, almacen: editE.albaran.warehouseId, observaciones: editE.albaran.observaciones, palets: editE.partidas.reduce((s, p) => s + p.inicial, 0) };
+      const al = payload.albaran;
+      const despues = { fecha: al.fecha, referencia: al.referencia, transportista: al.transportista, matricula: al.matricula, modalidad: al.modalidad, almacen: al.warehouse_id, observaciones: al.observaciones, palets: total };
+      const cambios = sgaAlbCambiosTxt(antes, despues);
+      await logAlbaranHistorial(editE.id, 'Editada' + (cambios ? ': ' + cambios : ' (guardada sin cambios en los datos)') + '. Stock y cobros recalculados.');
+    }
     appToast(`Entrada ${sgaNumAlbaran(editE.albaran)} actualizada: stock y cobros recalculados.`, 'ok');
     window.__stockSeg = 'entradas';
     stockVolver();
     return;
   }
   await logContactoHistorial(d.clienteId, `SGA · ha registrado una entrada de ${total} palet${total !== 1 ? 's' : ''} (${SGA_MODALIDADES[d.modalidad]}) el ${fmtDateDMY(d.fecha)}${d.referencia ? ', ref. ' + d.referencia : ''}.`);
+  await logAlbaranHistorial(data, `Entrada registrada: ${total} palet${total !== 1 ? 's' : ''} el ${fmtDateDMY(d.fecha)}`);
   appToast(`Entrada registrada: ${total} palet${total !== 1 ? 's' : ''}.`, 'ok');
   window.__stockSeg = 'entradas';
   stockVolver();
@@ -5774,7 +5849,7 @@ function tplStockSalidaPage(){
         return `<div class="deca-banner-actions"><div style="display:flex;align-items:center;gap:4px;">${arrow(-1, 'Salida anterior', '←')}<span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${idx + 1}/${ids.length}</span>${arrow(1, 'Salida siguiente', '→')}</div></div>`;
       })() : ''}
     </div>
-    <div class="deca-form" oninput="window.__stockDirty=true; sgaSalidaRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
+    ${albLayoutAbre(window.__slEdit && window.__slEdit.id)}<div class="deca-form" oninput="window.__stockDirty=true; sgaSalidaRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
       <div class="card deca-card">
         ${decaCardHead('file', 'Datos de la salida', 'Para quién y cuándo')}
         <div class="deca-card-body">
@@ -5825,6 +5900,7 @@ function tplStockSalidaPage(){
         <button class="btn btn-primary deca-submit sl-save" onclick="sgaSalidaConfirmar()">${window.__slEdit && !window.__slEdit.albaran.borrador ? 'Guardar cambios' : 'Confirmar salida'}</button>
       </div>
     </div>
+    ${albLayoutCierra(window.__slEdit && window.__slEdit.id)}
     </div>`;
 }
 async function sgaSalidaConfirmar(comoBorrador){
@@ -5885,6 +5961,13 @@ async function sgaSalidaConfirmar(comoBorrador){
     const verbo = comoBorrador ? 'ha guardado el borrador de' : eraBorrador ? 'ha confirmado' : 'ha editado';
     await logContactoHistorial(d.clienteId, `SGA · ${verbo} la salida ${sgaNumAlbaran(edit.albaran)}: ${total} palet${total !== 1 ? 's' : ''} el ${fmtDateDMY(d.fecha)}${fifo.saltados.size ? ' (FIFO saltado)' : ''}.${comoBorrador ? ' Pendiente de confirmar.' : ' Stock y cobros recalculados.'}`);
     appToast(comoBorrador ? `Borrador ${sgaNumAlbaran(edit.albaran)} guardado.` : eraBorrador ? `Salida ${sgaNumAlbaran(edit.albaran)} confirmada con fecha ${fmtDateDMY(d.fecha)}.` : `Salida ${sgaNumAlbaran(edit.albaran)} actualizada: stock y cobros recalculados.`, 'ok');
+    {
+      const a0 = edit.albaran, al = payload.albaran;
+      const antes = { fecha: a0.fecha, referencia: a0.referencia, transportista: a0.transportista, matricula: a0.matricula, destinatario: a0.destinatario, modalidad: a0.modalidad, almacen: a0.warehouseId, observaciones: a0.observaciones, palets: Object.values(edit.prev || {}).reduce((s, n) => s + n, 0) };
+      const despues = { fecha: al.fecha, referencia: al.referencia, transportista: al.transportista, matricula: al.matricula, destinatario: al.destinatario, modalidad: al.modalidad, almacen: al.warehouse_id, observaciones: al.observaciones, palets: total };
+      const cambios = sgaAlbCambiosTxt(antes, despues);
+      await logAlbaranHistorial(edit.id, (comoBorrador ? 'Borrador guardado' : eraBorrador ? 'Borrador confirmado' : 'Editada') + (cambios ? ': ' + cambios : '') + (comoBorrador ? '' : '. Stock y cobros recalculados.'));
+    }
     window.__stockSeg = 'salidas';
     // Confirmando borradores desde la lista: al confirmar uno se abre directamente el siguiente pendiente, sin volver a la lista
     if (!comoBorrador && eraBorrador && edit.confirmar) {
@@ -5899,6 +5982,7 @@ async function sgaSalidaConfirmar(comoBorrador){
     if (comoBorrador && await appConfirm({ title: 'Albarán de salida', message: `Borrador guardado con el nº ${sgaNumAlbaran(edit.albaran)}. ¿Quieres imprimir el albarán (o guardarlo en PDF)?`, confirmLabel: 'Imprimir albarán', cancelLabel: 'Ahora no', tone: 'info', icon: 'file' })) sgaAlbaranImprimir(edit.id);
     return;
   }
+  await logAlbaranHistorial(albId, comoBorrador ? `Borrador creado: ${total} palet${total !== 1 ? 's' : ''} para el ${fmtDateDMY(d.fecha)}` : `Salida registrada: ${total} palet${total !== 1 ? 's' : ''} el ${fmtDateDMY(d.fecha)}`);
   await logContactoHistorial(d.clienteId, `SGA · ha ${comoBorrador ? 'guardado el borrador de' : 'registrado'} la salida ${numAlb ? numAlb + ' ' : ''}de ${total} palet${total !== 1 ? 's' : ''} el ${fmtDateDMY(d.fecha)}${fifo.saltados.size ? ' (FIFO saltado)' : ''}.${comoBorrador ? ' Pendiente de confirmar.' : ''}`);
   appToast(comoBorrador ? `Borrador guardado: ${total} palet${total !== 1 ? 's' : ''} apartados. Confírmalo cuando salgan.` : `Salida registrada: ${total} palet${total !== 1 ? 's' : ''}.`, 'ok');
   window.__stockSeg = 'salidas';
@@ -6658,6 +6742,7 @@ async function sgaAnularConfirmar(){
     return;
   }
   await loadSgaStock();
+  await logAlbaranHistorial(id, 'Anulada: ' + motivo);
   if (a) await logContactoHistorial(a.clienteId, `SGA · ha anulado el albarán ${sgaNumAlbaran(a)} (${motivo}).`);
   closeModal();
   appToast('Albarán anulado.', 'ok');
