@@ -2771,6 +2771,7 @@ function computeBreadcrumbSegments(){
   }
   if (currentTab === 'stock' && window.__stockView === 'salida') return [{label:'Control Stock SGA', onclick:'sgaSalidaCancelar()'}, {label: window.__slEdit ? 'Editar salida' : 'Nueva salida', onclick:null}];
   if (currentTab === 'stock' && window.__stockView === 'catedit') return [{label:'Inventario', onclick:'catEditarSalir()'}, {label:'Editar catálogo', onclick:null}];
+  if (currentTab === 'stock' && window.__stockView === 'operativa') return [{label:'Control Stock SGA', onclick:'sgaOperativaCancelar()'}, {label: (window.__opForm && window.__opForm.id) ? 'Editar operativa' : 'Nueva operativa', onclick:null}];
   if (currentTab === 'stock' && window.__stockView === 'regul') return [{label:'Control Stock SGA', onclick:'sgaRegulCancelar()'}, {label:'Regularizar stock', onclick:null}];
   if (currentTab === ALMACEN_CONFIG_TAB) {
     if (window.__sgaPage && window.__sgaPage.kind === 'campo') {
@@ -2944,7 +2945,7 @@ function tplAlmacenBar(){
    y un historial de quién cambió qué y cuándo. */
 const WAREHOUSE_COLORS = ['#2E6F95', '#C98A2E', '#8A4A35', '#3F8F5F', '#7C5CBF', '#C1443D', '#2C9A93', '#D9A72C', '#5C6670', '#1B3A6B'];
 const WAREHOUSES_PAGE_SIZE = 80;
-function almacenIsSubpage(){ return (currentTab === ALMACEN_CONFIG_TAB && (window.__whView === "form" || window.__apView === "form" || !!window.__sgaPage)) || (currentTab === "stock" && ["entrada", "salida", "articulo", "rapida", "regul", "catedit"].includes(window.__stockView)); }
+function almacenIsSubpage(){ return (currentTab === ALMACEN_CONFIG_TAB && (window.__whView === "form" || window.__apView === "form" || !!window.__sgaPage)) || (currentTab === "stock" && ["entrada", "salida", "articulo", "rapida", "regul", "catedit", "operativa"].includes(window.__stockView)); }
 function warehouseConfirmLeaveForm(){
   if (currentTab === ALMACEN_CONFIG_TAB && window.__whView === 'form' && window.__whEditMode && window.__whFormDirty) {
     return leaveGuard();
@@ -4053,6 +4054,7 @@ async function loadSgaStock(){
     const m = await supabaseClient.from('sga_movimientos').select('albaran_id,cantidad').in('albaran_id', ids);
     (m.data || []).forEach(r => { sgaMovsAlbaran[r.albaran_id] = (sgaMovsAlbaran[r.albaran_id] || 0) + Number(r.cantidad); });
   }
+  await loadSgaOperativasHechas();
 }
 const SGA_MODALIDADES = { palet: 'Palets', contenedor_20: "Contenedor 20'", contenedor_40: "Contenedor 40'", trailer: 'Trailer' };
 function sgaProdTxt(id){ const p = almacenajeProducto(id); return p ? almacenajeProductoTexto(p) : (id || '—'); }
@@ -4062,7 +4064,7 @@ function sgaSitioTxt(p){
   const z = sgaZonaDe(p.zonaId), u = sgaUbicDe(p.ubicacionId);
   return z ? sgaZonaNombre(z) + (u ? ' · ' + u.codigo : '') : '—';
 }
-function stockSeg(){ return ['entradas', 'salidas', 'resumen'].includes(window.__stockSeg) ? window.__stockSeg : 'catalogo'; }   // «Stock» se fusionó con el catálogo
+function stockSeg(){ return ['entradas', 'salidas', 'operativas', 'resumen'].includes(window.__stockSeg) ? window.__stockSeg : 'catalogo'; }   // «Stock» se fusionó con el catálogo
 
 /* ---- Pantalla principal: stock por cliente y entradas ---- */
 function whNombre(id){ const w = allWarehouses.find(x => x.id === id); return w ? w.name : '—'; }
@@ -4123,6 +4125,7 @@ function stockClienteRowHtml(c, ps){
 function stockBodyHtml(){
   if (stockSeg() === 'catalogo') return stockCatalogoBodyHtml();
   if (stockSeg() === 'resumen') return stockResumenBodyHtml();
+  if (stockSeg() === 'operativas') return stockOperativasBodyHtml();
   const q = (window.__stockSearch || '').trim().toLowerCase();
   const wid = window.__stockAlm || '';
   const okCli = c => !q || c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q);
@@ -4641,17 +4644,229 @@ const SGA_ACC_ARTE = {
     <circle cx="124" cy="86" r="11" fill="rgba(255,255,255,.95)" stroke="none"/><path d="M118.5 86l4 4 7.5-8" stroke="var(--acc)" stroke-width="3"/>
   </svg>`,
 };
+/* ---- SGA · Operativas realizadas ----
+   Una operativa (de Comercial → Tarifas Almacén → Operativas) es un servicio con precio cerrado: apartados fijos que suman el
+   total y extras por cantidad (palet extra, filmado…). Aquí se anota cada vez que se le hace a un cliente, con su fecha y la
+   cantidad de cada extra; el precio se toma de la operativa vigente ese día y queda copiado. Salen en el Resumen mensual. */
+let sgaOperativasHechas = [];
+async function loadSgaOperativasHechas(){
+  try {
+    const { data, error } = await supabaseClient.from('sga_operativas_realizadas').select('*').order('fecha', { ascending: false }).limit(300);
+    window.__sgaOpHechasOk = !error;
+    sgaOperativasHechas = error ? [] : (data || []).map(r => ({
+      id: r.id, createdAt: r.created_at, createdBy: r.created_by || '', clienteId: r.cliente_id, operativaId: r.operativa_id, nombre: r.nombre, fecha: r.fecha,
+      apartados: Array.isArray(r.apartados) ? r.apartados : [], importe: Number(r.importe), observaciones: r.observaciones || '', estado: r.estado,
+    }));
+    if (!operativas.length) await loadOperativas();   // para poder elegirlas (si no hay permiso, queda vacío)
+  } catch (e) { sgaOperativasHechas = []; }
+}
+// Precio vigente de una operativa del cliente en una fecha: la versión más reciente que empezó ese día o antes
+function sgaOperativaVigente(clienteId, nombre, fecha){
+  const k = `${clienteId}|${String(nombre).trim().toLowerCase()}`;
+  return operativas.filter(o => operativaClave(o) === k && o.fecha <= fecha)
+    .sort((a, b) => b.fecha.localeCompare(a.fecha) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null;
+}
+function sgaOperativasNombres(clienteId, fecha){
+  const vistos = new Map();
+  operativas.filter(o => o.clienteId === clienteId).forEach(o => { const k = String(o.nombre).trim().toLowerCase(); if (!vistos.has(k)) vistos.set(k, o.nombre); });
+  return [...vistos.values()].filter(n => sgaOperativaVigente(clienteId, n, fecha)).sort((a, b) => a.localeCompare(b, 'es'));
+}
+function sgaOperativaTotal(apartados){
+  return sgaR2((apartados || []).reduce((s, a) => s + (a.extra ? (Number(a.cantidad) || 0) * (Number(a.importe) || 0) : (Number(a.importe) || 0)), 0));
+}
+// «Acarreo 120,00 € · Transporte 200,00 € · Palet extra ×4 (5,00 € por palet)»
+function sgaOperativaDetalleTxt(apartados){
+  const fijos = (apartados || []).filter(a => !a.extra).map(a => `${a.concepto} ${eur2(a.importe)}`);
+  const extras = (apartados || []).filter(a => a.extra && Number(a.cantidad) > 0).map(a => `${a.concepto} ×${a.cantidad} (${operativaExtraTxt(a)})`);
+  return [...fijos, ...extras].join(' · ');
+}
+function stockOperativasBodyHtml(){
+  const q = (window.__stockSearch || '').trim().toLowerCase();
+  const emp = window.__stockEmp || '', est = window.__stockEstado || '';
+  const lista = sgaOperativasHechas.filter(o => (!emp || o.clienteId === emp) && (!est || o.estado === est)).filter(o => {
+    const c = contactos.find(x => x.id === o.clienteId);
+    return !q || (c && (c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q))) || o.nombre.toLowerCase().includes(q);
+  });
+  if (window.__sgaOpHechasOk === false) return '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Para anotar operativas falta ejecutar el SQL «sga-operativas-realizadas.sql» en Supabase.</div>';
+  if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q || emp || est ? 'Ninguna operativa coincide con la búsqueda o el filtro.' : 'Todavía no hay operativas anotadas. Anota la primera con «Nueva operativa».'}</div>`;
+  const puede = sgaPuedeEditarStock();
+  return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
+    <thead><tr>${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Operativa','text')}${thSort('Detalle','text')}${thSort('Importe','number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
+    <tbody>${lista.map(o => { const c = contactos.find(x => x.id === o.clienteId); return `
+      <tr data-op="${o.id}" style="${o.estado === 'anulada' ? 'opacity:.6;' : ''}">
+        <td style="white-space:nowrap;" data-sort-value="${esc(o.fecha)}">${fmtDateDMY(o.fecha)}</td>
+        <td data-sort-value="${esc(c ? c.nombre : '')}">${esc(c ? ((c.nombreComercial || '').trim() || c.nombre) : '—')}</td>
+        <td data-sort-value="${esc(o.nombre)}"><b>${esc(o.nombre)}</b></td>
+        <td style="color:var(--muted);font-size:12.5px;" data-sort-value="${esc(sgaOperativaDetalleTxt(o.apartados))}">${esc(sgaOperativaDetalleTxt(o.apartados)) || '—'}</td>
+        <td class="tf-precio" data-sort-value="${o.importe}">${eur2(o.importe)}</td>
+        <td data-sort-value="${o.estado}"${o.estado === 'anulada' ? ' style="color:var(--danger);"' : ''}>${o.estado === 'anulada' ? 'Anulada' : 'Activa'}</td>
+        <td style="text-align:right;white-space:nowrap;">${puede && o.estado === 'activa' ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="sgaOperativaAbrir('${o.id}')">Editar</button> <button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:var(--danger);" onclick="sgaOperativaAnular('${o.id}')">Anular</button>` : ''}</td>
+      </tr>`; }).join('')}</tbody></table></div>`;
+}
+/* ---- Pantalla «Nueva operativa» / editar ---- */
+function sgaOperativaAbrir(id){
+  const o = id ? sgaOperativasHechas.find(x => x.id === id) : null;
+  window.__opForm = o
+    ? { id: o.id, clienteId: o.clienteId, fecha: o.fecha, nombre: o.nombre, apartados: JSON.parse(JSON.stringify(o.apartados)), obs: o.observaciones, operativaId: o.operativaId }
+    : { id: null, clienteId: '', fecha: today(), nombre: '', apartados: [], obs: '', operativaId: null };
+  window.__stockView = 'operativa';
+  window.__stockDirty = false;
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
+  sgaOperativaPintar();
+}
+async function sgaOperativaCancelar(){
+  if (window.__stockDirty && !(await appConfirm({ title: 'Descartar la operativa', message: 'Has empezado a rellenar esta operativa. Si sales, se pierde.', confirmLabel: 'Descartar', cancelLabel: 'Seguir', tone: 'warn', icon: 'warn' }))) return;
+  window.__opForm = null;
+  window.__stockSeg = 'operativas';
+  stockVolver();
+}
+function tplStockOperativaPage(){
+  const f = window.__opForm || {};
+  const clientes = sgaClientesAlmacenLista();
+  if (f.clienteId && !clientes.some(c => c.id === f.clienteId)) { const c = contactos.find(x => x.id === f.clienteId); if (c) clientes.push(c); }
+  return `
+    <div style="--bn-accent:var(--primary);">
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.tag, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 260px;">
+        <div class="deca-banner-title">${f.id ? 'Editar operativa' : 'Nueva operativa'}</div>
+        <div class="deca-banner-sub">Un servicio con precio cerrado que se le ha hecho a un cliente. Sale en su resumen mensual, en «A facturar».</div>
+      </div>
+    </div>
+    <div class="deca-form" style="max-width:820px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
+      <div class="card deca-card">
+        ${decaCardHead('tag', 'Qué se ha hecho', 'Cliente, día y operativa')}
+        <div class="deca-card-body">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <div class="field" style="flex:2;min-width:230px;"><label>Cliente <span class="dc-req">*</span></label>
+              <select id="op-cliente" onchange="sgaOperativaCambio('cliente')" ${f.id ? 'disabled' : ''}><option value="">Elige el cliente…</option>${clientes.map(c => `<option value="${c.id}" ${c.id === f.clienteId ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
+            <div class="field" style="flex:1;min-width:160px;"><label>Fecha <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="op-f-fecha" type="date" value="${esc(f.fecha || today())}" onchange="sgaOperativaCambio('fecha')" />`)}</div>
+          </div>
+          <div class="field" style="margin-bottom:0;"><label>Operativa <span class="dc-req">*</span></label>
+            <select id="op-f-sel" onchange="sgaOperativaCambio('operativa')"></select></div>
+        </div>
+      </div>
+      <div class="card deca-card" id="op-f-detalle-card">
+        ${decaCardHead('list', 'Precio', 'Apartados fijos y extras por cantidad')}
+        <div class="deca-card-body" id="op-f-detalle"></div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('file', 'Observaciones', 'Opcional')}
+        <div class="deca-card-body"><textarea id="op-f-obs" maxlength="500" placeholder="Contenedor, referencia, quién lo pidió…" style="min-height:70px;resize:vertical;" oninput="window.__opForm.obs=this.value; window.__stockDirty=true;">${esc(f.obs || '')}</textarea></div>
+      </div>
+    </div>
+    <div class="deca-actions" style="max-width:820px;">
+      <div id="op-f-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
+      <div class="deca-actions-row">
+        <button class="btn btn-ghost deca-cancel" onclick="sgaOperativaCancelar()">Cancelar</button>
+        <button class="btn btn-primary deca-submit" onclick="sgaOperativaGuardar()">${f.id ? 'Guardar cambios' : 'Guardar operativa'}</button>
+      </div>
+    </div>
+    </div>`;
+}
+// Lee cliente y fecha y vuelve a pintar el desplegable de operativas y el precio
+function sgaOperativaCambio(que){
+  const f = window.__opForm;
+  if (!f) return;
+  const cli = document.getElementById('op-cliente'), fec = document.getElementById('op-f-fecha'), sel = document.getElementById('op-f-sel');
+  if (cli) f.clienteId = cli.value;
+  if (fec && fec.value) f.fecha = fec.value;
+  window.__stockDirty = true;
+  if (que === 'cliente') { f.nombre = ''; f.apartados = []; f.operativaId = null; }
+  else if (que === 'operativa' && sel) {
+    f.nombre = sel.value;
+    const v = f.nombre ? sgaOperativaVigente(f.clienteId, f.nombre, f.fecha) : null;
+    f.apartados = v ? JSON.parse(JSON.stringify(v.apartados)) : [];
+    f.operativaId = v ? v.id : null;
+  } else if (que === 'fecha' && f.nombre) {   // otro día: puede haber otro precio vigente
+    const v = sgaOperativaVigente(f.clienteId, f.nombre, f.fecha);
+    f.apartados = v ? JSON.parse(JSON.stringify(v.apartados)) : [];
+    f.operativaId = v ? v.id : null;
+    if (!v) f.nombre = '';
+  }
+  sgaOperativaPintar();
+}
+function sgaOperativaPintar(){
+  const f = window.__opForm;
+  if (!f) return;
+  const sel = document.getElementById('op-f-sel');
+  if (sel) {
+    const nombres = f.clienteId ? sgaOperativasNombres(f.clienteId, f.fecha) : [];
+    if (f.nombre && !nombres.some(n => n.toLowerCase() === f.nombre.toLowerCase())) nombres.push(f.nombre);   // al editar, la que ya tenía
+    sel.innerHTML = `<option value="">${!f.clienteId ? 'Elige primero el cliente' : nombres.length ? 'Elige la operativa…' : 'Este cliente no tiene operativas con precio a esa fecha'}</option>`
+      + nombres.map(n => `<option value="${esc(n)}" ${n.toLowerCase() === (f.nombre || '').toLowerCase() ? 'selected' : ''}>${esc(n)}</option>`).join('');
+  }
+  const det = document.getElementById('op-f-detalle');
+  if (!det) return;
+  if (!f.apartados.length) { det.innerHTML = '<div style="color:var(--mutedFaint);font-size:13px;">Elige el cliente y la operativa para ver su precio.</div>'; return; }
+  const fijos = f.apartados.map((a, i) => ({ a, i })).filter(x => !x.a.extra), extras = f.apartados.map((a, i) => ({ a, i })).filter(x => x.a.extra);
+  det.innerHTML = `
+    <div class="op-lines">${fijos.map(({ a }) => `<div class="op-line"><span>${esc(a.concepto)}</span><span class="op-dots"></span><b>${esc(eur2(a.importe))}</b></div>`).join('')}</div>
+    ${extras.length ? `<div class="op-extras" style="margin-top:12px;"><div class="op-extras-t">Extras: pon cuántos ha habido</div>
+      ${extras.map(({ a, i }) => `<div class="op-line" style="align-items:center;"><span>${esc(a.concepto)} <small style="color:var(--muted);">· ${esc(operativaExtraTxt(a))}</small></span><span class="op-dots"></span>
+        <input inputmode="numeric" maxlength="5" placeholder="0" value="${Number(a.cantidad) > 0 ? a.cantidad : ''}" style="width:78px;text-align:right;" oninput="sgaOperativaExtra(${i}, this.value)" /></div>`).join('')}</div>` : ''}
+    <div class="op-total-row" style="margin-top:14px;"><span>Importe de esta operativa (sin IVA)</span><b id="op-f-total">${eur2(sgaOperativaTotal(f.apartados))}</b></div>`;
+}
+function sgaOperativaExtra(i, v){
+  const f = window.__opForm;
+  if (!f || !f.apartados[i]) return;
+  const n = parseInt(String(v).replace(/\D/g, ''), 10);
+  f.apartados[i].cantidad = isFinite(n) && n > 0 ? n : 0;
+  window.__stockDirty = true;
+  const t = document.getElementById('op-f-total');
+  if (t) t.textContent = eur2(sgaOperativaTotal(f.apartados));
+}
+async function sgaOperativaGuardar(){
+  const f = window.__opForm;
+  const errEl = document.getElementById('op-f-error');
+  if (!f || !errEl) return;
+  errEl.textContent = '';
+  const errores = [];
+  if (!f.clienteId) errores.push('Elige el cliente.');
+  if (!f.fecha) errores.push('Indica la fecha.');
+  if (!f.nombre || !f.apartados.length) errores.push('Elige la operativa.');
+  if (errores.length) { errEl.textContent = errores.join('\n'); return; }
+  const importe = sgaOperativaTotal(f.apartados);
+  const fila = { cliente_id: f.clienteId, operativa_id: f.operativaId || null, nombre: f.nombre, fecha: f.fecha, apartados: f.apartados, importe, observaciones: (f.obs || '').trim() || null };
+  const btn = document.querySelector('.deca-submit'); if (btn) btn.disabled = true;
+  const { error } = f.id
+    ? await supabaseClient.from('sga_operativas_realizadas').update(fila).eq('id', f.id)
+    : await supabaseClient.from('sga_operativas_realizadas').insert({ ...fila, created_by: currentUserEmail() });
+  if (error) {
+    errEl.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test(error.message || '') ? 'falta ejecutar el SQL «sga-operativas-realizadas.sql» en Supabase.' : error.message);
+    if (btn) btn.disabled = false;
+    return;
+  }
+  await loadSgaOperativasHechas();
+  await logContactoHistorial(f.clienteId, `SGA · ha ${f.id ? 'editado' : 'anotado'} la operativa «${f.nombre}» del ${fmtDateDMY(f.fecha)}: ${eur2(importe)}.`);
+  appToast(f.id ? 'Operativa actualizada.' : 'Operativa anotada.', 'ok');
+  window.__opForm = null;
+  window.__stockSeg = 'operativas';
+  stockVolver();
+}
+async function sgaOperativaAnular(id){
+  const o = sgaOperativasHechas.find(x => x.id === id);
+  if (!o) return;
+  if (!(await appConfirm({ title: 'Anular operativa', name: `${o.nombre} · ${fmtDateDMY(o.fecha)} · ${eur2(o.importe)}`, message: 'Dejará de contarse en el resumen mensual del cliente.', confirmLabel: 'Anular', tone: 'danger', icon: 'trash' }))) return;
+  const { error } = await supabaseClient.from('sga_operativas_realizadas').update({ estado: 'anulada', anulada_at: new Date().toISOString() }).eq('id', id);
+  if (error) { appToast('No se pudo anular: ' + error.message, 'error'); return; }
+  o.estado = 'anulada';
+  await logContactoHistorial(o.clienteId, `SGA · ha anulado la operativa «${o.nombre}» del ${fmtDateDMY(o.fecha)}.`);
+  appToast('Operativa anulada.', 'ok');
+  refreshStockBody();
+}
 // Filtro por empresa (cliente) de las listas de Entradas y Salidas: solo salen las empresas que tienen albaranes de ese tipo.
 function stockEmpresasConAlbaran(seg){
   const esSal = seg === 'salidas';
-  const ids = new Set(sgaAlbaranes.filter(a => esSal ? a.tipo === 'salida' : a.tipo !== 'salida').map(a => a.clienteId));
+  const ids = new Set(seg === 'operativas' ? sgaOperativasHechas.map(o => o.clienteId) : sgaAlbaranes.filter(a => esSal ? a.tipo === 'salida' : a.tipo !== 'salida').map(a => a.clienteId));
   return contactos.filter(c => ids.has(c.id))
     .sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es'));
 }
 // Estado de un albarán para el filtro: borrador (salida pendiente de confirmar), confirmada o anulada.
 function sgaAlbaranEstadoClave(a){ return a.estado === 'anulado' ? 'anulada' : (a.estado === 'confirmado' && a.borrador ? 'borrador' : 'confirmada'); }
 function stockEstadoSelectHtml(seg){
-  const ops = [['', 'Todos los estados'], ['confirmada', 'Confirmadas'], ...(seg === 'salidas' ? [['borrador', 'Borradores']] : []), ['anulada', 'Anuladas']];
+  const ops = seg === 'operativas' ? [['', 'Todos los estados'], ['activa', 'Activas'], ['anulada', 'Anuladas']] : [['', 'Todos los estados'], ['confirmada', 'Confirmadas'], ...(seg === 'salidas' ? [['borrador', 'Borradores']] : []), ['anulada', 'Anuladas']];
   if (window.__stockEstado && !ops.some(o => o[0] === window.__stockEstado)) window.__stockEstado = '';
   return `<select id="stock-estado" onchange="window.__stockEstado=this.value; refreshStockBody();" style="width:auto;flex:0 0 170px;min-width:0;" title="Ver solo los albaranes en un estado">${ops.map(([v, t]) => `<option value="${v}" ${v === (window.__stockEstado || '') ? 'selected' : ''}>${t}</option>`).join('')}</select>`;
 }
@@ -4664,6 +4879,7 @@ function tplStock(){
   if (window.__stockView === 'entrada') return tplStockEntradaPage();
   if (window.__stockView === 'salida') return tplStockSalidaPage();
   if (window.__stockView === 'regul') return tplStockRegulPage();
+  if (window.__stockView === 'operativa') return tplStockOperativaPage();
   if (window.__stockView === 'catedit') return tplCatEditPage();
   if (window.__stockView === 'articulo') { const c = contactos.find(x => x.id === (window.__sgaArtForm || {}).clienteId); return c ? tplSgaArticuloPage(c) : ''; }
   if (window.__stockView === 'rapida') { const c = contactos.find(x => x.id === (window.__sgaArtRapida || {}).clienteId); return c ? tplSgaArtRapidaPage(c) : ''; }
@@ -4685,7 +4901,7 @@ function tplStock(){
       ${acc('#C0721A', 'salida', 'Nueva salida', 'Sacar mercancía y emitir albarán', 'sgaSalidaAbrir()', 'Sacar mercancía del almacén y generar el albarán')}
       ${acc('#2F7F86', 'regul', 'Regularizar', 'Ajustar el stock a lo contado', 'sgaRegulAbrir()', 'Ajustar el stock a lo que hay de verdad')}
     </div>
-    <div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Entradas')}${segBtn('salidas', 'Salidas')}${segBtn('resumen', 'Resumen mensual')}</div>
+    <div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Entradas')}${segBtn('salidas', 'Salidas')}${segBtn('operativas', 'Operativas')}${segBtn('resumen', 'Resumen mensual')}</div>
     <div class="card deca-toolbar">
       ${seg === 'catalogo' ? `
       <select id="cat-cliente" onchange="catElegirCliente(this.value)" style="width:auto;flex:0 0 210px;min-width:0;"><option value="">Todos los clientes</option>${contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es')).map(c => `<option value="${c.id}" ${c.id === catClienteSel() ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
@@ -4702,8 +4918,8 @@ function tplStock(){
         <input placeholder="${seg === 'catalogo' ? 'Buscar cliente o artículo…' : 'Buscar cliente por nombre o NIF…'}" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      ${seg === 'entradas' || seg === 'salidas' ? stockEmpresaSelectHtml(seg) + stockEstadoSelectHtml(seg) : ''}`}
-      ${seg === 'resumen' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
+      ${seg === 'entradas' || seg === 'salidas' || seg === 'operativas' ? stockEmpresaSelectHtml(seg) + stockEstadoSelectHtml(seg) : ''}${seg === 'operativas' && sgaPuedeEditarStock() ? '<button class="btn btn-primary" style="margin-left:auto;" onclick="sgaOperativaAbrir()">+ Nueva operativa</button>' : ''}`}
+      ${seg === 'resumen' || seg === 'operativas' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
     </div>
     <div id="stock-body">${stockBodyHtml()}</div>
     </div>`;
@@ -6379,11 +6595,13 @@ async function sgaResumenCargar(){
   if (!rm.clienteId) { rm.datos = null; refreshStockBody(); return; }
   rm.cargando = true; refreshStockBody();
   const cid = rm.clienteId, per = rm.periodo, desde = per + '-01';
-  const [a, c, m2, pt] = await Promise.all([
+  const hasta = `${per}-${String(sgaDiasDelMes(per)).padStart(2, '0')}`;
+  const [a, c, m2, pt, op] = await Promise.all([
     supabaseClient.from('sga_albaranes').select('id,tipo,fecha,estado').eq('cliente_id', cid).eq('estado', 'confirmado').gte('fecha', desde),
     supabaseClient.from('sga_cobros').select('*').eq('cliente_id', cid).eq('periodo', per),
     supabaseClient.from('sga_m2').select('*').eq('cliente_id', cid).order('periodo', { ascending: false }).limit(24),
     supabaseClient.from('sga_partidas').select('id,producto_id').eq('cliente_id', cid),
+    supabaseClient.from('sga_operativas_realizadas').select('*').eq('cliente_id', cid).eq('estado', 'activa').gte('fecha', desde).lte('fecha', hasta),
   ]);
   const albaranes = a.data || [];
   const prodDe = {};
@@ -6398,6 +6616,7 @@ async function sgaResumenCargar(){
     clienteId: cid, periodo: per, movs,
     cobros: (c.data || []).filter(x => x.estado !== 'anulado').map(x => ({ fecha: x.fecha, origen: x.origen, productoId: x.producto_id, cantidad: Number(x.cantidad), precio: Number(x.precio), importe: Number(x.importe) })),
     m2: (m2.data || []).map(x => ({ periodo: x.periodo, m2: Number(x.m2) })),
+    operativas: (op.data || []).map(x => ({ id: x.id, fecha: x.fecha, nombre: x.nombre, importe: Number(x.importe), apartados: Array.isArray(x.apartados) ? x.apartados : [] })),
   };
   rm.cargando = false;
   refreshStockBody();
@@ -6432,6 +6651,7 @@ function sgaResumenCalcular(d){
       saldoMod: actualMod - posterior.reduce((s, m) => s + m.cantidad, 0), saldoBul: actualBul - posterior.reduce((s, m) => s + bm(m), 0),
       mov: cobrosDia.filter(c => c.origen === 'movimiento').reduce((s, c) => s + c.importe, 0),
       serv: cobrosDia.filter(c => c.origen === 'servicio').reduce((s, c) => s + c.importe, 0),
+      oper: (d.operativas || []).filter(o => o.fecha === f).reduce((s, o) => s + o.importe, 0),
     });
   }
   const antes = d.movs.filter(m => m.fecha >= d.periodo + '-01');
@@ -6440,6 +6660,7 @@ function sgaResumenCalcular(d){
   d.cobros.forEach(c => { const k = c.productoId + '|' + c.precio; const e = (conceptos[k] = conceptos[k] || { productoId: c.productoId, precio: c.precio, cantidad: 0, importe: 0, origen: c.origen, detalle: '' }); e.cantidad += c.cantidad; e.importe += c.importe; });
   const totMov = d.cobros.filter(c => c.origen === 'movimiento').reduce((s, c) => s + c.importe, 0);
   const totServ = d.cobros.filter(c => c.origen === 'servicio').reduce((s, c) => s + c.importe, 0);
+  const totOper = sgaR2((d.operativas || []).reduce((s, o) => s + o.importe, 0));
   // Almacenaje de stock: palet por día (suma de cada día) o máximo del mes (el día con más stock), según la base de cada línea de tarifa
   const hoy = today();
   const ultimo = d.periodo === hoy.slice(0, 7) ? Number(hoy.slice(8, 10)) : (d.periodo < hoy.slice(0, 7) ? dias : 0);
@@ -6468,7 +6689,7 @@ function sgaResumenCalcular(d){
   const prodM2 = almacenajeProductos.find(p => !p.archived && p.disparador === 'stock_mes' && almacenajeTarifas.some(t => t.clienteId === d.clienteId && t.tipo === p.id));
   const finMes = `${d.periodo}-${String(dias).padStart(2, '0')}`;
   const tM2 = prodM2 ? sgaTarifaEn(d.clienteId, prodM2.id, finMes) : null;
-  return { cfg, usaBultos, filas, inicial, final: { mod: actualMod, bul: actualBul }, conceptos: [...Object.values(conceptos), ...stockLineas], hayReg: filas.some(x => x.regMod), totMov, totServ, totStock, m2, m2Guardado: !!guardado, prodM2, tM2, finMes };
+  return { cfg, usaBultos, filas, inicial, final: { mod: actualMod, bul: actualBul }, conceptos: [...Object.values(conceptos), ...stockLineas], hayReg: filas.some(x => x.regMod), totMov, totServ, totOper, operativas: d.operativas || [], totStock, m2, m2Guardado: !!guardado, prodM2, tM2, finMes };
 }
 function sgaResumenHtml(d, paraImprimir){
   const r = sgaResumenCalcular(d);
@@ -6476,11 +6697,11 @@ function sgaResumenHtml(d, paraImprimir){
   const nombre = (cliente.nombreComercial || '').trim() || cliente.nombre || '';
   const eur = n => eur2(sgaR2(n));
   const fijo = r.m2 != null && r.tM2 ? sgaR2(r.m2 * r.tM2.precio) : 0;
-  const total = sgaR2(r.totMov + r.totServ + r.totStock + fijo);
+  const total = sgaR2(r.totMov + r.totServ + r.totOper + r.totStock + fijo);
   const num = n => (n ? String(sgaNumTxt(n)) : '·');
   const th = (t, right) => `<th style="${right ? 'text-align:right;' : ''}">${t}</th>`;
   const colsB = r.usaBultos, reg = r.hayReg;
-  const hayCobros = r.filas.some(f => f.mov || f.serv);   // la columna «Cobrado €» solo sale si ese mes se cobró algo
+  const hayCobros = r.filas.some(f => f.mov || f.serv || f.oper);   // la columna «Cobrado €» solo sale si ese mes se cobró algo
   const hayAlm = r.filas.some(f => f.alm);                 // «Almacenaje €»: lo que genera cada día el stock que hay en el almacén
   const soloAct = !!window.__rmSoloAct;                   // «solo días con movimiento»: por defecto salen todos
   const tot = k => sgaR2(r.filas.reduce((s, f) => s + f[k], 0));
@@ -6504,6 +6725,10 @@ function sgaResumenHtml(d, paraImprimir){
   const grupoDe = c => { if (c.origen === 'stock') return 'almacenaje'; const cat = (almacenajeProducto(c.productoId) || {}).categoria; return cat || (c.origen === 'servicio' ? 'extra' : 'movimiento'); };
   const ordenDe = c => { const p = almacenajeProducto(c.productoId) || {}; return c.origen === 'stock' ? 0 : p.disparador === 'descarga' ? 0 : p.disparador === 'carga' ? 1 : 2; };
   const lineas = r.conceptos.map(c => ({ g: grupoDe(c), o: ordenDe(c), importe: c.importe, html: `<tr><td>${esc(sgaProdTxt(c.productoId))}${c.origen === 'stock' ? ` <small style="color:var(--muted);">· almacenaje (${esc(c.detalle)})</small>` : ''}</td><td class="r">${sgaNumTxt(c.cantidad)}</td><td class="r">${esc(eurPrecio(c.precio))}</td><td class="r">${eur(c.importe)}</td></tr>` }));
+  r.operativas.slice().sort((x, y) => x.fecha.localeCompare(y.fecha)).forEach(o => {
+    const det = sgaOperativaDetalleTxt(o.apartados);
+    lineas.push({ g: 'operativa', o: 0, importe: o.importe, html: `<tr><td>${esc(o.nombre)} <small style="color:var(--muted);">· ${esc(fmtDateDMY(o.fecha).split('/').join('-'))}${det ? ' · ' + esc(det) : ''}</small></td><td class="r">1</td><td class="r">${eur(o.importe)}</td><td class="r">${eur(o.importe)}</td></tr>` });
+  });
   if (r.prodM2 && r.tM2) {
     const cant = paraImprimir
       ? (r.m2 != null ? `${sgaNumTxt(r.m2)} m²` : '—')
@@ -6511,9 +6736,9 @@ function sgaResumenHtml(d, paraImprimir){
     const aviso = !paraImprimir && !r.m2Guardado && r.m2 != null ? ' <small style="color:var(--mutedFaint);">· los del mes anterior: pulsa fuera para confirmarlos</small>' : '';
     lineas.push({ g: 'almacenaje', o: 9, importe: r.m2 != null ? fijo : 0, html: `<tr><td>${esc(sgaProdTxt(r.prodM2.id))} <small style="color:var(--muted);">· superficie</small>${aviso}</td><td class="r" style="white-space:nowrap;">${cant}</td><td class="r">${esc(eurPrecio(r.tM2.precio))}</td><td class="r">${r.m2 != null ? eur(fijo) : '—'}</td></tr>` });
   }
-  const GRUPOS_COBRO = [['movimiento', 'Movimientos · entradas y salidas'], ['almacenaje', 'Almacenaje'], ['extra', 'Extras']];
+  const GRUPOS_COBRO = [['movimiento', 'Movimientos · entradas y salidas'], ['almacenaje', 'Almacenaje'], ['operativa', 'Operativas'], ['extra', 'Extras']];
   const cuerpoCobro = GRUPOS_COBRO.map(([k, t]) => {
-    const ls = lineas.filter(l => l.g === k || (k === 'extra' && !['movimiento', 'almacenaje'].includes(l.g))).sort((x, y) => x.o - y.o);
+    const ls = lineas.filter(l => l.g === k || (k === 'extra' && !['movimiento', 'almacenaje', 'operativa'].includes(l.g))).sort((x, y) => x.o - y.o);
     if (!ls.length) return '';
     const sub = sgaR2(ls.reduce((s, l) => s + (l.importe || 0), 0));
     return `<tr class="rm-grp"><td colspan="3">${t}</td><td class="r">${eur(sub)}</td></tr>${ls.map(l => l.html).join('')}`;
@@ -6526,24 +6751,24 @@ function sgaResumenHtml(d, paraImprimir){
     </table>` : '<div style="color:var(--mutedFaint);font-size:12.5px;">No hay cobros este mes.</div>';
 
   // 3) Día a día: solo las columnas que usa este cliente
-  const filasDia = r.filas.filter(f => !soloAct || f.entMod || f.salMod || f.regMod || f.mov || f.serv);
+  const filasDia = r.filas.filter(f => !soloAct || f.entMod || f.salMod || f.regMod || f.mov || f.serv || f.oper);
   const nCols = 1 + 1 + (colsB ? 1 : 0) + 1 + (colsB ? 1 : 0) + (reg ? 1 : 0) + 1 + (colsB ? 1 : 0) + (hayAlm ? 1 : 0) + (hayCobros ? 1 : 0);
   const tabla = `
     <table class="${paraImprimir ? '' : 'tf-table'} rm-tabla">
       <thead><tr>${th('Día')}${th('Entradas', 1)}${colsB ? th('Bultos', 1) : ''}${th('Salidas', 1)}${colsB ? th('Bultos', 1) : ''}${reg ? th('Regul.', 1) : ''}${th('Saldo', 1)}${colsB ? th('Bultos', 1) : ''}${hayAlm ? th('Almacenaje €', 1) : ''}${hayCobros ? th('Cobrado €', 1) : ''}</tr></thead>
       <tbody>
         <tr class="rm-ini"><td>Stock inicial</td><td></td>${colsB ? '<td></td>' : ''}<td></td>${colsB ? '<td></td>' : ''}${reg ? '<td></td>' : ''}<td class="r">${sgaNumTxt(r.inicial.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.inicial.bul)}</td>` : ''}${hayAlm ? '<td></td>' : ''}${hayCobros ? '<td></td>' : ''}</tr>
-        ${filasDia.map(f => { const act = f.entMod || f.salMod || f.regMod || f.mov || f.serv; return `
+        ${filasDia.map(f => { const act = f.entMod || f.salMod || f.regMod || f.mov || f.serv || f.oper; return `
         <tr class="${act ? 'rm-act' : 'rm-sin'}"><td style="white-space:nowrap;">${fmtDateDMY(f.f).split('/').join('-')}</td>
           <td class="r">${num(f.entMod)}</td>${colsB ? `<td class="r">${num(f.entBul)}</td>` : ''}
           <td class="r">${num(f.salMod)}</td>${colsB ? `<td class="r">${num(f.salBul)}</td>` : ''}
           ${reg ? `<td class="r">${f.regMod ? (f.regMod > 0 ? '+' : '') + sgaNumTxt(f.regMod) : '·'}</td>` : ''}
           <td class="r">${sgaNumTxt(f.saldoMod)}</td>${colsB ? `<td class="r">${sgaNumTxt(f.saldoBul)}</td>` : ''}
           ${hayAlm ? `<td class="r">${f.alm ? eur(f.alm) : '·'}</td>` : ''}
-          ${hayCobros ? `<td class="r">${f.mov || f.serv ? eur(f.mov + f.serv) : '·'}</td>` : ''}</tr>`; }).join('')}
+          ${hayCobros ? `<td class="r">${f.mov || f.serv || f.oper ? eur(f.mov + f.serv + f.oper) : '·'}</td>` : ''}</tr>`; }).join('')}
         ${!filasDia.length ? `<tr><td colspan="${nCols}" style="color:var(--mutedFaint);">Sin movimientos este mes.</td></tr>` : ''}
       </tbody>
-      <tfoot><tr><td>TOTAL</td><td class="r">${sgaNumTxt(tot('entMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('entBul'))}</td>` : ''}<td class="r">${sgaNumTxt(tot('salMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('salBul'))}</td>` : ''}${reg ? `<td class="r">${sgaNumTxt(tot('regMod'))}</td>` : ''}<td class="r">${sgaNumTxt(r.final.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.final.bul)}</td>` : ''}${hayAlm ? `<td class="r">${eur(r.filas.reduce((s, x) => s + (x.alm || 0), 0))}</td>` : ''}${hayCobros ? `<td class="r">${eur(r.totMov + r.totServ)}</td>` : ''}</tr></tfoot>
+      <tfoot><tr><td>TOTAL</td><td class="r">${sgaNumTxt(tot('entMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('entBul'))}</td>` : ''}<td class="r">${sgaNumTxt(tot('salMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('salBul'))}</td>` : ''}${reg ? `<td class="r">${sgaNumTxt(tot('regMod'))}</td>` : ''}<td class="r">${sgaNumTxt(r.final.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.final.bul)}</td>` : ''}${hayAlm ? `<td class="r">${eur(r.filas.reduce((s, x) => s + (x.alm || 0), 0))}</td>` : ''}${hayCobros ? `<td class="r">${eur(r.totMov + r.totServ + r.totOper)}</td>` : ''}</tr></tfoot>
     </table>`;
   const interruptor = `<label class="rm-solo"><input type="checkbox" ${soloAct ? 'checked' : ''} onchange="window.__rmSoloAct=this.checked; refreshStockBody();" /> Solo días con movimiento</label>`;
   const flat = paraImprimir ? 'border:none;box-shadow:none;' : '';
