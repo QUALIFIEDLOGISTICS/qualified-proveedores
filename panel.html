@@ -10276,7 +10276,14 @@ function tplContactoTabTransporte(c){
       </table>
       </div>` : `<div style="color:var(--mutedFaint);font-size:12.5px;padding:18px;">Todavía no cubre ninguna ruta.${canRutas ? ' Se apuntan aquí o en Transporte → Rutas.' : ''}</div>`}
     </div>`;
-  return contactoVerCardHtml(c, true) + perfil + tplContactoPersonasCard(c) + rutasCard;
+  // Viajes que ha hecho de verdad (según las órdenes de carga): ruta, nº de viajes, lo que se le ha pagado y el margen que ha dejado
+  const gViajes = viajesAgrupados(viajesRealizados().filter(v => v.transportistaId === c.id), true);
+  const viajesCard = `
+    <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:20px;">
+      ${decaCardHead('truck', `Viajes realizados (${gViajes.reduce((s, g) => s + g.n, 0)})`, 'Lo que ha hecho para nosotros, según las órdenes de carga emitidas')}
+      ${viajesTablaHtml(gViajes, false)}
+    </div>`;
+  return contactoVerCardHtml(c, true) + perfil + tplContactoPersonasCard(c) + rutasCard + viajesCard;
 }
 // Contenido de la pestaña "Autónomos": resumen de conductores (se gestionan en el módulo Autónomos).
 function tplContactoTabAutonomos(c){
@@ -17463,12 +17470,167 @@ function colabRelativo(iso){
   const anios = Math.floor(dias / 365);
   return `hace ${anios} año${anios === 1 ? '' : 's'}`;
 }
+/* ---- Viajes realizados: lo que de verdad han hecho los transportistas, sacado de las órdenes de carga ----
+   Cada orden emitida con transportista, carga y descarga es un viaje: la ruta es la zona de la primera carga → la zona de la última
+   descarga (país + 2 primeras cifras del código postal, igual que las coberturas de Rutas), lo contratado es lo que se pagó al
+   transportista, y el margen es lo que cobramos al cliente menos eso. No se guarda nada aparte: se calcula con las órdenes. */
+function viajeZona(p){
+  if (!p) return '';
+  const cc = CONTACTO_PAIS_CODIGOS[String(p.pais || '').trim()] || '';
+  if (!cc) return '';
+  const cp = String(p.cp || '').replace(/\D/g, '');
+  return cc + (cp.length >= 2 ? cp.slice(0, 2) : '');
+}
+function viajesRealizados(){
+  return ordenesCarga
+    .filter(o => o.estado === 'emitida' && o.transportistaId && o.cargas.length && o.descargas.length)
+    .map(o => {
+      const coste = o.precio, venta = o.precioCliente;
+      return {
+        oc: o, ref: ocRef(o), transportistaId: o.transportistaId,
+        origen: viajeZona(o.cargas[0]), destino: viajeZona(o.descargas[o.descargas.length - 1]),
+        fecha: (o.cargas[0] && o.cargas[0].fecha) || o.fechaPedido || '',
+        coste: coste == null ? null : coste, venta: venta == null ? null : venta,
+        margen: coste != null && venta != null ? venta - coste : null,
+      };
+    })
+    .filter(v => v.origen && v.destino);
+}
+// Totales de un conjunto de viajes: número, último, coste y cobro medios y margen (€ y % sobre lo cobrado, solo con los viajes que tienen ambos precios)
+function viajesResumen(lista){
+  const conCoste = lista.filter(v => v.coste != null), conVenta = lista.filter(v => v.venta != null), conAmbos = lista.filter(v => v.margen != null);
+  const sumVenta = conAmbos.reduce((s, v) => s + v.venta, 0);
+  return {
+    n: lista.length,
+    ultimo: lista.reduce((m, v) => (v.fecha > m ? v.fecha : m), ''),
+    costeMedio: conCoste.length ? conCoste.reduce((s, v) => s + v.coste, 0) / conCoste.length : null,
+    ventaMedia: conVenta.length ? conVenta.reduce((s, v) => s + v.venta, 0) / conVenta.length : null,
+    margenEur: conAmbos.length ? conAmbos.reduce((s, v) => s + v.margen, 0) : null,
+    margenPct: conAmbos.length && sumVenta > 0 ? conAmbos.reduce((s, v) => s + v.margen, 0) / sumVenta * 100 : null,
+    conAmbos: conAmbos.length,
+  };
+}
+function viajesAgrupados(lista, porTransportista){
+  const g = new Map();
+  lista.forEach(v => {
+    const k = `${porTransportista ? v.transportistaId : ''}|${v.origen}|${v.destino}`;
+    if (!g.has(k)) g.set(k, { key: k, transportistaId: porTransportista ? v.transportistaId : '', origen: v.origen, destino: v.destino, viajes: [] });
+    g.get(k).viajes.push(v);
+  });
+  return [...g.values()].map(x => ({ ...x, ...viajesResumen(x.viajes) })).sort((a, b) => b.ultimo.localeCompare(a.ultimo));
+}
+// Viajes que encajan con una cobertura apuntada de un transportista (su ruta declarada puede ser un país entero o una zona)
+function viajesDeCobertura(r, todos){
+  if (colabEsGrua(r)) return [];
+  return (todos || viajesRealizados()).filter(v => v.transportistaId === r.contactoId && colabZonaCubre(r.origenZona, v.origen) && colabZonaCubre(r.destinoZona, v.destino));
+}
+function viajeMargenHtml(pct, eur){
+  if (pct == null) return '<span style="color:var(--mutedFaint);">—</span>';
+  const c = pct < 0 ? 'var(--danger)' : pct < 5 ? '#B26B00' : '#3F8F5F';
+  return `<b style="color:${c};">${pct.toLocaleString('es-ES', { maximumFractionDigits: 1 })} %</b>${eur != null ? `<small style="color:var(--muted);"> · ${eur2(eur)}</small>` : ''}`;
+}
+function viajeRutaHtml(o, d){
+  return `<span style="font-family:var(--mono);white-space:nowrap;display:inline-flex;align-items:center;gap:6px;">${rutaZonaBanderaHtml(o)} <span style="color:var(--mutedFaint);">→</span> ${rutaZonaBanderaHtml(d)}</span>`;
+}
+// Tabla de viajes agrupados por ruta (y por transportista en la pantalla de Rutas). Al pulsar una fila se ven los viajes uno a uno.
+function viajesTablaHtml(grupos, conTransportista){
+  if (!grupos.length) return '<div style="color:var(--mutedFaint);font-size:12.5px;padding:22px 18px;text-align:center;">Todavía no hay viajes realizados con esos datos. Salen de las órdenes de carga emitidas con transportista, carga y descarga.</div>';
+  const t = viajesResumen(grupos.flatMap(g => g.viajes));
+  return `
+    <div style="display:flex;gap:18px;flex-wrap:wrap;padding:10px 18px;border-bottom:1px solid var(--border);font-size:13px;color:var(--muted);">
+      <span><b style="color:var(--text);">${t.n}</b> viaje${t.n === 1 ? '' : 's'}</span>
+      ${t.margenEur != null ? `<span>Margen total <b style="color:var(--text);">${eur2(t.margenEur)}</b></span><span>Margen medio ${viajeMargenHtml(t.margenPct, null)}</span>` : ''}
+    </div>
+    <div style="overflow-x:auto;"><table class="tf-table">
+      <thead><tr>${thSort('Ruta', 'text')}${conTransportista ? thSort('Transportista', 'text') : ''}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Último viaje', 'date')}${thSort('Pagado (medio)', 'number', 'style="text-align:right;"')}${thSort('Cobrado (medio)', 'number', 'style="text-align:right;"')}${thSort('Margen', 'number', 'style="text-align:right;"')}</tr></thead>
+      <tbody>${grupos.map(g => {
+        const c = g.transportistaId ? contactos.find(x => x.id === g.transportistaId) : null;
+        const nombre = c ? ((c.nombreComercial || '').trim() || c.nombre) : '—';
+        return `<tr style="cursor:pointer;" onclick="viajesDetalleAbrir('${esc(g.key)}', ${conTransportista ? 'true' : 'false'})" title="Ver los viajes uno a uno">
+          <td data-sort-value="${esc(g.origen + g.destino)}">${viajeRutaHtml(g.origen, g.destino)}</td>
+          ${conTransportista ? `<td style="font-weight:600;" data-sort-value="${esc(nombre)}">${esc(nombre)}</td>` : ''}
+          <td class="tf-precio" data-sort-value="${g.n}">${g.n}</td>
+          <td style="white-space:nowrap;" data-sort-value="${esc(g.ultimo)}" title="${esc(fmtDateDMY(g.ultimo))}">${g.ultimo ? esc(colabRelativo(g.ultimo)) : '—'}</td>
+          <td class="tf-precio" data-sort-value="${g.costeMedio ?? ''}">${g.costeMedio != null ? eur2(g.costeMedio) : '—'}</td>
+          <td class="tf-precio" data-sort-value="${g.ventaMedia ?? ''}">${g.ventaMedia != null ? eur2(g.ventaMedia) : '—'}</td>
+          <td class="tf-precio" data-sort-value="${g.margenPct ?? ''}">${viajeMargenHtml(g.margenPct, g.margenEur)}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>`;
+}
+// Ventana con los viajes de una ruta (y transportista), uno por línea
+function viajesDetalleAbrir(key, conTransportista){
+  const [tid, origen, destino] = key.split('|');   // la clave siempre lleva el transportista
+  const lista = viajesRealizados().filter(v => v.transportistaId === tid && v.origen === origen && v.destino === destino)
+    .sort((a, b) => b.fecha.localeCompare(a.fecha));
+  const c = tid ? contactos.find(x => x.id === tid) : null;
+  const t = viajesResumen(lista);
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:820px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.truck, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">${esc(origen)} → ${esc(destino)}</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">${c ? esc((c.nombreComercial || '').trim() || c.nombre) + ' · ' : ''}${t.n} viaje${t.n === 1 ? '' : 's'}${t.margenPct != null ? ' · margen medio ' + t.margenPct.toLocaleString('es-ES', { maximumFractionDigits: 1 }) + ' %' : ''}</div></div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div style="padding:6px 0 10px;max-height:70vh;overflow:auto;"><table class="tf-table">
+          <thead><tr>${thSort('Fecha', 'date')}${thSort('Orden', 'text')}${thSort('Cliente', 'text')}${thSort('Servicio', 'text')}${thSort('Pagado', 'number', 'style="text-align:right;"')}${thSort('Cobrado', 'number', 'style="text-align:right;"')}${thSort('Margen', 'number', 'style="text-align:right;"')}</tr></thead>
+          <tbody>${lista.map(v => {
+            const cl = v.oc.clienteId ? contactos.find(x => x.id === v.oc.clienteId) : null;
+            const pct = v.margen != null && v.venta > 0 ? v.margen / v.venta * 100 : null;
+            return `<tr>
+              <td style="white-space:nowrap;" data-sort-value="${esc(v.fecha)}">${esc(fmtDateDMY(v.fecha))}</td>
+              <td style="font-family:var(--mono);" data-sort-value="${esc(v.ref)}">${esc(v.ref)}</td>
+              <td data-sort-value="${esc(cl ? cl.nombre : '')}">${esc(cl ? ((cl.nombreComercial || '').trim() || cl.nombre) : '—')}</td>
+              
+              <td data-sort-value="${esc(ocServicioTxt(v.oc))}">${esc(ocServicioTxt(v.oc)) || '—'}</td>
+              <td class="tf-precio" data-sort-value="${v.coste ?? ''}">${v.coste != null ? eur2(v.coste) : '—'}</td>
+              <td class="tf-precio" data-sort-value="${v.venta ?? ''}">${v.venta != null ? eur2(v.venta) : '—'}</td>
+              <td class="tf-precio" data-sort-value="${pct ?? ''}">${viajeMargenHtml(pct, v.margen)}</td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table></div>
+      </div>
+    </div>`;
+}
+// Periodo del listado de viajes de Rutas: todo, este año o los últimos 12 meses
+function colabViajesFiltrados(){
+  const per = window.__colabViajesPeriodo || 'todo', q = (window.__colabViajesSearch || '').trim().toLowerCase();
+  const hoy = today(), anio = hoy.slice(0, 4), hace12 = `${Number(anio) - 1}${hoy.slice(4)}`;
+  return viajesRealizados().filter(v => {
+    if (per === 'anio' && v.fecha.slice(0, 4) !== anio) return false;
+    if (per === '12m' && v.fecha < hace12) return false;
+    if (!q) return true;
+    const c = contactos.find(x => x.id === v.transportistaId);
+    return (c && (c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q))) || (v.origen + ' ' + v.destino).toLowerCase().includes(q);
+  });
+}
+function colabViajesBodyHtml(){ return viajesTablaHtml(viajesAgrupados(colabViajesFiltrados(), true), true); }
+function refreshColabViajesBody(){ const el = document.getElementById('colab-viajes-body'); if (el) el.innerHTML = colabViajesBodyHtml(); }
+function colabViajesCardHtml(){
+  return `
+    <div class="card deca-card" style="--dc-accent:var(--primary);margin-top:16px;">
+      ${decaCardHead('truck', 'Viajes realizados', 'Quién nos ha hecho cada ruta y con qué margen, según las órdenes de carga emitidas')}
+      <div style="padding:12px 18px 6px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+        <div class="deca-search deca-form" style="max-width:340px;">
+          <input placeholder="Buscar por transportista o ruta…" value="${esc(window.__colabViajesSearch || '')}" oninput="window.__colabViajesSearch=this.value; refreshColabViajesBody();" />
+          <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
+        </div>
+        <select onchange="window.__colabViajesPeriodo=this.value; refreshColabViajesBody();" style="width:auto;min-width:190px;" title="Periodo">
+          ${[['todo', 'Todo el histórico'], ['anio', 'Este año'], ['12m', 'Últimos 12 meses']].map(([v, t]) => `<option value="${v}" ${(window.__colabViajesPeriodo || 'todo') === v ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+      </div>
+      <div id="colab-viajes-body">${colabViajesBodyHtml()}</div>
+    </div>`;
+}
 function colabTablaBodyHtml(){
   const list = colaboradoresFilteredRutas();
+  const viajesTodos = viajesRealizados();
   if (!list.length) return `<div style="color:var(--mutedFaint);font-size:12.5px;padding:22px 0;text-align:center;">${window.__colabSearch ? 'Ningún transportista coincide con la búsqueda.' : 'Todavía no hay ninguna cobertura apuntada.'}</div>`;
   return `
     <table class="tf-table">
-      <thead><tr>${thSort('Última edición','date')}${thSort('Transportista','text')}${thSort('Ruta','text')}${thSort('Servicio','text')}${thSort('Vehículo','text')}${thSort('Tarifa base','number','style="text-align:right;"')}${thSort('Indexación','text')}${thSort('Observaciones','text')}<th>Acciones</th></tr></thead>
+      <thead><tr>${thSort('Última edición','date')}${thSort('Transportista','text')}${thSort('Ruta','text')}${thSort('Servicio','text')}${thSort('Vehículo','text')}${thSort('Tarifa base','number','style="text-align:right;"')}${thSort('Viajes hechos','number','style="text-align:right;"')}${thSort('Margen medio','number','style="text-align:right;"')}${thSort('Indexación','text')}${thSort('Observaciones','text')}<th>Acciones</th></tr></thead>
       <tbody>
         ${list.map(r => {
           const c = contactos.find(x => x.id === r.contactoId);
@@ -17481,6 +17643,7 @@ function colabTablaBodyHtml(){
             <td data-sort-value="${esc((r.servicios||[]).join(','))}">${colabServiciosChipsHtml(r)}</td>
             <td data-sort-value="${esc(r.tipoVehiculo)}">${r.tipoVehiculo ? `<span class="colab-chip veh">${esc(r.tipoVehiculo)}</span>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
             <td class="tf-precio" data-sort-value="${r.tarifaBase??''}">${r.tarifaBase!==null&&r.tarifaBase!==undefined ? colabPrecioTxt(r) : '<span style="color:var(--mutedFaint);font-weight:400;">—</span>'}</td>
+            ${(() => { const vv = viajesDeCobertura(r, viajesTodos), s = viajesResumen(vv); return `<td class="tf-precio" data-sort-value="${s.n}" title="${s.n ? 'Último viaje: ' + esc(fmtDateDMY(s.ultimo)) : ''}">${s.n ? s.n + ' <small style="color:var(--muted);">· ' + esc(colabRelativo(s.ultimo)) + '</small>' : '<span style="color:var(--mutedFaint);">—</span>'}</td><td class="tf-precio" data-sort-value="${s.margenPct ?? ''}">${viajeMargenHtml(s.margenPct, null)}</td>`; })()}
             <td data-sort-value="${r.indexacion?'Si':'No'}">${r.indexacion ? '<span class="badge" style="background:#3F8F5F;">Sí</span>' : '<span class="badge" style="background:var(--mutedFaint);">No</span>'}</td>
             <td style="color:var(--muted);" data-sort-value="${esc(r.observaciones)}">${r.observaciones ? esc(truncateText(r.observaciones, 40)) : '—'}</td>
             <td style="white-space:nowrap;">
@@ -17559,6 +17722,7 @@ function tplColaboradoresPage(){
       </div>
       <div id="colab-tabla-body" style="overflow-x:auto;">${colabTablaBodyHtml()}</div>
     </div>
+    ${colabViajesCardHtml()}
     </div>`;
 }
 // ---- Cobertura de un transportista: pantalla completa (antes era una ventana
