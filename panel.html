@@ -572,6 +572,7 @@
   .rm-tabla .rm-sin td{color:var(--mutedFaint);}
   .rm-tabla .rm-act td{font-weight:600;color:var(--text);}
   .rm-tabla .rm-ini td{font-style:normal;font-weight:800;color:var(--primary);background:color-mix(in srgb,var(--primary) 11%,var(--panel));border-bottom:2px solid var(--primary);}
+  .rm-tabla tr.rm-prev td{font-style:italic;color:var(--muted);} .rm-tabla tr.rm-prev small{font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;color:#B26B00;background:color-mix(in srgb,#C98A2E 16%,var(--panel));border-radius:6px;padding:1px 6px;margin-left:4px;font-style:normal;}
   .rm-doc{max-width:1320px;}
   #rm-cliente{flex:0 1 320px;width:auto;min-width:220px;}
   .rm-doc .tf-table.rm-tabla{width:100%;}
@@ -6703,7 +6704,7 @@ function sgaResumenCalcular(d){
     const posterior = d.movs.filter(m => m.fecha > f);
     const cobrosDia = d.cobros.filter(c => c.fecha === f);
     filas.push({
-      f, n, entMod: ent.reduce((s, m) => s + m.cantidad, 0), entBul: ent.reduce((s, m) => s + bm(m), 0),
+      f, n, prev: d.periodo === today().slice(0, 7) && n > Number(today().slice(8, 10)), entMod: ent.reduce((s, m) => s + m.cantidad, 0), entBul: ent.reduce((s, m) => s + bm(m), 0),
       salMod: -sal.reduce((s, m) => s + m.cantidad, 0), salBul: -sal.reduce((s, m) => s + bm(m), 0),
       regMod: reg.reduce((s, m) => s + m.cantidad, 0), regBul: reg.reduce((s, m) => s + bm(m), 0),
       saldoMod: actualMod - posterior.reduce((s, m) => s + m.cantidad, 0), saldoBul: actualBul - posterior.reduce((s, m) => s + bm(m), 0),
@@ -6721,22 +6722,26 @@ function sgaResumenCalcular(d){
   const totOper = sgaR2((d.operativas || []).reduce((s, o) => s + o.importe, 0));
   // Almacenaje de stock: palet por día (suma de cada día) o máximo del mes (el día con más stock), según la base de cada línea de tarifa
   const hoy = today();
-  const ultimo = d.periodo === hoy.slice(0, 7) ? Number(hoy.slice(8, 10)) : (d.periodo < hoy.slice(0, 7) ? dias : 0);
+  const mesActual = d.periodo === hoy.slice(0, 7), hoyDia = Number(hoy.slice(8, 10));
+  // En el mes en curso, por defecto se prevé también el almacenaje de los días que faltan, con el stock de hoy (se cierra el mes antes y no habrá más movimientos)
+  const proyectar = mesActual && window.__rmProy !== false;
+  const ultimo = mesActual ? (proyectar ? dias : hoyDia) : (d.periodo < hoy.slice(0, 7) ? dias : 0);
+  let almPrevisto = 0;
   const stockLineas = [];
   almacenajeProductos.filter(p => !p.archived && p.disparador === 'stock_dia' && almacenajeTarifas.some(t => t.clienteId === d.clienteId && t.tipo === p.id)).forEach(p => {
     const usaB = p.unidad === 'bulto';
     const actualP = ps.filter(x => x.productoId === p.id).reduce((s, x) => s + (usaB ? bultosDe(x) : x.actual), 0);
-    let suma = 0, max = 0, importeDia = 0, dias_n = 0;
+    let suma = 0, max = 0, importeDia = 0, dias_n = 0, diasPrev = 0, impPrev = 0;
     for (let n = 1; n <= ultimo; n++) {
       const f = `${d.periodo}-${String(n).padStart(2, '0')}`;
       if (cfg.activoDesde && f < cfg.activoDesde) continue;
       const qty = actualP - d.movs.filter(m => m.fecha > f && m.productoId === p.id).reduce((s, m) => s + (usaB ? bm(m) : m.cantidad), 0);
       const t = sgaTarifaEn(d.clienteId, p.id, f);
       if (!t) continue;
-      if ((t.base || 'dia') === 'dia') { suma += qty; importeDia += qty * t.precio; dias_n++; filas[n - 1].alm = (filas[n - 1].alm || 0) + qty * t.precio; } else if (qty > max) max = qty;
+      if ((t.base || 'dia') === 'dia') { suma += qty; importeDia += qty * t.precio; dias_n++; filas[n - 1].alm = (filas[n - 1].alm || 0) + qty * t.precio; if (mesActual && n > hoyDia) { diasPrev++; impPrev += qty * t.precio; almPrevisto += qty * t.precio; } } else if (qty > max) max = qty;
     }
     const tMes = sgaTarifaEn(d.clienteId, p.id, `${d.periodo}-${String(dias).padStart(2, '0')}`);
-    if (suma > 0 && importeDia > 0) stockLineas.push({ productoId: p.id, precio: sgaR2(importeDia / suma * 1000) / 1000, cantidad: suma, importe: sgaR2(importeDia), origen: 'stock', detalle: `${suma} ${usaB ? 'bulto' : 'palet'}-día` });
+    if (suma > 0 && importeDia > 0) stockLineas.push({ productoId: p.id, precio: sgaR2(importeDia / suma * 1000) / 1000, cantidad: suma, importe: sgaR2(importeDia), origen: 'stock', detalle: `${suma} ${usaB ? 'bulto' : 'palet'}-día${diasPrev ? ' · ' + diasPrev + ' días previstos' : ''}` });
     if (max > 0 && tMes && (tMes.base || 'dia') === 'mes_max') stockLineas.push({ productoId: p.id, precio: tMes.precio, cantidad: max, importe: sgaR2(max * tMes.precio), origen: 'stock', detalle: `máximo del mes: ${max}` });
   });
   const totStock = sgaR2(stockLineas.reduce((s, l) => s + l.importe, 0));
@@ -6747,7 +6752,7 @@ function sgaResumenCalcular(d){
   const prodM2 = almacenajeProductos.find(p => !p.archived && p.disparador === 'stock_mes' && almacenajeTarifas.some(t => t.clienteId === d.clienteId && t.tipo === p.id));
   const finMes = `${d.periodo}-${String(dias).padStart(2, '0')}`;
   const tM2 = prodM2 ? sgaTarifaEn(d.clienteId, prodM2.id, finMes) : null;
-  return { cfg, usaBultos, filas, inicial, final: { mod: actualMod, bul: actualBul }, conceptos: [...Object.values(conceptos), ...stockLineas], hayReg: filas.some(x => x.regMod), totMov, totServ, totOper, totOperMes: sgaR2(filas.reduce((s, x) => s + (x.oper || 0), 0)), operativas: d.operativas || [], totStock, m2, m2Guardado: !!guardado, prodM2, tM2, finMes };
+  return { cfg, usaBultos, filas, inicial, final: { mod: actualMod, bul: actualBul }, conceptos: [...Object.values(conceptos), ...stockLineas], hayReg: filas.some(x => x.regMod), mesActual, proyectar, almPrevisto: sgaR2(almPrevisto), totMov, totServ, totOper, totOperMes: sgaR2(filas.reduce((s, x) => s + (x.oper || 0), 0)), operativas: d.operativas || [], totStock, m2, m2Guardado: !!guardado, prodM2, tM2, finMes };
 }
 function sgaResumenHtml(d, paraImprimir){
   const r = sgaResumenCalcular(d);
@@ -6817,7 +6822,7 @@ function sgaResumenHtml(d, paraImprimir){
       <tbody>
         <tr class="rm-ini"><td>Stock inicial</td><td></td>${colsB ? '<td></td>' : ''}<td></td>${colsB ? '<td></td>' : ''}${reg ? '<td></td>' : ''}<td class="r">${sgaNumTxt(r.inicial.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.inicial.bul)}</td>` : ''}${hayAlm ? '<td></td>' : ''}${hayCobros ? '<td></td>' : ''}</tr>
         ${filasDia.map(f => { const act = f.entMod || f.salMod || f.regMod || f.mov || f.serv || f.oper; return `
-        <tr class="${act ? 'rm-act' : 'rm-sin'}"><td style="white-space:nowrap;">${fmtDateDMY(f.f).split('/').join('-')}</td>
+        <tr class="${act ? 'rm-act' : 'rm-sin'}${f.prev ? ' rm-prev' : ''}"><td style="white-space:nowrap;">${fmtDateDMY(f.f).split('/').join('-')}${f.prev ? ' <small>previsto</small>' : ''}</td>
           <td class="r">${num(f.entMod)}</td>${colsB ? `<td class="r">${num(f.entBul)}</td>` : ''}
           <td class="r">${num(f.salMod)}</td>${colsB ? `<td class="r">${num(f.salBul)}</td>` : ''}
           ${reg ? `<td class="r">${f.regMod ? (f.regMod > 0 ? '+' : '') + sgaNumTxt(f.regMod) : '·'}</td>` : ''}
@@ -6828,7 +6833,8 @@ function sgaResumenHtml(d, paraImprimir){
       </tbody>
       <tfoot><tr><td>TOTAL</td><td class="r">${sgaNumTxt(tot('entMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('entBul'))}</td>` : ''}<td class="r">${sgaNumTxt(tot('salMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('salBul'))}</td>` : ''}${reg ? `<td class="r">${sgaNumTxt(tot('regMod'))}</td>` : ''}<td class="r">${sgaNumTxt(r.final.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.final.bul)}</td>` : ''}${hayAlm ? `<td class="r">${eur(r.filas.reduce((s, x) => s + (x.alm || 0), 0))}</td>` : ''}${hayCobros ? `<td class="r">${eur(r.totMov + r.totServ + r.totOperMes)}</td>` : ''}</tr></tfoot>
     </table>`;
-  const interruptor = `<label class="rm-solo"><input type="checkbox" ${soloAct ? 'checked' : ''} onchange="window.__rmSoloAct=this.checked; refreshStockBody();" /> Solo días con movimiento</label>`;
+  const interruptorPrev = !paraImprimir && r.mesActual ? `<label class="rm-solo" title="Suma al almacenaje los días que faltan del mes, con el stock que hay hoy"><input type="checkbox" ${r.proyectar ? 'checked' : ''} onchange="window.__rmProy=this.checked; refreshStockBody();" /> Prever almacenaje hasta fin de mes</label>` : '';
+  const interruptor = interruptorPrev + `<label class="rm-solo"><input type="checkbox" ${soloAct ? 'checked' : ''} onchange="window.__rmSoloAct=this.checked; refreshStockBody();" /> Solo días con movimiento</label>`;
   const flat = paraImprimir ? 'border:none;box-shadow:none;' : '';
   const cardCobro = `
       <div class="card deca-card" style="--dc-accent:var(--primary);${paraImprimir ? 'margin-top:14px;' : ''}${flat}">
@@ -6840,7 +6846,8 @@ function sgaResumenHtml(d, paraImprimir){
         ${paraImprimir ? '<h2>Día a día</h2>' : decaCardHead('calendar', 'Día a día', 'Lo que entra, lo que sale y lo que se cobra', interruptor)}
         <div class="${paraImprimir ? '' : 'deca-card-body'}"><div>${tabla}</div></div>
       </div>`;
-  const nota = !paraImprimir && r.totStock ? `<div style="font-size:12px;color:var(--mutedFaint);margin-top:10px;">El almacenaje del stock (palet por día o máximo del mes) se calcula aquí con la tarifa vigente de cada día; no queda guardado como cobro.</div>` : '';
+  const notaPrev = r.almPrevisto ? `<div style="font-size:12px;color:var(--muted);background:color-mix(in srgb,#C98A2E 12%,var(--panel));border-radius:8px;padding:8px 12px;margin-top:10px;">El almacenaje incluye <b>${eur(r.almPrevisto)}</b> previstos de los días que faltan del mes, con el stock de hoy (${sgaNumTxt(r.final.mod)}). Si hay movimientos, cambiará.</div>` : '';
+  const nota = notaPrev + (!paraImprimir && r.totStock ? `<div style="font-size:12px;color:var(--mutedFaint);margin-top:10px;">El almacenaje del stock (palet por día o máximo del mes) se calcula aquí con la tarifa vigente de cada día; no queda guardado como cobro.</div>` : '');
   return `
     <div class="rm-doc">
       ${paraImprimir ? `<div class="rm-cab"><h1>Resumen mensual · ${esc(sgaPeriodoTxt(d.periodo))}</h1><div>${esc(nombre)}</div></div>` : ''}
@@ -6883,6 +6890,7 @@ function sgaResumenImprimir(){
     th,td{padding:3px 4px;border-bottom:1px solid #BBB;white-space:nowrap;}
     th{border-bottom:1.5px solid #000;text-align:left;font-size:9px;}
     .r{text-align:right;} .rm-sin td{color:#777;} .rm-act td{font-weight:700;} .rm-ini td{font-weight:700;background:#E6E6E6;border-bottom:1.5px solid #000;}
+    .rm-prev td{font-style:italic;color:#555;} .rm-prev small{font-size:8px;text-transform:uppercase;}
     .rm-grp td{background:#EEE;font-weight:700;font-size:9px;text-transform:uppercase;}
     tfoot td{border-top:1.5px solid #000;border-bottom:none;font-weight:700;background:#E6E6E6;}
     .op-total-row{display:flex;justify-content:space-between;align-items:baseline;padding:8px 10px;margin-top:12px;} .op-total-row span{font-size:11px;font-weight:700;text-transform:uppercase;} .op-total-row b{font-size:17px;}
