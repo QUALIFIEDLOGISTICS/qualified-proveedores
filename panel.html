@@ -2807,7 +2807,7 @@ function computeBreadcrumbSegments(){
     }
     return [{label: comercialSection() === 'tarifas' ? 'Tarifas Transporte' : 'Clientes', onclick:null}];
   }
-  if (currentTab === 'stock' && window.__stockView === 'entrada') return [{label:'Control Stock SGA', onclick:'sgaEntradaCancelar()'}, {label: window.__seEdit ? 'Editar entrada' : 'Nueva entrada', onclick:null}];
+  if (currentTab === 'stock' && window.__stockView === 'entrada') return [{label:'Control Stock SGA', onclick:'sgaEntradaCancelar()'}, {label: window.__seEdit ? 'Editar recepción' : window.__seInicial ? 'Stock inicial' : 'Nueva recepción', onclick:null}];
   if (currentTab === 'stock' && (window.__stockView === 'articulo' || window.__stockView === 'rapida')) {
     const pg = window.__stockView === 'articulo' ? window.__sgaArtForm : window.__sgaArtRapida;
     const cl = pg ? contactos.find(x => x.id === pg.clienteId) : null;
@@ -5435,7 +5435,7 @@ function tplStock(){
     </div>`;
 }
 function stockVolver(){
-  window.__seEdit = null; window.__slNavIds = null; window.__seNavIds = null;
+  window.__seEdit = null; window.__seInicial = false; window.__slNavIds = null; window.__seNavIds = null;
   if (window.__slEdit) { window.__slEdit = null; loadSgaStock().then(() => { if (currentTab === 'stock') renderTab(); }); }
   window.__catEditAll = false;
   window.__stockView = 'home';
@@ -5889,11 +5889,13 @@ function sgaEntradaRefrescar(){
   const el = document.getElementById('se-resumen');
   if (el) el.innerHTML = sgaEntradaResumenHtml(sgaEntradaLeer());
 }
-function sgaEntradaAbrir(){
+function sgaEntradaAbrir(inicial, clienteId){
+  window.__seInicial = inicial === true;   // «stock inicial»: mercancía que ya está en el almacén (cliente que venía de Excel), sin cobros de recepción
   window.__stockView = 'entrada';
   window.__stockDirty = false;
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
+  if (clienteId) { const s = document.getElementById('se-cliente'); if (s) { s.value = clienteId; sgaEntradaClienteCambio(); } }
 }
 /* ---- Editar una recepción ya confirmada ----
    Se abre el mismo formulario de la recepción con todo rellenado (una línea por cada partida). Al guardar, sga_editar_entrada actualiza
@@ -6032,6 +6034,7 @@ async function albHistorialCargar(id){
   if (el && el.dataset.id === id) el.innerHTML = albHistorialCuerpoHtml(id, lista);
 }
 function tplStockEntradaPage(){
+  const ini = !!window.__seInicial && !window.__seEdit;   // stock inicial: lo que ya hay en el almacén de un cliente que llevabas en Excel
   const clientes = sgaClientesAlmacenLista();
   const wh = currentWh() || {};
   const hayZonas = sgaZonasActivas().length > 0;
@@ -6041,8 +6044,8 @@ function tplStockEntradaPage(){
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
-        <div class="deca-banner-title">${window.__seEdit ? 'Editar recepción ' + esc(sgaNumAlbaran(window.__seEdit.albaran)) : 'Nueva recepción'}</div>
-        <div class="deca-banner-sub">${window.__seEdit ? 'Cambia lo que necesites: al guardar se recalculan el stock y lo que se cobra. De una línea de la que ya ha salido mercancía no se pueden quitar palets de más.' : 'La mercancía que llega a un cliente; eliges en cuál de sus almacenes se queda.'}</div>
+        <div class="deca-banner-title">${window.__seEdit ? 'Editar recepción ' + esc(sgaNumAlbaran(window.__seEdit.albaran)) : ini ? 'Stock inicial' : 'Nueva recepción'}</div>
+        <div class="deca-banner-sub">${window.__seEdit ? 'Cambia lo que necesites: al guardar se recalculan el stock y lo que se cobra. De una línea de la que ya ha salido mercancía no se pueden quitar palets de más.' : ini ? 'La mercancía que un cliente ya tiene en el almacén y que hasta ahora llevabas en Excel. No genera cobro de recepción: el almacenaje se cobra desde la fecha de recepción original de cada línea.' : 'La mercancía que llega a un cliente; eliges en cuál de sus almacenes se queda.'}</div>
       </div>
       ${window.__seEdit && (window.__seNavIds || []).length > 1 && (window.__seNavIds || []).includes(window.__seEdit.id) ? (() => {
         const ids = window.__seNavIds, idx = ids.indexOf(window.__seEdit.id);
@@ -6058,8 +6061,8 @@ function tplStockEntradaPage(){
             <div class="field" style="flex:2;min-width:240px;"><label>Cliente <span class="dc-req">*</span></label>
               <select id="se-cliente" onchange="sgaEntradaClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos en el SGA'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
             <div class="field" style="flex:1;min-width:190px;"><label>Almacén <span class="dc-req">*</span></label><select id="se-almacen" onchange="sgaEntradaAlmacenCambio()">${sgaAlmacenOptionsHtml('', '')}</select></div>
-            <div class="field" style="flex:1;min-width:150px;"><label>Fecha de recepción <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="se-fecha" type="date" value="${today()}" />`)}</div>
-            <div class="field" style="flex:1;min-width:180px;"><label>Referencia / nº de albarán <span class="dc-req">*</span></label>${decaInputIcon('file', `<input id="se-ref" maxlength="20" placeholder="Obligatorio (máx. 20 caracteres)" />`)}</div>
+            <div class="field" style="flex:1;min-width:150px;"><label>${ini ? 'Fecha de recepción original' : 'Fecha de recepción'} <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="se-fecha" type="date" value="${today()}" />`)}</div>
+            <div class="field" style="flex:1;min-width:180px;"><label>Referencia / nº de albarán <span class="dc-req">*</span></label>${decaInputIcon('file', `<input id="se-ref" maxlength="20" placeholder="Obligatorio (máx. 20 caracteres)" ${ini ? 'value="STOCK INICIAL"' : ''} />`)}</div>
           </div>
           <input type="hidden" id="se-modalidad" value="${mod}" />
           <div id="se-mod-wrap" style="display:none;">
@@ -6087,11 +6090,11 @@ function tplStockEntradaPage(){
           </div>
         </div>
       </div>
-      <div class="card deca-card">
+      <div class="card deca-card"${ini ? ' style="display:none"' : ''}>
         ${decaCardHead('clock', 'Servicios', 'Horas y extras de esta recepción (opcional)', `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="sgaServicioAdd()">+ Servicio</button>`)}
         <div class="deca-card-body"><div id="se-servicios"></div></div>
       </div>
-      <div class="card deca-card">
+      <div class="card deca-card"${ini ? ' style="display:none"' : ''}>
         ${decaCardHead('tag', 'Lo que se cobrará', 'Calculado con la tarifa del cliente a la fecha de la recepción')}
         <div class="deca-card-body"><div id="se-resumen">${sgaEntradaResumenHtml({ clienteId: '' })}</div></div>
       </div>
@@ -6100,7 +6103,7 @@ function tplStockEntradaPage(){
       <div id="se-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
       <div class="deca-actions-row">
         <button class="btn btn-ghost deca-cancel" onclick="sgaEntradaCancelar()">Cancelar</button>
-        <button class="btn btn-primary deca-submit se-save" onclick="sgaEntradaConfirmar()">${window.__seEdit ? 'Guardar cambios' : 'Confirmar recepción'}</button>
+        <button class="btn btn-primary deca-submit se-save" onclick="sgaEntradaConfirmar()">${window.__seEdit ? 'Guardar cambios' : ini ? 'Confirmar stock inicial' : 'Confirmar recepción'}</button>
       </div>
     </div>
     ${albLayoutCierra(window.__seEdit && window.__seEdit.id)}
@@ -6175,9 +6178,10 @@ async function sgaEntradaConfirmar(){
   const calc = sgaCalcularEntrada({ clienteId: d.clienteId, fecha: d.fecha, modalidad: d.modalidad, partidas: partidas.map(p => ({ productoId: p.producto_id, cantidad: p.cantidad, bultos: p.bultos != null ? p.bultos : p.cantidad })), servicios: servicios.map(s => ({ productoId: s.producto_id, cantidad: s.cantidad })) });
   const btn = document.querySelector('.se-save');
   if (btn) btn.disabled = true;
+  const inicial = !!window.__seInicial && !window.__seEdit;   // stock inicial: se guarda como «apertura», sin servicios ni cobros
   const payload = {
-    albaran: { created_by: currentUserEmail(), tipo: 'entrada', cliente_id: d.clienteId, warehouse_id: sgaEntradaWh(), fecha: d.fecha, referencia: d.referencia, modalidad: d.modalidad, transportista: d.transportista, matricula: d.matricula, observaciones: d.observaciones },
-    partidas, servicios, cobros: calc.activo ? calc.cobros : [],
+    albaran: { created_by: currentUserEmail(), tipo: inicial ? 'apertura' : 'entrada', cliente_id: d.clienteId, warehouse_id: sgaEntradaWh(), fecha: d.fecha, referencia: d.referencia, modalidad: d.modalidad, transportista: d.transportista, matricula: d.matricula, observaciones: d.observaciones },
+    partidas, servicios: inicial ? [] : servicios, cobros: !inicial && calc.activo ? calc.cobros : [],
   };
   const editE = window.__seEdit;
   const { data, error } = editE
@@ -6202,6 +6206,14 @@ async function sgaEntradaConfirmar(){
       await logAlbaranHistorial(editE.id, 'Editada' + (cambios ? ': ' + cambios : ' (guardada sin cambios en los datos)') + '. Stock y cobros recalculados.');
     }
     appToast(`Entrada ${sgaNumAlbaran(editE.albaran)} actualizada: stock y cobros recalculados.`, 'ok');
+    window.__stockSeg = 'entradas';
+    stockVolver();
+    return;
+  }
+  if (inicial) {
+    await logContactoHistorial(d.clienteId, `SGA · ha cargado el stock inicial: ${total} palet${total !== 1 ? 's' : ''}, con fecha de recepción ${fmtDateDMY(d.fecha)}.`);
+    await logAlbaranHistorial(data, `Stock inicial registrado: ${total} palet${total !== 1 ? 's' : ''} con fecha ${fmtDateDMY(d.fecha)}`);
+    appToast(`Stock inicial registrado: ${total} palet${total !== 1 ? 's' : ''}.`, 'ok');
     window.__stockSeg = 'entradas';
     stockVolver();
     return;
@@ -6594,7 +6606,7 @@ function tplStockSalidaPage(){
         <div class="deca-card-body">
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
             <div class="field" style="flex:2;min-width:240px;"><label>Cliente <span class="dc-req">*</span></label>
-              <select id="sl-cliente" onchange="sgaSalidaClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos con stock'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
+              <select id="sl-cliente" onchange="sgaSalidaClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos en el SGA'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
             <div class="field" style="flex:1;min-width:190px;"><label>Almacén de expedición <span class="dc-req">*</span></label><select id="sl-almacen" onchange="sgaSalidaAlmacenCambio()"><option value="">Elige primero el cliente</option></select></div>
             <div class="field" style="flex:1;min-width:150px;"><label>Fecha de expedición <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="sl-fecha" type="date" value="${today()}" />`)}</div>
             <div class="field" style="flex:1;min-width:190px;"><label>Nº de albarán <small style="color:var(--mutedFaint);font-weight:400;">· lo asigna el programa</small></label>${decaInputIcon('file', `<input id="sl-num" readonly placeholder="Elige el cliente" style="font-family:var(--mono);font-weight:700;" />`)}</div>
@@ -7534,13 +7546,14 @@ async function sgaRegulCancelar(){
   if (window.__stockDirty && !(await appConfirm({ title: 'Descartar la regularización', message: 'Has empezado a rellenar esta regularización. Si sales, se pierde lo escrito.', confirmLabel: 'Descartar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
   stockVolver();
 }
+function sgaRegulAInicial(){ const c = sgaRegulCliente(); window.__stockDirty = false; sgaEntradaAbrir(true, c); }
 function sgaRegulWh(){ const el = document.getElementById('rg-almacen'); return el && el.value ? el.value : ''; }
 function sgaRegulCliente(){ const el = document.getElementById('rg-cliente'); return el ? el.value : ''; }
 function sgaRegulClienteCambio(){
   const clienteId = sgaRegulCliente();
   const alm = document.getElementById('rg-almacen');
   const ids = [...new Set(sgaStockCliente(clienteId).map(p => p.warehouseId))];
-  const whs = allWarehouses.filter(w => ids.includes(w.id));
+  const whs = ids.length ? allWarehouses.filter(w => ids.includes(w.id)) : (clienteId ? sgaAlmacenesCliente(clienteId) : []);   // sin stock: sus almacenes asignados
   alm.innerHTML = clienteId ? `${whs.length === 1 ? '' : '<option value="">Elige el almacén…</option>'}${whs.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}` : '<option value="">Elige primero el cliente</option>';
   if (whs.length === 1) alm.value = whs[0].id;
   sgaRegulAlmacenCambio();
@@ -7550,6 +7563,11 @@ function sgaRegulAlmacenCambio(){
   const cont = document.getElementById('rg-stock');
   if (!clienteId || !wid) { cont.innerHTML = `<div style="color:var(--mutedFaint);font-size:12.5px;">${!clienteId ? 'Elige primero el cliente.' : 'Elige el almacén.'}</div>`; sgaRegulRefrescar(); return; }
   const ps = sgaStockCliente(clienteId, wid);
+  if (!ps.length) {
+    cont.innerHTML = `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);"><span>Este cliente no tiene stock en el SGA en este almacén. Si lo llevabas en Excel, carga lo que tiene como <b>stock inicial</b>.</span><button type="button" class="btn btn-primary" onclick="sgaRegulAInicial()">Cargar stock inicial</button></div>`;
+    sgaRegulRefrescar();
+    return;
+  }
   cont.innerHTML = `
     <div class="tc-hist-box" style="max-height:460px;"><table class="tf-table" style="min-width:620px;">
       <thead><tr>${thSort('Recepción','date')}<th>Artículo</th>${thSort('Tipo de carga','text')}${thSort('Referencia','text')}<th>Sitio</th><th style="text-align:right;">En el SGA</th><th style="text-align:right;">Hay de verdad</th><th style="text-align:right;">Diferencia</th></tr></thead>
@@ -7592,7 +7610,7 @@ function sgaRegulRefrescar(){
   if (t) t.innerHTML = cambian ? `Se regularizan <b>${cambian}</b> partida${cambian !== 1 ? 's' : ''}.` : 'Todavía no has cambiado ninguna cantidad.';
 }
 function tplStockRegulPage(){
-  const clientes = sgaClientesAlmacenLista().filter(c => sgaStockCliente(c.id).length);
+  const clientes = sgaClientesAlmacenLista();
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
@@ -7601,13 +7619,14 @@ function tplStockRegulPage(){
         <div class="deca-banner-title">Regularizar stock</div>
         <div class="deca-banner-sub">Cuando lo que hay en el almacén no coincide con el SGA: escribe lo que hay de verdad y queda anotado con su motivo.</div>
       </div>
+      <div class="deca-banner-actions"><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="sgaRegulAInicial()" title="Para un cliente que llevabas en Excel: da de alta la mercancía que ya tiene en el almacén">Cargar stock inicial</button></div>
     </div>
     <div class="deca-form" oninput="window.__stockDirty=true; sgaRegulRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
       <div class="card deca-card">
         ${decaCardHead('file', 'Datos de la regularización', 'De qué cliente, en qué almacén y por qué')}
         <div class="deca-card-body">
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <div class="field" style="flex:2;min-width:240px;"><label>Cliente <span class="dc-req">*</span></label><select id="rg-cliente" onchange="sgaRegulClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos con stock'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
+            <div class="field" style="flex:2;min-width:240px;"><label>Cliente <span class="dc-req">*</span></label><select id="rg-cliente" onchange="sgaRegulClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos en el SGA'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
             <div class="field" style="flex:1;min-width:190px;"><label>Almacén <span class="dc-req">*</span></label><select id="rg-almacen" onchange="sgaRegulAlmacenCambio()"><option value="">Elige primero el cliente</option></select></div>
             <div class="field" style="flex:1;min-width:150px;"><label>Fecha <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="rg-fecha" type="date" value="${today()}" />`)}</div>
           </div>
