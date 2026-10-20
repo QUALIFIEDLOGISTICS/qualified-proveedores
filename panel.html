@@ -5389,6 +5389,7 @@ function sgaCalcularEntrada(d){
   if (!porAlbaran) {
     const grupos = {};
     d.partidas.forEach(p => {
+      if (!p.productoId) return;   // sin tipo de carga (clientes que cobran por m²): no hay tarifa de movimiento por palet
       const ps = almacenajeProducto(p.productoId);
       const fam = ps && ps.familia;
       const pe = fam ? almacenajeProductos.find(x => !x.archived && x.disparador === (salida ? 'salida' : 'entrada') && x.familia === fam) : null;
@@ -5441,6 +5442,8 @@ function sgaProductosStock(){ return almacenajeProductos.filter(p => !p.archived
 function sgaProductosCliente(clienteId, incluir){
   return sgaProductosStock().filter(p => p.id === incluir || (clienteId && almacenajeTarifas.some(t => t.clienteId === clienteId && t.tipo === p.id)));
 }
+// Los clientes que cobran por m² no tienen tipos de carga en su tarifa de palet: para ellos la recepción va sin tipo.
+function sgaEntradaConTipo(clienteId){ return sgaProductosCliente(clienteId, '').length > 0 || !!(window.__seEdit && window.__seEdit.partidas.some(p => p.productoId)); }
 function sgaEntradaClienteId(){ const el = document.getElementById('se-cliente'); return el ? el.value : ''; }
 // Solo los tipos de carga que este cliente tiene en su tarifa (un tipo sin tarifa no se podría cobrar).
 function sgaProdOptionsHtml(clienteId, sel){
@@ -5489,7 +5492,7 @@ function sgaEntradaFilaHtml(i, cfg, pre){
     <tr class="se-row" data-i="${i}"${pre.pid ? ` data-pid="${pre.pid}" data-cons="${pre.cons || 0}"` : ''}>
       <td style="padding:5px 4px;color:var(--mutedFaint);font-size:12px;text-align:right;width:26px;">${i + 1}</td>
       ${conArt ? cell(`<select id="se-${i}-art" onchange="sgaEntradaArticuloCambio(${i})">${sgaArticuloOptionsHtml(clienteId, pre.art || '')}</select>`, 230) : ''}
-      ${cell(`<select id="se-${i}-prod">${sgaProdOptionsHtml(clienteId, pre.prod || '')}</select>`, 190)}
+      ${sgaEntradaConTipo(clienteId) ? cell(`<select id="se-${i}-prod">${sgaProdOptionsHtml(clienteId, pre.prod || '')}</select>`, 190) : ''}
       ${cfg.codigosUnicos
         ? cell(`<input id="se-${i}-codigo" maxlength="60" placeholder="Código del palet" value="${esc(pre.codigo || '')}" />`, 150)
         : cell(`<input id="se-${i}-cant" inputmode="numeric" maxlength="6" placeholder="Nº de palets" oninput="sgaEntradaBultosAuto(${i})" value="${esc(pre.cant || '')}" />`, 90)}
@@ -5507,7 +5510,7 @@ function sgaEntradaArticuloCambio(i){
   const art = sgaArticulos.find(a => a.id === valor);
   if (art) {
     const prod = document.getElementById(`se-${i}-prod`);
-    if (art.productoId && [...prod.options].some(o => o.value === art.productoId)) prod.value = art.productoId;
+    if (prod && art.productoId && [...prod.options].some(o => o.value === art.productoId)) prod.value = art.productoId;
     const zona = document.getElementById(`se-${i}-zona`);
     if (art.zonaId && [...zona.options].some(o => o.value === art.zonaId)) { zona.value = art.zonaId; sgaEntradaZonaCambio(i); }
     const b = document.getElementById(`se-${i}-bultos`);
@@ -5538,7 +5541,7 @@ function sgaEntradaLineasHtml(cfg, pre){
       <thead><tr>
         <th style="padding:6px 4px;text-align:right;">#</th>
         ${conArt ? '<th style="padding:6px 4px;">Artículo</th>' : ''}
-        <th style="padding:6px 4px;">Tipo de carga</th>
+        ${sgaEntradaConTipo(sgaEntradaClienteId()) ? '<th style="padding:6px 4px;">Tipo de carga</th>' : ''}
         <th style="padding:6px 4px;">${cfg.codigosUnicos ? 'Código' : 'Palets'}</th>
         ${conArt && sgaClienteConBultos(sgaEntradaClienteId()) ? '<th style="padding:6px 4px;">Bultos</th>' : ''}
         <th style="padding:6px 4px;">Zona</th>
@@ -5557,7 +5560,7 @@ function sgaEntradaAddFila(pre){
   const last = rows[rows.length - 1];
   if (!pre && last) {
     const j = last.dataset.i;
-    pre = { prod: document.getElementById(`se-${j}-prod`).value, zona: document.getElementById(`se-${j}-zona`).value };
+    pre = { prod: (document.getElementById(`se-${j}-prod`) || {}).value || '', zona: document.getElementById(`se-${j}-zona`).value };
   }
   const i = window.__stockN++;
   document.getElementById('se-rows').insertAdjacentHTML('beforeend', sgaEntradaFilaHtml(i, cfg, pre));
@@ -5718,7 +5721,7 @@ function sgaEntradaPegarCodigos(){
   const rows = [...document.querySelectorAll('.se-row')];
   const last = rows[rows.length - 1];
   const j = last ? last.dataset.i : null;
-  const pre = j !== null ? { prod: document.getElementById(`se-${j}-prod`).value, zona: document.getElementById(`se-${j}-zona`).value } : {};
+  const pre = j !== null ? { prod: (document.getElementById(`se-${j}-prod`) || {}).value || '', zona: document.getElementById(`se-${j}-zona`).value } : {};
   // La primera línea vacía se aprovecha para el primer código.
   codigos.forEach((c, k) => {
     const vacia = k === 0 && rows.length === 1 && !document.getElementById(`se-${j}-codigo`).value;
@@ -5776,7 +5779,7 @@ function sgaEntradaParaCalculo(d){
   const cfg = sgaClienteCfg(d.clienteId);
   return {
     clienteId: d.clienteId, fecha: d.fecha, modalidad: d.modalidad,
-    partidas: d.lineas.filter(l => l.productoId).map(l => { const cant = cfg.codigosUnicos ? 1 : (parseInt(l.cantidadTxt, 10) || 0); const b = sgaNumero(l.bultosTxt); return { productoId: l.productoId, cantidad: cant, bultos: isFinite(b) && b > 0 ? b : cant }; }).filter(p => p.cantidad > 0),
+    partidas: d.lineas.map(l => { const cant = cfg.codigosUnicos ? 1 : (parseInt(l.cantidadTxt, 10) || 0); const b = sgaNumero(l.bultosTxt); return { productoId: l.productoId, cantidad: cant, bultos: isFinite(b) && b > 0 ? b : cant }; }).filter(p => p.cantidad > 0),
     servicios: d.servicios.filter(s => s.productoId && sgaNumero(s.cantidadTxt) > 0).map(s => ({ productoId: s.productoId, cantidad: sgaNumero(s.cantidadTxt) })),
   };
 }
@@ -6036,7 +6039,7 @@ async function sgaEntradaConfirmar(){
     const vacia = !l.productoId && !l.articuloId && !l.codigo && !l.cantidadTxt && sgaCamposEntrada().every(c => !l[c.id]);
     if (vacia && d.lineas.length > 1) return;
     if (conArt && !l.articuloId) { errores.push(`${f}: elige el artículo.`); return; }
-    if (!l.productoId) { errores.push(`${f}: elige el tipo de carga.`); return; }
+    if (!l.productoId && sgaEntradaConTipo(d.clienteId)) { errores.push(`${f}: elige el tipo de carga.`); return; }
     let cantidad = 1;
     if (cfg.codigosUnicos) {
       if (!l.codigo) { errores.push(`${f}: escribe el código del palet.`); return; }
@@ -6068,7 +6071,7 @@ async function sgaEntradaConfirmar(){
     const art = sgaArticulos.find(x => x.id === l.articuloId);
     const bTxt = sgaNumero(l.bultosTxt);
     const bultos = isFinite(bTxt) && bTxt > 0 ? bTxt : (art && sgaClienteConBultos(d.clienteId) ? Math.round(cantidad * art.bultos * 100) / 100 : null);
-    partidas.push({ id: l.pid || '', producto_id: l.productoId, zona_id: l.zonaId || '', ubicacion_id: l.ubicacionId || '', referencia: art ? art.referencia : (l.referencia || ''), descripcion: art ? art.nombre : (l.descripcion || ''), lote: l.lote || '', codigo: cfg.codigosUnicos ? l.codigo : '', cantidad, atributos, articulo_id: art ? art.id : '', bultos });
+    partidas.push({ id: l.pid || '', producto_id: l.productoId || null, zona_id: l.zonaId || '', ubicacion_id: l.ubicacionId || '', referencia: art ? art.referencia : (l.referencia || ''), descripcion: art ? art.nombre : (l.descripcion || ''), lote: l.lote || '', codigo: cfg.codigosUnicos ? l.codigo : '', cantidad, atributos, articulo_id: art ? art.id : '', bultos });
   });
   const servicios = [];
   d.servicios.forEach((s, n) => {
@@ -6143,7 +6146,7 @@ function sgaSalidaAbrir(){
    nueva de golpe: stock, movimientos, servicios y cobros se recalculan. El albarán conserva su número. */
 function sgaPartidaDeFila(r){
   return {
-    id: r.id, clienteId: r.cliente_id, warehouseId: r.warehouse_id, zonaId: r.zona_id, ubicacionId: r.ubicacion_id, productoId: r.producto_id,
+    id: r.id, clienteId: r.cliente_id, warehouseId: r.warehouse_id, zonaId: r.zona_id, ubicacionId: r.ubicacion_id, productoId: r.producto_id || '',
     referencia: r.referencia || '', descripcion: r.descripcion || '', lote: r.lote || '', codigo: r.codigo || '',
     inicial: Number(r.cantidad_inicial), actual: Number(r.cantidad_actual), fechaEntrada: r.fecha_entrada, albaranId: r.albaran_entrada_id,
     atributos: r.atributos || {}, createdAt: r.created_at, articuloId: r.articulo_id || '', bultos: r.bultos == null ? null : Number(r.bultos),
