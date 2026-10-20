@@ -486,6 +486,10 @@
   .af-compact>.af-cp{grid-column:1 / -1;margin-top:0;}
   @media (max-width:760px){.af-compact{grid-template-columns:1fr;}.af-c-act{justify-content:space-between;}}
   .cg-tabla td{padding:4px 6px;vertical-align:middle;}
+  .cat-hist{display:inline-flex;gap:4px;}
+  .cat-hist button{width:36px;height:36px;border-radius:9px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:20px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0 0 2px;}
+  .cat-hist button:hover:not(:disabled){border-color:var(--primary);color:var(--primary);}
+  .cat-hist button:disabled{opacity:.4;cursor:default;}
   .cg-tabla td.cg-trunc{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .qtip{position:fixed;z-index:99999;max-width:420px;padding:9px 12px;border-radius:9px;background:#1f2937;color:#fff;font-size:13px;line-height:1.45;box-shadow:0 8px 24px rgba(0,0,0,.28);pointer-events:none;white-space:pre-wrap;word-break:break-word;}
   /* Vista normal del catálogo: la tarjeta se ajusta a la tabla (no se estira por toda la pantalla) y las columnas quedan juntas */
@@ -4358,7 +4362,7 @@ function catEditarTodo(){
   window.__catFiltro = 'todos'; window.__stockSearch = '';
   window.__catEditAll = true;
   window.__catLocked = true;      // se abre bloqueada: hay que pulsar «Editar» para cambiar algo
-  window.__catDirty = {};
+  window.__catDirty = {}; window.__catHist = null;
   window.__stockView = 'catedit';
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
@@ -4366,7 +4370,7 @@ function catEditarTodo(){
 // «Editar» desbloquea las casillas; los cambios quedan marcados y solo se escriben al pulsar «Guardar».
 function catActivarEdicion(){
   window.__catLocked = false;
-  window.__catDirty = {};
+  window.__catDirty = {}; window.__catHist = null;
   renderTab();
 }
 function catMarcarCambio(el){
@@ -4376,6 +4380,65 @@ function catMarcarCambio(el){
   el.classList.add('cg-mod'); el.classList.remove('cg-err');
   catActualizarContador();
 }
+/* Deshacer / rehacer de «Editar catálogo» (flechas de la barra, Ctrl+Z y Ctrl+Y): cada cambio de una casilla es un paso */
+const catPrev = new WeakMap();
+function catHist(){ return (window.__catHist = window.__catHist || { u: [], r: [] }); }
+function catOrig(el){ return el.tagName === 'SELECT' ? (([...el.options].find(o => o.defaultSelected) || {}).value || '') : el.defaultValue; }
+function catHistRefrescar(){
+  const h = catHist();
+  const u = document.getElementById('cat-undo'), r = document.getElementById('cat-redo');
+  if (u) u.disabled = !h.u.length;
+  if (r) r.disabled = !h.r.length;
+}
+function catHistAplicar(dir){
+  if (!window.__catEditAll || window.__catLocked) return;
+  const h = catHist();
+  const desde = dir < 0 ? h.u : h.r, hacia = dir < 0 ? h.r : h.u;
+  let it = null;
+  while (desde.length) { const x = desde.pop(); if (x.el.isConnected) { it = x; break; } }   // las filas nuevas quitadas ya no se pueden deshacer
+  if (!it) { catHistRefrescar(); return; }
+  const el = it.el, v = dir < 0 ? it.antes : it.despues;
+  el.value = v;
+  catPrev.set(el, v);
+  if (el.dataset.id) {   // casilla de un artículo existente: vuelve a estar «sin cambios» si recupera su valor original
+    if (v === catOrig(el)) {
+      delete (window.__catDirty || {})[el.dataset.id + '|' + (el.dataset.f || 'x:' + el.dataset.x)];
+      el.classList.remove('cg-mod', 'cg-err');
+    } else catMarcarCambio(el);
+  }
+  hacia.push(it);
+  catActualizarContador();
+  catHistRefrescar();
+  el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  el.focus();
+  if (el.select && el.tagName === 'INPUT') el.select();
+}
+(function(){
+  const enCatalogo = el => !!(el && el.closest && el.closest('#stock-body') && el.matches('input.cg-in, select.cg-in, .cg-nuevo input, .cg-nuevo select, [data-n]'));
+  document.addEventListener('focusin', e => { if (enCatalogo(e.target)) catPrev.set(e.target, e.target.value); });
+  document.addEventListener('change', e => {
+    const el = e.target;
+    if (!window.__catEditAll || window.__catLocked || !enCatalogo(el)) return;
+    const antes = catPrev.has(el) ? catPrev.get(el) : el.defaultValue;
+    catPrev.set(el, el.value);
+    if (antes === el.value) return;
+    const h = catHist();
+    h.u.push({ el, antes, despues: el.value });
+    if (h.u.length > 300) h.u.shift();
+    h.r = [];
+    catHistRefrescar();
+  }, true);
+  document.addEventListener('keydown', e => {
+    if (!window.__catEditAll || window.__catLocked || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const k = e.key.toLowerCase();
+    const deshacer = k === 'z' && !e.shiftKey, rehacer = k === 'y' || (k === 'z' && e.shiftKey);
+    if (!deshacer && !rehacer) return;
+    const a = document.activeElement;
+    if (a && enCatalogo(a) && a.tagName === 'INPUT' && catPrev.has(a) && catPrev.get(a) !== a.value) return;   // escribiendo en una casilla: se deja el deshacer normal del texto
+    e.preventDefault();
+    catHistAplicar(deshacer ? -1 : 1);
+  });
+})();
 function catNumCambios(){ return Object.keys(window.__catDirty || {}).length + document.querySelectorAll('#stock-body tr.cg-new').length; }
 async function catGuardarTodo(){
   const act = document.activeElement;
@@ -4401,19 +4464,19 @@ async function catGuardarTodo(){
   } finally { window.__catLote = false; }
   if (fallos) { appToast(`${fallos} cambio${fallos === 1 ? '' : 's'} no se ha podido guardar: revisa las casillas en rojo.`, 'error'); return; }
   appToast(`Catálogo guardado: ${ok} cambio${ok === 1 ? '' : 's'}.`, 'ok');
-  window.__catDirty = {};
+  window.__catDirty = {}; window.__catHist = null;
   window.__catLocked = true;
   renderTab();
 }
 async function catCancelarEdicion(){
   if (catNumCambios() && !(await appConfirm({ title: 'Descartar cambios', message: `Tienes ${catNumCambios()} cambio${catNumCambios() === 1 ? '' : 's'} sin guardar. ¿Quieres descartarlos?`, confirmLabel: 'Descartar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
-  window.__catDirty = {};
+  window.__catDirty = {}; window.__catHist = null;
   window.__catLocked = true;
   renderTab();
 }
 async function catEditarSalir(){
   if (catNumCambios() && !(await appConfirm({ title: 'Cambios sin guardar', message: `Tienes ${catNumCambios()} cambio${catNumCambios() === 1 ? '' : 's'} sin guardar. Si sales ahora se pierden.`, confirmLabel: 'Salir sin guardar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
-  window.__catDirty = {};
+  window.__catDirty = {}; window.__catHist = null;
   window.__catLocked = true;
   window.__catEditAll = false;
   window.__stockView = 'home';
@@ -4436,7 +4499,11 @@ function tplCatEditPage(){
         ${bloqueada ? `
           ${sgaPuedeEditarStock() ? `<button class="btn btn-primary" onclick="catActivarEdicion()" title="Desbloquear las casillas para cambiar datos">${homeIcon(HOME_ICON_PATHS.edit, 16, 'currentColor', 2)}<span>Editar</span></button>` : ''}
           ` : `
-          <span id="cat-ncambios" style="font-size:12.5px;color:#fff;opacity:.9;">${catNumCambios() ? catNumCambios() + ' cambios sin guardar' : ''}</span>
+          <span id="cat-ncambios" style="font-size:12.5px;font-weight:600;color:var(--muted);">${catNumCambios() ? catNumCambios() + ' cambios sin guardar' : ''}</span>
+          <span class="cat-hist">
+            <button type="button" id="cat-undo" onclick="catHistAplicar(-1)" ${catHist().u.length ? '' : 'disabled'} title="Deshacer el último cambio (Ctrl+Z)" aria-label="Deshacer">↶</button>
+            <button type="button" id="cat-redo" onclick="catHistAplicar(1)" ${catHist().r.length ? '' : 'disabled'} title="Rehacer (Ctrl+Y)" aria-label="Rehacer">↷</button>
+          </span>
           <button class="btn btn-primary" onclick="catGuardarTodo()" title="Guardar todos los cambios">${homeIcon(HOME_ICON_PATHS.check, 16, 'currentColor', 2)}<span>Guardar</span></button>`}
       </div>
     </div>
