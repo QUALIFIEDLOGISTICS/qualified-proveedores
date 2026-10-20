@@ -17321,7 +17321,7 @@ function colabResultadosHtml(){
   // Una empresa puede tener varios contactos (una por ámbito); se bccan todos los correos apuntados.
   const todosCorreos = [...new Set(conContacto.flatMap(({c}) => transportistaContactos.filter(p => p.contactoId === c.id && p.email).map(p => p.email)))];
   const contactarTodos = todosCorreos.length > 1
-    ? `<a class="btn btn-primary" style="text-decoration:none;" href="${esc(colabMailtoUrl({ bcc: todosCorreos.join(','), subject: asunto, body: cuerpo }))}">${homeIcon(HOME_ICON_PATHS.mail, 15, 'currentColor', 2)}<span>Contactar a los ${todosCorreos.length} por correo</span></a>`
+    ? `<a class="btn btn-primary" style="text-decoration:none;" href="${esc(colabMailtoUrl({ bcc: todosCorreos.join(','), subject: asunto, body: cuerpo }))}">${homeIcon(HOME_ICON_PATHS.mail, 15, 'currentColor', 2)}<span>Contactar a los ${todosCorreos.length} correos</span></a>`
     : '';
   // "Mejor precio": el más barato de cada grupo (viajes por un lado, grúas por otro),
   // solo si en ese grupo hay al menos dos con tarifa apuntada.
@@ -17336,54 +17336,56 @@ function colabResultadosHtml(){
     if (!a) return false;
     return [r.origenZona, tarifaZonaHint(r.origenZona), tarifaZonaHint(r.destinoZona)].some(t => t && a.includes(String(t).toLowerCase()));
   };
+  const todosViajes = viajesRealizados();
+  // 1) Coberturas de la ruta, en una tabla
+  const filasCob = conContacto.map(({ r, c }) => {
+    const grua = colabEsGrua(r);
+    const personas = transportistaContactos.filter(p => p.contactoId === c.id).sort((a, b) => Number(coincideZona(b, r)) - Number(coincideZona(a, r)));
+    const p = personas[0];
+    const vs = grua ? null : viajesResumen(todosViajes.filter(v => v.transportistaId === c.id && colabZonaCubre(origen, v.origen) && colabZonaCubre(destino, v.destino)));
+    const contacto = p
+      ? `<div style="font-size:12.5px;"><b>${esc([p.nombre, p.apellidos].filter(Boolean).join(' ') || 'Sin nombre')}</b>${personas.length > 1 ? ` <small style="color:var(--muted);">+${personas.length - 1}</small>` : ''}</div>
+         <div style="display:flex;gap:4px;margin-top:3px;">
+           ${p.telefono ? `<a class="btn btn-ghost" style="padding:3px 8px;font-size:12px;" href="tel:${esc(p.telefono.replace(/[^\d+]/g,''))}" title="Llamar · ${esc(phoneFormat(p.telefono))}">${homeIcon(HOME_ICON_PATHS.phone, 13, 'currentColor', 2)}</a><button type="button" class="btn btn-ghost" style="padding:3px 8px;" data-copy="${esc(p.telefono)}" onclick="colabCopiar(this.dataset.copy, this)" title="Copiar el teléfono">${homeIcon(HOME_ICON_PATHS.copy, 13, 'currentColor', 2)}</button>` : ''}
+           ${p.email ? `<a class="btn btn-ghost" style="padding:3px 8px;font-size:12px;" href="${esc(colabMailtoUrl({ to: p.email, subject: asunto, body: cuerpo }))}" title="Correo · ${esc(p.email)}">${homeIcon(HOME_ICON_PATHS.mail, 13, 'currentColor', 2)}</a>` : ''}
+         </div>`
+      : '<span style="font-size:12px;color:var(--mutedFaint);">Sin contacto apuntado</span>';
+    return `<tr>
+      <td data-sort-value="${esc(c.nombre)}"><span style="font-weight:600;cursor:pointer;" onclick="openTransportistaFicha('${c.id}')">${esc((c.nombreComercial || '').trim() || c.nombre)}</span>${mejores.has(r.id) ? ' <span class="colab-best">Mejor precio</span>' : ''}</td>
+      <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona + r.destinoZona)}">${grua ? rutaZonaBanderaHtml(r.origenZona) : `${rutaZonaBanderaHtml(r.origenZona)} <span style="color:var(--mutedFaint);">→</span> ${rutaZonaBanderaHtml(r.destinoZona)}`}</td>
+      <td data-sort-value="${esc((r.servicios || []).join(','))}">${colabServiciosChipsHtml(r)}</td>
+      <td data-sort-value="${esc(r.tipoVehiculo)}">${r.tipoVehiculo ? `<span class="colab-chip veh">${esc(r.tipoVehiculo)}</span>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+      <td class="tf-precio" data-sort-value="${r.tarifaBase ?? ''}">${r.tarifaBase != null ? `${colabPrecioTxt(r)}${r.indexacion && !grua ? ' <small>+ indexación</small>' : ''}` : '<span style="color:var(--mutedFaint);font-weight:400;">—</span>'}</td>
+      <td class="tf-precio" data-sort-value="${vs ? vs.n : ''}">${vs ? (vs.n ? `<b>${vs.n}</b> <small style="color:var(--muted);">· ${esc(viajeFechaTxt(vs.ultimo))}</small>` : '<span style="color:var(--mutedFaint);">—</span>') : '—'}</td>
+      <td class="tf-precio" data-sort-value="${vs && vs.margenPct != null ? vs.margenPct : ''}">${vs ? viajeMargenHtml(vs.margenPct, null) : '—'}</td>
+      <td>${contacto}</td>
+      <td style="color:var(--muted);font-size:12px;" data-sort-value="${esc(r.observaciones)}">${r.observaciones ? esc(truncateText(r.observaciones, 40)) : ''}</td>
+    </tr>`;
+  }).join('');
+  const tablaCob = `<div style="overflow-x:auto;"><table class="tf-table">
+    <thead><tr>${thSort('Transportista', 'text')}${thSort('Ruta', 'text')}${thSort('Servicio', 'text')}${thSort('Vehículo', 'text')}${thSort('Tarifa base', 'number', 'style="text-align:right;"')}${thSort('Viajes hechos', 'number', 'style="text-align:right;"')}${thSort('Margen medio', 'number', 'style="text-align:right;"')}<th>Contacto</th><th></th></tr></thead>
+    <tbody>${filasCob}</tbody></table></div>`;
+  // 2) Viajes realizados en esa ruta (uno por línea)
+  const serviciosViaje = selS.filter(s => s === 'FTL' || s === 'LTL');
+  const viajesRuta = todosViajes.filter(v => colabZonaCubre(origen, v.origen) && colabZonaCubre(destino, v.destino) && (!serviciosViaje.length || serviciosViaje.includes(v.oc.servicio)))
+    .sort((a, b) => b.fecha.localeCompare(a.fecha));
+  const tv = viajesResumen(viajesRuta);
+  const bloqueViajes = `
+    <div style="margin:22px 0 8px;display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;">
+      <div style="font-size:14px;font-weight:700;">Viajes realizados en esta ruta <span style="font-weight:400;color:var(--muted);">(${tv.n})</span></div>
+      ${tv.margenEur != null ? `<div style="font-size:13px;color:var(--muted);">Margen total <b style="color:var(--text);">${eur2(tv.margenEur)}</b> · medio ${viajeMargenHtml(tv.margenPct, null)}</div>` : ''}
+    </div>
+    ${viajesRuta.length
+      ? `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;">${viajesListaTablaHtml(viajesRuta, true)}</div>`
+      : '<div style="font-size:12.5px;color:var(--mutedFaint);padding:6px 2px;">Todavía no se ha hecho ningún viaje en esta ruta con nosotros.</div>'}`;
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0 10px;">
-      <div style="font-size:13px;color:var(--text);"><b>${conContacto.length}</b> transportista${conContacto.length===1?'':'s'} ${filtroTxt ? `con ${esc(filtroTxt)} ` : ''}cubre${conContacto.length===1?'':'n'} <span style="font-family:var(--mono);">${rutaTxt}</span></div>
+      <div style="font-size:14px;font-weight:700;">Quién cubre <span style="font-family:var(--mono);font-weight:600;">${rutaTxt}</span> <span style="font-weight:400;color:var(--muted);">· ${conContacto.length} transportista${conContacto.length === 1 ? '' : 's'}${filtroTxt ? ' con ' + esc(filtroTxt) : ''}</span></div>
       ${contactarTodos}
     </div>
-    <div class="colab-res-grid">
-    ${conContacto.map(({r,c}) => {
-      const grua = colabEsGrua(r);
-      const personas = transportistaContactos.filter(p => p.contactoId === c.id).sort((a, b) => Number(coincideZona(b, r)) - Number(coincideZona(a, r)));
-      const esMejor = mejores.has(r.id);
-      const vv = grua ? [] : viajesRealizados().filter(v => v.transportistaId === c.id && colabZonaCubre(origen, v.origen) && colabZonaCubre(destino, v.destino)), vs = viajesResumen(vv);
-      const viajesHtml = grua ? '' : (vs.n
-        ? `<div class="colab-viajes" onclick="colabViajesBusquedaAbrir('${c.id}')" title="Ver los viajes uno a uno"><b>${vs.n} viaje${vs.n === 1 ? '' : 's'} hecho${vs.n === 1 ? '' : 's'}</b> en esta ruta · último viaje el ${esc(viajeFechaTxt(vs.ultimo))}<br>${vs.costeMedio != null ? 'Pagado de media <b>' + eur2(vs.costeMedio) + '</b>' : ''}${vs.ventaMedia != null ? ' · Cobrado de media <b>' + eur2(vs.ventaMedia) + '</b>' : ''}${vs.margenPct != null ? ' · Margen ' + viajeMargenHtml(vs.margenPct, vs.margenEur) : ''}</div>`
-        : '<div style="font-size:12px;color:var(--mutedFaint);">Todavía no ha hecho ningún viaje en esta ruta con nosotros.</div>');
-      const precio = r.tarifaBase != null
-        ? `<div class="colab-price">${colabPrecioTxt(r)}<small>${grua ? 'por hora' : (r.indexacion ? '+ indexación' : 'tarifa base')}</small></div>`
-        : `<div style="font-size:11.5px;color:var(--mutedFaint);text-align:right;">Sin tarifa<br>apuntada</div>`;
-      return `
-      <div class="colab-res${esMejor ? ' best' : ''}">
-        <div class="colab-res-head">
-          <div style="min-width:0;">
-            ${esMejor ? '<span class="colab-best">Mejor precio</span><br>' : ''}
-            <div class="colab-res-name" style="${esMejor ? 'margin-top:5px;' : ''}" onclick="openTransportistaFicha('${c.id}')">${esc((c.nombreComercial||'').trim() || c.nombre)}</div>
-            <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;">
-              ${(r.servicios || []).map(k => `<span class="colab-chip${k === 'GRUA' ? ' grua' : ''}">${esc(COLAB_SERVICIOS_CORTO[k] || k)}</span>`).join('')}
-              ${r.tipoVehiculo ? `<span class="colab-chip veh">${esc(r.tipoVehiculo)}</span>` : ''}
-            </div>
-            ${grua ? `<div style="font-size:12px;color:var(--muted);margin-top:6px;">Zona de servicio: <span style="font-family:var(--mono);">${rutaZonaBanderaHtml(r.origenZona)}</span>${tarifaZonaHint(r.origenZona) ? ' · ' + esc(tarifaZonaHint(r.origenZona)) : ''}</div>` : ''}
-          </div>
-          ${precio}
-        </div>
-        ${viajesHtml}
-        ${r.observaciones ? `<div style="font-size:12px;color:var(--muted);">${esc(r.observaciones)}</div>` : ''}
-        ${personas.length ? personas.map(p => `
-          <div class="colab-person">
-            <div class="info">
-              <b>${esc([p.nombre, p.apellidos].filter(Boolean).join(' ') || 'Sin nombre')}</b>${p.ambito ? ` · ${esc(p.ambito)}` : ''}${coincideZona(p, r) ? ' <span class="colab-best" style="background:#0F8B8D;">Su zona</span>' : ''}<br>
-              ${p.email ? esc(p.email) : 'Sin correo apuntado'}${p.telefono ? '<br>' + esc(phoneFormat(p.telefono)) : ''}
-            </div>
-            <div class="acts">
-              ${p.telefono ? `<a class="btn btn-ghost" href="tel:${esc(p.telefono.replace(/[^\d+]/g,''))}" title="Llamar">${homeIcon(HOME_ICON_PATHS.phone, 14, 'currentColor', 2)}<span>Llamar</span></a>
-              <button type="button" class="btn btn-ghost" data-copy="${esc(p.telefono)}" onclick="colabCopiar(this.dataset.copy, this)" title="Copiar el teléfono">${homeIcon(HOME_ICON_PATHS.copy, 14, 'currentColor', 2)}</button>` : ''}
-              ${p.email ? `<a class="btn btn-ghost" href="${esc(colabMailtoUrl({ to: p.email, subject: asunto, body: cuerpo }))}" title="Contactar por correo">${homeIcon(HOME_ICON_PATHS.mail, 14, 'currentColor', 2)}<span>Correo</span></a>` : ''}
-            </div>
-          </div>`).join('') : `<div style="font-size:12px;color:var(--mutedFaint);">Sin ningún contacto apuntado (se añade desde su ficha en Transporte → Proveedores Transporte).</div>`}
-      </div>`;
-    }).join('')}
-    </div>${notaSinTipo}`;
+    <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;">${tablaCob}</div>
+    ${notaSinTipo}
+    ${bloqueViajes}`;
 }
 function colaboradoresFilteredRutas(){
   const search = (window.__colabSearch || '').toLowerCase();
@@ -17587,6 +17589,28 @@ function colabViajesBusquedaAbrir(tid){
   const lista = viajesRealizados().filter(v => v.transportistaId === tid && colabZonaCubre(origen, v.origen) && colabZonaCubre(destino, v.destino));
   viajesModalAbrir(tid, origen, destino, lista);
 }
+// Tabla de viajes uno a uno (ventana de detalle y resultados del buscador de rutas)
+function viajesListaTablaHtml(lista, conTransportista){
+  return `<table class="tf-table">
+    <thead><tr>${thSort('Fecha', 'date')}${thSort('Orden', 'text')}${conTransportista ? thSort('Transportista', 'text') : ''}${thSort('Cliente', 'text')}${thSort('Servicio', 'text')}${thSort('Vehículo', 'text')}${thSort('Pagado', 'number', 'style="text-align:right;"')}${thSort('Cobrado', 'number', 'style="text-align:right;"')}${thSort('Margen', 'number', 'style="text-align:right;"')}</tr></thead>
+    <tbody>${lista.map(v => {
+      const cl = v.oc.clienteId ? contactos.find(x => x.id === v.oc.clienteId) : null;
+      const tr = contactos.find(x => x.id === v.transportistaId);
+      const pct = v.margen != null && v.venta > 0 ? v.margen / v.venta * 100 : null;
+      return `<tr>
+        <td style="white-space:nowrap;" data-sort-value="${esc(v.fecha)}">${esc(viajeFechaTxt(v.fecha))}</td>
+        <td style="font-family:var(--mono);" data-sort-value="${esc(v.ref)}">${esc(v.ref)}</td>
+        ${conTransportista ? `<td style="font-weight:600;" data-sort-value="${esc(tr ? tr.nombre : '')}">${esc(tr ? ((tr.nombreComercial || '').trim() || tr.nombre) : '—')}</td>` : ''}
+        <td data-sort-value="${esc(cl ? cl.nombre : '')}">${esc(cl ? ((cl.nombreComercial || '').trim() || cl.nombre) : '—')}</td>
+        <td data-sort-value="${esc(ocServicioTxt(v.oc))}">${viajeServicioChipHtml(v)}</td>
+        <td style="font-family:var(--mono);font-size:12.5px;white-space:nowrap;" data-sort-value="${esc(viajeMatriculas(v))}">${esc(viajeMatriculas(v)) || '<span style="color:var(--mutedFaint);">—</span>'}</td>
+        <td class="tf-precio" data-sort-value="${v.coste ?? ''}">${v.coste != null ? eur2(v.coste) : '—'}</td>
+        <td class="tf-precio" data-sort-value="${v.venta ?? ''}">${v.venta != null ? eur2(v.venta) : '—'}</td>
+        <td class="tf-precio" data-sort-value="${pct ?? ''}">${viajeMargenHtml(pct, v.margen)}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table>`;
+}
 function viajesModalAbrir(tid, origen, destino, lista){
   lista = lista.slice().sort((a, b) => b.fecha.localeCompare(a.fecha));
   const c = tid ? contactos.find(x => x.id === tid) : null;
@@ -17601,24 +17625,7 @@ function viajesModalAbrir(tid, origen, destino, lista){
             <div class="deca-banner-sub" style="margin-top:1px;">${c ? esc((c.nombreComercial || '').trim() || c.nombre) + ' · ' : ''}${t.n} viaje${t.n === 1 ? '' : 's'}${t.margenPct != null ? ' · margen medio ' + t.margenPct.toLocaleString('es-ES', { maximumFractionDigits: 1 }) + ' %' : ''}</div></div>
           <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
         </div>
-        <div style="padding:6px 0 10px;max-height:70vh;overflow:auto;"><table class="tf-table">
-          <thead><tr>${thSort('Fecha', 'date')}${thSort('Orden', 'text')}${thSort('Cliente', 'text')}${thSort('Servicio', 'text')}${thSort('Vehículo', 'text')}${thSort('Pagado', 'number', 'style="text-align:right;"')}${thSort('Cobrado', 'number', 'style="text-align:right;"')}${thSort('Margen', 'number', 'style="text-align:right;"')}</tr></thead>
-          <tbody>${lista.map(v => {
-            const cl = v.oc.clienteId ? contactos.find(x => x.id === v.oc.clienteId) : null;
-            const pct = v.margen != null && v.venta > 0 ? v.margen / v.venta * 100 : null;
-            return `<tr>
-              <td style="white-space:nowrap;" data-sort-value="${esc(v.fecha)}">${esc(viajeFechaTxt(v.fecha))}</td>
-              <td style="font-family:var(--mono);" data-sort-value="${esc(v.ref)}">${esc(v.ref)}</td>
-              <td data-sort-value="${esc(cl ? cl.nombre : '')}">${esc(cl ? ((cl.nombreComercial || '').trim() || cl.nombre) : '—')}</td>
-              
-              <td data-sort-value="${esc(ocServicioTxt(v.oc))}">${viajeServicioChipHtml(v)}</td>
-              <td style="font-family:var(--mono);font-size:12.5px;white-space:nowrap;" data-sort-value="${esc(viajeMatriculas(v))}">${esc(viajeMatriculas(v)) || '<span style="color:var(--mutedFaint);">—</span>'}</td>
-              <td class="tf-precio" data-sort-value="${v.coste ?? ''}">${v.coste != null ? eur2(v.coste) : '—'}</td>
-              <td class="tf-precio" data-sort-value="${v.venta ?? ''}">${v.venta != null ? eur2(v.venta) : '—'}</td>
-              <td class="tf-precio" data-sort-value="${pct ?? ''}">${viajeMargenHtml(pct, v.margen)}</td>
-            </tr>`;
-          }).join('')}</tbody>
-        </table></div>
+        <div style="padding:6px 0 10px;max-height:70vh;overflow:auto;">${viajesListaTablaHtml(lista, false)}</div>
       </div>
     </div>`;
 }
@@ -17721,7 +17728,7 @@ function tplColaboradoresPage(){
       </div>
     </div>
     <div class="card deca-card" style="--dc-accent:var(--primary);margin-bottom:16px;">
-      ${decaCardHead('search', 'Buscar quién cubre una ruta', 'Elige origen y destino y te enseño a quién llamar', colabBuscando() ? '<button class="btn btn-ghost" style="background:var(--panel);" onclick="colabLimpiarBusqueda()">✕ Limpiar búsqueda</button>' : '')}
+      ${decaCardHead('search', 'Buscador de rutas', 'Elige origen y destino: te enseño quién la cubre y los viajes que se han hecho', colabBuscando() ? '<button class="btn btn-ghost" style="background:var(--panel);" onclick="colabLimpiarBusqueda()">✕ Limpiar búsqueda</button>' : '')}
       <div class="deca-card-body">
         <div class="colab-route">
           ${colabRutaBloqueHtml('Origen', 'origenZona', window.__colabBuscarPaisO, window.__colabBuscarOrigen,
