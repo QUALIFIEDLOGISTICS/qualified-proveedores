@@ -3683,6 +3683,7 @@ const SGA_CAMPOS_BASE = [
   { clave: 'proveedor', nombre: 'Proveedor', tipo: 'texto' },
   { clave: 'serie', nombre: 'Nº de serie', tipo: 'texto' },
   { clave: 'medidas', nombre: 'Medidas', tipo: 'texto' },
+  { clave: 'metros_lineales', nombre: 'Metros lineales', tipo: 'numero', unidad: 'm', ambito: 'articulo' },   // es la columna «M. lineales» del artículo (no un dato adicional)
   { clave: 'finalidad', nombre: 'Finalidad', tipo: 'texto', ambito: 'articulo' },   // del artículo: cada cliente decide si la usa
 ];
 // Finalidad de un artículo (vive en sus atributos; las anteriores estaban en una columna aparte y se leen de ahí)
@@ -3703,12 +3704,12 @@ const SGA_CAMPO_TIPOS = { texto: 'Texto', numero: 'Número', fecha: 'Fecha', lis
 const SGA_CAMPO_AMBITOS = { entrada: 'De la recepción', articulo: 'Del artículo' };
 function sgaCamposPropios(ambito, conArchivados){ return sgaCampos.filter(f => (!ambito || f.ambito === ambito) && (conArchivados || !f.archived)); }
 function sgaCampoDef(f){ return { id: f.clave, label: f.nombre + (f.unidad ? ` (${f.unidad})` : ''), nombre: f.nombre, unidad: f.unidad || '', custom: true, tipo: f.tipo, opciones: f.opciones || [], ambito: f.ambito, enAlbaran: f.enAlbaran, enStock: f.enStock }; }
-function sgaCamposEntrada(){ return sgaCamposPropios('entrada').map(sgaCampoDef); }
+function sgaCamposEntrada(){ return sgaCamposPropios('entrada').filter(f => !sgaEsCampoMl(f)).map(sgaCampoDef); }
 function sgaCamposCliente(){ return sgaCamposPropios().map(sgaCampoDef); }
 // Campos de serie que todavía no están en la base de datos: aparecen en la lista y se guardan al tocarlos por primera vez.
 function sgaCamposCompletar(filas){
   SGA_CAMPOS_BASE.forEach((b, i) => {
-    if (!filas.some(f => f.clave === b.clave)) filas.push({ id: 'base:' + b.clave, virtual: true, clave: b.clave, nombre: b.nombre, tipo: b.tipo, unidad: b.unidad || '', opciones: [], ambito: b.ambito || 'entrada', enAlbaran: false, enStock: false, orden: i - 100, archived: false });
+    if (!filas.some(f => f.clave === b.clave || (b.clave === 'metros_lineales' && sgaEsCampoMl(f)))) filas.push({ id: 'base:' + b.clave, virtual: true, clave: b.clave, nombre: b.nombre, tipo: b.tipo, unidad: b.unidad || '', opciones: [], ambito: b.ambito || 'entrada', enAlbaran: false, enStock: false, orden: i - 100, archived: false });
   });
   return filas.sort((a, b) => (a.orden - b.orden) || a.nombre.localeCompare(b.nombre, 'es'));
 }
@@ -3716,7 +3717,11 @@ function sgaCamposCompletar(filas){
 // Los datos de la mercancía se rellenan en el CATÁLOGO (en el artículo), no al recibir la mercancía. Descripción (la referencia del artículo), código de artículo (su nombre),
 // peso y medidas ya tienen su sitio fijo en el artículo; el resto de datos que usa el cliente salen en «Datos adicionales».
 const SGA_CAMPOS_ART_PROPIOS = ['referencia', 'descripcion', 'peso', 'medidas'];
-function sgaCamposArticulo(clienteId){ return sgaCamposPropios().map(sgaCampoDef).filter(f => !SGA_CAMPOS_ART_PROPIOS.includes(f.id) && (sgaClienteCfg(clienteId).campos[f.id] || 'no') !== 'no'); }
+// «Metros lineales» (cualquier dato con ese nombre) es la columna propia del artículo, no un dato adicional
+function sgaEsCampoMl(f){ return String(f.nombre || '').trim().toLowerCase() === 'metros lineales'; }
+function sgaClienteUsaMl(clienteId){ const cfg = sgaClienteCfg(clienteId).campos; return sgaCamposPropios().some(f => sgaEsCampoMl(f) && (cfg[f.clave] || 'no') !== 'no'); }
+function sgaClienteMlObligatorio(clienteId){ const cfg = sgaClienteCfg(clienteId).campos; return sgaCamposPropios().some(f => sgaEsCampoMl(f) && cfg[f.clave] === 'obligatorio'); }
+function sgaCamposArticulo(clienteId){ return sgaCamposPropios().map(sgaCampoDef).filter(f => !SGA_CAMPOS_ART_PROPIOS.includes(f.id) && !sgaEsCampoMl(f) && (sgaClienteCfg(clienteId).campos[f.id] || 'no') !== 'no'); }
 /* ---- Mayúscula solo en la primera letra de cada palabra ----
    Los campos que llevan data-mayus (nombres, transportista, destinatario…) escriben solos «Carpa Green 20x20»: la primera
    letra de cada palabra en mayúscula y el resto en minúscula. Una palabra con números (códigos como «306515RG») solo
@@ -4272,7 +4277,7 @@ function catColumnas(clienteId){
   return {
     referencia: !cfg || cfg.campos.referencia !== 'no' || arts.some(a => a.referencia),
     tipo: clienteId ? (sgaProductosCliente(clienteId, '').length > 0 || arts.some(a => a.productoId)) : true,   // «Tipo de carga» solo si el cliente tiene tipos en su tarifa de palet (si cobra por m² no hay)
-    ml: arts.some(a => a.metrosLineales != null),
+    ml: arts.some(a => a.metrosLineales != null) || (!!clienteId && sgaClienteUsaMl(clienteId)),   // con valores, o si el cliente lo usa (ficha SGA)
     peso: !cfg || cfg.campos.peso !== 'no' || arts.some(a => a.peso != null),
     medidas: cfg ? (cfg.campos.medidas !== 'no' || arts.some(a => a.medidas)) : arts.some(a => a.medidas),   // «Medidas» si el cliente las usa (ficha SGA) o algún artículo las tiene
     x: clienteId ? sgaCamposArticulo(clienteId) : [],   // campos propios del artículo que usa este cliente
@@ -4634,6 +4639,7 @@ async function catGuardarFilaNueva(tr){
   if (!medidas && sgaClienteCfg(cid).campos.medidas === 'obligatorio') return marcar('medidas', 'Las medidas son obligatorias para este cliente.');
   const ml = num('metrosLineales'), peso = num('peso');
   if (ml != null && !isFinite(ml)) return marcar('metrosLineales', 'Escribe un número en metros lineales.');
+  if (ml == null && sgaClienteMlObligatorio(cid)) return marcar('metrosLineales', 'Falta «Metros lineales».');
   if (peso != null && !isFinite(peso)) return marcar('peso', 'Escribe un número en el peso.');
   if (sgaArticulos.some(x => x.clienteId === cid && (x.referencia || x.nombre).toLowerCase() === (referencia || nombre).toLowerCase())) {
     return marcar(referencia ? 'referencia' : 'nombre', 'Este cliente ya tiene un artículo con esa descripción (o ese código, si no tiene descripción).');
