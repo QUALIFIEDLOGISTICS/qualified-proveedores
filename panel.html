@@ -495,6 +495,7 @@
   .cg-tabla input.cg-in:focus,.cg-tabla select.cg-in:focus{border-color:var(--primary);background:var(--panel);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 15%,transparent);}
   .cg-th-ed{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:7px;border:1px solid var(--primary);background:var(--panel);color:var(--primary);font-family:var(--body);font-size:12px;font-weight:700;letter-spacing:0;text-transform:none;cursor:pointer;vertical-align:middle;}
   .cg-th-ed:hover{background:var(--primary);color:#fff;}
+  .colab-viajes{font-size:12.5px;line-height:1.6;color:var(--muted);background:color-mix(in srgb,var(--primary) 6%,var(--panel));border:1px solid var(--border);border-left:3px solid var(--primary);border-radius:8px;padding:8px 12px;margin:8px 0;cursor:pointer;} .colab-viajes b{color:var(--text);} .colab-viajes:hover{background:color-mix(in srgb,var(--primary) 11%,var(--panel));}
   /* Albarán de entrada/salida abierto para editar: formulario a la izquierda y su historial de cambios a la derecha */
   .alb-layout.con-hist{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;align-items:start;}
   .alb-layout.con-hist .alb-main .deca-form,.alb-layout.con-hist .alb-main .deca-actions{max-width:none !important;}
@@ -17345,6 +17346,10 @@ function colabResultadosHtml(){
       const grua = colabEsGrua(r);
       const personas = transportistaContactos.filter(p => p.contactoId === c.id).sort((a, b) => Number(coincideZona(b, r)) - Number(coincideZona(a, r)));
       const esMejor = mejores.has(r.id);
+      const vv = grua ? [] : viajesRealizados().filter(v => v.transportistaId === c.id && colabZonaCubre(origen, v.origen) && colabZonaCubre(destino, v.destino)), vs = viajesResumen(vv);
+      const viajesHtml = grua ? '' : (vs.n
+        ? `<div class="colab-viajes" onclick="colabViajesBusquedaAbrir('${c.id}')" title="Ver los viajes uno a uno"><b>${vs.n} viaje${vs.n === 1 ? '' : 's'} hecho${vs.n === 1 ? '' : 's'}</b> en esta ruta · último ${esc(colabRelativo(vs.ultimo))}<br>${vs.costeMedio != null ? 'Pagado de media <b>' + eur2(vs.costeMedio) + '</b>' : ''}${vs.ventaMedia != null ? ' · Cobrado de media <b>' + eur2(vs.ventaMedia) + '</b>' : ''}${vs.margenPct != null ? ' · Margen ' + viajeMargenHtml(vs.margenPct, vs.margenEur) : ''}</div>`
+        : '<div style="font-size:12px;color:var(--mutedFaint);">Todavía no ha hecho ningún viaje en esta ruta con nosotros.</div>');
       const precio = r.tarifaBase != null
         ? `<div class="colab-price">${colabPrecioTxt(r)}<small>${grua ? 'por hora' : (r.indexacion ? '+ indexación' : 'tarifa base')}</small></div>`
         : `<div style="font-size:11.5px;color:var(--mutedFaint);text-align:right;">Sin tarifa<br>apuntada</div>`;
@@ -17362,6 +17367,7 @@ function colabResultadosHtml(){
           </div>
           ${precio}
         </div>
+        ${viajesHtml}
         ${r.observaciones ? `<div style="font-size:12px;color:var(--muted);">${esc(r.observaciones)}</div>` : ''}
         ${personas.length ? personas.map(p => `
           <div class="colab-person">
@@ -17559,12 +17565,22 @@ function viajesTablaHtml(grupos, conTransportista){
     </table></div>`;
 }
 // Ventana con los viajes de una ruta (y transportista), uno por línea
-function viajesDetalleAbrir(key, conTransportista){
+function viajesDetalleAbrir(key){
   const [tid, origen, destino] = key.split('|');   // la clave siempre lleva el transportista
-  const lista = viajesRealizados().filter(v => v.transportistaId === tid && v.origen === origen && v.destino === destino)
-    .sort((a, b) => b.fecha.localeCompare(a.fecha));
+  const lista = viajesRealizados().filter(v => v.transportistaId === tid && v.origen === origen && v.destino === destino);
+  viajesModalAbrir(tid, origen, destino, lista);
+}
+// Desde «quién cubre esta ruta»: los viajes de ese transportista en la ruta buscada (que puede ser un país entero o una zona)
+function colabViajesBusquedaAbrir(tid){
+  const { origen, destino } = colabBuscarClaves();
+  const lista = viajesRealizados().filter(v => v.transportistaId === tid && colabZonaCubre(origen, v.origen) && colabZonaCubre(destino, v.destino));
+  viajesModalAbrir(tid, origen, destino, lista);
+}
+function viajesModalAbrir(tid, origen, destino, lista){
+  lista = lista.slice().sort((a, b) => b.fecha.localeCompare(a.fecha));
   const c = tid ? contactos.find(x => x.id === tid) : null;
   const t = viajesResumen(lista);
+  const conTransportista = false;
   document.getElementById('modal-slot').innerHTML = `
     <div class="modal-overlay">
       <div class="modal-box" style="max-width:820px;padding:0;border-radius:14px;overflow:hidden;">
