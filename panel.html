@@ -17206,11 +17206,19 @@ function colabZonasDatalistHtml(field){
 // País → zona del buscador (igual que el filtro de Tarifas): solo países con alguna
 // cobertura guardada, y la zona se ve como "ES17 · Girona".
 // Zonas que se pueden buscar en un lado de la ruta: las de las coberturas apuntadas y las de los viajes que ya se han hecho
-// (la zona de la primera carga para el origen y la de la última descarga para el destino).
+// (la zona de la primera carga para el origen y la de la última descarga para el destino). Solo salen COMBINACIONES QUE EXISTEN:
+// si ya se ha elegido el otro lado (p. ej. Barcelona de origen), solo se ofrecen los destinos con alguna cobertura o algún viaje desde ahí.
+function colabParesRuta(){
+  return [
+    ...transportistaRutas.map(r => ({ o: r.origenZona, d: r.destinoZona, grua: colabEsGrua(r) })),
+    ...viajesRealizados().map(v => ({ o: v.origen, d: v.destino, grua: false })),
+  ].filter(p => p.o && p.d);
+}
 function colabZonasBuscables(field){
-  const deCob = transportistaRutas.map(r => r[field]).filter(Boolean);
-  const deViajes = viajesRealizados().map(v => field === 'origenZona' ? v.origen : v.destino).filter(Boolean);
-  return [...new Set([...deCob, ...deViajes])];
+  const k = colabBuscarClaves();
+  const otro = field === 'origenZona' ? k.destino : k.origen;
+  const pares = colabParesRuta().filter(p => !otro || (!p.grua && colabZonaCubre(field === 'origenZona' ? p.d : p.o, otro)));
+  return [...new Set(pares.map(p => field === 'origenZona' ? p.o : p.d))];
 }
 function colabPaisesOptionsHtml(field, selected){
   const codes = [...new Set(colabZonasBuscables(field).map(z => z.slice(0, 2)))]
@@ -17220,6 +17228,16 @@ function colabPaisesOptionsHtml(field, selected){
 function colabZonasOptionsHtml(field, cc, selected){
   const zonas = colabZonasBuscables(field).filter(z => z.length > 2 && z.startsWith(cc)).sort();
   return zonas.map(z => `<option value="${esc(z)}" ${z === selected ? 'selected' : ''}>${esc(z)}${tarifaZonaHint(z) ? ' · ' + esc(tarifaZonaHint(z)) : ''}</option>`).join('');
+}
+// Si al cambiar un lado el otro ya no tiene esa combinación, se vacía (el origen manda: se revisa primero el destino)
+function colabRevisarBusqueda(){
+  const ok = (field, pais, zona) => {
+    if (!pais) return true;
+    const zs = colabZonasBuscables(field);
+    return zona ? zs.includes(zona) : zs.some(z => z.startsWith(pais));
+  };
+  if (!ok('destinoZona', window.__colabBuscarPaisD, window.__colabBuscarDestino)) { window.__colabBuscarPaisD = ''; window.__colabBuscarDestino = ''; }
+  if (!ok('origenZona', window.__colabBuscarPaisO, window.__colabBuscarOrigen)) { window.__colabBuscarPaisO = ''; window.__colabBuscarOrigen = ''; }
 }
 // Mayúsculas y sin espacios al escribir una zona (formulario de alta), y refresca lo que dependa de ella.
 function colabZonaInput(id, after){
@@ -17732,6 +17750,7 @@ function colabLimpiarBusqueda(){
   renderTab();
 }
 function tplColaboradoresPage(){
+  colabRevisarBusqueda();
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
