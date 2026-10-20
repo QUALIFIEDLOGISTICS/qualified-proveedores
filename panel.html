@@ -17280,6 +17280,22 @@ function colabCopiar(txt, btn){
     setTimeout(() => { btn.innerHTML = antes; }, 1300);
   }, () => {});
 }
+// Viajes realizados en la ruta buscada (uno por línea), con el servicio elegido en el filtro si lo hay
+function colabViajesRutaHtml(origen, destino, selS){
+  const todosViajes = viajesRealizados();
+  const serviciosViaje = selS.filter(s => s === 'FTL' || s === 'LTL');
+  const viajesRuta = todosViajes.filter(v => colabZonaCubre(origen, v.origen) && colabZonaCubre(destino, v.destino) && (!serviciosViaje.length || serviciosViaje.includes(v.oc.servicio)))
+    .sort((a, b) => b.fecha.localeCompare(a.fecha));
+  const tv = viajesResumen(viajesRuta);
+  const bloqueViajes = `
+    <div style="margin:22px 0 8px;display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;">
+      <div style="font-size:14px;font-weight:700;">Viajes realizados en esta ruta <span style="font-weight:400;color:var(--muted);">(${tv.n})</span></div>
+      ${tv.margenEur != null ? `<div style="font-size:13px;color:var(--muted);">Margen total <b style="color:var(--text);">${eur2(tv.margenEur)}</b> · medio ${viajeMargenHtml(tv.margenPct, null)}</div>` : ''}
+    </div>
+    ${viajesRuta.length
+      ? `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;">${viajesListaTablaHtml(viajesRuta, true)}</div>`
+  return bloqueViajes;
+}
 function colabResultadosHtml(){
   const { origen, destino } = colabBuscarClaves();
   const aviso = (txt) => `<div style="color:var(--mutedFaint);font-size:12.5px;padding:14px 4px 2px;">${txt}</div>`;
@@ -17323,7 +17339,7 @@ function colabResultadosHtml(){
   const faltaDato = r => (sel.length && !sel.includes(COLAB_SIN_VEH) && !r.tipoVehiculo) || (selS.length && !selS.includes(COLAB_SIN_SERV) && !(r.servicios || []).length);
   const sinTipo = (sel.length || selS.length) ? todasLasQueCubren.filter(r => faltaDato(r) && contactos.some(x => x.id === r.contactoId)).length : 0;
   const notaSinTipo = sinTipo ? `<div style="font-size:12px;color:var(--muted);background:var(--panel2);border-radius:8px;padding:8px 12px;margin-top:10px;">Hay ${sinTipo} cobertura${sinTipo===1?'':'s'} de esta ruta sin vehículo o servicio indicado que no se muestra${sinTipo===1?'':'n'} por el filtro.</div>` : '';
-  if (!conContacto.length) return aviso(`Ningún transportista ${filtroTxt ? `con ${esc(filtroTxt)} ` : 'apuntado '}cubre <span style="font-family:var(--mono);">${rutaTxt}</span>.`) + notaSinTipo;
+  if (!conContacto.length) return aviso(`Ningún transportista ${filtroTxt ? `con ${esc(filtroTxt)} ` : 'apuntado '}cubre <span style="font-family:var(--mono);">${rutaTxt}</span>.`) + notaSinTipo + colabViajesRutaHtml(origen, destino, selS);
   const asunto = colabOfertaAsunto(origen, destino), cuerpo = colabOfertaCuerpo(origen, destino);
   // Una empresa puede tener varios contactos (una por ámbito); se bccan todos los correos apuntados.
   const todosCorreos = [...new Set(conContacto.flatMap(({c}) => transportistaContactos.filter(p => p.contactoId === c.id && p.email).map(p => p.email)))];
@@ -17372,18 +17388,7 @@ function colabResultadosHtml(){
   const tablaCob = `<div style="overflow-x:auto;"><table class="tf-table">
     <thead><tr>${thSort('Transportista', 'text')}${thSort('Ruta', 'text')}${thSort('Servicio', 'text')}${thSort('Vehículo', 'text')}${thSort('Tarifa base', 'number', 'style="text-align:right;"')}${thSort('Viajes hechos', 'number', 'style="text-align:right;"')}${thSort('Margen medio', 'number', 'style="text-align:right;"')}<th>Contacto</th><th></th></tr></thead>
     <tbody>${filasCob}</tbody></table></div>`;
-  // 2) Viajes realizados en esa ruta (uno por línea)
-  const serviciosViaje = selS.filter(s => s === 'FTL' || s === 'LTL');
-  const viajesRuta = todosViajes.filter(v => colabZonaCubre(origen, v.origen) && colabZonaCubre(destino, v.destino) && (!serviciosViaje.length || serviciosViaje.includes(v.oc.servicio)))
-    .sort((a, b) => b.fecha.localeCompare(a.fecha));
-  const tv = viajesResumen(viajesRuta);
-  const bloqueViajes = `
-    <div style="margin:22px 0 8px;display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;">
-      <div style="font-size:14px;font-weight:700;">Viajes realizados en esta ruta <span style="font-weight:400;color:var(--muted);">(${tv.n})</span></div>
-      ${tv.margenEur != null ? `<div style="font-size:13px;color:var(--muted);">Margen total <b style="color:var(--text);">${eur2(tv.margenEur)}</b> · medio ${viajeMargenHtml(tv.margenPct, null)}</div>` : ''}
-    </div>
-    ${viajesRuta.length
-      ? `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;">${viajesListaTablaHtml(viajesRuta, true)}</div>`
+  const bloqueViajes = colabViajesRutaHtml(origen, destino, selS);
       : '<div style="font-size:12.5px;color:var(--mutedFaint);padding:6px 2px;">Todavía no se ha hecho ningún viaje en esta ruta con nosotros.</div>'}`;
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0 10px;">
