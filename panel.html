@@ -488,6 +488,7 @@
   .cg-tabla td{padding:4px 6px;vertical-align:middle;}
   .se-ini #se-mod-wrap{display:none !important;}
   .se-ini-nota{margin-bottom:14px;padding:11px 14px;border-radius:10px;border:1px solid color-mix(in srgb,var(--primary) 28%,var(--border));background:color-mix(in srgb,var(--primary) 6%,var(--panel));font-size:13px;line-height:1.5;color:var(--text);}
+  td.sga-merc{max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:help;}
   .cat-hist{display:inline-flex;gap:4px;}
   .cat-hist button{width:36px;height:36px;border-radius:9px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:20px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0 0 2px;}
   .cat-hist button:hover:not(:disabled){border-color:var(--primary);color:var(--primary);}
@@ -4102,12 +4103,48 @@ async function loadSgaStock(){
     modalidad: r.modalidad, transportista: r.transportista || '', matricula: r.matricula || '', observaciones: r.observaciones || '', estado: r.estado, createdAt: r.created_at, numeroTexto: r.numero_texto || '', createdBy: r.created_by || '', destinatario: r.destinatario || '', destinatarioDireccion: r.destinatario_direccion || '', anuladoMotivo: r.anulado_motivo || '', borrador: !!r.borrador,
   }));
   sgaMovsAlbaran = {};
+  window.__sgaLineasAlb = {};   // mercancía de cada expedición: [{ txt, cantidad }], para verla en el listado sin entrar
   const ids = sgaAlbaranes.map(x => x.id);
   if (ids.length) {
-    const m = await supabaseClient.from('sga_movimientos').select('albaran_id,cantidad').in('albaran_id', ids);
+    const m = await supabaseClient.from('sga_movimientos').select('albaran_id,partida_id,cantidad').in('albaran_id', ids);
     (m.data || []).forEach(r => { sgaMovsAlbaran[r.albaran_id] = (sgaMovsAlbaran[r.albaran_id] || 0) + Number(r.cantidad); });
+    try {
+      const idSal = new Set(sgaAlbaranes.filter(x => x.tipo === 'salida').map(x => x.id));
+      const movS = (m.data || []).filter(r => idSal.has(r.albaran_id) && r.partida_id);
+      const pids = [...new Set(movS.map(r => r.partida_id))];
+      const pm = {};
+      for (let i = 0; i < pids.length; i += 100) {
+        const r = await supabaseClient.from('sga_partidas').select('id,producto_id,referencia,descripcion,articulo_id').in('id', pids.slice(i, i + 100));
+        (r.data || []).forEach(x => { pm[x.id] = x; });
+      }
+      const grupos = {};
+      movS.forEach(r => {
+        const p = pm[r.partida_id] || {};
+        const art = p.articulo_id ? sgaArticulos.find(a => a.id === p.articulo_id) : null;
+        const nombre = (art ? art.nombre : p.descripcion) || p.referencia || '—';
+        const desc = (art ? art.referencia : p.referencia) || '';
+        const tipo = p.producto_id ? sgaProdTxt(p.producto_id).replace(/\s*·\s*sin subtipo definido/i, '') : '';
+        const k = r.albaran_id + '|' + nombre + '|' + desc + '|' + tipo;
+        (grupos[k] = grupos[k] || { alb: r.albaran_id, nombre, desc, tipo, cantidad: 0 }).cantidad += Math.abs(Number(r.cantidad));
+      });
+      Object.values(grupos).forEach(g => { (window.__sgaLineasAlb[g.alb] = window.__sgaLineasAlb[g.alb] || []).push(g); });
+      Object.values(window.__sgaLineasAlb).forEach(l => l.sort((a, b) => (b.cantidad - a.cantidad) || a.nombre.localeCompare(b.nombre, 'es')));
+    } catch (e) { window.__sgaLineasAlb = {}; }
   }
   await loadSgaOperativasHechas();
+}
+// Mercancía entregada en una expedición, para el listado: resumen («12 × CARPA +2 más») y detalle completo (globo al pasar el ratón)
+function sgaLineasAlb(a){ return (window.__sgaLineasAlb || {})[a.id] || []; }
+function sgaLineaTxt(l){ return `${sgaNumTxt(l.cantidad)} × ${l.nombre}`; }
+function sgaMercanciaResumen(a){
+  const ls = sgaLineasAlb(a);
+  if (!ls.length) return '';
+  return sgaLineaTxt(ls[0]) + (ls.length > 1 ? ` +${ls.length - 1} más` : '');
+}
+function sgaMercanciaDetalle(a){
+  const ls = sgaLineasAlb(a);
+  const total = ls.reduce((s, l) => s + l.cantidad, 0);
+  return ls.map(l => sgaLineaTxt(l) + (l.desc ? ' · ' + l.desc : '') + (l.tipo ? ' (' + l.tipo + ')' : '')).join('\n') + (ls.length > 1 ? `\nTotal: ${sgaNumTxt(total)} palet${total === 1 ? '' : 's'}` : '');
 }
 const SGA_MODALIDADES = { palet: 'Palets', contenedor_20: "Contenedor 20'", contenedor_40: "Contenedor 40'", trailer: 'Trailer' };
 function sgaProdTxt(id){ const p = almacenajeProducto(id); return p ? almacenajeProductoTexto(p) : (id || '—'); }
@@ -4186,17 +4223,17 @@ function stockBodyHtml(){
   if (stockSeg() !== 'stock') {
     const esSal = stockSeg() === 'salidas';
     const emp = window.__stockEmp || '', est = window.__stockEstado || '';
-    const lista = sgaAlbaranes.filter(a => (!wid || a.warehouseId === wid) && (!emp || a.clienteId === emp) && (!est || sgaAlbaranEstadoClave(a) === est) && (esSal ? a.tipo === 'salida' : a.tipo !== 'salida')).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && (okCli(c) || (esSal && q && (a.destinatario || '').toLowerCase().includes(q))); });
+    const lista = sgaAlbaranes.filter(a => (!wid || a.warehouseId === wid) && (!emp || a.clienteId === emp) && (!est || sgaAlbaranEstadoClave(a) === est) && (esSal ? a.tipo === 'salida' : a.tipo !== 'salida')).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && (okCli(c) || (esSal && q && ((a.destinatario || '').toLowerCase().includes(q) || sgaLineasAlb(a).some(l => (l.nombre + ' ' + l.desc).toLowerCase().includes(q))))); });
     if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q || emp || est ? 'Ningún albarán coincide con la búsqueda o el filtro.' : esSal ? 'Todavía no hay expediciones. Registra la primera con «Nueva expedición».' : 'Todavía no hay recepciones. Registra la primera con «Nueva recepción».'}</div>`;
     return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
-      <thead><tr>${thSort('Nº','number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Almacén','text')}${esSal ? thSort('Destinatario','text') : thSort('Referencia','text')}${thSort('Modalidad','text')}${thSort('Palets','number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
+      <thead><tr>${thSort('Nº','number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Almacén','text')}${esSal ? thSort('Destinatario','text') + thSort('Mercancía','text') : thSort('Referencia','text')}${thSort('Modalidad','text')}${thSort('Palets','number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
       <tbody>${lista.map(a => { const c = contactos.find(x => x.id === a.clienteId); return `
         <tr data-alb="${a.id}">
           <td data-sort-value="${a.numero}"><b>${esc(sgaNumAlbaran(a))}</b></td>
           <td style="white-space:nowrap;" data-sort-value="${esc(a.fecha)}">${fmtDateDMY(a.fecha)}</td>
           <td data-sort-value="${esc(c ? c.nombre : '')}">${esc(c ? ((c.nombreComercial || '').trim() || c.nombre) : '—')}</td>
           <td data-sort-value="${esc(whNombre(a.warehouseId))}">${esc(whNombre(a.warehouseId))}</td>
-          ${esSal ? `<td data-sort-value="${esc(a.destinatario)}" title="${esc(a.destinatarioDireccion)}">${esc(a.destinatario) || '—'}</td>` : `<td data-sort-value="${esc(a.referencia)}">${esc(a.referencia) || '—'}</td>`}
+          ${esSal ? `<td data-sort-value="${esc(a.destinatario)}" title="${esc(a.destinatarioDireccion)}">${esc(a.destinatario) || '—'}</td><td class="sga-merc" data-sort-value="${esc(sgaMercanciaResumen(a))}"${sgaLineasAlb(a).length ? ` data-tip="${esc(sgaMercanciaDetalle(a))}"` : ''}>${sgaMercanciaResumen(a) ? esc(sgaMercanciaResumen(a)) : '<span style="color:var(--mutedFaint);">—</span>'}</td>` : `<td data-sort-value="${esc(a.referencia)}">${esc(a.referencia) || '—'}</td>`}
           <td data-sort-value="${esc(a.modalidad)}">${a.tipo === 'regularizacion' ? 'Regularización' : a.tipo === 'apertura' ? 'Stock inicial' : esc(SGA_MODALIDADES[a.modalidad] || a.modalidad)}</td>
           <td class="tf-precio" data-sort-value="${Math.abs(sgaMovsAlbaran[a.id] || 0)}">${sgaMovsAlbaran[a.id] == null ? '—' : a.tipo === 'regularizacion' ? (sgaMovsAlbaran[a.id] > 0 ? '+' : '') + sgaMovsAlbaran[a.id] : Math.abs(sgaMovsAlbaran[a.id])}</td>
           <td data-sort-value="${esc(a.estado)}"${a.estado === 'anulado' ? ` title="${esc(a.anuladoMotivo)}" style="color:var(--danger);"` : ''}>${a.estado === 'confirmado' && a.borrador ? '<span class="sga-borr" title="Albarán impreso o preparado, pendiente de confirmar la expedición real">BORRADOR</span>' : a.estado === 'confirmado' ? 'Confirmada' : a.estado === 'anulado' ? 'Anulada' : 'Borrador'}</td>
@@ -4284,10 +4321,11 @@ function catArticulosVirtuales(clienteId){
   let tip = null;
   const ocultar = () => { if (tip) { tip.remove(); tip = null; } };
   document.addEventListener('mouseover', e => {
-    const el = e.target.closest ? e.target.closest('td.cg-trunc, .cg-tabla input.cg-in') : null;
+    const el = e.target.closest ? e.target.closest('td.cg-trunc, .cg-tabla input.cg-in, [data-tip]') : null;
     if (!el) { ocultar(); return; }
-    const texto = (el.tagName === 'INPUT' ? el.value : el.textContent).trim();
-    if (!texto || el.scrollWidth <= el.clientWidth + 1) { ocultar(); return; }
+    const conTip = el.dataset && el.dataset.tip;   // [data-tip]: el globo sale siempre, con ese texto (varias líneas)
+    const texto = (conTip ? el.dataset.tip : el.tagName === 'INPUT' ? el.value : el.textContent).trim();
+    if (!texto || (!conTip && el.scrollWidth <= el.clientWidth + 1)) { ocultar(); return; }
     ocultar();
     tip = document.createElement('div');
     tip.className = 'qtip';
