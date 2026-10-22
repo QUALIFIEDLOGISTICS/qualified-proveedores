@@ -4427,7 +4427,7 @@ function sgacNivel(id, nivel){
 const SGA_SALIDA_MODOS = {
   fifo: { corto: 'FIFO', nombre: 'FIFO', txt: 'Sale primero lo más antiguo.' },
   lifo: { corto: 'LIFO', nombre: 'LIFO', txt: 'Sale primero lo más reciente.' },
-  manual: { corto: 'Manual', nombre: 'Manual', txt: 'Tú eliges de qué recepción sale cada palet; el programa no reparte ni avisa.' },
+  manual: { corto: 'Manual', nombre: 'Manual', txt: 'Sin orden de entrada: el stock sale junto, agrupado por artículo, y solo indicas cuántos palets salen; el programa no avisa de nada.' },
 };
 function sgaClienteSalida(clienteId){
   const v = (sgaClienteCfg(clienteId).campos || {}).__salida;
@@ -6896,9 +6896,49 @@ async function sgaSalidaCancelar(){
   if (window.__stockDirty && !(await appConfirm({ title: 'Descartar la expedición', message: 'Has empezado a rellenar esta expedición. Si sales, se pierde lo escrito.', confirmLabel: 'Descartar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
   stockVolver();   // si se estaba editando, stockVolver recarga el stock real
 }
+// Sin orden de entrada («Manual»): el stock del cliente se enseña junto, agrupado por artículo, y solo se indica cuántos palets salen.
+// Por debajo se reparten entre sus partidas (las más antiguas primero, da igual cuál) en campos ocultos que lee el resto del programa.
+function sgaSalidaGruposHtml(clienteId, ps, conDesc){
+  const grupos = {};
+  ps.slice().sort((a, b) => String(a.fechaEntrada).localeCompare(String(b.fechaEntrada))).forEach(p => { const k = [p.productoId, p.descripcion, p.referencia].join('|'); (grupos[k] = grupos[k] || []).push(p); });
+  const lista = Object.values(grupos).sort((a, b) => sgaProdTxt(a[0].productoId).localeCompare(sgaProdTxt(b[0].productoId), 'es') || (a[0].descripcion || '').localeCompare(b[0].descripcion || '', 'es') || (a[0].referencia || '').localeCompare(b[0].referencia || '', 'es'));
+  const conBultos = sgaClienteConBultos(clienteId);
+  return lista.map((g, i) => {
+    const p0 = g[0], total = g.reduce((s, p) => s + p.actual, 0);
+    const sitios = [...new Set(g.map(sgaSitioTxt).filter(s => s && s !== '—'))].join(' · ');
+    const bultos = conBultos && g.every(p => p.bultos != null) ? g.reduce((s, p) => s + sgaBultosSalida(p, p.actual), 0) : null;
+    const pids = g.map(p => p.id).join(',');
+    return `<tr data-pids="${pids}" data-pid="${p0.id}">
+      ${conDesc ? `<td data-sort-value="${esc(p0.descripcion)}">${esc(p0.descripcion) || '—'}</td>` : ''}
+      <td data-sort-value="${esc(sgaProdTxt(p0.productoId))}">${esc(sgaProdTxt(p0.productoId))}</td>
+      <td data-sort-value="${esc(p0.referencia)}">${esc(p0.referencia) || '—'}</td>
+      <td data-sort-value="${esc(sitios)}">${esc(sitios) || '—'}</td>
+      <td class="tf-precio" data-sort-value="${total}">${total}${bultos != null ? `<small> (${sgaNumTxt(bultos)} bultos)</small>` : ''}</td>
+      <td style="text-align:right;width:110px;"><input class="sl-g" id="sl-g-${i}" data-pids="${pids}" data-total="${total}" inputmode="numeric" maxlength="6" placeholder="0" style="width:80px;text-align:right;" oninput="sgaSalidaGrupoIn(this)" onblur="sgaSalidaGruposSync()" />
+        <span style="display:none;">${g.map(p => `<input type="hidden" class="sl-in" id="sl-in-${p.id}" data-pid="${p.id}" />`).join('')}</span></td>
+    </tr>`;
+  }).join('');
+}
+function sgaSalidaGrupoIn(el){
+  const ps = el.dataset.pids.split(',').map(id => sgaPartidas.find(p => p.id === id)).filter(Boolean);
+  const total = ps.reduce((s, p) => s + p.actual, 0);
+  const n = Math.max(0, parseInt(el.value, 10) || 0);
+  el.classList.toggle('cg-err', n > total);
+  el.title = n > total ? `Solo hay ${total}` : '';
+  let resto = Math.min(n, total);
+  ps.forEach(p => { const toma = Math.min(resto, p.actual); sgaSalidaPonerCantidad(p.id, toma); resto -= toma; });
+}
+// El campo visible de cada artículo enseña la suma de lo repartido (también tras «Limpiar» o al abrir una expedición ya hecha)
+function sgaSalidaGruposSync(){
+  document.querySelectorAll('.sl-g').forEach(el => {
+    if (document.activeElement === el) return;
+    const s = el.dataset.pids.split(',').reduce((a, id) => { const h = document.getElementById('sl-in-' + id); return a + (h && h.value ? Number(h.value) || 0 : 0); }, 0);
+    el.value = s > 0 ? String(s) : ''; el.classList.remove('cg-err'); el.title = '';
+  });
+}
 function sgaSalidaStockHtml(clienteId){
   const cfg = sgaClienteCfg(clienteId);
-  const modo = sgaClienteSalida(clienteId), manual = modo === 'manual';
+  const modo = sgaClienteSalida(clienteId), manual = modo === 'manual', agrupado = manual && !sgaClienteCfg(clienteId).codigosUnicos;
   const ps = sgaStockCliente(clienteId, sgaSalidaWh());
   const conDesc = ps.some(p => p.descripcion);
   const tipos = [...new Set(ps.map(p => p.productoId))].sort((a, b) => sgaProdTxt(a).localeCompare(sgaProdTxt(b), 'es'));
@@ -6907,15 +6947,15 @@ function sgaSalidaStockHtml(clienteId){
       ${manual ? '' : `<div class="field" style="flex:1;min-width:190px;margin-bottom:0;"><label>Pedir por cantidad</label><select id="sl-q-tipo" onchange="sgaSalidaTipoCambio()">${tipos.map(t => `<option value="${t}">${esc(sgaProdTxt(t))}</option>`).join('')}</select></div>
       <div class="field" style="flex:1;min-width:150px;margin-bottom:0;"><label>Descripción</label><select id="sl-q-ref"></select></div>
       <div class="field" style="width:110px;margin-bottom:0;"><label>Cantidad</label><input id="sl-q-cant" inputmode="numeric" maxlength="6" placeholder="Nº" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaSalidaRepartir(); }" /></div>`}
-      ${manual ? '<div style="flex:1;min-width:200px;font-size:13px;color:var(--muted);"><b>Manual</b> · marca abajo cuántos palets salen de cada recepción.</div>' : `<button type="button" class="btn btn-ghost" onclick="sgaSalidaRepartir()" title="${modo === 'lifo' ? 'Reparte la cantidad entre las partidas más recientes' : 'Reparte la cantidad entre las partidas más antiguas'}">Repartir (${modo === 'lifo' ? 'más reciente' : 'más antiguo'} primero)</button>`}
+      ${manual ? '<div style="flex:1;min-width:200px;font-size:13px;color:var(--muted);"><b>Sin orden de entrada</b> · el stock sale junto, agrupado por artículo: indica abajo cuántos palets salen de cada uno.</div>' : `<button type="button" class="btn btn-ghost" onclick="sgaSalidaRepartir()" title="${modo === 'lifo' ? 'Reparte la cantidad entre las partidas más recientes' : 'Reparte la cantidad entre las partidas más antiguas'}">Repartir (${modo === 'lifo' ? 'más reciente' : 'más antiguo'} primero)</button>`}
       <button type="button" class="btn btn-ghost" onclick="sgaSalidaLimpiar()">Limpiar</button>
     </div>
     <div class="tc-hist-box" style="max-height:420px;">
     <table class="tf-table" style="min-width:640px;">
-      <thead><tr>${thSort('Recepción','date')}${conDesc ? thSort('Código de artículo','text') : ''}${thSort('Tipo de carga','text')}${thSort('Descripción','text')}${cfg.codigosUnicos ? thSort('Código','text') : ''}${thSort('Sitio','text')}${thSort('Hay','number','style="text-align:right;"')}<th style="text-align:right;">Sale</th></tr></thead>
-      <tbody>${ps.map(p => `
+      <thead><tr>${manual ? '' : thSort('Recepción','date')}${conDesc ? thSort('Código de artículo','text') : ''}${thSort('Tipo de carga','text')}${thSort('Descripción','text')}${cfg.codigosUnicos && !agrupado ? thSort('Código','text') : ''}${thSort('Sitio','text')}${thSort('Hay','number','style="text-align:right;"')}<th style="text-align:right;">Sale</th></tr></thead>
+      <tbody>${agrupado ? sgaSalidaGruposHtml(clienteId, ps, conDesc) : ps.map(p => `
         <tr data-pid="${p.id}">
-          <td style="white-space:nowrap;" data-sort-value="${esc(p.fechaEntrada)}">${fmtDateDMY(p.fechaEntrada)}</td>
+          ${manual ? '' : `<td style="white-space:nowrap;" data-sort-value="${esc(p.fechaEntrada)}">${fmtDateDMY(p.fechaEntrada)}</td>`}
           ${conDesc ? `<td data-sort-value="${esc(p.descripcion)}">${esc(p.descripcion) || "—"}</td>` : ""}
           <td data-sort-value="${esc(sgaProdTxt(p.productoId))}">${esc(sgaProdTxt(p.productoId))}</td>
           <td data-sort-value="${esc(p.referencia)}">${esc(p.referencia) || '—'}</td>
@@ -7078,8 +7118,10 @@ function sgaSalidaRefrescar(){
   const tot = d.items.reduce((s, x) => s + (x.n > 0 && isFinite(x.n) ? x.n : 0), 0);
   const t = document.getElementById('sl-total');
   if (t) t.innerHTML = tot ? `Salen <b>${tot}</b> palet${tot !== 1 ? 's' : ''}.` : 'Todavía no has marcado nada.';
+  sgaSalidaGruposSync();
   document.querySelectorAll('#sl-stock tbody tr').forEach(tr => {
-    const x = d.items.find(i => i.p.id === tr.dataset.pid);
+    const pids = (tr.dataset.pids || tr.dataset.pid || '').split(',');
+    const x = d.items.find(i => pids.includes(i.p.id) && i.n > 0);   // en el agrupado, la fila se resalta si sale algo de cualquiera de sus partidas
     tr.style.background = x && x.n > 0 ? 'color-mix(in srgb,var(--primary) 8%,var(--panel))' : '';
   });
 }
