@@ -13185,6 +13185,7 @@ function openAppointmentModal(prefillStart, editId, prefill){
         <div class="field"><label>Observaciones (opcional)</label><input id="af-notes" placeholder="Ej. Acceso por muelle 2" value="${esc(src.notes||'')}" /></div>
         ${attachmentsFieldHtml()}
         <input type="hidden" id="af-from-unscheduled" value="${prefill&&prefill.fromUnscheduledId ? prefill.fromUnscheduledId : ''}" />
+        <div id="af-ok" style="color:var(--success);font-size:12.5px;font-weight:600;margin-bottom:4px;"></div>
         <div id="af-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
         <div style="display:flex;gap:10px;">
           ${editing ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="deleteAppointment('${editing.id}')">Eliminar</button>` : ''}
@@ -24662,18 +24663,25 @@ function openAddFichajeModal(driverId){
           <div class="field" style="flex:1;"><label>Km final</label><input id="af-kmend" type="number" step="0.1" /></div>
         </div>
         <div style="font-size:11.5px;color:var(--mutedFaint);margin-bottom:10px;">Deja la hora/km de salida en blanco si la jornada debe quedar como abierta.</div>
+        <div id="af-ok" style="color:var(--success);font-size:12.5px;font-weight:600;margin-bottom:4px;"></div>
         <div id="af-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
         <div style="display:flex;gap:10px;">
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button class="btn btn-primary" id="af-submit-btn" style="flex:1;justify-content:center;" onclick="submitAddFichaje('${driverId}')">Guardar</button>
+          <button class="btn btn-ghost" id="af-submit-btn" style="flex:1;justify-content:center;" onclick="submitAddFichaje('${driverId}')" title="Guarda y cierra">Guardar</button>
+          <button class="btn btn-primary" id="af-otro-btn" style="flex:1.4;justify-content:center;" onclick="submitAddFichaje('${driverId}', true)" title="Guarda y deja el formulario abierto con el día siguiente (Intro)">Guardar y añadir otro</button>
         </div>
       </div>
     </div>`;
+  setTimeout(() => {
+    const box = document.querySelector('#modal-slot .modal-box');
+    if (box) box.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); submitAddFichaje(driverId, true); } });
+    const t = document.getElementById('af-timein'); if (t) t.focus();
+  }, 30);
 }
-async function submitAddFichaje(driverId){
+async function submitAddFichaje(driverId, otro){
   const errEl = document.getElementById('af-error');
   const btn = document.getElementById('af-submit-btn');
-  errEl.textContent = '';
+  errEl.textContent = ''; { const ok0 = document.getElementById('af-ok'); if (ok0) ok0.textContent = ''; }
   const date = document.getElementById('af-date').value;
   const timeIn = document.getElementById('af-timein').value;
   const timeOut = document.getElementById('af-timeout').value || null;
@@ -24688,7 +24696,7 @@ async function submitAddFichaje(driverId){
   if (kmEnd != null && kmEnd < kmStart) { errEl.textContent = 'El km final no puede ser menor que el inicial.'; return; }
   const km = kmEnd != null ? Math.round((kmEnd - kmStart)*10)/10 : null;
   const status = (timeOut && kmEnd != null) ? 'cerrada' : 'abierta';
-  btn.disabled = true;
+  btn.disabled = true; { const ob = document.getElementById('af-otro-btn'); if (ob) ob.disabled = true; }
   try {
     const { data, error } = await supabaseClient.from('daily_entries').insert({
       driver_id: driverId, date, status, time_in: timeIn, time_out: timeOut,
@@ -24700,11 +24708,21 @@ async function submitAddFichaje(driverId){
       kmStart, kmEnd, km, photoIn: null, photoOut: null,
     });
     const { year } = getISOWeek(date);
-    closeModal();
-    await recalcWeeksFromFichajes(driverId, year);
+    if (!otro) { closeModal(); await recalcWeeksFromFichajes(driverId, year); return; }
+    // «Guardar y añadir otro»: el formulario sigue abierto con el día siguiente, las mismas horas y el km inicial = el km final anterior
+    const okEl = document.getElementById('af-ok');
+    if (okEl) okEl.textContent = `✓ Guardado el ${fmtDate(date)}${kmEnd != null ? '' : ' (jornada abierta)'}. Ya puedes meter el siguiente.`;
+    document.getElementById('af-date').value = nextFichajeDate(driverId);
+    document.getElementById('af-kmstart').value = kmEnd != null ? String(kmEnd) : '';
+    document.getElementById('af-kmend').value = '';
+    btn.disabled = false;
+    const otroBtn = document.getElementById('af-otro-btn'); if (otroBtn) otroBtn.disabled = false;
+    const sig = document.getElementById(kmEnd != null ? 'af-kmend' : 'af-kmstart'); if (sig) { sig.focus(); sig.select && sig.select(); }
+    recalcWeeksFromFichajes(driverId, year);   // las semanas se recalculan por detrás para no frenar la entrada
   } catch (error) {
     errEl.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido.');
     btn.disabled = false;
+    const otroBtn = document.getElementById('af-otro-btn'); if (otroBtn) otroBtn.disabled = false;
   }
 }
 function openEditFichajeModal(id){
