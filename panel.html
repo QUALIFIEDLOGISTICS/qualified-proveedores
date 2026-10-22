@@ -587,6 +587,15 @@
   .mp-pop-p{margin:8px 0 2px;padding-top:7px;border-top:1px solid #E1E5EA;font-size:12.5px;color:#1B2430;}
   .mp-pop-p div{display:flex;justify-content:space-between;gap:12px;padding:1px 0;}
   .mp-pop-b{margin-top:9px;width:100%;padding:8px;border:0;border-radius:8px;background:#173E8C;color:#fff;font:700 12.5px/1 inherit;cursor:pointer;}
+  .mp-lugar-pop .mp-pop-p{margin-top:8px;}
+  .mp-lugar-it{display:flex;align-items:center;gap:7px;width:100%;text-align:left;padding:4px 0;background:transparent;border:0;cursor:pointer;color:#1B2430;font:inherit;font-size:12.5px;}
+  .mp-lugar-it span{flex:0 0 auto;width:9px;height:9px;border-radius:50%;background:var(--c);}
+  .mp-lugar-it b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;}
+  .mp-lugar-it small{color:#69727C;font-size:11.5px;}
+  .mp-lugar-it:hover b{color:#173E8C;text-decoration:underline;}
+  .mp-pop-acc{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
+  .mp-pop-acc button,.mp-pop-acc a{flex:1 1 auto;padding:7px 9px;border-radius:8px;border:1px solid #D5DBE3;background:#F4F6F8;color:#173E8C;font:inherit;font-size:12px;font-weight:700;cursor:pointer;text-align:center;text-decoration:none;white-space:nowrap;}
+  .mp-pop-acc button:hover,.mp-pop-acc a:hover{background:#E6EBF3;}
   .leaflet-container{font-family:inherit;}
   /* ---- Mapa · vista Regiones (fondo oscuro) ---- */
   .mp-map.mp-oscuro{background:#0B1220;border-color:#1B2740;}
@@ -14205,6 +14214,7 @@ function mapaIniciarMapa(){
   map.on('click', e => {
     if (S.modo === 'form') mapaColocar(e.latlng.lat, e.latlng.lng, true);
     else if (S.modo === 'ruta' && S.ruta && S.ruta.pick) mapaRutaPunto(S.ruta.pick, { lat: e.latlng.lat, lng: e.latlng.lng, nombre: 'Punto del mapa (' + e.latlng.lat.toFixed(4) + ', ' + e.latlng.lng.toFixed(4) + ')' });
+    else if (S.modo !== 'importar') mapaLugarClic(e.latlng);   // pulsar en cualquier otro sitio: información de ese lugar
   });
   S.map = map; S.marks = {}; S.tmp = null;
   setTimeout(() => { try { map.invalidateSize(); } catch (e) { /* ya no está */ } }, 60);
@@ -15142,6 +15152,68 @@ function mapaRutaVer(id){
   if (!m || !S.map) return;
   S.map.setView(m.getLatLng(), Math.max(S.map.getZoom(), 11), { animate: true });
   m.openPopup();
+}
+/* ---- Pulsar en cualquier sitio del mapa: información de ese lugar (como en Google Maps) ----
+   Dirección y código postal (consulta inversa a Nominatim), coordenadas, qué puntos nuestros hay cerca y atajos: cómo llegar, usarlo como
+   origen / destino / paso de una ruta o crear un punto ahí. Si se pulsa sobre una chincheta de las nuestras, se abre su ficha (como siempre). */
+let mapaLugarSeq = 0;
+function mapaPuntosCerca(lat, lng, km, max){
+  return mapaS().puntos.map(p => ({ p, d: mapaHaversine([lat, lng], [p.lat, p.lng]) })).filter(x => x.d <= km).sort((a, b) => a.d - b.d).slice(0, max);
+}
+function mapaLugarHtml(l){
+  const cerca = mapaPuntosCerca(l.lat, l.lng, 8, 4);
+  const ll = l.lat.toFixed(5) + ', ' + l.lng.toFixed(5);
+  return `<div class="mp-pop mp-lugar-pop">
+    <div class="mp-pop-t" style="color:var(--muted,#69727C)">Lugar en el mapa</div>
+    <div class="mp-pop-n">${l.cargando ? 'Buscando la dirección…' : esc(l.titulo || 'Sin dirección conocida')}</div>
+    ${l.lineas && l.lineas.length ? `<div class="mp-pop-d">${l.lineas.map(esc).join('<br>')}</div>` : ''}
+    <div class="mp-pop-d" style="margin-top:4px;font-variant-numeric:tabular-nums;">${esc(ll)}</div>
+    ${cerca.length ? `<div class="mp-pop-p"><div style="font-weight:700;margin-bottom:3px;">Cerca de aquí</div>${cerca.map(x => `<button type="button" class="mp-lugar-it" onclick="mapaSeleccionar('${x.p.id}', true)"><span style="--c:${MAPA_TIPOS[x.p.tipo].color}"></span><b>${esc(x.p.nombre)}</b><small>${x.d < 1 ? Math.round(x.d * 1000) + ' m' : x.d.toFixed(1).replace('.', ',') + ' km'}</small></button>`).join('')}</div>` : ''}
+    <div class="mp-pop-acc">
+      <button type="button" onclick="mapaLugarAccion('origen')">Ruta desde aquí</button>
+      <button type="button" onclick="mapaLugarAccion('destino')">Ruta hasta aquí</button>
+      <button type="button" onclick="mapaLugarAccion('via')">Pasar por aquí</button>
+      <button type="button" onclick="mapaLugarAccion('punto')">+ Añadir punto aquí</button>
+      <a href="https://www.google.com/maps/search/?api=1&query=${l.lat},${l.lng}" target="_blank" rel="noopener">Abrir en Google Maps</a>
+    </div></div>`;
+}
+async function mapaLugarClic(ll){
+  const S = mapaS();
+  if (!S.map) return;
+  const seq = ++mapaLugarSeq;
+  const l = S.lugar = { lat: ll.lat, lng: ll.lng, cargando: true, titulo: '', lineas: [], nombre: 'Punto del mapa (' + ll.lat.toFixed(4) + ', ' + ll.lng.toFixed(4) + ')' };
+  const pop = L.popup({ maxWidth: 300, minWidth: 250, className: 'mp-popup-lugar' }).setLatLng(ll).setContent(mapaLugarHtml(l)).openOn(S.map);
+  try {
+    const r = await mapaFetchTope(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&accept-language=es&zoom=18&lat=${ll.lat}&lon=${ll.lng}`, 5000);
+    if (!r.ok) throw new Error('sin respuesta');
+    const j = await r.json();
+    if (seq !== mapaLugarSeq) return;
+    const a = j.address || {};
+    const calle = [a.road || a.pedestrian || a.industrial || '', a.house_number || ''].filter(Boolean).join(' ');
+    const zona = a.city || a.town || a.village || a.municipality || a.county || '';
+    l.titulo = j.name && j.name !== calle ? j.name : (calle || a.suburb || zona || '');
+    l.lineas = [calle && l.titulo !== calle ? calle : '', [a.postcode, zona].filter(Boolean).join(' '), [a.county && a.county !== zona ? a.county : '', a.state].filter(Boolean).join(', '), a.country || ''].filter(Boolean);
+    if (l.titulo) l.nombre = [l.titulo, zona || a.country].filter(Boolean).join(', ');
+  } catch (e) { if (seq !== mapaLugarSeq) return; }
+  l.cargando = false;
+  pop.setContent(mapaLugarHtml(l));
+}
+function mapaLugarAccion(a){
+  const S = mapaS(), l = S.lugar;
+  if (!l) return;
+  if (S.map) S.map.closePopup();
+  if (a === 'punto') {
+    mapaAnadir();
+    setTimeout(() => mapaColocar(l.lat, l.lng, true), 250);
+    return;
+  }
+  const r = mapaRutaS();
+  const lugar = { lat: l.lat, lng: l.lng, nombre: l.nombre };
+  if (S.modo !== 'ruta') { S.modo = 'ruta'; r.fase = 'form'; r.res = null; mapaRutaLimpiarMapa(); mapaPanel(); }
+  else if (r.fase !== 'form') { r.fase = 'form'; r.res = null; mapaRutaLimpiarMapa(); }
+  if (a === 'via') { r.vias.push(lugar); r.viaAbierta = false; mapaPanel(); return; }
+  r[a] = lugar;
+  mapaPanel();
 }
 // Vuelve a pintar chips, países, marcadores y la lista/tabla según los filtros
 function mapaRefrescar(ajustar){
