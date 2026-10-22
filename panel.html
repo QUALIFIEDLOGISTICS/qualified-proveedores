@@ -634,6 +634,15 @@
   .mp-rn.sel{box-shadow:0 0 0 4px color-mix(in srgb,var(--c) 35%,transparent),0 3px 9px rgba(0,0,0,.5);}
   .mp-rn-ab{font-size:15px;}
   .mp-rn-via{width:100%;height:100%;border-radius:50%;background:#fff;border:4px solid #2F6FED;box-sizing:border-box;box-shadow:0 1px 5px rgba(0,0,0,.4);}
+  .mp-sugs{margin-top:6px;border:1px solid var(--border);border-radius:12px;background:var(--panel);box-shadow:0 8px 22px rgba(0,0,0,.12);overflow:hidden;}
+  .mp-sug{display:flex;align-items:center;gap:11px;width:100%;text-align:left;padding:9px 12px;background:transparent;border:0;border-bottom:1px solid var(--border);cursor:pointer;color:var(--text);}
+  .mp-sug:hover,.mp-sug.act{background:var(--panel2);}
+  .mp-sug-i{flex:0 0 auto;width:28px;height:28px;border-radius:50%;background:var(--panel2);color:var(--muted);display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;}
+  .mp-sug-i.p{background:var(--primary);color:#fff;}
+  .mp-sug-t{display:flex;flex-direction:column;min-width:0;}
+  .mp-sug-t b{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .mp-sug-t small{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .mp-sug-h{padding:7px 12px;font-size:11.5px;color:var(--mutedFaint);background:var(--panel2);font-weight:600;}
   /* ---- Mapa · importar AS24, avisos de estado ---- */
   .mp-imp-drop{display:flex;align-items:center;justify-content:center;padding:26px 16px;border:2px dashed var(--border);border-radius:14px;background:var(--panel2);cursor:pointer;text-align:center;}
   .mp-imp-drop:hover{border-color:var(--primary);}
@@ -14692,14 +14701,14 @@ function mapaRutaHtml(){
     const v = r[k];
     return `<div class="field"><label>${titulo}</label>
       ${v ? `<div class="mp-lugar"><span>${esc(v.nombre)}</span><button type="button" class="mp-x" title="Quitar" onclick="mapaRutaQuitar('${k}')">✕</button></div>`
-        : `<div class="mp-busca"><input id="mp-r-${k}" maxlength="120" placeholder="${ph}" onkeydown="if(event.key==='Enter'){event.preventDefault();mapaRutaBuscar('${k}');}" /><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="mapaRutaBuscar('${k}')">Buscar</button></div>
+        : `<div class="mp-busca"><input id="mp-r-${k}" maxlength="120" autocomplete="off" placeholder="${ph}" oninput="mapaRutaEscribe('${k}')" onkeydown="mapaRutaTecla(event, '${k}')" onblur="setTimeout(() => { const s = mapaRutaS().sug; if (s && s.k === '${k}') { mapaRutaS().sug = null; mapaRutaSugPinta('${k}'); } }, 180)" /><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="mapaRutaBuscar('${k}')">Buscar</button></div>
           <div class="mp-hint">o <button type="button" class="mp-link" onclick="mapaRutaElegirEnMapa('${k}')">elígelo pinchando en el mapa</button></div><div id="mp-r-res-${k}" class="mp-res"></div>`}</div>`;
   };
   if (r.fase === 'calculando') return `${cab}<div class="mp-cuerpo"><div class="mp-imp-prog"><b id="mp-r-estado">Calculando la ruta…</b><div class="mp-imp-barra"><i id="mp-r-bar" style="width:5%"></i></div><small>Un camión de ${esc(String(r.camion.alto))} m y ${esc(String(r.camion.peso))} t. Puede tardar unos segundos.</small></div></div>`;
   if (r.fase === 'listo' && r.res) return `${cab}${mapaRutaResultadosHtml()}`;
   return `${cab}<div class="mp-cuerpo">
-    ${lugar('origen', 'Origen <span class="dc-req">*</span>', 'Ciudad, dirección o nombre de un punto…')}
-    ${lugar('destino', 'Destino <span class="dc-req">*</span>', 'Ciudad, dirección o nombre de un punto…')}
+    ${lugar('origen', 'Origen <span class="dc-req">*</span>', 'Ciudad, dirección, código postal o nombre…')}
+    ${lugar('destino', 'Destino <span class="dc-req">*</span>', 'Ciudad, dirección, código postal o nombre…')}
     ${r.vias.length ? `<div class="field"><label>Pasando por</label>${r.vias.map((v, i) => `<div class="mp-lugar"><span>${esc(v.nombre)}</span><button type="button" class="mp-x" title="Quitar" onclick="mapaRutaQuitarVia(${i})">✕</button></div>`).join('')}</div>` : ''}
     <div class="field"><label>¿Qué necesitas?</label><div class="mp-svcs-e">
       ${[['as24', 'Repostar (AS24)'], ['parking', 'Descansar (parking)'], ['lavadero', 'Lavar']].map(([t, l]) => `<button type="button" class="mp-sv${r.tipos[t] ? ' on' : ''}" onclick="mapaRutaTipo('${t}')">${l}</button>`).join('')}</div></div>
@@ -14732,27 +14741,117 @@ function mapaRutaPunto(k, lugar){
   mapaPanel();
   if (S.map && r.origen && r.destino) S.map.fitBounds([[r.origen.lat, r.origen.lng], [r.destino.lat, r.destino.lng]], { padding: [60, 60] });
 }
-async function mapaRutaBuscar(k){
+/* ---- Buscador de lugares con sugerencias, como el de Google Maps: ciudad, dirección, código postal o nombre de un punto ----
+   Mientras escribes salen sugerencias de Photon (buscador de OpenStreetMap hecho para autocompletar, limitado a Europa) y de tus propios
+   puntos. Si Photon no responde, el botón «Buscar» prueba con Nominatim. */
+const MAPA_EUROPA_BBOX = '-12,34,35,72';
+let mapaSugTimer = null, mapaSugSeq = 0, mapaPaisNom = null, mapaPhotonFallo = 0;   // si Photon no responde se usa Nominatim un rato (más despacio: pide máximo 1 consulta por segundo)
+// fetch con tiempo máximo: si el buscador se queda colgado, se sigue con otro en vez de esperar
+function mapaFetchTope(url, ms){
+  const c = new AbortController(), t = setTimeout(() => c.abort(), ms);
+  return fetch(url, { signal: c.signal }).finally(() => clearTimeout(t));
+}
+function mapaPaisDeCodigo(cc){
+  try { mapaPaisNom = mapaPaisNom || new Intl.DisplayNames(['es'], { type: 'region' }); return mapaPaisNom.of(String(cc).toUpperCase()) || ''; } catch (e) { return ''; }
+}
+function mapaSugPhoton(f){
+  const p = f.properties || {}, c = f.geometry && f.geometry.coordinates;
+  if (!c) return null;
+  const calle = [p.street, p.housenumber].filter(Boolean).join(' ');
+  const zona = p.city || p.town || p.village || p.municipality || p.county || '';
+  const titulo = p.name || calle || p.postcode || zona;
+  if (!titulo) return null;
+  const cpZona = [p.postcode && p.postcode !== titulo ? p.postcode : '', zona && zona !== titulo ? zona : ''].filter(Boolean).join(' ');
+  const pais = p.countrycode ? mapaPaisDeCodigo(p.countrycode) : (p.country || '');
+  const sub = [p.name && calle ? calle : '', cpZona, p.state && p.state !== zona && p.state !== titulo ? p.state : '', pais].filter(Boolean).join(', ');
+  return { lat: c[1], lng: c[0], titulo, sub, nombre: [titulo, sub].filter(Boolean).join(', ') };
+}
+function mapaSugNominatim(x){
+  const partes = String(x.display_name || '').split(',').map(s => s.trim());
+  const sub = [...new Set([...partes.slice(1, 3), partes.length > 1 ? partes[partes.length - 1] : ''].filter(Boolean))].join(', ');   // zona y país
+  return { lat: Number(x.lat), lng: Number(x.lon), titulo: partes[0], sub, nombre: [partes[0], sub].filter(Boolean).join(', ') };
+}
+function mapaSugLocales(q){
+  const n = mapaNorm(q).trim(), cp = q.replace(/\s/g, '');
+  if (n.length < 2) return [];
+  return mapaS().puntos.filter(p => mapaNorm(p.nombre + ' ' + p.localidad).includes(n) || (cp.length >= 3 && p.cp && p.cp.replace(/\s/g, '').startsWith(cp)) || p.codigo === q.trim())
+    .slice(0, 4).map(p => ({ lat: p.lat, lng: p.lng, titulo: p.nombre, sub: [MAPA_TIPOS[p.tipo].corto, [p.cp, p.localidad].filter(Boolean).join(' '), p.pais].filter(Boolean).join(' · '), nombre: p.nombre + (p.localidad ? ', ' + p.localidad : ''), propio: true }));
+}
+function mapaRutaEscribe(k){
+  clearTimeout(mapaSugTimer);
+  const r = mapaRutaS();
   const q = ((document.getElementById('mp-r-' + k) || {}).value || '').trim();
+  if (q.length < 2) { r.sug = null; mapaRutaSugPinta(k); return; }
+  r.sug = { k, items: mapaSugLocales(q), activo: -1, buscando: true };   // lo tuyo sale al instante; los lugares, en cuanto contesta el buscador
+  mapaRutaSugPinta(k);
+  mapaSugTimer = setTimeout(() => mapaRutaSugerir(k, false), Date.now() - mapaPhotonFallo < 60000 ? 800 : 280);
+}
+async function mapaRutaSugerir(k, forzar){
+  const inp = document.getElementById('mp-r-' + k);
+  if (!inp) return;
+  const q = inp.value.trim(), r = mapaRutaS(), seq = ++mapaSugSeq;
+  if (q.length < 2) return;
+  let lugares = [], fallo = false;
+  const sinPhoton = Date.now() - mapaPhotonFallo < 60000 && !forzar;
+  try {
+    if (sinPhoton) throw new Error('sin Photon');
+    const rs = await mapaFetchTope(`https://photon.komoot.io/api/?limit=7&bbox=${MAPA_EUROPA_BBOX}&q=${encodeURIComponent(q)}`, 3500);
+    if (!rs.ok) throw new Error('el buscador no responde');
+    lugares = ((await rs.json()).features || []).map(mapaSugPhoton).filter(Boolean);
+  } catch (e) { fallo = true; if (!sinPhoton) mapaPhotonFallo = Date.now(); }
+  if (seq !== mapaSugSeq) return;
+  if (!lugares.length && (fallo || forzar)) {
+    try {
+      const esCp = /^[A-Za-z]{0,2}[- ]?\d{3,5}(?:[ -]?[A-Za-z0-9]{0,3})?$/.test(q);   // «08001», «75001», «1012 AB»…: se busca como código postal
+      const rs = await mapaFetchTope(`https://nominatim.openstreetmap.org/search?format=jsonv2&accept-language=es&limit=7&countrycodes=es,pt,fr,de,it,nl,be,lu,at,ch,gb,ie,pl,cz,sk,hu,si,hr,ro,bg,gr,dk,se,no,fi,ee,lv,lt,ad,mc,li,sm,mt,cy&${esCp ? 'postalcode=' : 'q='}${encodeURIComponent(q)}`, 6000);
+      if (rs.ok) lugares = (await rs.json()).map(mapaSugNominatim);
+    } catch (e) { /* solo quedan los puntos propios */ }
+    if (seq !== mapaSugSeq) return;
+  }
+  const vistos = new Set();
+  lugares = lugares.filter(l => { const id = l.titulo + '|' + l.sub; if (vistos.has(id)) return false; vistos.add(id); return true; }).slice(0, 6);
+  r.sug = { k, items: [...lugares, ...mapaSugLocales(q)], activo: -1, buscando: false, sinResultados: !lugares.length && !mapaSugLocales(q).length };
+  mapaRutaSugPinta(k);
+}
+function mapaRutaBuscar(k){ clearTimeout(mapaSugTimer); return mapaRutaSugerir(k, true); }
+function mapaRutaSugPinta(k){
   const res = document.getElementById('mp-r-res-' + k);
   if (!res) return;
-  if (q.length < 3) { res.innerHTML = '<div class="mp-hint">Escribe al menos 3 letras.</div>'; return; }
-  res.innerHTML = '<div class="mp-hint">Buscando…</div>';
-  const qn = mapaNorm(q);
-  const propios = mapaS().puntos.filter(p => mapaNorm(p.nombre + ' ' + p.localidad).includes(qn)).slice(0, 3);
-  let osm = [];
-  try {
-    const rsp = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&accept-language=es&limit=5&q=${encodeURIComponent(q)}`);
-    if (rsp.ok) osm = await rsp.json();
-  } catch (e) { /* solo se ofrecen los puntos propios */ }
-  window.__mapaRutaRes = [...osm.slice(0, 4).map(x => ({ lat: Number(x.lat), lng: Number(x.lon), nombre: x.display_name })), ...propios.map(p => ({ lat: p.lat, lng: p.lng, nombre: p.nombre + (p.localidad ? ' · ' + p.localidad : ''), propio: true }))];   // primero lugares (ciudades, direcciones), luego puntos del mapa
-  res.innerHTML = window.__mapaRutaRes.length ? window.__mapaRutaRes.map((x, i) => `<button type="button" class="mp-res-i" onclick="mapaRutaElegirRes('${k}', ${i})">${x.propio ? '<b>Punto del mapa · </b>' : ''}${esc(x.nombre)}</button>`).join('') : '<div class="mp-hint">Sin resultados. Prueba con otro nombre o elígelo en el mapa.</div>';
+  const s = mapaRutaS().sug;
+  if (!s || s.k !== k) { res.innerHTML = ''; return; }
+  const lugares = s.items.filter(x => !x.propio), propios = s.items.filter(x => x.propio);
+  const fila = (x, i) => `<button type="button" class="mp-sug${i === s.activo ? ' act' : ''}" onmousedown="event.preventDefault(); mapaRutaSugElegir('${k}', ${i})">
+    <span class="mp-sug-i${x.propio ? ' p' : ''}">${x.propio ? 'P' : '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>'}</span>
+    <span class="mp-sug-t"><b>${esc(x.titulo)}</b><small>${esc(x.sub)}</small></span></button>`;
+  res.innerHTML = `<div class="mp-sugs">
+    ${lugares.map((x, i) => fila(x, i)).join('')}
+    ${s.buscando ? '<div class="mp-sug-h">Buscando lugares…</div>' : ''}
+    ${propios.length ? `<div class="mp-sug-h">Puntos del mapa</div>${propios.map((x, i) => fila(x, lugares.length + i)).join('')}` : ''}
+    ${s.sinResultados ? '<div class="mp-sug-h">Sin resultados. Prueba con otro nombre o código postal, o elígelo en el mapa.</div>' : ''}
+  </div>`;
 }
-function mapaRutaElegirRes(k, i){
-  const x = (window.__mapaRutaRes || [])[i];
+function mapaRutaTecla(ev, k){
+  const s = mapaRutaS().sug;
+  if (ev.key === 'Escape') { mapaRutaS().sug = null; mapaRutaSugPinta(k); return; }
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+    if (!s || !s.items.length) return;
+    ev.preventDefault();
+    s.activo = (s.activo + (ev.key === 'ArrowDown' ? 1 : -1) + s.items.length) % s.items.length;
+    mapaRutaSugPinta(k);
+    return;
+  }
+  if (ev.key === 'Enter') {
+    ev.preventDefault();
+    if (s && s.items.length) mapaRutaSugElegir(k, s.activo >= 0 ? s.activo : 0);
+    else mapaRutaBuscar(k);
+  }
+}
+function mapaRutaSugElegir(k, i){
+  const s = mapaRutaS().sug;
+  const x = s && s.items[i];
   if (!x) return;
-  const corto = x.nombre.split(',').slice(0, 3).join(',');
-  mapaRutaPunto(k, { lat: x.lat, lng: x.lng, nombre: corto });
+  mapaRutaS().sug = null;
+  mapaRutaPunto(k, { lat: x.lat, lng: x.lng, nombre: x.nombre });
 }
 /* ---- Cálculo ---- */
 function mapaRutaProgreso(txt, pct){
