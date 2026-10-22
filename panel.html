@@ -718,6 +718,15 @@
   .crm-ic{min-width:30px;height:30px;padding:0 9px;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:var(--muted);font:700 12px/1 inherit;cursor:pointer;margin-left:4px;}
   .crm-ic:hover{border-color:var(--primary);color:var(--primary);}
   .crm-ic.ok:hover{border-color:var(--success);color:var(--success);}
+  .crm-clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:13px;line-height:1.4;}
+  .crm-b.ok{border-color:color-mix(in srgb,var(--success) 50%,var(--border));color:var(--success);}
+  .crm-pc{display:flex;flex-direction:column;gap:6px;}
+  .crm-pc-r{display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:11px;background:var(--panel);cursor:pointer;text-align:left;font-family:inherit;color:var(--text);}
+  .crm-pc-r:hover{border-color:var(--primary);}
+  .crm-pc-t{flex:1;min-width:0;display:flex;flex-direction:column;}
+  .crm-pc-t b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .crm-pc-t small{font-size:11.5px;color:var(--muted);}
+  .crm-pc-r em{font-style:normal;color:var(--mutedFaint);font-size:18px;}
   .crm-lt-f{padding:10px 16px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);background:var(--panel2);}
   .crm-sol{border:1px solid var(--border);border-radius:12px;background:var(--panel2);padding:10px 13px;font-size:13px;}
   .crm-sol summary{cursor:pointer;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:800;}
@@ -18147,35 +18156,89 @@ function crmPfSet(k, v, el){
   const s = window.__crmPF; s[k] = s[k] === v ? '' : v;   // pulsar otra vez lo quita
   el.parentElement.querySelectorAll('.crm-ch').forEach(b => b.classList.toggle('on', b.dataset.v === s[k]));
 }
+function crmProsDatos(){
+  const S = crmS(), h = today();
+  return S.prospectos.map(p => {
+    const os = S.opps.filter(o => o.prospectoId === p.id);
+    const ab = os.filter(crmAbierta).length;
+    return { p, n: os.length, ab, gan: os.some(o => o.fase === 'ganada'), ult: os.map(o => o.ultimo || o.fechaCot).sort().pop() || '',
+      venc: p.estado === 'activo' && !!p.revisar && p.revisar <= h && !ab };
+  });
+}
+function crmProsFiltrados(){
+  const S = crmS(), f = S.pfiltro || 'activos', q = crmNorm(S.pq);
+  const ok = { activos: x => x.p.estado === 'activo', sin: x => x.p.estado === 'activo' && !x.n, con: x => x.p.estado === 'activo' && x.n,
+    retomar: x => x.venc, alto: x => x.p.estado === 'activo' && x.p.potencial === 'alto', clientes: x => x.p.estado === 'cliente', descartados: x => x.p.estado === 'descartado', todos: () => true }[f] || (() => true);
+  return crmProsDatos().filter(x => ok(x) && (!q || crmNorm([x.p.nombre, x.p.persona, x.p.cargo, x.p.interes, x.p.email, x.p.telefono, x.p.notas, x.p.origen].join(' ')).includes(q)));
+}
 function crmProspectosHtml(){
   const S = crmS(), f = S.pfiltro || 'activos';
-  const todas = S.prospectos.map(p => {
-    const os = S.opps.filter(o => o.prospectoId === p.id);
-    return { p, n: os.length, ab: os.filter(crmAbierta).length, ult: os.map(o => o.ultimo || o.fechaCot).sort().pop() || '' };
-  });
+  const todas = crmProsDatos();
   if (!todas.length) return `<div class="card crm-inicio"><h3>Todavía no hay prospectos</h3><p>Aquí guardas las empresas que te interesan aunque ahora no vayas a negociar con ellas: apuntas quién es el contacto, qué servicio les encajaría, cuánto potencial tienen y por qué, y la fecha en la que quieres volver a mirarlas. Ese día te salen en «Hoy».</p><button type="button" class="btn btn-primary" onclick="crmProspectoForm()">+ Nuevo prospecto</button></div>`;
-  const cuenta = { activos: todas.filter(x => x.p.estado === 'activo').length, sin: todas.filter(x => x.p.estado === 'activo' && !x.n).length, con: todas.filter(x => x.p.estado === 'activo' && x.n).length, todos: todas.length };
-  const filas = todas.filter(x => f === 'todos' ? true : f === 'sin' ? x.p.estado === 'activo' && !x.n : f === 'con' ? x.p.estado === 'activo' && x.n : x.p.estado === 'activo');
-  const chips = [['activos', 'Activos'], ['sin', 'A futuro · sin cotizar'], ['con', 'Con cotización'], ['todos', 'Todos']];
-  const h = today();
-  return `<div class="crm-filtros"><div class="crm-chs">${chips.map(([v, t]) => `<button type="button" class="crm-ch${f === v ? ' on' : ''}" onclick="crmProsFiltro('${v}')">${t} <small>${cuenta[v]}</small></button>`).join('')}</div><div style="flex:1"></div><button type="button" class="btn btn-primary" onclick="crmProspectoForm()">+ Nuevo prospecto</button></div>
-    ${filas.length ? `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
+  const cuenta = { activos: 0, sin: 0, con: 0, retomar: 0, alto: 0, clientes: 0, descartados: 0, todos: todas.length };
+  todas.forEach(x => {
+    if (x.p.estado === 'activo') { cuenta.activos++; if (!x.n) cuenta.sin++; else cuenta.con++; if (x.p.potencial === 'alto') cuenta.alto++; }
+    if (x.p.estado === 'cliente') cuenta.clientes++; if (x.p.estado === 'descartado') cuenta.descartados++; if (x.venc) cuenta.retomar++;
+  });
+  const chips = [['activos', 'Activos', ''], ['sin', 'A futuro · sin cotizar', '#0E8A9B'], ['con', 'Con cotización', '#4F7DF3'], ['retomar', 'Para retomar', '#C1443D'], ['alto', 'Potencial alto', '#1F9D55'], ['clientes', 'Ya son clientes', '#2E9D6B'], ['descartados', 'Descartados', '#8A93A0'], ['todos', 'Todos', '']];
+  const stat = (n, t, sub, cls, on) => `<button type="button" class="crm-st ${cls}" onclick="${on}"><b>${n}</b><span>${t}</span><small>${sub}</small></button>`;
+  return `<div class="crm-ls">
+      ${stat(cuenta.activos, 'Prospectos activos', `${cuenta.sin} a futuro · ${cuenta.con} con cotización`, '', "crmProsFiltro('activos')")}
+      ${stat(cuenta.retomar, 'Para retomar', cuenta.retomar ? 'su fecha de volver a mirar ya llegó' : 'nada pendiente de retomar', cuenta.retomar ? 'mal' : '', "crmProsFiltro('retomar')")}
+      ${stat(cuenta.alto, 'Potencial alto', 'las que más interesan', 'ok', "crmProsFiltro('alto')")}
+      ${stat(cuenta.clientes, 'Pasadas a cliente', 'ya están en Contactos', '', "crmProsFiltro('clientes')")}
+    </div>
+    <div class="crm-filtros">
+      <div class="deca-search" style="flex:1 1 260px;max-width:440px;"><input id="crm-pq" placeholder="Buscar empresa, persona, motivo, teléfono…" value="${esc(S.pq || '')}" oninput="crmProsBuscar(this.value)" autocomplete="off" /><span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span></div>
+      <div style="flex:1"></div>
+      <button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="crmExportarProspectos()" title="Descarga en Excel (CSV) lo que se ve en la lista">Exportar</button>
+      <button type="button" class="btn btn-primary" onclick="crmProspectoForm()">+ Nuevo prospecto</button>
+    </div>
+    <div class="crm-fchips">${chips.map(([v, t, c]) => `<button type="button" class="crm-fc${f === v ? ' on' : ''}"${c ? ` style="--c:${c}"` : ''} onclick="crmProsFiltro('${v}')">${c ? '<i></i>' : ''}${t}<em>${cuenta[v]}</em></button>`).join('')}</div>
+    <div id="crm-pros-t">${crmProsTablaHtml()}</div>`;
+}
+function crmProsTablaHtml(){
+  const filas = crmProsFiltrados();
+  if (!filas.length) return '<div class="card crm-vacio">No hay prospectos que coincidan.</div>';
+  return `<div class="card crm-lt"><div class="crm-lt-s"><table class="tf-table crm-lt-t">
     <thead><tr>${thSort('Empresa', 'text')}${thSort('Potencial', 'number')}${thSort('Servicio', 'text')}${thSort('Por qué nos interesa', 'text')}${thSort('Volver a mirar', 'date')}${thSort('Cotizaciones', 'number', 'style="text-align:right;"')}${thSort('Último movimiento', 'date')}<th></th></tr></thead>
-    <tbody>${filas.map(({ p, n, ab, ult }) => {
-      const venc = p.estado === 'activo' && p.revisar && p.revisar <= h && !ab;
-      return `<tr>
-      <td data-sort-value="${esc(p.nombre)}" style="min-width:190px;"><b>${esc(p.nombre)}</b>${p.estado === 'cliente' ? ' <span class="crm-chip" style="--c:#2E9D6B">Cliente</span>' : p.estado === 'descartado' ? ' <span class="crm-chip" style="--c:#8A93A0">Descartado</span>' : ''}${p.persona || p.telefono || p.email ? `<div class="crm-sub">${esc([[p.persona, p.cargo].filter(Boolean).join(', '), p.telefono ? phoneFormat(p.telefono) : '', p.email].filter(Boolean).join(' · '))}</div>` : ''}</td>
+    <tbody>${filas.map(({ p, n, ab, gan, ult, venc }) => {
+      const col = p.estado === 'cliente' ? '#2E9D6B' : p.estado === 'descartado' ? '#8A93A0' : (CRM_POTENCIAL[p.potencial] || ['', 'var(--border)'])[1];
+      const contacto = [[p.persona, p.cargo].filter(Boolean).join(' · '), p.telefono ? phoneFormat(p.telefono) : '', p.email].filter(Boolean).join(' · ');
+      return `<tr class="crm-lr" style="--c:${col}" onclick="crmProspectoForm('${p.id}')">
+      <td data-sort-value="${esc(p.nombre)}" style="min-width:230px;"><div class="crm-lr-e">${crmAvatar(p.nombre)}<div><span class="crm-lr-n"><b>${esc(p.nombre)}</b>${p.estado === 'cliente' ? '<span class="crm-chip" style="--c:#2E9D6B">Cliente</span>' : p.estado === 'descartado' ? '<span class="crm-chip" style="--c:#8A93A0">Descartado</span>' : ''}</span>${contacto ? `<small>${esc(contacto)}</small>` : ''}</div></div></td>
       <td data-sort-value="${{ alto: 3, medio: 2, bajo: 1 }[p.potencial] || 0}">${crmPotChip(p.potencial)}</td>
-      <td data-sort-value="${esc(p.servicio)}">${p.servicio ? esc(CRM_SERVICIOS[p.servicio]) : '—'}</td>
-      <td data-sort-value="${esc(p.interes)}" style="max-width:260px;">${p.interes ? `<span class="crm-trunc" title="${esc(p.interes)}">${esc(p.interes)}</span>` : '—'}</td>
-      <td style="white-space:nowrap;${venc ? 'color:var(--danger);font-weight:700;' : ''}" data-sort-value="${esc(p.revisar || '9999')}">${p.revisar ? crmFecha(p.revisar) + (venc ? ' · ' + crmRel(p.revisar) : '') : '—'}</td>
-      <td class="tf-precio" data-sort-value="${n}">${n}${ab ? ` <small style="color:var(--primary);">(${ab} abierta${ab === 1 ? '' : 's'})</small>` : ''}</td>
-      <td style="white-space:nowrap;" data-sort-value="${esc(ult)}">${ult ? crmFecha(ult) : '—'}</td>
-      <td style="text-align:right;white-space:nowrap;">
+      <td data-sort-value="${esc(p.servicio)}">${p.servicio ? crmServChip(p.servicio) : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+      <td data-sort-value="${esc(p.interes)}" style="min-width:230px;max-width:340px;">${p.interes ? `<span class="crm-clamp" title="${esc(p.interes)}">${esc(p.interes)}</span>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+      <td style="min-width:130px;" data-sort-value="${esc(p.revisar || '9999')}">${p.revisar && p.estado === 'activo' ? `<span class="crm-lr-p${venc ? ' atras' : ''}">${crmRel(p.revisar)}</span><small class="crm-lr-s">${crmFecha(p.revisar)}</small>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+      <td class="tf-precio" data-sort-value="${n}">${n}${ab ? `<small class="crm-lr-s" style="color:var(--primary);">${ab} abierta${ab === 1 ? '' : 's'}</small>` : ''}</td>
+      <td style="white-space:nowrap;" data-sort-value="${esc(ult)}">${ult ? crmFecha(ult) + `<small class="crm-lr-s">${esc(crmRel(ult).toLowerCase())}</small>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+      <td style="white-space:nowrap;text-align:right;" onclick="event.stopPropagation()">
+        ${gan && p.estado !== 'cliente' ? `<button type="button" class="crm-b sm ok" title="Ya ha ganado una cotización: créalo como cliente" onclick="crmConvertir('${p.id}')">Pasar a cliente</button>` : ''}
         ${p.estado === 'activo' ? `<button type="button" class="crm-b pri sm" onclick="crmNuevaDesdeProspecto('${p.id}')">Cotizar</button>` : ''}
-        ${p.estado === 'cliente' ? '' : `<button type="button" class="crm-b sm" onclick="crmConvertir('${p.id}')">Pasar a cliente</button>`}
-        <button type="button" class="crm-b sm" onclick="crmProspectoForm('${p.id}')">Editar</button>
-        <button type="button" class="crm-b sm mal" onclick="crmProspectoEliminar('${p.id}')">Eliminar</button></td></tr>`; }).join('')}</tbody></table></div>` : '<div class="card crm-vacio">No hay prospectos en este filtro.</div>'}`;
+        <button type="button" class="crm-ic" title="Abrir y editar" onclick="crmProspectoForm('${p.id}')">›</button></td></tr>`; }).join('')}</tbody></table></div>
+    <div class="crm-lt-f">${filas.length} prospecto${filas.length === 1 ? '' : 's'}</div></div>`;
+}
+// Cotizaciones ya hechas a este prospecto, para abrirlas desde su ficha
+function crmProsCotizacionesHtml(p){
+  const os = crmS().opps.filter(o => o.prospectoId === p.id).sort((a, b) => (b.fechaCot || '').localeCompare(a.fechaCot || ''));
+  if (!os.length) return '';
+  return `<div class="crm-form-sec">Cotizaciones (${os.length})</div><div class="crm-pc">${os.map(o => { const f = CRM_FASE[o.fase];
+    return `<button type="button" class="crm-pc-r" onclick="crmAbrir('${o.id}')"><span class="crm-chip" style="--c:${f.color}">${f.label}</span><span class="crm-pc-t"><b>${esc(crmTitulo(o))}</b><small>${o.oferta ? esc(o.oferta) + ' · ' : ''}${crmFecha(o.fechaCot)}</small></span><em>›</em></button>`; }).join('')}</div>`;
+}
+function crmProsBuscar(v){ crmS().pq = v; const t = document.getElementById('crm-pros-t'); if (t) t.innerHTML = crmProsTablaHtml(); }
+function crmExportarProspectos(){
+  const l = crmProsFiltrados();
+  if (!l.length) { appToast('No hay prospectos que exportar.', 'info'); return; }
+  const cel = x => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"';
+  const cab = ['Empresa', 'Estado', 'Potencial', 'Servicio', 'Por qué nos interesa', 'Volver a mirar', 'Persona', 'Cargo', 'Teléfono', 'Correo', 'Cómo ha llegado', 'Cotizaciones', 'Notas'];
+  const filas = l.map(({ p, n }) => [p.nombre, p.estado, (CRM_POTENCIAL[p.potencial] || [''])[0], p.servicio ? CRM_SERVICIOS[p.servicio] : '', p.interes, p.revisar ? crmFecha(p.revisar) : '', p.persona, p.cargo, p.telefono ? phoneFormat(p.telefono) : '', p.email, p.origen, n, p.notas]);
+  const csv = '﻿' + [cab, ...filas].map(f => f.map(cel).join(';')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `prospectos-${today()}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 function crmProsFiltro(v){ crmS().pfiltro = v; crmPinta(); }
 function crmProspectoForm(id){ crmDrawerAbre({ tipo: 'prospecto', id: id || null }); }
@@ -18202,9 +18265,10 @@ function crmProspectoFormHtml(p){
       <div class="field"><label>Cómo ha llegado</label><input id="crm-p-ori" data-combo="crm-ori-dl" autocomplete="off" maxlength="80" placeholder="Opcional" value="${esc(p ? p.origen : '')}" /><datalist id="crm-ori-dl">${orig.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist></div>
       <div class="field"><label>Notas</label><textarea id="crm-p-not" rows="3" maxlength="800">${esc(p ? p.notas : '')}</textarea></div>
       ${p && p.estado !== 'activo' ? `<div class="field"><label>Estado</label><div class="crm-hint">${p.estado === 'cliente' ? 'Ya es cliente (está en Contactos).' : 'Descartado.'} <button type="button" class="crm-link" onclick="crmProspectoEstado('${p.id}', 'activo')">Volver a ponerlo como activo</button></div></div>` : (p ? `<div class="field"><button type="button" class="crm-link" onclick="crmProspectoEstado('${p.id}', 'descartado')">Descartar este prospecto</button></div>` : '')}
+      ${p ? crmProsCotizacionesHtml(p) : ''}
       <div id="crm-p-err" class="crm-err"></div>
     </div>
-    <div class="crm-dr-f"><button type="button" class="btn btn-ghost" onclick="crmCerrarDrawer()">Cancelar</button>${p && p.estado === 'activo' ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="crmProspectoGuardar('${p.id}', true)">Guardar y cotizar</button>` : ''}<button type="button" class="btn btn-primary" onclick="crmProspectoGuardar(${p ? `'${p.id}'` : 'null'})">Guardar</button></div>`;
+    <div class="crm-dr-f">${p ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);color:var(--danger);margin-right:auto;" onclick="crmProspectoEliminar('${p.id}')">Eliminar</button>${p.estado !== 'cliente' ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="crmConvertir('${p.id}')">Pasar a cliente</button>` : ''}` : ''}<button type="button" class="btn btn-ghost" onclick="crmCerrarDrawer()">Cancelar</button>${p && p.estado === 'activo' ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="crmProspectoGuardar('${p.id}', true)">Guardar y cotizar</button>` : ''}<button type="button" class="btn btn-primary" onclick="crmProspectoGuardar(${p ? `'${p.id}'` : 'null'})">Guardar</button></div>`;
 }
 function crmPfRev(meses){ const d = new Date(today() + 'T00:00:00'); d.setMonth(d.getMonth() + meses); const e = document.getElementById('crm-p-rev'); if (e) e.value = toDateStr(d); }
 async function crmProspectoGuardar(id, cotizar){
