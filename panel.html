@@ -13955,7 +13955,7 @@ const mapaNorm = s => String(s == null ? '' : s).toLowerCase().normalize('NFD').
 function mapaPuntoDeFila(r){
   return { id: r.id, tipo: r.tipo, nombre: r.nombre || '', lat: Number(r.lat), lng: Number(r.lng), direccion: r.direccion || '', localidad: r.localidad || '', pais: r.pais || '',
     telefono: r.telefono || '', web: r.web || '', horario: r.horario || '', plazas: r.plazas == null ? null : Number(r.plazas), servicios: Array.isArray(r.servicios) ? r.servicios : [],
-    observaciones: r.observaciones || '', createdAt: r.created_at, createdBy: r.created_by || '', updatedAt: r.updated_at, updatedBy: r.updated_by || '' };
+    observaciones: r.observaciones || '', mapsUrl: r.maps_url || '', createdAt: r.created_at, createdBy: r.created_by || '', updatedAt: r.updated_at, updatedBy: r.updated_by || '' };
 }
 function mapaPrecioDeFila(r){
   return { id: r.id, puntoId: r.punto_id, concepto: r.concepto, unidad: r.unidad || '', importe: Number(r.importe), moneda: r.moneda || 'EUR', desde: r.vigente_desde, nota: r.nota || '', createdBy: r.created_by || '', createdAt: r.created_at };
@@ -14190,6 +14190,7 @@ function mapaFichaHtml(p){
     <div class="mp-cuerpo">
       ${fila(mapaIco('pin'), dirTxt)}
       ${fila(mapaIco('tel'), p.telefono ? `<a href="tel:${esc(p.telefono.replace(/\s+/g, ''))}">${esc(p.telefono)}</a>` : '')}
+      ${fila(mapaIco('pin'), p.mapsUrl ? `<a href="${esc(mapaWebUrl(p.mapsUrl))}" target="_blank" rel="noopener">Abrir en Google Maps</a>` : '')}
       ${fila(mapaIco('web'), p.web ? `<a href="${esc(mapaWebUrl(p.web))}" target="_blank" rel="noopener">${esc(p.web.replace(/^https?:\/\//i, ''))}</a>` : '')}
       ${fila(mapaIco('hor'), esc(p.horario))}
       ${p.plazas != null ? fila(mapaIco('pla'), `${p.plazas} plazas`) : ''}
@@ -14371,6 +14372,8 @@ function mapaFormHtml(){
           <div id="mp-f-res" class="mp-res"></div>
           <div class="mp-hint">Busca arriba o <b>pincha en el mapa</b>. Puedes arrastrar la chincheta para afinar.</div>
           <input id="mp-f-coord" maxlength="40" placeholder="Coordenadas: 40.4168, -3.7038" value="${S.coord ? S.coord.lat.toFixed(6) + ', ' + S.coord.lng.toFixed(6) : ''}" onchange="mapaCoordEscrita(this.value)" style="margin-top:6px;" /></div>
+        <div class="field"><label>Enlace de Google Maps</label><input id="mp-f-maps" maxlength="500" placeholder="Pega aquí el enlace de Google Maps" value="${val('mapsUrl')}" oninput="mapaEnlaceMaps(this.value)" onchange="mapaEnlaceMaps(this.value)" />
+          <div class="mp-hint" id="mp-f-maps-h">Si pegas el enlace completo, el punto se sitúa solo en el mapa.</div></div>
         <div class="field"><label>Dirección</label><input id="mp-f-dir" maxlength="200" placeholder="Calle, número, polígono, salida de autopista…" value="${val('direccion')}" /></div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
           <div class="field" style="flex:1;min-width:130px;"><label>Localidad</label><input id="mp-f-loc" maxlength="100" value="${val('localidad')}" /></div>
@@ -14404,6 +14407,33 @@ function mapaColocar(lat, lng, inversa){
   }
   const c = document.getElementById('mp-f-coord'); if (c) c.value = lat.toFixed(6) + ', ' + lng.toFixed(6);
   if (inversa) mapaDireccionInversa(lat, lng);
+}
+// Coordenadas que lleva un enlace de Google Maps (los enlaces cortos «maps.app.goo.gl» no las traen y no se pueden leer desde aquí)
+function mapaCoordDeEnlace(url){
+  let u = String(url || '');
+  try { u = decodeURIComponent(u); } catch (e) { /* se usa tal cual */ }
+  const num = '(-?\\d{1,3}(?:\\.\\d+)?)';
+  const m = u.match(new RegExp('!3d' + num + '!4d' + num)) || u.match(new RegExp('@' + num + ',' + num)) || u.match(new RegExp('[?&](?:q|query|ll|destination|center)=' + num + ',\\s*' + num));
+  if (!m) return null;
+  const lat = Number(m[1]), lng = Number(m[2]);
+  return Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? { lat, lng } : null;
+}
+function mapaEnlaceMaps(txt){
+  const h = document.getElementById('mp-f-maps-h');
+  const t = String(txt || '').trim();
+  if (!t) { if (h) { h.textContent = 'Si pegas el enlace completo, el punto se sitúa solo en el mapa.'; h.style.color = ''; } return; }
+  const c = mapaCoordDeEnlace(t);
+  if (c) {
+    const S = mapaS();
+    if (!S.coord || Math.abs(S.coord.lat - c.lat) > 1e-6 || Math.abs(S.coord.lng - c.lng) > 1e-6) {
+      mapaColocar(c.lat, c.lng, !S.coord);   // si aún no había sitio, se rellena también la dirección
+      if (S.map) S.map.setView([c.lat, c.lng], Math.max(S.map.getZoom(), 15));
+    }
+    if (h) { h.textContent = 'Enlace leído: el punto está situado en el mapa.'; h.style.color = 'var(--success)'; }
+  } else if (h) {
+    h.textContent = /goo\.gl|maps\.app/i.test(t) ? 'Es un enlace corto: se guarda, pero no trae el sitio. Sitúalo buscando la dirección o pinchando en el mapa.' : 'Se guarda el enlace, pero no he podido leer el sitio de él. Sitúalo en el mapa.';
+    h.style.color = 'var(--mutedFaint)';
+  }
 }
 function mapaCoordEscrita(txt){
   const m = String(txt).replace(/;/g, ',').match(/(-?\d+(?:[.,]\d+)?)\s*[, ]\s*(-?\d+(?:[.,]\d+)?)/);
@@ -14474,12 +14504,14 @@ async function mapaGuardar(){
   const fila = { tipo: S.formTipo, nombre, lat: S.coord.lat, lng: S.coord.lng, direccion: v('mp-f-dir') || null, localidad: v('mp-f-loc') || null, pais: v('mp-f-pais') || null,
     telefono: v('mp-f-tel') || null, web: v('mp-f-web') || null, horario: v('mp-f-hor') || null, plazas: S.formTipo === 'parking' && plazasTxt ? Number(plazasTxt) : null,
     servicios: S.formSvc, observaciones: v('mp-f-obs') || null };
+  const prev = S.edit ? S.puntos.find(x => x.id === S.edit) : null;
+  if (v('mp-f-maps') || (prev && prev.mapsUrl)) fila.maps_url = v('mp-f-maps') || null;
   const btn = document.getElementById('mp-f-ok'); if (btn) btn.disabled = true;
   const { data, error } = S.edit
     ? await supabaseClient.from('transporte_puntos').update({ ...fila, updated_at: new Date().toISOString(), updated_by: currentUserEmail() }).eq('id', S.edit).select().single()
     : await supabaseClient.from('transporte_puntos').insert({ ...fila, created_by: currentUserEmail() }).select().single();
   if (error) {
-    err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test(error.message || '') ? 'falta ejecutar el SQL «trafico-mapa-puntos.sql» en Supabase.' : (error.message || 'error desconocido'));
+    err.textContent = 'No se pudo guardar: ' + (/maps_url/i.test(error.message || '') ? 'falta ejecutar el SQL del «enlace de Google Maps» en Supabase.' : /relation|does not exist|schema cache/i.test(error.message || '') ? 'falta ejecutar el SQL «trafico-mapa-puntos.sql» en Supabase.' : (error.message || 'error desconocido'));
     if (btn) btn.disabled = false;
     return;
   }
@@ -14536,9 +14568,9 @@ function mapaExportar(){
   const ps = mapaFiltrados();
   if (!ps.length) { appToast('No hay puntos que exportar.', 'info'); return; }
   const cel = x => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"';
-  const cab = ['Tipo', 'Nombre', 'País', 'Localidad', 'Dirección', 'Teléfono', 'Web', 'Horario', 'Plazas', 'Servicios', 'Precios', 'Latitud', 'Longitud', 'Observaciones'];
+  const cab = ['Tipo', 'Nombre', 'País', 'Localidad', 'Dirección', 'Teléfono', 'Web', 'Horario', 'Plazas', 'Servicios', 'Precios', 'Latitud', 'Longitud', 'Google Maps', 'Observaciones'];
   const filas = ps.map(p => [MAPA_TIPOS[p.tipo].label, p.nombre, p.pais, p.localidad, p.direccion, p.telefono, p.web, p.horario, p.plazas == null ? '' : p.plazas, p.servicios.join(', '),
-    mapaPreciosDe(p.id).map(x => `${x.actual.concepto}${x.actual.unidad ? ' (' + x.actual.unidad.toLowerCase() + ')' : ''}: ${mapaImporteTxt(x.actual)}`).join(' | '), p.lat, p.lng, p.observaciones]);
+    mapaPreciosDe(p.id).map(x => `${x.actual.concepto}${x.actual.unidad ? ' (' + x.actual.unidad.toLowerCase() + ')' : ''}: ${mapaImporteTxt(x.actual)}`).join(' | '), p.lat, p.lng, p.mapsUrl, p.observaciones]);
   const csv = '﻿' + [cab, ...filas].map(f => f.map(cel).join(';')).join('\r\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));

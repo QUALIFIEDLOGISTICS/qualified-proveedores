@@ -23,6 +23,7 @@ create table if not exists public.transporte_puntos (
   web text,
   horario text,
   plazas integer check (plazas is null or plazas >= 0),
+  maps_url text,
   servicios jsonb not null default '[]'::jsonb,
   observaciones text
 );
