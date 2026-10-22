@@ -786,6 +786,13 @@
   .crm-fecha-in.on{border-color:var(--primary);color:var(--primary);}
   .crm-modal-f{padding:12px 22px 16px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px;justify-content:flex-end;flex-wrap:wrap;}
   .crm-cerrar{display:flex;gap:14px;margin-right:auto;}
+  .crm-cc{display:flex;gap:5px;flex-wrap:wrap;}
+  .crm-cc span{padding:2px 9px;border-radius:999px;background:color-mix(in srgb,var(--primary) 9%,var(--panel));color:var(--primary);font-size:11.5px;font-weight:700;}
+  .crm-cc.big span{font-size:12.5px;padding:4px 11px;}
+  .crm-cat{margin-bottom:10px;}
+  .crm-cat-t{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);font-weight:800;margin:6px 0 5px;}
+  .crm-igrid2{grid-template-columns:repeat(2,1fr) !important;}
+  @media(max-width:1100px){.crm-igrid2{grid-template-columns:1fr !important;}}
   .mp-vistas{display:flex;flex-direction:column;gap:4px;margin-top:8px;}
   .mp-vistas button{background:#17233A;color:#DCE6F7;border:1px solid #2A3A58;border-radius:8px;padding:6px 10px;font-size:11.5px;font-weight:600;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.35);}
   .mp-vistas button:hover{background:#223452;}
@@ -17329,7 +17336,7 @@ const crmNorm = s => String(s == null ? '' : s).toLowerCase().normalize('NFD').r
 function crmOppDeFila(r){
   return { id: r.id, titulo: r.titulo || '', servicio: r.servicio || 'transporte', prospectoId: r.prospecto_id || '', contactoId: r.contacto_id || '', persona: r.persona || '', email: r.email || '', telefono: r.telefono || '',
     importe: r.importe == null ? null : Number(r.importe), periodicidad: r.periodicidad || 'unico', fase: r.fase || 'cotizada', fechaCot: r.fecha_cotizacion || '', proxFecha: r.proxima_fecha || '',
-    proxAccion: r.proxima_accion || '', ultimo: r.ultimo_contacto || '', motivo: r.motivo_perdida || '', cerradaAt: r.cerrada_at || '', notas: r.notas || '', createdAt: r.created_at, updatedAt: r.updated_at };
+    proxAccion: r.proxima_accion || '', ultimo: r.ultimo_contacto || '', motivo: r.motivo_perdida || '', cerradaAt: r.cerrada_at || '', notas: r.notas || '', conceptos: Array.isArray(r.conceptos) ? r.conceptos : [], createdAt: r.created_at, updatedAt: r.updated_at };
 }
 function crmProspectoDeFila(r){ return { id: r.id, nombre: r.nombre || '', origen: r.origen || '', notas: r.notas || '', estado: r.estado || 'activo', contactoId: r.contacto_id || '', createdAt: r.created_at }; }
 function crmEmpresa(o){
@@ -17338,6 +17345,27 @@ function crmEmpresa(o){
   return p ? p.nombre : '—';
 }
 const crmAbierta = o => CRM_ABIERTAS.includes(o.fase);
+/* ---- Lo que se cotiza: se elige de los mismos catálogos de Tarifas Transporte y Tarifas Almacén, para que todo sea uniforme ---- */
+function crmCatalogo(){
+  const grupos = [{ t: 'transporte', titulo: 'Transporte', items: Object.keys(TARIFA_TIPO_LABELS).map(k => ({ c: k, n: TARIFA_TIPO_LABELS[k] })) }];
+  const cats = { almacenaje: 'Almacenaje', movimiento: 'Movimientos', extra: 'Extras' };
+  Object.keys(cats).forEach(cat => {
+    const items = almacenajeProductos.filter(p => !p.archived && p.categoria === cat).map(p => ({ c: p.id, n: almacenajeProductoTexto(p) }));
+    if (items.length) grupos.push({ t: 'almacen', titulo: 'Almacén · ' + cats[cat], items });
+  });
+  const vistos = new Set(), ops = [];
+  [...operativas.map(o => o.nombre), ...OPERATIVA_CONCEPTOS_HABITUALES].forEach(n => { const k = crmNorm(n); if (n && !vistos.has(k)) { vistos.add(k); ops.push({ c: k, n: String(n).trim() }); } });
+  if (ops.length) grupos.push({ t: 'operativa', titulo: 'Operativas', items: ops.sort((a, b) => a.n.localeCompare(b.n, 'es')) });
+  return grupos;
+}
+// Lo que se enseña como título: el detalle escrito o, si no hay, los conceptos elegidos
+const crmTitulo = o => (o.titulo || '').trim() || (o.conceptos || []).map(x => x.n).join(' + ') || 'Cotización';
+// Servicio (transporte / almacén / mixto) deducido de lo elegido
+function crmServicioDe(conceptos, actual){
+  const t = conceptos.some(x => x.t === 'transporte'), a = conceptos.some(x => x.t === 'almacen' || x.t === 'operativa');
+  return t && a ? 'mixto' : t ? 'transporte' : a ? 'almacen' : (actual || 'otro');
+}
+const crmConceptosChips = o => (o.conceptos || []).length ? `<div class="crm-cc">${o.conceptos.slice(0, 5).map(x => `<span>${esc(x.n)}</span>`).join('')}${o.conceptos.length > 5 ? `<span>+${o.conceptos.length - 5}</span>` : ''}</div>` : '';
 // Lo que se ve según el filtro de servicio (una cotización «Transporte + Almacén» cuenta en las dos)
 function crmOpps(){ const S = crmS(); return S.opps.filter(o => !S.servicio || o.servicio === S.servicio || o.servicio === 'mixto'); }
 function crmCargar(){
@@ -17354,6 +17382,7 @@ function crmCargar(){
       if (o.error) throw o.error;
       S.prospectos = (p.data || []).map(crmProspectoDeFila);
       S.opps = (o.data || []).map(crmOppDeFila);
+      try { if (!almacenajeProductos.length) await loadAlmacenajeProductos(); if (!operativas.length) await loadOperativas(); } catch (e) { /* los catálogos son opcionales para ver el CRM */ }
       S.cargado = true;
     } catch (e) {
       const m = (e && e.message) || 'error desconocido';
@@ -17435,7 +17464,8 @@ function crmTarjetaHtml(o, grande){
   const f = CRM_FASE[o.fase];
   return `<div class="crm-card${atras ? ' atras' : ''}" data-id="${o.id}">
     <div class="crm-card-t" onclick="crmAbrir('${o.id}')"><b>${esc(emp)}</b><span class="crm-chip" style="--c:${f.color}">${f.label}</span>${o.importe != null ? `<span class="crm-imp">${esc(crmEur(o.importe, o.periodicidad))}</span>` : ''}</div>
-    <div class="crm-card-s" onclick="crmAbrir('${o.id}')">${esc(o.titulo)} <span class="crm-serv-t">${esc(CRM_SERVICIOS[o.servicio])}</span></div>
+    <div class="crm-card-s" onclick="crmAbrir('${o.id}')">${esc(crmTitulo(o))} <span class="crm-serv-t">${esc(CRM_SERVICIOS[o.servicio])}</span></div>
+    ${(o.titulo || '').trim() ? crmConceptosChips(o) : ''}
     ${o.persona || o.telefono || o.email ? `<div class="crm-card-p">${o.persona ? `<span>${esc(o.persona)}</span>` : ''}${o.telefono ? `<a href="tel:${esc(o.telefono.replace(/\s+/g, ''))}">${esc(o.telefono)}</a>` : ''}${o.email ? `<a href="mailto:${esc(o.email)}">${esc(o.email)}</a>` : ''}</div>` : ''}
     <div class="crm-card-n"><span class="crm-paso">${o.proxAccion ? esc(o.proxAccion) : '<i>Sin siguiente paso</i>'}</span><span class="crm-fecha${atras ? ' atras' : ''}" title="${crmFecha(o.proxFecha)}">${o.proxFecha ? crmRel(o.proxFecha) : 'Pon una fecha'}</span></div>
     <div class="crm-card-u">Cotizada hace ${edad} día${edad === 1 ? '' : 's'} · último contacto ${o.ultimo ? (quieta === 0 ? 'hoy' : `hace ${quieta} día${quieta === 1 ? '' : 's'}`) : 'ninguno'}</div>
@@ -17476,8 +17506,8 @@ function crmVacioInicial(){
 async function crmGuardarOpp(o, cambios){
   const fila = {};
   const mapa = { titulo: 'titulo', servicio: 'servicio', prospectoId: 'prospecto_id', contactoId: 'contacto_id', persona: 'persona', email: 'email', telefono: 'telefono', importe: 'importe', periodicidad: 'periodicidad',
-    fase: 'fase', fechaCot: 'fecha_cotizacion', proxFecha: 'proxima_fecha', proxAccion: 'proxima_accion', ultimo: 'ultimo_contacto', motivo: 'motivo_perdida', cerradaAt: 'cerrada_at', notas: 'notas' };
-  Object.keys(cambios).forEach(k => { fila[mapa[k]] = cambios[k] === '' ? null : cambios[k]; });
+    conceptos: 'conceptos', fase: 'fase', fechaCot: 'fecha_cotizacion', proxFecha: 'proxima_fecha', proxAccion: 'proxima_accion', ultimo: 'ultimo_contacto', motivo: 'motivo_perdida', cerradaAt: 'cerrada_at', notas: 'notas' };
+  Object.keys(cambios).forEach(k => { fila[mapa[k]] = cambios[k] === '' && k !== 'titulo' ? null : cambios[k]; });
   fila.updated_at = new Date().toISOString(); fila.updated_by = currentUserEmail();
   const { error } = await supabaseClient.from('crm_oportunidades').update(fila).eq('id', o.id);
   if (error) { appToast('No se pudo guardar: ' + (error.message || 'error desconocido'), 'error'); return false; }
@@ -17521,7 +17551,7 @@ function crmRegistrarPinta(){
   const chip = (clave, valor, txt, on) => `<button type="button" class="crm-ch${on ? ' on' : ''}" onclick="crmRegSet('${clave}', ${typeof valor === 'string' ? `'${valor}'` : valor})">${txt}</button>`;
   const fecha = r.sin ? '' : r.otra ? r.otra : crmSuma(today(), r.dias);
   crmModal(`
-    <div class="crm-modal-h"><b>Registrar seguimiento</b><small>${esc(crmEmpresa(o))} · ${esc(o.titulo)}</small></div>
+    <div class="crm-modal-h"><b>Registrar seguimiento</b><small>${esc(crmEmpresa(o))} · ${esc(crmTitulo(o))}</small></div>
     <div class="crm-modal-b">
       <label>¿Qué ha pasado?</label>
       <div class="crm-chs">${['llamada', 'correo', 'whatsapp', 'reunion', 'sinrespuesta'].map(t => chip('tipo', t, CRM_ACT[t], r.tipo === t)).join('')}</div>
@@ -17581,7 +17611,7 @@ async function crmCerrarOpp(id, fase){
   S.reg = null; crmModalCerrar();
   if (fase === 'perdida') {
     crmModal(`
-      <div class="crm-modal-h"><b>¿Por qué se ha perdido?</b><small>${esc(crmEmpresa(o))} · ${esc(o.titulo)}</small></div>
+      <div class="crm-modal-h"><b>¿Por qué se ha perdido?</b><small>${esc(crmEmpresa(o))} · ${esc(crmTitulo(o))}</small></div>
       <div class="crm-modal-b"><div class="crm-chs">${CRM_MOTIVOS.map(m => `<button type="button" class="crm-ch" onclick="crmPerdidaMotivo(this, '${m.replace(/'/g, "\\'")}')">${esc(m)}</button>`).join('')}</div>
         <label>Detalle <small>(opcional)</small></label><textarea id="crm-per-nota" rows="2" maxlength="400" placeholder="Ej. Pedía 5 € menos por palet"></textarea>
         <div class="crm-hint">Apuntar el motivo te sirve para ver, en Informes, por qué se pierden las cotizaciones.</div></div>
@@ -17632,7 +17662,7 @@ function crmTableroHtml(){
       <div class="crm-col-b">${l.map(o => {
         const atras = crmAbierta(o) && o.proxFecha && o.proxFecha < h;
         return `<div class="crm-k${atras ? ' atras' : ''}" draggable="true" ondragstart="event.dataTransfer.setData('text/plain', '${o.id}'); this.classList.add('arr')" ondragend="this.classList.remove('arr')" onclick="crmAbrir('${o.id}')">
-          <b>${esc(crmEmpresa(o))}</b><span class="crm-k-s">${esc(o.titulo)}</span>
+          <b>${esc(crmEmpresa(o))}</b><span class="crm-k-s">${esc(crmTitulo(o))}</span>
           <div class="crm-k-f"><span class="crm-serv-t">${esc(CRM_SERVICIOS[o.servicio])}</span>${o.importe != null ? `<span class="crm-imp">${esc(crmEur(o.importe, o.periodicidad))}</span>` : ''}</div>
           ${crmAbierta(o) ? `<div class="crm-k-n${atras ? ' atras' : ''}">${o.proxFecha ? crmRel(o.proxFecha) : '<i>Sin siguiente paso</i>'}</div>` : (o.motivo ? `<div class="crm-k-n">${esc(o.motivo)}</div>` : '')}
         </div>`; }).join('') || '<div class="crm-nada">Nada aquí</div>'}</div></div>`;
@@ -17662,7 +17692,7 @@ async function crmMoverFase(id, fase){
 function crmListaFiltrada(){
   const S = crmS(), q = crmNorm(S.q);
   return crmOpps().filter(o => (S.filtro === 'todas' || (S.filtro === 'abiertas' ? crmAbierta(o) : o.fase === S.filtro))
-    && (!q || crmNorm([crmEmpresa(o), o.titulo, o.persona, o.email, o.telefono, o.notas].join(' ')).includes(q)));
+    && (!q || crmNorm([crmEmpresa(o), crmTitulo(o), o.persona, o.email, o.telefono, o.notas].join(' ')).includes(q)));
 }
 function crmListaHtml(){
   const S = crmS();
@@ -17684,7 +17714,7 @@ function crmListaTablaHtml(){
       const f = CRM_FASE[o.fase], atras = crmAbierta(o) && o.proxFecha && o.proxFecha < h;
       return `<tr style="cursor:pointer;" onclick="crmAbrir('${o.id}')">
         <td data-sort-value="${esc(crmEmpresa(o))}"><b>${esc(crmEmpresa(o))}</b>${o.contactoId ? '' : ' <span class="crm-pros">prospecto</span>'}</td>
-        <td data-sort-value="${esc(o.titulo)}">${esc(o.titulo)}</td>
+        <td data-sort-value="${esc(crmTitulo(o))}">${esc(crmTitulo(o))}</td>
         <td data-sort-value="${esc(CRM_SERVICIOS[o.servicio])}">${esc(CRM_SERVICIOS[o.servicio])}</td>
         <td class="tf-precio" data-sort-value="${o.importe || 0}">${o.importe != null ? esc(crmEur(o.importe, o.periodicidad)) : '—'}</td>
         <td data-sort-value="${esc(f.label)}"><span class="crm-chip" style="--c:${f.color}">${f.label}</span></td>
@@ -17738,6 +17768,9 @@ function crmInformesHtml(){
   const maxM = Math.max(1, ...Object.values(motivos));
   const porFase = CRM_ABIERTAS.map(f => ({ f: CRM_FASE[f], n: abiertas.filter(o => o.fase === f).length, v: sum(abiertas.filter(o => o.fase === f), anual) }));
   const maxF = Math.max(1, ...porFase.map(x => x.v));
+  const porConcepto = {};
+  enviadas.forEach(o => (o.conceptos || []).forEach(x => { (porConcepto[x.n] = porConcepto[x.n] || { n: 0, g: 0 }).n++; if (o.fase === 'ganada') porConcepto[x.n].g++; }));
+  const topC = Object.keys(porConcepto).sort((a, b) => porConcepto[b].n - porConcepto[a].n).slice(0, 8), maxC = Math.max(1, ...topC.map(k => porConcepto[k].n));
   const servicio = ['transporte', 'almacen'].map(s => ({ s, n: enviadas.filter(o => o.servicio === s || o.servicio === 'mixto').length, g: ganadas.filter(o => o.servicio === s || o.servicio === 'mixto').length }));
   const periodos = [['30', '30 días'], ['90', '90 días'], ['365', 'Un año'], ['todo', 'Todo']];
   const kpi = (v, t, sub, cls) => `<div class="crm-ikpi ${cls || ''}"><span>${t}</span><b>${v}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
@@ -17753,6 +17786,7 @@ function crmInformesHtml(){
     <div class="crm-igrid2">
       <div class="card crm-ibox"><h4>Embudo abierto (valor anual)</h4>${porFase.map(x => `<div class="crm-bar"><span>${x.f.label} <small>${x.n}</small></span><div><i style="width:${Math.max(2, 100 * x.v / maxF)}%;background:${x.f.color}"></i></div><b>${esc(crmEur(x.v))}</b></div>`).join('') || '<div class="crm-nada">Sin cotizaciones abiertas</div>'}</div>
       <div class="card crm-ibox"><h4>Por qué se pierden</h4>${Object.keys(motivos).length ? Object.keys(motivos).sort((a, b) => motivos[b] - motivos[a]).map(m => `<div class="crm-bar"><span>${esc(m)}</span><div><i style="width:${Math.max(4, 100 * motivos[m] / maxM)}%;background:#C1443D"></i></div><b>${motivos[m]}</b></div>`).join('') : '<div class="crm-nada">Todavía no hay cotizaciones perdidas en este periodo.</div>'}</div>
+      <div class="card crm-ibox"><h4>Qué se cotiza más</h4>${topC.length ? topC.map(k => `<div class="crm-bar"><span>${esc(k)}</span><div><i style="width:${Math.max(4, 100 * porConcepto[k].n / maxC)}%;background:#9B51E0"></i></div><b>${porConcepto[k].n} · ${porConcepto[k].g} ganadas</b></div>`).join('') : '<div class="crm-nada">Aparecerá cuando elijas conceptos de las listas al cotizar.</div>'}</div>
       <div class="card crm-ibox"><h4>Transporte y almacén</h4>${servicio.map(x => `<div class="crm-bar"><span>${CRM_SERVICIOS[x.s]}</span><div><i style="width:${x.n ? Math.max(4, 100 * x.n / Math.max(1, ...servicio.map(y => y.n))) : 0}%;background:#4F7DF3"></i></div><b>${x.n} enviadas · ${x.g} ganadas</b></div>`).join('')}</div>
     </div>`;
 }
@@ -17797,7 +17831,7 @@ function crmDetalleHtml(o){
   return `<div class="crm-dr-h" style="--c:${f.color}">
       <button type="button" class="crm-x" onclick="crmCerrarDrawer()" title="Cerrar">✕</button>
       <small>${esc(crmEmpresa(o))}${o.contactoId ? '' : ' · prospecto'} · ${esc(CRM_SERVICIOS[o.servicio])}</small>
-      <h3>${esc(o.titulo)}</h3>
+      <h3>${esc(crmTitulo(o))}</h3>
       <div class="crm-dr-h2"><span class="crm-chip" style="--c:${f.color}">${f.label}</span>${o.importe != null ? `<b>${esc(crmEur(o.importe, o.periodicidad))}</b>` : ''}<span class="crm-edad">cotizada hace ${edad} día${edad === 1 ? '' : 's'}</span></div>
     </div>
     <div class="crm-dr-b">
@@ -17805,6 +17839,7 @@ function crmDetalleHtml(o){
       ${abierta ? `<div class="crm-paso-box${atras ? ' atras' : ''}">
         <div><small>Siguiente paso</small><b>${o.proxAccion ? esc(o.proxAccion) : '<i>Sin siguiente paso</i>'}</b><span>${o.proxFecha ? `${crmFecha(o.proxFecha)} · ${crmRel(o.proxFecha)}` : 'Sin fecha: pon una para que no se olvide'}</span></div>
         <button type="button" class="btn btn-primary" onclick="crmRegistrar('${o.id}')">✓ Registrar seguimiento</button></div>` : o.fase === 'perdida' ? `<div class="crm-perdida">Perdida${o.motivo ? ': <b>' + esc(o.motivo) + '</b>' : ''}</div>` : `<div class="crm-ganada">Ganada${o.cerradaAt ? ' el ' + crmFecha(o.cerradaAt.slice(0, 10)) : ''}</div>`}
+      ${(o.conceptos || []).length ? `<div class="crm-cc big">${o.conceptos.map(x => `<span>${esc(x.n)}</span>`).join('')}</div>` : ''}
       <div class="crm-datos">
         ${dato('Persona', esc(o.persona))}${dato('Teléfono', o.telefono ? `<a href="tel:${esc(o.telefono.replace(/\s+/g, ''))}">${esc(o.telefono)}</a>` : '')}${dato('Correo', o.email ? `<a href="mailto:${esc(o.email)}">${esc(o.email)}</a>` : '')}
         ${dato('Cotizada el', crmFecha(o.fechaCot))}${dato('Último contacto', o.ultimo ? crmFecha(o.ultimo) + ' · ' + crmRel(o.ultimo).toLowerCase() : 'Ninguno')}${dato('Notas', esc(o.notas).replace(/\n/g, '<br>'))}
@@ -17819,6 +17854,14 @@ function crmDetalleHtml(o){
     </div>
     <div class="crm-dr-f"><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="crmEditar('${o.id}')">Editar</button><button type="button" class="btn btn-ghost" style="background:var(--panel);color:var(--danger);" onclick="crmEliminar('${o.id}')">Eliminar</button></div>`;
 }
+function crmConceptoTog(btn){
+  const f = crmS().form; f.conceptos = f.conceptos || [];
+  const t = btn.dataset.t, c = btn.dataset.c, n = btn.dataset.n;
+  const i = f.conceptos.findIndex(x => x.t === t && x.c === c);
+  if (i >= 0) f.conceptos.splice(i, 1); else f.conceptos.push({ t, c, n });
+  btn.classList.toggle('on', i < 0);
+  const w = document.getElementById('crm-f-serv-w'); if (w) w.style.display = f.conceptos.length ? 'none' : '';   // el tipo de servicio solo se pide si no se ha elegido nada de las listas
+}
 function crmCompTipo(b){ b.parentElement.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); }
 async function crmCompGuardar(id){
   const S = crmS(), o = S.opps.find(x => x.id === id);
@@ -17830,8 +17873,8 @@ async function crmCompGuardar(id){
   crmDrawerPinta(); crmPinta();
 }
 /* ---- Nueva cotización / editar ---- */
-function crmNueva(){ crmS().form = { servicio: 'transporte', periodicidad: 'unico' }; crmDrawerAbre({ tipo: 'form', id: null }); setTimeout(() => { const e = document.getElementById('crm-f-emp'); if (e) e.focus(); }, 60); }
-function crmEditar(id){ const o = crmS().opps.find(x => x.id === id); crmS().form = { servicio: o.servicio, periodicidad: o.periodicidad, emp: o.contactoId ? { tipo: 'cliente', id: o.contactoId } : { tipo: 'prospecto', id: o.prospectoId }, cerrada: true }; crmDrawerAbre({ tipo: 'form', id }); }
+function crmNueva(){ crmS().form = { servicio: 'transporte', periodicidad: 'unico', conceptos: [] }; crmDrawerAbre({ tipo: 'form', id: null }); setTimeout(() => { const e = document.getElementById('crm-f-emp'); if (e) e.focus(); }, 60); }
+function crmEditar(id){ const o = crmS().opps.find(x => x.id === id); crmS().form = { servicio: o.servicio, periodicidad: o.periodicidad, conceptos: (o.conceptos || []).slice(), emp: o.contactoId ? { tipo: 'cliente', id: o.contactoId } : { tipo: 'prospecto', id: o.prospectoId }, cerrada: true }; crmDrawerAbre({ tipo: 'form', id }); }
 function crmEmpresaBuscar(nombre){
   const n = crmNorm(nombre);
   if (!n) return null;
@@ -17950,11 +17993,14 @@ function crmFormHtml(o){
   const emp = o ? crmEmpresa(o) : '';
   const prox = o ? o.proxFecha : crmSuma(today(), 3);
   const chs = (k, mapa, actual) => `<div class="crm-chs">${Object.keys(mapa).map(v => `<button type="button" class="crm-ch${actual === v ? ' on' : ''}" onclick="crmFormSet(this, '${k}', '${v}')">${mapa[v]}</button>`).join('')}</div>`;
-  return `<div class="crm-dr-h"><button type="button" class="crm-x" onclick="crmCerrarDrawer()" title="Cerrar">✕</button><small>${nuevo ? 'Nueva cotización' : 'Editar cotización'}</small><h3>${nuevo ? 'Anotar una cotización' : esc(o.titulo)}</h3></div>
+  return `<div class="crm-dr-h"><button type="button" class="crm-x" onclick="crmCerrarDrawer()" title="Cerrar">✕</button><small>${nuevo ? 'Nueva cotización' : 'Editar cotización'}</small><h3>${nuevo ? 'Anotar una cotización' : esc(crmTitulo(o))}</h3></div>
     <div class="crm-dr-b crm-form">
       <div class="field"><label>Empresa <span class="dc-req">*</span></label><input id="crm-f-emp" autocomplete="off" maxlength="120" placeholder="Busca un cliente o escribe una empresa nueva" value="${esc(emp)}" oninput="crmEmpSug()" onfocus="crmEmpAbrir()" onkeydown="crmEmpTecla(event)" onblur="setTimeout(crmEmpCerrar, 180)" /><div id="crm-f-emp-res"></div><div id="crm-f-emp-h" class="crm-hint">${o ? 'Cliente o prospecto elegido.' : 'Busca un cliente o prospecto, o escribe el nombre de una empresa nueva.'}</div></div>
-      <div class="field"><label>Qué le has cotizado <span class="dc-req">*</span></label><input id="crm-f-tit" maxlength="140" placeholder="Ej. Barcelona–Lyon, 2 camiones a la semana · Almacenaje de 200 palets + operativas" value="${esc(o ? o.titulo : '')}" /></div>
-      <div class="field"><label>Servicio</label>${chs('servicio', CRM_SERVICIOS, f.servicio)}</div>
+      <div class="field"><label>Qué le cotizas <span class="dc-req">*</span> <small style="font-weight:400;color:var(--mutedFaint);">· elige de las listas de Tarifas, las que quieras</small></label>
+        <div id="crm-f-cat">${crmCatalogo().map(g => `<div class="crm-cat"><div class="crm-cat-t">${esc(g.titulo)}</div><div class="crm-chs">${g.items.map(it => `<button type="button" class="crm-ch${(f.conceptos || []).some(x => x.t === g.t && x.c === it.c) ? ' on' : ''}" data-t="${g.t}" data-c="${esc(it.c)}" data-n="${esc(it.n)}" onclick="crmConceptoTog(this)">${esc(it.n)}</button>`).join('')}</div></div>`).join('')}</div>
+        <div class="crm-hint">Si no está en la lista, añade el producto o servicio en Tarifas (o en Almacén → Configuración) y saldrá aquí. Mientras, escríbelo en el detalle de abajo.</div></div>
+      <div class="field"><label>Detalle <small style="font-weight:400;color:var(--mutedFaint);">· ruta, cantidades, condiciones${(f.conceptos || []).length ? ' (opcional)' : ''}</small></label><input id="crm-f-tit" maxlength="140" placeholder="Ej. Barcelona–Lyon, 2 camiones a la semana · 200 palets" value="${esc(o ? o.titulo : '')}" /></div>
+      <div class="field" id="crm-f-serv-w" style="${(f.conceptos || []).length ? 'display:none;' : ''}"><label>Tipo de servicio <small style="font-weight:400;color:var(--mutedFaint);">· si no eliges nada de la lista</small></label>${chs('servicio', CRM_SERVICIOS, f.servicio)}</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         <div class="field" style="flex:1;min-width:130px;"><label>Importe (€)</label><input id="crm-f-imp" inputmode="decimal" maxlength="12" placeholder="Ej. 1.250" value="${o && o.importe != null ? String(o.importe).replace('.', ',') : ''}" /></div>
         <div class="field" style="flex:2;min-width:200px;"><label>El importe es…</label>${chs('periodicidad', CRM_PERIODOS, f.periodicidad)}</div>
@@ -17983,7 +18029,8 @@ async function crmFormGuardar(id){
   err.textContent = '';
   const empNombre = v('crm-f-emp'), titulo = v('crm-f-tit');
   if (!empNombre) { err.textContent = 'Escribe la empresa.'; return; }
-  if (!titulo) { err.textContent = 'Escribe qué le has cotizado.'; return; }
+  const conceptos = (f.conceptos || []).slice();
+  if (!titulo && !conceptos.length) { err.textContent = 'Elige qué le cotizas de las listas, o escríbelo en el detalle.'; return; }
   const impTxt = v('crm-f-imp').replace(/\./g, '').replace(',', '.');
   const importe = impTxt === '' ? null : Number(impTxt);
   if (importe != null && (!isFinite(importe) || importe < 0)) { err.textContent = 'El importe tiene que ser un número.'; return; }
@@ -17999,10 +18046,11 @@ async function crmFormGuardar(id){
       const p = crmProspectoDeFila(data); S.prospectos.push(p); S.prospectos.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
       prospectoId = p.id;
     } else if (emp.tipo === 'cliente') contactoId = emp.id; else prospectoId = emp.id;
-    const datos = { titulo, servicio: f.servicio || 'transporte', persona: v('crm-f-per'), telefono: v('crm-f-tel'), email: mail, importe, periodicidad: f.periodicidad || 'unico',
+    const datos = { titulo, servicio: crmServicioDe(conceptos, f.servicio), persona: v('crm-f-per'), telefono: v('crm-f-tel'), email: mail, importe, periodicidad: f.periodicidad || 'unico',
       fechaCot: v('crm-f-fec') || today(), proxFecha: v('crm-f-prox'), proxAccion: v('crm-f-acc'), notas: v('crm-f-notas'), prospectoId, contactoId };
     if (id) {
       const o = S.opps.find(x => x.id === id);
+      if (conceptos.length || (o.conceptos || []).length) datos.conceptos = conceptos;   // solo se envía si hay (o había) conceptos: así sigue funcionando aunque falte el SQL
       if (!(await crmGuardarOpp(o, datos))) { if (btn) btn.disabled = false; return; }
       appToast('Cotización actualizada.', 'ok');
       crmPinta(); crmAbrir(id);
@@ -18010,22 +18058,23 @@ async function crmFormGuardar(id){
     }
     const fila = { titulo, servicio: datos.servicio, prospecto_id: prospectoId || null, contacto_id: contactoId || null, persona: datos.persona || null, email: mail || null, telefono: datos.telefono || null,
       importe, periodicidad: datos.periodicidad, fase: 'cotizada', fecha_cotizacion: datos.fechaCot, proxima_fecha: datos.proxFecha || null, proxima_accion: datos.proxAccion || null, notas: datos.notas || null, created_by: currentUserEmail() };
+    if (conceptos.length) fila.conceptos = conceptos;
     const { data, error } = await supabaseClient.from('crm_oportunidades').insert(fila).select().single();
     if (error) throw error;
     const o = crmOppDeFila(data); S.opps.unshift(o);
     S.acts[o.id] = [];
-    await crmActividad(o.id, 'cotizacion', `Cotización enviada: ${titulo}${importe != null ? ' · ' + crmEur(importe, datos.periodicidad) : ''}`);
+    await crmActividad(o.id, 'cotizacion', `Cotización enviada: ${crmTitulo(o)}${importe != null ? ' · ' + crmEur(importe, datos.periodicidad) : ''}`);
     appToast('Cotización anotada.' + (o.proxFecha ? ` Te aviso ${crmRel(o.proxFecha).toLowerCase()}.` : ''), 'ok');
     crmCerrarDrawer(); crmPinta();
   } catch (e) {
-    err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test((e && e.message) || '') ? 'falta ejecutar el SQL «comercial-crm.sql» en Supabase.' : ((e && e.message) || 'error desconocido'));
+    err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache|conceptos/i.test((e && e.message) || '') ? 'falta ejecutar el SQL del CRM en Supabase.' : ((e && e.message) || 'error desconocido'));
     if (btn) btn.disabled = false;
   }
 }
 async function crmEliminar(id){
   const S = crmS(), o = S.opps.find(x => x.id === id);
   if (!o) return;
-  if (!(await appConfirm({ title: 'Eliminar cotización', message: `Se elimina «${o.titulo}» de ${crmEmpresa(o)} con todo su historial. No se puede deshacer.`, confirmLabel: 'Eliminar', cancelLabel: 'Cancelar', tone: 'warn', icon: 'warn' }))) return;
+  if (!(await appConfirm({ title: 'Eliminar cotización', message: `Se elimina «${crmTitulo(o)}» de ${crmEmpresa(o)} con todo su historial. No se puede deshacer.`, confirmLabel: 'Eliminar', cancelLabel: 'Cancelar', tone: 'warn', icon: 'warn' }))) return;
   const { error } = await supabaseClient.from('crm_oportunidades').delete().eq('id', id);
   if (error) { appToast('No se pudo eliminar: ' + (error.message || 'error desconocido'), 'error'); return; }
   S.opps = S.opps.filter(x => x.id !== id); delete S.acts[id];
