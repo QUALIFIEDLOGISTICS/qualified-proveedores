@@ -17831,13 +17831,7 @@ async function crmCompGuardar(id){
 }
 /* ---- Nueva cotización / editar ---- */
 function crmNueva(){ crmS().form = { servicio: 'transporte', periodicidad: 'unico' }; crmDrawerAbre({ tipo: 'form', id: null }); setTimeout(() => { const e = document.getElementById('crm-f-emp'); if (e) e.focus(); }, 60); }
-function crmEditar(id){ const o = crmS().opps.find(x => x.id === id); crmS().form = { servicio: o.servicio, periodicidad: o.periodicidad }; crmDrawerAbre({ tipo: 'form', id }); }
-function crmEmpresasLista(){
-  const S = crmS();
-  const clientes = contactos.filter(c => (c.esClienteAlmacen || c.esClienteTransporte) && !c.archived).map(c => ({ nombre: ((c.nombreComercial || '').trim() || c.nombre), tipo: 'cliente', id: c.id }));
-  const prospectos = S.prospectos.filter(p => p.estado !== 'cliente').map(p => ({ nombre: p.nombre, tipo: 'prospecto', id: p.id }));
-  return [...clientes, ...prospectos];
-}
+function crmEditar(id){ const o = crmS().opps.find(x => x.id === id); crmS().form = { servicio: o.servicio, periodicidad: o.periodicidad, emp: o.contactoId ? { tipo: 'cliente', id: o.contactoId } : { tipo: 'prospecto', id: o.prospectoId }, cerrada: true }; crmDrawerAbre({ tipo: 'form', id }); }
 function crmEmpresaBuscar(nombre){
   const n = crmNorm(nombre);
   if (!n) return null;
@@ -17846,13 +17840,109 @@ function crmEmpresaBuscar(nombre){
   const p = crmS().prospectos.find(x => crmNorm(x.nombre) === n);
   return p ? { tipo: 'prospecto', id: p.id, nombre: p.nombre } : null;
 }
-function crmEmpresaCambio(){
-  const v = (document.getElementById('crm-f-emp') || {}).value || '', h = document.getElementById('crm-f-emp-h');
-  if (!h) return;
-  const r = crmEmpresaBuscar(v);
-  h.className = 'crm-hint' + (r ? ' ok' : '');
-  h.textContent = !v.trim() ? 'Escribe el nombre de la empresa: si ya existe, la reconoce; si no, la crea como prospecto.' : r ? (r.tipo === 'cliente' ? 'Cliente existente.' : 'Prospecto existente.') : 'Empresa nueva: se guardará como prospecto.';
+/* ---- Buscador de empresa de la cotización: clientes y prospectos por nombre, razón social o NIF; si no está, se escribe a mano ---- */
+function crmEmpNombreCliente(c){ return ((c.nombreComercial || '').trim() || c.nombre); }
+function crmEmpCandidatos(){
+  const S = crmS();
+  const clientes = contactos.filter(c => (c.esClienteAlmacen || c.esClienteTransporte) && !c.archived).map(c => ({
+    tipo: 'cliente', id: c.id, titulo: crmEmpNombreCliente(c), legal: (c.nombreComercial || '').trim() ? c.nombre : '', nif: c.nif || '',
+    sub: [c.esClienteTransporte ? 'Cliente de transporte' : '', c.esClienteAlmacen ? 'Cliente de almacén' : ''].filter(Boolean).join(' y '),
+    clave: crmNorm([c.nombre, c.nombreComercial, c.nif].join(' ')) }));
+  const prospectos = S.prospectos.filter(p => p.estado !== 'cliente').map(p => ({ tipo: 'prospecto', id: p.id, titulo: p.nombre, legal: '', nif: '', sub: 'Prospecto', clave: crmNorm(p.nombre) }));
+  return [...clientes, ...prospectos];
 }
+function crmEmpBuscar(texto){
+  const q = crmNorm(texto);
+  const todos = crmEmpCandidatos();
+  const reciente = {};
+  crmS().opps.forEach(o => { const k = (o.contactoId ? 'c' : 'p') + (o.contactoId || o.prospectoId); if (!reciente[k] || o.createdAt > reciente[k]) reciente[k] = o.createdAt || ''; });
+  const rec = c => reciente[(c.tipo === 'cliente' ? 'c' : 'p') + c.id] || '';
+  if (!q) return todos.slice().sort((a, b) => rec(b).localeCompare(rec(a)) || a.titulo.localeCompare(b.titulo, 'es')).slice(0, 8);   // sin escribir: los usados hace poco
+  const palabras = q.split(/\s+/).filter(Boolean);
+  return todos.filter(c => palabras.every(p => c.clave.includes(p)))
+    .sort((a, b) => (crmNorm(b.titulo).startsWith(q) - crmNorm(a.titulo).startsWith(q)) || a.titulo.localeCompare(b.titulo, 'es')).slice(0, 10);
+}
+// Empresas que se parecen a lo escrito (para no duplicar): contienen el texto o empiezan igual
+function crmEmpParecidas(texto){
+  const q = crmNorm(texto);
+  if (q.length < 3) return [];
+  const w = q.split(/\s+/)[0];
+  return crmEmpCandidatos().filter(c => c.clave.includes(q) || (w.length >= 4 && crmNorm(c.titulo).startsWith(w))).slice(0, 5);
+}
+function crmEmpSug(){
+  const f = crmS().form; if (!f) return;
+  f.emp = null;   // al escribir deja de haber una empresa elegida de la lista
+  const t = ((document.getElementById('crm-f-emp') || {}).value || '').trim();
+  f.sug = crmEmpBuscar(t); f.act = -1; f.sugTexto = t;
+  crmEmpSugPinta(); crmEmpresaCambio();
+}
+function crmEmpSugPinta(){
+  const f = crmS().form, el = document.getElementById('crm-f-emp-res');
+  if (!el) return;
+  if (!f || !f.sug || f.cerrada) { el.innerHTML = ''; return; }
+  const t = f.sugTexto || '';
+  const exacto = f.sug.some(c => crmNorm(c.titulo) === crmNorm(t) || crmNorm(c.legal) === crmNorm(t));
+  const fila = (c, i) => `<button type="button" class="mp-sug${i === f.act ? ' act' : ''}" onmousedown="event.preventDefault(); crmEmpElegir(${i})">
+    <span class="mp-sug-i${c.tipo === 'cliente' ? ' p' : ''}">${c.tipo === 'cliente' ? 'C' : 'P'}</span>
+    <span class="mp-sug-t"><b>${esc(c.titulo)}</b><small>${esc([c.legal, c.nif, c.sub].filter(Boolean).join(' · '))}</small></span></button>`;
+  el.innerHTML = `<div class="mp-sugs">
+    ${f.sug.length ? (t ? '' : '<div class="mp-sug-h">Usadas hace poco</div>') + f.sug.map(fila).join('') : ''}
+    ${t && !exacto ? `<button type="button" class="mp-sug nueva${f.act === f.sug.length ? ' act' : ''}" onmousedown="event.preventDefault(); crmEmpNuevaTexto()"><span class="mp-sug-i">+</span><span class="mp-sug-t"><b>Usar «${esc(t)}» como empresa nueva</b><small>Se guarda como prospecto</small></span></button>` : ''}
+    ${!f.sug.length && !t ? '<div class="mp-sug-h">Todavía no hay clientes ni prospectos: escribe el nombre de la empresa.</div>' : ''}
+  </div>`;
+}
+function crmEmpElegir(i){
+  const f = crmS().form, c = f && f.sug && f.sug[i];
+  if (!c) return;
+  f.emp = { tipo: c.tipo, id: c.id }; f.cerrada = true;
+  const inp = document.getElementById('crm-f-emp'); if (inp) inp.value = c.titulo;
+  crmEmpSugPinta(); crmEmpresaCambio();
+}
+function crmEmpNuevaTexto(){ const f = crmS().form; f.emp = null; f.nuevaOk = true; f.cerrada = true; crmEmpSugPinta(); crmEmpresaCambio(); }
+function crmEmpAbrir(){ const f = crmS().form; if (!f) return; f.cerrada = false; crmEmpSug(); }
+function crmEmpCerrar(){ const f = crmS().form; if (!f) return; f.cerrada = true; crmEmpSugPinta(); }
+function crmEmpTecla(ev){
+  const f = crmS().form; if (!f || !f.sug || f.cerrada) { if (ev.key === 'ArrowDown') crmEmpAbrir(); return; }
+  const hayNueva = (f.sugTexto || '') && !f.sug.some(c => crmNorm(c.titulo) === crmNorm(f.sugTexto));
+  const n = f.sug.length + (hayNueva ? 1 : 0);
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') { ev.preventDefault(); if (!n) return; f.act = (f.act + (ev.key === 'ArrowDown' ? 1 : -1) + n) % n; crmEmpSugPinta(); }
+  else if (ev.key === 'Enter') { if (f.act >= 0) { ev.preventDefault(); if (f.act < f.sug.length) crmEmpElegir(f.act); else crmEmpNuevaTexto(); } }
+  else if (ev.key === 'Escape') { ev.stopPropagation(); crmEmpCerrar(); }
+}
+function crmEmpresaCambio(){
+  const f = crmS().form, v = (document.getElementById('crm-f-emp') || {}).value || '', h = document.getElementById('crm-f-emp-h');
+  if (!h) return;
+  const el = f && f.emp ? { cliente: 'Cliente existente', prospecto: 'Prospecto existente' }[f.emp.tipo] : '';
+  h.className = 'crm-hint' + (el ? ' ok' : '');
+  h.textContent = el ? el + ': no se crea nada nuevo.' : !v.trim() ? 'Busca un cliente o prospecto, o escribe el nombre de una empresa nueva.' : 'Escribe y elige de la lista. Si no está, se guardará como empresa nueva (prospecto).';
+}
+// Empresa elegida o escrita; si no se ha elegido y se parece a alguna ya existente, se pregunta antes de crear otra
+function crmEmpresaResolver(texto, idOpp){
+  const f = crmS().form || {};
+  if (f.emp) return { tipo: f.emp.tipo, id: f.emp.id };
+  const exacta = crmEmpresaBuscar(texto);
+  if (exacta) return exacta;
+  if (!f.nuevaOk) {
+    const par = crmEmpParecidas(texto);
+    if (par.length) { crmEmpParecidasModal(texto, par, idOpp); return 'pregunta'; }
+  }
+  return null;
+}
+function crmEmpParecidasModal(texto, par, idOpp){
+  window.__crmPar = { par, idOpp };
+  crmModal(`<div class="crm-modal-h"><b>¿Es alguna de estas?</b><small>Hay empresas parecidas a «${esc(texto)}»</small></div>
+    <div class="crm-modal-b">${par.map((c, i) => `<button type="button" class="mp-sug" style="border:1px solid var(--border);border-radius:11px;" onclick="crmEmpParecidaElegir(${i})"><span class="mp-sug-i${c.tipo === 'cliente' ? ' p' : ''}">${c.tipo === 'cliente' ? 'C' : 'P'}</span><span class="mp-sug-t"><b>${esc(c.titulo)}</b><small>${esc([c.legal, c.sub].filter(Boolean).join(' · '))}</small></span></button>`).join('')}
+      <div class="crm-hint">Elige una para no duplicarla, o crea «${esc(texto)}» como empresa nueva.</div></div>
+    <div class="crm-modal-f"><button type="button" class="btn btn-ghost" onclick="crmModalCerrar()">Cancelar</button><button type="button" class="btn btn-primary" onclick="crmEmpParecidaNueva()">Crear «${esc(texto)}» nueva</button></div>`);
+  const b = document.getElementById('crm-f-ok'); if (b) b.disabled = false;
+}
+function crmEmpParecidaElegir(i){
+  const { par, idOpp } = window.__crmPar, c = par[i], f = crmS().form;
+  f.emp = { tipo: c.tipo, id: c.id };
+  const inp = document.getElementById('crm-f-emp'); if (inp) inp.value = c.titulo;
+  crmModalCerrar(); crmFormGuardar(idOpp);
+}
+function crmEmpParecidaNueva(){ const { idOpp } = window.__crmPar; crmS().form.nuevaOk = true; crmModalCerrar(); crmFormGuardar(idOpp); }
 function crmFormSet(btn, k, v){ crmS().form[k] = v; btn.parentElement.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === btn)); }
 function crmFormHtml(o){
   const S = crmS(), f = S.form || (S.form = { servicio: 'transporte', periodicidad: 'unico' });
@@ -17862,7 +17952,7 @@ function crmFormHtml(o){
   const chs = (k, mapa, actual) => `<div class="crm-chs">${Object.keys(mapa).map(v => `<button type="button" class="crm-ch${actual === v ? ' on' : ''}" onclick="crmFormSet(this, '${k}', '${v}')">${mapa[v]}</button>`).join('')}</div>`;
   return `<div class="crm-dr-h"><button type="button" class="crm-x" onclick="crmCerrarDrawer()" title="Cerrar">✕</button><small>${nuevo ? 'Nueva cotización' : 'Editar cotización'}</small><h3>${nuevo ? 'Anotar una cotización' : esc(o.titulo)}</h3></div>
     <div class="crm-dr-b crm-form">
-      <div class="field"><label>Empresa <span class="dc-req">*</span></label><input id="crm-f-emp" data-combo="crm-emp-dl" autocomplete="off" maxlength="120" placeholder="Nombre de la empresa" value="${esc(emp)}" oninput="crmEmpresaCambio()" /><datalist id="crm-emp-dl">${crmEmpresasLista().map(e => `<option value="${esc(e.nombre)}">${e.tipo === 'cliente' ? 'Cliente' : 'Prospecto'}</option>`).join('')}</datalist><div id="crm-f-emp-h" class="crm-hint"></div></div>
+      <div class="field"><label>Empresa <span class="dc-req">*</span></label><input id="crm-f-emp" autocomplete="off" maxlength="120" placeholder="Busca un cliente o escribe una empresa nueva" value="${esc(emp)}" oninput="crmEmpSug()" onfocus="crmEmpAbrir()" onkeydown="crmEmpTecla(event)" onblur="setTimeout(crmEmpCerrar, 180)" /><div id="crm-f-emp-res"></div><div id="crm-f-emp-h" class="crm-hint">${o ? 'Cliente o prospecto elegido.' : 'Busca un cliente o prospecto, o escribe el nombre de una empresa nueva.'}</div></div>
       <div class="field"><label>Qué le has cotizado <span class="dc-req">*</span></label><input id="crm-f-tit" maxlength="140" placeholder="Ej. Barcelona–Lyon, 2 camiones a la semana · Almacenaje de 200 palets + operativas" value="${esc(o ? o.titulo : '')}" /></div>
       <div class="field"><label>Servicio</label>${chs('servicio', CRM_SERVICIOS, f.servicio)}</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
@@ -17901,7 +17991,8 @@ async function crmFormGuardar(id){
   if (mail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail)) { err.textContent = 'El correo no parece válido.'; return; }
   const btn = document.getElementById('crm-f-ok'); if (btn) btn.disabled = true;
   try {
-    let emp = crmEmpresaBuscar(empNombre), prospectoId = '', contactoId = '';
+    let emp = crmEmpresaResolver(empNombre, id), prospectoId = '', contactoId = '';
+    if (emp === 'pregunta') return;   // se está preguntando si es una empresa parecida; al responder se vuelve a guardar
     if (!emp) {   // empresa nueva: se crea como prospecto
       const { data, error } = await supabaseClient.from('crm_prospectos').insert({ nombre: empNombre, created_by: currentUserEmail() }).select().single();
       if (error) throw error;
