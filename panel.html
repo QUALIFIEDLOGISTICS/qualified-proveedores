@@ -648,6 +648,9 @@
   .mp-r-s{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;}
   .mp-r-s span{padding:2px 8px;border-radius:999px;background:var(--panel2);font-size:11px;font-weight:600;color:var(--text);}
   .mp-r-a{display:flex;gap:14px;margin-top:5px;}
+  .mp-lleg{margin-top:4px;padding:4px 9px;border-radius:8px;font-size:11.5px;font-weight:700;display:inline-block;}
+  .mp-lleg.ok{background:color-mix(in srgb,var(--success) 14%,var(--panel));color:var(--success);}
+  .mp-lleg.no{background:color-mix(in srgb,var(--danger) 12%,var(--panel));color:var(--danger);}
   .mp-rn-w{background:transparent;border:0;}
   .mp-rn{width:100%;height:100%;border-radius:50%;background:var(--c);color:#fff;border:2.5px solid #fff;box-shadow:0 2px 7px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;box-sizing:border-box;}
   .mp-rn.sel{box-shadow:0 0 0 4px color-mix(in srgb,var(--c) 35%,transparent),0 3px 9px rgba(0,0,0,.5);}
@@ -14620,6 +14623,7 @@ function mapaImportHtml(){
    por un servidor propio o de pago (Valhalla/OpenRouteService). */
 const MAPA_RUTA_URL = 'https://valhalla1.openstreetmap.de/route';
 const MAPA_REQS = [
+  { id: 'diesel', label: 'Diésel', ok: p => p.combustibles.includes('Diésel') },
   { id: 'duchas', label: 'Duchas', ok: p => p.servicios.includes('Duchas') },
   { id: 'vigilado', label: 'Vigilado', ok: p => p.servicios.some(s => /c[aá]mara de seguridad|zona vallada|vigilan/i.test(s)) },
   { id: 'restaurante', label: 'Restaurante', ok: p => p.servicios.includes('Restaurante') },
@@ -14631,14 +14635,14 @@ const MAPA_REQS = [
   { id: 'sinreserva', label: 'Sin reserva obligatoria', ok: p => p.reserva !== 'Obligatoria' },
 ];
 const MAPA_BUENOS = ['Duchas', 'Aseos', 'Restaurante', 'Wifi', 'Cámara de seguridad', 'Zona vallada', 'Vigilante', 'Iluminación difusa', 'Toma de corriente'];
-const MAPA_ORDENES = { desvio: 'Menos desvío (km)', tiempo: 'Menos tiempo extra', origen: 'Más cerca del origen', servicios: 'Más servicios' };
+const MAPA_ORDENES = { desvio: 'Menos desvío (km)', tiempo: 'Menos tiempo extra', origen: 'Más cerca del origen', lejos: 'Más lejos del origen', servicios: 'Más servicios' };
 
 function mapaRutaS(){
   const S = mapaS();
   if (!S.ruta) {
     let camion = { alto: 4, peso: 40, largo: 16.5 };
     try { camion = Object.assign(camion, JSON.parse(localStorage.getItem('qualified.mapa.camion') || '{}')); } catch (e) { /* valores por defecto */ }
-    S.ruta = { origen: null, destino: null, vias: [], tipos: { as24: true, parking: true, lavadero: false }, corredor: 10, reqs: [], orden: 'desvio', descanso: true, descansoH: 4.5, evitarPeajes: false, camion, fase: 'form', res: null, error: '', pick: null };
+    S.ruta = { origen: null, destino: null, vias: [], tipos: { as24: true, parking: true, lavadero: false }, corredor: 10, reqs: [], orden: 'desvio', descanso: true, descansoH: 4.5, evitarPeajes: false, autonomia: (() => { try { return Number(localStorage.getItem('qualified.mapa.autonomia')) || null; } catch (e) { return null; } })(), camion, fase: 'form', res: null, error: '', pick: null };
   }
   return S.ruta;
 }
@@ -14759,6 +14763,7 @@ function mapaRutaCampo(k, v){
   const r = mapaRutaS();
   if (k === 'corredor') r.corredor = Number(v);
   else if (k === 'orden') { r.orden = v; if (r.fase === 'listo') { mapaPanel(); mapaRutaPintar(false); } }
+  else if (k === 'autonomia') { const n = Number(String(v).replace(',', '.')); r.autonomia = isFinite(n) && n > 0 ? Math.round(n) : null; try { localStorage.setItem('qualified.mapa.autonomia', r.autonomia || ''); } catch (e) { /* sin almacenamiento */ } }
   else if (k === 'descansoH') r.descansoH = Math.max(1, Math.min(9, Number(String(v).replace(',', '.')) || 4.5));
   else if (k === 'descanso') r.descanso = !!v;
   else if (k === 'evitarPeajes') r.evitarPeajes = !!v;
@@ -14789,6 +14794,7 @@ function mapaRutaHtml(){
     ${lugar('destino', 'Destino <span class="dc-req">*</span>', 'Ciudad, dirección, código postal o nombre…')}
     <div class="field"><label>¿Qué necesitas?</label><div class="mp-svcs-e">
       ${[['as24', 'Repostar (AS24)'], ['parking', 'Descansar (parking)'], ['lavadero', 'Lavar']].map(([t, l]) => `<button type="button" class="mp-sv${r.tipos[t] ? ' on' : ''}" onclick="mapaRutaTipo('${t}')">${l}</button>`).join('')}</div></div>
+    ${r.tipos.as24 ? `<div class="field"><label>Autonomía del depósito <small style="font-weight:400;color:var(--mutedFaint);">· opcional</small></label><div class="mp-camion"><label><input class="mp-num" style="width:84px;" value="${r.autonomia || ''}" inputmode="numeric" maxlength="5" placeholder="km" onchange="mapaRutaCampo('autonomia', this.value)" /> km que puedes hacer desde A</label></div><div class="mp-hint">Con tus km de autonomía te marco a qué gasolineras llegas y cuál es la última a la que llegas.</div></div>` : ''}
     ${r.tipos.parking ? `<div class="field"><label class="mp-check"><input type="checkbox" ${r.descanso ? 'checked' : ''} onchange="mapaRutaCampo('descanso', this.checked); mapaPanel();" /> Descansar tras <input class="mp-num" value="${String(r.descansoH).replace('.', ',')}" inputmode="decimal" maxlength="4" onchange="mapaRutaCampo('descansoH', this.value)" ${r.descanso ? '' : 'disabled'} /> h de conducción</label><div class="mp-hint">El tacógrafo obliga a parar 45 min tras 4 h 30. Se buscará el parking entre la hora y media anterior y ese momento.</div></div>` : ''}
     <div class="field"><label>Qué tiene que tener</label><div class="mp-svcs-e">${MAPA_REQS.map(q => `<button type="button" class="mp-sv${r.reqs.includes(q.id) ? ' on' : ''}" onclick="mapaRutaReq('${q.id}')">${esc(q.label)}</button>`).join('')}</div></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
@@ -14975,6 +14981,13 @@ async function mapaRutaCalcular(reusar){
         lista = enVentana.length ? enVentana : lista.filter(c => c.tMin <= fin).sort((a, b) => b.tMin - a.tMin).slice(0, 6);   // sin ninguno en la franja: los últimos antes del límite
         r.res.setParking = new Set(lista.map(c => c.p.id));
       }
+      if (t === 'as24' && r.autonomia) {   // con autonomía: las más cómodas de las que alcanzas y las últimas a las que llegas
+        const alc = lista.filter(c => c.pos + c.extraKm / 2 <= r.autonomia);
+        const porDesvio = alc.slice().sort((a, b) => a.offset - b.offset).slice(0, 4);
+        const ultimas = alc.slice().sort((a, b) => b.pos - a.pos).slice(0, 3);
+        lotes.push(...new Set([...porDesvio, ...ultimas]));
+        return;
+      }
       lotes.push(...lista.sort((a, b) => a.offset - b.offset).slice(0, 6));
     });
     let hecho = 0;
@@ -15012,7 +15025,7 @@ async function mapaRutaDesvio(R, c, r){
 /* ---- Resultados ---- */
 function mapaRutaServicios(p){ return MAPA_BUENOS.filter(s => p.servicios.includes(s)).length; }
 function mapaRutaOrdenar(lista, orden){
-  const f = { desvio: (a, b) => a.extraKm - b.extraKm || a.extraMin - b.extraMin, tiempo: (a, b) => a.extraMin - b.extraMin || a.extraKm - b.extraKm, origen: (a, b) => a.pos - b.pos, servicios: (a, b) => mapaRutaServicios(b.p) - mapaRutaServicios(a.p) || a.extraKm - b.extraKm }[orden] || ((a, b) => a.extraKm - b.extraKm);
+  const f = { lejos: (a, b) => b.pos - a.pos, desvio: (a, b) => a.extraKm - b.extraKm || a.extraMin - b.extraMin, tiempo: (a, b) => a.extraMin - b.extraMin || a.extraKm - b.extraKm, origen: (a, b) => a.pos - b.pos, servicios: (a, b) => mapaRutaServicios(b.p) - mapaRutaServicios(a.p) || a.extraKm - b.extraKm }[orden] || ((a, b) => a.extraKm - b.extraKm);
   return lista.slice().sort(f);
 }
 function mapaRutaListas(){
@@ -15025,9 +15038,14 @@ function mapaRutaListas(){
     out[t] = t === 'parking' && r.res.setParking && !r.res.ventana && r.orden === 'desvio'
       ? lista.slice().sort((a, b) => b.tMin - a.tMin)   // sin parkings en la franja: primero el último que queda antes del límite
       : mapaRutaOrdenar(lista, r.orden);
+    if (t === 'as24' && r.autonomia) out[t] = [...out[t].filter(c => mapaRutaLlega(c)), ...out[t].filter(c => !mapaRutaLlega(c))];   // primero las que alcanzas
   });
   return out;
 }
+// Kilómetros que conduces desde A hasta entrar en esa parada (el camino hasta su altura más la mitad del desvío) y los que te quedan hasta B
+const mapaRutaKmA = c => c.pos + c.extraKm / 2;
+const mapaRutaKmB = c => Math.max(0, mapaRutaS().res.R.km - c.pos + c.extraKm / 2);
+const mapaRutaLlega = c => { const a = mapaRutaS().autonomia; return !a || mapaRutaKmA(c) <= a; };
 function mapaRutaGoogleUrl(){
   const r = mapaRutaS();
   const ll = x => x.lat.toFixed(6) + ',' + x.lng.toFixed(6);
@@ -15040,12 +15058,13 @@ function mapaRutaResultadosHtml(){
   const fin = r.descansoH * 60;
   const tarjeta = (c, i, t, mejor) => {
     const p = c.p, tp = MAPA_TIPOS[p.tipo];
-    const buenos = MAPA_BUENOS.filter(s => p.servicios.includes(s)).slice(0, 4);
+    const buenos = [...(p.tipo === 'as24' ? p.combustibles.slice(0, 4) : []), ...MAPA_BUENOS.filter(s => p.servicios.includes(s)).slice(0, 4)];
     return `<div class="mp-r-it${mejor ? ' mejor' : ''}" onclick="mapaRutaVer('${p.id}')">
       <span class="mp-r-n" style="--c:${tp.color}">${i + 1}</span>
       <div class="mp-r-b"><b>${esc(p.nombre)}</b>${mejor ? '<em>La mejor opción</em>' : ''}
         <small>${esc([p.localidad, p.pais].filter(Boolean).join(' · '))}</small>
-        <div class="mp-r-d"><span title="Kilómetros y minutos extra respecto a seguir por la ruta">${c.aprox ? '≈ ' : ''}<b>+${mapaKmTxt(c.extraKm)}</b> · +${Math.max(0, Math.round(c.extraMin))} min</span><span>km ${Math.round(c.pos)} · a las ${mapaHoras(c.tMin)}</span></div>
+        <div class="mp-r-d"><span title="Kilómetros y minutos extra respecto a seguir por la ruta">${c.aprox ? '≈ ' : ''}<b>+${mapaKmTxt(c.extraKm)}</b> · +${Math.max(0, Math.round(c.extraMin))} min</span><span><b>${Math.round(mapaRutaKmA(c))} km</b> desde A · faltan <b>${Math.round(mapaRutaKmB(c))} km</b> hasta B · a las ${mapaHoras(c.tMin)}</span></div>
+        ${t === 'as24' && r.autonomia ? (mapaRutaLlega(c) ? `<div class="mp-lleg ok">Llegas · te sobran ${Math.round(r.autonomia - mapaRutaKmA(c))} km de autonomía</div>` : `<div class="mp-lleg no">No llegas · te faltan ${Math.round(mapaRutaKmA(c) - r.autonomia)} km</div>`) : ''}
         ${buenos.length ? `<div class="mp-r-s">${buenos.map(s => `<span>${esc(s)}</span>`).join('')}</div>` : ''}
         ${p.estado ? `<div style="margin-top:4px;"><span class="mp-estado av">${esc(p.estado)}</span></div>` : ''}
         ${p.reserva ? `<small style="color:#9A5E00;">Reserva ${esc(p.reserva.toLowerCase())}</small>` : ''}
@@ -15058,11 +15077,12 @@ function mapaRutaResultadosHtml(){
       ? (r.res.ventana ? `<div class="mp-hint" style="margin:0 0 6px;">Parkings que quedan entre las ${mapaHoras(fin - 90)} y las ${mapaHoras(fin)} de conducción.</div>` : `<div class="mp-aviso" style="margin-bottom:8px;">No hay parkings con esos requisitos entre las ${mapaHoras(fin - 90)} y las ${mapaHoras(fin)} de conducción. Te enseño los últimos que quedan antes de esa hora: pasado el límite ya no se puede parar.</div>`)
       : t === 'parking' && r.descanso ? `<div class="mp-hint" style="margin:0 0 6px;">La ruta dura ${mapaHoras(R.min)}: no hace falta parada de descanso obligatoria.</div>` : '';
     return `<div class="mp-sec-h"><span>${nombreT[t]}</span><span style="text-transform:none;letter-spacing:0;font-weight:600;">${(listas[t] || []).length} cerca</span></div>${nota}
-      ${l.length ? l.map((c, i) => tarjeta(c, i, t, i === 0)).join('') : `<div class="mp-nada">No hay ningún sitio con esos requisitos a menos de ${r.corredor} km de la ruta.</div>`}`;
+      ${l.length ? l.map((c, i) => tarjeta(c, i, t, i === 0 && mapaRutaLlega(c))).join('') : `<div class="mp-nada">No hay ningún sitio con esos requisitos a menos de ${r.corredor} km de la ruta.</div>`}`;
   }).join('');
   return `<div class="mp-cuerpo">
     <div class="mp-r-resumen"><div><b>${esc(r.origen.nombre.split(',')[0])}</b> → <b>${esc(r.destino.nombre.split(',')[0])}</b></div>
       <div class="mp-r-tot"><span><b>${mapaKmTxt(R.km)}</b>distancia</span><span><b>${mapaHoras(R.min)}</b>conduciendo</span></div>
+      ${r.autonomia && r.tipos.as24 ? (R.km <= r.autonomia ? `<div class="mp-lleg ok">Con ${r.autonomia} km de autonomía llegas a B sin repostar</div>` : `<div class="mp-lleg no">Con ${r.autonomia} km de autonomía no llegas a B (${mapaKmTxt(R.km)}): tienes que repostar antes del km ${r.autonomia}</div>`) : ''}
       ${r.vias.length ? `<div class="mp-hint" style="margin:0;">Pasando por: ${r.vias.map((v, i) => `<b>${esc(v.nombre.split(',')[0])}</b> <button type="button" class="mp-x" title="Quitar este punto y recalcular" onclick="mapaRutaQuitarViaYCalcular(${i})">✕</button>`).join(' → ')}</div>` : ''}
       <div class="mp-acc"><a class="btn btn-primary" href="${esc(mapaRutaGoogleUrl())}" target="_blank" rel="noopener">Abrir en Google Maps</a><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="mapaRutaCambiar()">Cambiar</button></div></div>
     <div class="field" style="margin:0;"><label>Ordenar por</label><select onchange="mapaRutaCampo('orden', this.value)">${Object.keys(MAPA_ORDENES).map(k => `<option value="${k}"${r.orden === k ? ' selected' : ''}>${MAPA_ORDENES[k]}</option>`).join('')}</select></div>
@@ -15110,7 +15130,7 @@ function mapaRutaPintar(ajustar){
   const listas = mapaRutaListas();
   Object.keys(listas).forEach(t => listas[t].slice(0, 8).forEach((c, i) => {
     const m = L.marker([c.p.lat, c.p.lng], { icon: mapaIconoRuta(t, i + 1, i === 0), title: c.p.nombre, zIndexOffset: i === 0 ? 600 : 500 }).addTo(g);
-    m.bindPopup(() => `<div class="mp-pop"><div class="mp-pop-t" style="color:${MAPA_TIPOS[t].color}">${esc(MAPA_TIPOS[t].label)} · nº ${i + 1}</div><div class="mp-pop-n">${esc(c.p.nombre)}</div><div class="mp-pop-d">+${mapaKmTxt(c.extraKm)} · +${Math.round(c.extraMin)} min · km ${Math.round(c.pos)}</div><button type="button" class="mp-pop-b" onclick="mapaRutaPasarPor('${c.p.id}')">Pasar por aquí</button></div>`, { maxWidth: 260 });
+    m.bindPopup(() => `<div class="mp-pop"><div class="mp-pop-t" style="color:${MAPA_TIPOS[t].color}">${esc(MAPA_TIPOS[t].label)} · nº ${i + 1}</div><div class="mp-pop-n">${esc(c.p.nombre)}</div><div class="mp-pop-d">+${mapaKmTxt(c.extraKm)} · +${Math.round(c.extraMin)} min · ${Math.round(mapaRutaKmA(c))} km desde A</div><button type="button" class="mp-pop-b" onclick="mapaRutaPasarPor('${c.p.id}')">Pasar por aquí</button></div>`, { maxWidth: 260 });
     S.rutaMarks[c.p.id] = m;
   }));
   S.rutaLayer = g;
