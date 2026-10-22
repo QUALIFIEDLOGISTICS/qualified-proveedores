@@ -709,7 +709,13 @@
   .crm-lr-e>div{display:flex;flex-direction:column;min-width:0;}
   .crm-lr-e small,.crm-lr-s{display:block;font-size:11.5px;color:var(--muted);font-weight:400;}
   .crm-lr-n{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
-  .crm-sv{display:flex;flex-direction:column;align-items:flex-start;gap:7px;}
+  .crm-sv{display:flex;flex-direction:column;align-items:flex-start;gap:4px;cursor:help;}
+  .crm-sv>small{font-size:11.5px;color:var(--muted);max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #crm-tip{position:fixed;display:none;z-index:75;min-width:300px;max-width:430px;padding:12px 14px;background:var(--panel);border:1px solid var(--border);border-radius:14px;box-shadow:0 16px 40px rgba(15,30,60,.22);pointer-events:none;}
+  .crm-tip-h{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;}
+  .crm-tip-h b{font-size:13.5px;}
+  .crm-tip-h span{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--primary);}
+  #crm-tip .crm-lns{gap:5px;}
   .crm-sv ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px;}
   .crm-sv li{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text);line-height:1.3;}
   .crm-sv li i{flex:0 0 auto;width:6px;height:6px;border-radius:50%;background:var(--c);}
@@ -18115,14 +18121,29 @@ function crmListaHtml(){
 }
 function crmBuscar(v){ crmS().q = v; const t = document.getElementById('crm-lista-t'); if (t) t.innerHTML = crmListaTablaHtml(); }
 function crmFiltro(v){ crmS().filtro = v; if (crmS().vista !== 'lista') crmVista('lista'); else crmPinta(); }
-// Servicio: el tipo (transporte / almacén / mixto) y, debajo, lo cotizado línea a línea
+// Servicio: el tipo (transporte / almacén / mixto) y una sola línea con lo cotizado; al pasar el ratón por encima sale el detalle completo con precios
 function crmServCeldaHtml(o){
-  const cs = o.conceptos || [], max = 3;
-  const lin = cs.slice(0, max).map(x => x.t === 'transporte'
-    ? `<li><i style="--c:#2F6FED"></i><span>${esc(x.n)}${x.metros ? ' ' + esc(String(x.metros).replace('.', ',')) + ' m' : ''}${x.o && x.o.z && x.d && x.d.z ? ' · ' + esc(x.o.z) + ' → ' + esc(x.d.z) : ''}</span></li>`
-    : `<li><i style="--c:${x.t === 'operativa' ? '#0E8A9B' : '#C77A12'}"></i><span>${esc(x.n)}</span></li>`).join('');
-  return `<div class="crm-sv">${crmServChip(o.servicio)}${cs.length ? `<ul>${lin}${cs.length > max ? `<li class="mas">+${cs.length - max} más</li>` : ''}</ul>` : ''}</div>`;
+  const cs = o.conceptos || [];
+  const nTr = cs.filter(x => x.t === 'transporte').length, nAl = cs.filter(x => x.t === 'almacen').length, nOp = cs.filter(x => x.t === 'operativa').length;
+  let resumen = '';
+  if (cs.length === 1) { const x = cs[0]; resumen = x.t === 'transporte' ? [x.n, x.o && x.o.z && x.d && x.d.z ? `${x.o.z} → ${x.d.z}` : ''].filter(Boolean).join(' · ') : x.n; }
+  else if (cs.length) resumen = [nTr ? `${nTr} ruta${nTr === 1 ? '' : 's'}` : '', nAl ? `${nAl} producto${nAl === 1 ? '' : 's'}` : '', nOp ? `${nOp} operativa${nOp === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+  return `<div class="crm-sv"${cs.length ? ` onmouseenter="crmTipServ(event, '${o.id}')" onmouseleave="crmTipOculta()"` : ''}>${crmServChip(o.servicio)}${resumen ? `<small>${esc(resumen)}</small>` : ''}</div>`;
 }
+// Detalle flotante de lo cotizado (no se corta con el desplazamiento de la tabla)
+function crmTipServ(ev, id){
+  const o = crmS().opps.find(x => x.id === id); if (!o) return;
+  let t = document.getElementById('crm-tip');
+  if (!t) { t = document.createElement('div'); t.id = 'crm-tip'; document.body.appendChild(t); }
+  t.innerHTML = `<div class="crm-tip-h"><b>${esc(crmEmpresa(o))}</b>${o.oferta ? `<span>${esc(o.oferta)}</span>` : ''}</div>${crmLineasHtml(o)}`;
+  t.style.display = 'block';
+  const r = ev.currentTarget.getBoundingClientRect(), w = t.offsetWidth, h = t.offsetHeight;
+  let x = r.left, y = r.bottom + 6;
+  if (x + w > window.innerWidth - 12) x = window.innerWidth - w - 12;
+  if (y + h > window.innerHeight - 12) y = Math.max(12, r.top - h - 6);
+  t.style.left = Math.max(12, x) + 'px'; t.style.top = y + 'px';
+}
+function crmTipOculta(){ const t = document.getElementById('crm-tip'); if (t) t.style.display = 'none'; }
 // Siguiente paso: la acción, cuándo toca (con el color de su urgencia) y la fecha
 function crmPasoCeldaHtml(o, h){
   if (!crmAbierta(o)) {
@@ -18144,7 +18165,7 @@ function crmListaTablaHtml(){
       return `<tr class="crm-lr" style="--c:${f.color}" onclick="crmAbrir('${o.id}')">
         <td style="white-space:nowrap;" data-sort-value="${esc(o.oferta)}">${o.oferta ? `<span class="crm-of">${esc(o.oferta)}</span>` : '<span class="crm-of vacio">Sin oferta</span>'}</td>
         <td data-sort-value="${esc(emp)}" style="min-width:200px;"><div class="crm-lr-e">${crmAvatar(emp)}<div><span class="crm-lr-n"><b>${esc(emp)}</b>${o.contactoId ? '' : '<span class="crm-pros">prospecto</span>'}</span>${o.persona ? `<small>${esc(o.persona)}${o.cargo ? ' · ' + esc(o.cargo) : ''}</small>` : ''}</div></div></td>
-        <td data-sort-value="${esc(CRM_SERVICIOS[o.servicio])}" style="min-width:200px;">${crmServCeldaHtml(o)}</td>
+        <td data-sort-value="${esc(CRM_SERVICIOS[o.servicio])}" style="min-width:150px;max-width:210px;">${crmServCeldaHtml(o)}</td>
         <td data-sort-value="${esc(f.label)}"><span class="crm-chip" style="--c:${f.color}">${f.label}</span></td>
         <td style="white-space:nowrap;" data-sort-value="${esc(o.fechaCot)}">${crmFecha(o.fechaCot)}<small class="crm-lr-s">hace ${edad} día${edad === 1 ? '' : 's'}</small></td>
         <td style="min-width:200px;" data-sort-value="${esc(o.proxFecha || (abierta ? "9998" : "9999"))}">${crmPasoCeldaHtml(o, h)}</td>
