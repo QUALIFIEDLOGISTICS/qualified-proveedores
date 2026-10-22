@@ -588,6 +588,22 @@
   .mp-pop-p div{display:flex;justify-content:space-between;gap:12px;padding:1px 0;}
   .mp-pop-b{margin-top:9px;width:100%;padding:8px;border:0;border-radius:8px;background:#173E8C;color:#fff;font:700 12.5px/1 inherit;cursor:pointer;}
   .leaflet-container{font-family:inherit;}
+  /* ---- Mapa · vista Regiones (fondo oscuro) ---- */
+  .mp-map.mp-oscuro{background:#0B1220;border-color:#1B2740;}
+  .mp-map.mp-oscuro .leaflet-container{background:#0B1220;}
+  .mp-map.mp-oscuro .leaflet-control-attribution{background:rgba(11,18,32,.8);color:#7C8AA5;}
+  .mp-map.mp-oscuro .leaflet-control-attribution a{color:#9FB4D6;}
+  .mp-map.mp-oscuro .leaflet-bar a{background:#17233A;color:#DCE6F7;border-color:#2A3A58;}
+  .mp-map.mp-oscuro .leaflet-bar a:hover{background:#223452;}
+  .mp-tt.leaflet-tooltip{background:#0F1829;color:#EAF1FF;border:1px solid #2F4468;border-radius:10px;padding:8px 11px;font-size:12.5px;line-height:1.45;box-shadow:0 6px 18px rgba(0,0,0,.5);}
+  .mp-tt.leaflet-tooltip-top:before{border-top-color:#2F4468;}
+  .mp-tt-s{color:#8FA3C4;font-size:11.5px;}
+  .mp-regn-w{background:transparent;border:0;}
+  .mp-regn{width:26px;height:20px;line-height:20px;text-align:center;font-size:12px;font-weight:800;color:#06142B;text-shadow:0 0 3px rgba(255,255,255,.55);pointer-events:none;}
+  .mp-regn-b{flex:0 0 auto;width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#2B6CB0,#7DD3FC);color:#06142B;font-weight:800;font-size:13px;display:inline-flex;align-items:center;justify-content:center;}
+  .mp-leyenda{background:rgba(15,24,41,.92);color:#DCE6F7;border:1px solid #2A3A58;border-radius:10px;padding:8px 11px 7px;font-size:11.5px;min-width:130px;}
+  .mp-ley-b i{display:block;height:8px;border-radius:4px;margin:6px 0 3px;background:linear-gradient(90deg,#2B6CB0,#7DD3FC);}
+  .mp-ley-t{display:flex;justify-content:space-between;color:#8FA3C4;font-size:11px;}
   .cat-hist{display:inline-flex;gap:4px;}
   .cat-hist button{width:36px;height:36px;border-radius:9px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:20px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0 0 2px;}
   .cat-hist button:hover:not(:disabled){border-color:var(--primary);color:var(--primary);}
@@ -14036,13 +14052,14 @@ function tplMapaPage(){
         <select id="mp-pais" onchange="mapaPaisCambio(this.value)" style="width:auto;flex:0 0 170px;min-width:0;"><option value="">Todos los países</option></select>
         <div class="doc-seg mp-vista">
           <button type="button" class="${S.vista === 'mapa' ? 'on' : ''}" onclick="mapaVista('mapa')">Mapa</button>
+          <button type="button" class="${S.vista === 'regiones' ? 'on' : ''}" onclick="mapaVista('regiones')">Regiones</button>
           <button type="button" class="${S.vista === 'lista' ? 'on' : ''}" onclick="mapaVista('lista')">Lista</button>
         </div>
         <button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="mapaExportar()" title="Descargar los puntos que se ven, para abrirlos en Excel">Exportar</button>
         <button type="button" class="btn btn-primary" onclick="mapaAnadir()">+ Añadir punto</button>
       </div>
-      <div id="mapa-cuerpo">${S.vista === 'mapa'
-        ? `<div class="mp-wrap"><div class="card mp-side" id="mp-side"><div class="mp-vacio">Cargando…</div></div><div class="mp-map"><div id="mapa-canvas"></div></div></div>`
+      <div id="mapa-cuerpo">${S.vista !== 'lista'
+        ? `<div class="mp-wrap"><div class="card mp-side" id="mp-side"><div class="mp-vacio">Cargando…</div></div><div class="mp-map${S.vista === 'regiones' ? ' mp-oscuro' : ''}"><div id="mapa-canvas"></div></div></div>`
         : `<div class="card" id="mp-tabla" style="padding:0;overflow-x:auto;"><div class="mp-vacio">Cargando…</div></div>`}</div>
     </div>`;
 }
@@ -14055,7 +14072,7 @@ function mapaDestruir(){
   const S = window.__mapa;
   if (!S || !S.map) return;
   try { S.map.stop(); S.map.off(); S.map.remove(); } catch (e) { /* ya no está */ }
-  S.map = null; S.cluster = null; S.marks = {}; S.tmp = null;
+  S.map = null; S.cluster = null; S.marks = {}; S.tmp = null; S.regLayer = null; S.regLabels = null;
 }
 async function mapaHidratar(){
   if (currentTab !== 'trafico' || traficoSection() !== 'mapa' || !document.getElementById('mapa-root')) { mapaDestruir(); return; }
@@ -14066,9 +14083,17 @@ async function mapaHidratar(){
   if (!S.cargado) await mapaCargar();
   if (tok !== S.tok || !document.getElementById('mapa-root')) return;
   if (S.error) { mapaMensaje(S.error); return; }
-  if (S.vista === 'mapa') { mapaIniciarMapa(); }
+  if (S.vista === 'mapa') mapaIniciarMapa();
+  if (S.vista === 'regiones') {
+    mapaCargandoTxt('Cargando las regiones de Europa…');
+    try { await mapaRegionesCargar(); } catch (e) { mapaMensaje('No se pudieron cargar las regiones (revisa la conexión a internet): ' + e.message); return; }
+    if (tok !== S.tok || !document.getElementById('mapa-root')) return;
+    mapaIniciarRegiones();
+  }
   mapaRefrescar(!S.ajustado); S.ajustado = true;   // la primera vez se encuadran todos los puntos; después se respeta donde estaba el mapa
-  if (S.vista === 'mapa') mapaPanel();   // al volver a la pantalla se mantiene lo que había abierto (ficha o formulario)
+  if (S.vista === 'mapa' || S.vista === 'regiones') mapaPanel();   // al volver a la pantalla se mantiene lo que había abierto (ficha o formulario)
+  if (S.vista === 'mapa' && S.volarA) { const id = S.volarA; S.volarA = null; setTimeout(() => mapaVolarA(id), 150); }
+  if (S.vista === 'mapa' && S.modo === 'ficha' && S.sel && S.notas[S.sel] === undefined) mapaNotasCargar(S.sel);
 }
 function mapaIniciarMapa(){
   const S = mapaS();
@@ -14093,6 +14118,185 @@ function mapaIniciarMapa(){
   S.map = map; S.marks = {}; S.tmp = null;
   setTimeout(() => { try { map.invalidateSize(); } catch (e) { /* ya no está */ } }, 60);
 }
+/* ---- Vista «Regiones»: fondo oscuro liso con las provincias/departamentos de Europa (NUTS-3 de Eurostat), más intensas cuantos más puntos tienen ----
+   Los límites vienen de Eurostat (GISCO), se bajan la primera vez que se abre esta vista y el navegador los guarda. En España, el
+   código de cada provincia es el del código postal (Barcelona = 08). */
+const MAPA_REGIONES_URL = 'https://gisco-services.ec.europa.eu/distribution/v2/nuts/geojson/NUTS_RG_20M_2021_4326_LEVL_3.geojson';
+// NUTS-3 de España → código de provincia (los dos primeros números del código postal)
+const MAPA_ES_COD = { ES111: '15', ES112: '27', ES113: '32', ES114: '36', ES120: '33', ES130: '39', ES211: '01', ES212: '20', ES213: '48', ES220: '31', ES230: '26',
+  ES241: '22', ES242: '44', ES243: '50', ES300: '28', ES411: '05', ES412: '09', ES413: '24', ES414: '34', ES415: '37', ES416: '40', ES417: '42', ES418: '47', ES419: '49',
+  ES421: '02', ES422: '13', ES423: '16', ES424: '19', ES425: '45', ES431: '06', ES432: '10', ES511: '08', ES512: '17', ES513: '25', ES514: '43', ES521: '03', ES522: '12',
+  ES523: '46', ES531: '07', ES532: '07', ES533: '07', ES611: '04', ES612: '11', ES613: '14', ES614: '18', ES615: '21', ES616: '23', ES617: '29', ES618: '41', ES620: '30',
+  ES630: '51', ES640: '52', ES701: '35', ES702: '35', ES703: '35', ES704: '38', ES705: '38', ES706: '38', ES707: '38' };
+let mapaRegGeo = null, mapaRegP = null;
+function mapaRegionesCargar(){
+  if (mapaRegGeo) return Promise.resolve(mapaRegGeo);
+  if (mapaRegP) return mapaRegP;
+  mapaRegP = fetch(MAPA_REGIONES_URL)
+    .then(r => { if (!r.ok) throw new Error('error ' + r.status); return r.json(); })
+    .then(j => { mapaRegPrepara(j); mapaRegGeo = j; return j; })
+    .catch(e => { mapaRegP = null; throw e; });
+  return mapaRegP;
+}
+function mapaRegPrepara(j){
+  let nombres = null;
+  try { nombres = new Intl.DisplayNames(['es'], { type: 'region' }); } catch (e) { /* se usa el nombre en inglés */ }
+  j.features.forEach(f => {
+    const p = f.properties, g = f.geometry;
+    const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+    let x0 = 181, y0 = 91, x1 = -181, y1 = -91;
+    polys.forEach(poly => poly[0].forEach(c => { if (c[0] < x0) x0 = c[0]; if (c[0] > x1) x1 = c[0]; if (c[1] < y0) y0 = c[1]; if (c[1] > y1) y1 = c[1]; }));
+    const iso = p.CNTR_CODE === 'EL' ? 'GR' : p.CNTR_CODE === 'UK' ? 'GB' : p.CNTR_CODE;
+    let pais = p.NAME_ENGL || p.CNTR_CODE;
+    try { if (nombres) pais = nombres.of(iso) || pais; } catch (e) { /* se usa el nombre en inglés */ }
+    f._id = p.NUTS_ID; f._bb = [x0, y0, x1, y1]; f._polys = polys; f._cod = MAPA_ES_COD[p.NUTS_ID] || '';
+    f._nombre = p.NAME_LATN || p.NUTS_NAME || p.NUTS_ID; f._pais = pais;
+    f._centro = [(y0 + y1) / 2, (x0 + x1) / 2];
+  });
+}
+function mapaPipAnillo(x, y, ring){
+  let dentro = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) dentro = !dentro;
+  }
+  return dentro;
+}
+const mapaPipPoligono = (x, y, poly) => mapaPipAnillo(x, y, poly[0]) && !poly.slice(1).some(h => mapaPipAnillo(x, y, h));
+// Región a la que pertenece un punto (si cae en la costa, fuera del dibujo simplificado, se toma la más cercana)
+function mapaRegionDe(p){
+  const S = mapaS();
+  S.regCache = S.regCache || {};
+  const c = S.regCache[p.id];
+  if (c && c.lat === p.lat && c.lng === p.lng) return c.f;
+  let hallada = null;
+  const fs = mapaRegGeo.features;
+  for (const f of fs) {
+    const b = f._bb;
+    if (p.lng < b[0] || p.lng > b[2] || p.lat < b[1] || p.lat > b[3]) continue;
+    if (f._polys.some(poly => mapaPipPoligono(p.lng, p.lat, poly))) { hallada = f; break; }
+  }
+  if (!hallada) {
+    let mejor = 0.4;
+    const k = Math.cos(p.lat * Math.PI / 180);
+    fs.forEach(f => {
+      const b = f._bb;
+      if (p.lng < b[0] - 0.4 || p.lng > b[2] + 0.4 || p.lat < b[1] - 0.4 || p.lat > b[3] + 0.4) return;
+      f._polys.forEach(poly => poly[0].forEach(q => { const d = Math.hypot((q[0] - p.lng) * k, q[1] - p.lat); if (d < mejor) { mejor = d; hallada = f; } }));
+    });
+  }
+  S.regCache[p.id] = { lat: p.lat, lng: p.lng, f: hallada };
+  return hallada;
+}
+// Puntos (con los filtros activos) agrupados por región
+function mapaRegionCuentas(){
+  const out = {};
+  mapaFiltrados().forEach(p => {
+    const f = mapaRegionDe(p);
+    if (!f) return;
+    const c = out[f._id] = out[f._id] || { f, total: 0, as24: 0, parking: 0, lavadero: 0, puntos: [] };
+    c.total++; c[p.tipo]++; c.puntos.push(p);
+  });
+  return out;
+}
+const mapaMezcla = (a, b, t) => { const h = s => [1, 3, 5].map(i => parseInt(s.slice(i, i + 2), 16)); const x = h(a), y = h(b); return '#' + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, '0')).join(''); };
+function mapaRegEstilo(f){
+  const S = mapaS();
+  const c = (S.regCuentas || {})[f._id];
+  if (S.region === f._id) return { fillColor: c ? mapaMezcla('#2B6CB0', '#7DD3FC', Math.min(1, (c.total - 1) / Math.max(1, S.regMax - 1))) : '#1E2B42', fillOpacity: 1, color: '#FFFFFF', weight: 2 };
+  if (!c) return { fillColor: '#131E31', fillOpacity: 1, color: '#33466A', weight: 0.7 };
+  const t = S.regMax > 1 ? (c.total - 1) / (S.regMax - 1) : 1;
+  return { fillColor: mapaMezcla('#2B6CB0', '#7DD3FC', t), fillOpacity: 1, color: '#4B6A99', weight: 0.8 };
+}
+function mapaRegTitulo(f){ return (f._cod ? f._cod + ' · ' : '') + f._nombre; }
+function mapaRegTooltip(f){
+  const c = (mapaS().regCuentas || {})[f._id];
+  const det = c ? ['as24', 'parking', 'lavadero'].filter(t => c[t]).map(t => `<span style="color:${MAPA_TIPOS[t].color === '#1B3A6B' ? '#8FB3F0' : MAPA_TIPOS[t].color}">●</span> ${c[t]} ${esc(MAPA_TIPOS[t].corto)}`).join('&nbsp;&nbsp;') : '';
+  return `<b>${esc(mapaRegTitulo(f))}</b><br><span class="mp-tt-s">${esc(f._pais)}</span>${c ? `<br>${c.total} punto${c.total === 1 ? '' : 's'}<br>${det}` : '<br><span class="mp-tt-s">Sin puntos</span>'}`;
+}
+function mapaIniciarRegiones(){
+  const S = mapaS();
+  const el = document.getElementById('mapa-canvas');
+  if (!el || !window.L || !mapaRegGeo) return;
+  if (S.map) mapaDestruir();
+  const v = S.viewReg || { c: [51, 12], z: 4.5 };
+  const map = L.map(el, { preferCanvas: true, zoomSnap: 0.5, minZoom: 3, maxBounds: [[18, -40], [76, 66]], maxBoundsViscosity: 0.8, attributionControl: true }).setView(v.c, v.z);
+  map.attributionControl.addAttribution('Límites © Eurostat (GISCO)');
+  S.regLayer = L.geoJSON(mapaRegGeo, {
+    style: f => mapaRegEstilo(f),
+    onEachFeature: (f, layer) => {
+      layer.bindTooltip(() => mapaRegTooltip(f), { sticky: true, direction: 'top', className: 'mp-tt', opacity: 1 });
+      layer.on('mouseover', () => { if (S.region !== f._id) { layer.setStyle({ color: '#BFE0FF', weight: 1.6 }); layer.bringToFront(); } });
+      layer.on('mouseout', () => layer.setStyle(mapaRegEstilo(f)));
+      layer.on('click', () => mapaRegionSel(f._id));
+    },
+  }).addTo(map);
+  S.regLabels = L.layerGroup().addTo(map);
+  const leyenda = L.control({ position: 'bottomleft' });
+  leyenda.onAdd = () => { const d = L.DomUtil.create('div', 'mp-leyenda'); d.id = 'mp-leyenda'; return d; };
+  leyenda.addTo(map);
+  map.on('moveend', () => { const c = map.getCenter(); S.viewReg = { c: [c.lat, c.lng], z: map.getZoom() }; });
+  map.on('zoomend', mapaRegEtiquetas);
+  S.map = map;
+  setTimeout(() => { try { map.invalidateSize(); } catch (e) { /* ya no está */ } }, 60);
+}
+function mapaRegEtiquetas(){
+  const S = mapaS();
+  if (!S.map || !S.regLabels) return;
+  S.regLabels.clearLayers();
+  Object.values(S.regCuentas || {}).forEach(c => {
+    if (c.f._centro[0] < 25 || c.f._centro[0] > 72) return;
+    L.marker(c.f._centro, { interactive: false, keyboard: false, icon: L.divIcon({ className: 'mp-regn-w', html: `<div class="mp-regn">${c.total}</div>`, iconSize: [26, 20] }) }).addTo(S.regLabels);
+  });
+}
+function mapaPintarRegiones(ajustar){
+  const S = mapaS();
+  if (!S.map || !S.regLayer) return;
+  S.regCuentas = mapaRegionCuentas();
+  S.regMax = Math.max(1, ...Object.values(S.regCuentas).map(c => c.total));
+  S.regLayer.eachLayer(l => l.setStyle(mapaRegEstilo(l.feature)));
+  mapaRegEtiquetas();
+  const ley = document.getElementById('mp-leyenda');
+  if (ley) ley.innerHTML = `<b>Puntos por región</b><div class="mp-ley-b"><i></i></div><div class="mp-ley-t"><span>1</span><span>${S.regMax}</span></div>`;
+  if (ajustar && !S.viewReg) S.map.setView([51, 12], 4.5);
+}
+function mapaRegionSel(id){
+  const S = mapaS();
+  S.region = S.region === id ? null : id;
+  if (S.regLayer) S.regLayer.eachLayer(l => l.setStyle(mapaRegEstilo(l.feature)));
+  const f = mapaRegGeo.features.find(x => x._id === id);
+  if (S.region && f && S.map) S.map.fitBounds([[f._bb[1], f._bb[0]], [f._bb[3], f._bb[2]]], { padding: [60, 60], maxZoom: 8 });
+  mapaPanel();
+}
+function mapaItemHtml(p){
+  const t = MAPA_TIPOS[p.tipo], pr = mapaPreciosDe(p.id).slice(0, 2);
+  return `<button type="button" class="mp-it" onclick="mapaSeleccionar('${p.id}', true)">
+    <span class="mp-dot" style="--c:${t.color}"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${t.svg}</svg></span>
+    <span class="mp-it-b"><b>${esc(p.nombre)}</b><small>${esc([p.localidad, p.pais].filter(Boolean).join(' · ') || t.label)}</small>
+    ${pr.length ? `<em>${pr.map(x => `${esc(x.actual.concepto)}: ${esc(mapaImporteTxt(x.actual))}`).join(' · ')}</em>` : ''}</span>
+  </button>`;
+}
+function mapaRegionPanelHtml(){
+  const S = mapaS();
+  const cuentas = S.regCuentas || {};
+  const resumen = c => ['as24', 'parking', 'lavadero'].filter(t => c[t]).map(t => `<span class="mp-tag" style="--c:${MAPA_TIPOS[t].color}">${c[t]} ${esc(MAPA_TIPOS[t].corto)}</span>`).join(' ');
+  if (S.region && mapaRegGeo) {
+    const f = mapaRegGeo.features.find(x => x._id === S.region);
+    const c = cuentas[S.region];
+    return `<div class="mp-ficha-top"><button type="button" class="mp-volver" onclick="mapaRegionSel('${S.region}')">← Todas las regiones</button>
+        <div class="mp-ficha-t"><div><small>${esc(f ? f._pais : '')}</small><h3>${esc(f ? mapaRegTitulo(f) : S.region)}</h3></div></div>
+        <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">${c ? resumen(c) : '<span class="mp-nada">Ningún punto en esta región con los filtros de arriba.</span>'}</div></div>
+      ${c ? `<div class="mp-lista">${c.puntos.slice().sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).map(mapaItemHtml).join('')}</div>` : ''}`;
+  }
+  const lista = Object.values(cuentas).sort((a, b) => b.total - a.total || a.f._nombre.localeCompare(b.f._nombre, 'es'));
+  if (!S.puntos.length) return `<div class="mp-vacio"><b>Todavía no hay puntos</b><span>Crea puntos en la vista «Mapa» y aquí verás en qué regiones están.</span></div>`;
+  if (!lista.length) return `<div class="mp-vacio"><b>Ninguna región con puntos</b><span>Prueba con otra búsqueda o activa más tipos arriba.</span></div>`;
+  return `<div class="mp-side-h">${lista.length} región${lista.length === 1 ? '' : 'es'} con puntos</div>
+    <div class="mp-lista">${lista.map(c => `<button type="button" class="mp-it" onclick="mapaRegionSel('${c.f._id}')">
+      <span class="mp-regn-b">${c.total}</span>
+      <span class="mp-it-b"><b>${esc(mapaRegTitulo(c.f))}</b><small>${esc(c.f._pais)}</small><span style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px;">${resumen(c)}</span></span></button>`).join('')}</div>`;
+}
+function mapaCargandoTxt(t){ const c = document.getElementById('mp-side'); if (c) c.innerHTML = `<div class="mp-vacio">${esc(t)}</div>`; }
 // Vuelve a pintar chips, países, marcadores y la lista/tabla según los filtros
 function mapaRefrescar(ajustar){
   const S = mapaS();
@@ -14110,6 +14314,9 @@ function mapaRefrescar(ajustar){
   if (S.vista === 'mapa') {
     if (S.map && S.cluster) mapaPintarMarcadores(ajustar);
     if (S.modo === 'lista') mapaPanel();
+  } else if (S.vista === 'regiones') {
+    if (S.map) mapaPintarRegiones(ajustar);
+    mapaPanel();
   } else mapaTabla();
 }
 function mapaPintarMarcadores(ajustar){
@@ -14141,13 +14348,21 @@ function mapaPopupHtml(p){
 function mapaBuscar(v){ const S = mapaS(); S.q = v; mapaRefrescar(true); }
 function mapaTipo(t){ const S = mapaS(); S.tipos[t] = !S.tipos[t]; mapaRefrescar(true); }
 function mapaPaisCambio(v){ const S = mapaS(); S.pais = v; mapaRefrescar(true); }
-function mapaVista(v){ const S = mapaS(); if (S.vista === v) return; S.vista = v; if (v === 'lista') { S.modo = 'lista'; mapaLimpiarTmp(); } mapaDestruir(); renderTab(); }
+function mapaVista(v){
+  const S = mapaS();
+  if (S.vista === v) return;
+  S.vista = v; S.region = null;
+  if (v !== 'mapa' && S.modo === 'form') { S.modo = 'lista'; S.edit = null; }   // el formulario de un punto solo se hace en el mapa de calles
+  if (v === 'lista') { S.modo = 'lista'; mapaLimpiarTmp(); }
+  mapaDestruir(); renderTab();
+}
 
 /* ---- Panel lateral: lista, ficha y formulario ---- */
 function mapaPanel(){
   const S = mapaS();
   const el = document.getElementById('mp-side');
   if (!el) return;
+  if (S.vista === 'regiones' && S.modo !== 'form') { el.innerHTML = mapaRegionPanelHtml(); el.scrollTop = 0; return; }
   el.innerHTML = S.modo === 'form' ? mapaFormHtml() : S.modo === 'ficha' && S.puntos.some(p => p.id === S.sel) ? mapaFichaHtml(S.puntos.find(p => p.id === S.sel)) : mapaListaHtml();
   el.scrollTop = 0;
   const mapEl = document.querySelector('.mp-map');
@@ -14246,16 +14461,23 @@ async function mapaSeleccionar(id, volar, abrirFicha){
   if (!p) return;
   const antes = S.sel;
   S.sel = id; S.modo = 'ficha'; S.addPrecio = false;
+  if (S.vista !== 'mapa') {   // desde la lista o desde las regiones: se pasa al mapa con la ficha abierta y se vuela hasta el punto
+    S.vista = 'mapa'; S.volarA = id; mapaDestruir(); renderTab();
+    return;
+  }
   mapaPanel();
-  if (S.vista === 'lista') { S.vista = 'mapa'; renderTab(); return; }
   if (S.marks[antes] && S.puntos.find(x => x.id === antes)) S.marks[antes].setIcon(mapaIcono(S.puntos.find(x => x.id === antes).tipo, false));
   if (S.marks[id]) S.marks[id].setIcon(mapaIcono(p.tipo, true));
-  if (volar && S.map && S.marks[id]) {
-    S.map.setView([p.lat, p.lng], Math.max(S.map.getZoom(), 14), { animate: true });
-    S.cluster.zoomToShowLayer(S.marks[id], () => S.marks[id].openPopup());
-  }
+  if (volar) mapaVolarA(id);
   void abrirFicha;
   if (S.notas[id] === undefined) await mapaNotasCargar(id);
+}
+function mapaVolarA(id){
+  const S = mapaS();
+  const p = S.puntos.find(x => x.id === id);
+  if (!p || !S.map || !S.marks[id]) return;
+  S.map.setView([p.lat, p.lng], Math.max(S.map.getZoom(), 14), { animate: true });
+  S.cluster.zoomToShowLayer(S.marks[id], () => S.marks[id].openPopup());
 }
 async function mapaNotasCargar(id){
   const S = mapaS();
@@ -14319,7 +14541,7 @@ async function mapaNotaQuitar(id, puntoId){
 /* ---- Crear y editar un punto ---- */
 function mapaAnadir(){
   const S = mapaS();
-  if (S.vista !== 'mapa') { S.vista = 'mapa'; S.modo = 'form'; S.edit = null; S.coord = null; S.formTipo = 'as24'; S.formSvc = []; renderTab(); return; }
+  if (S.vista !== 'mapa') { S.vista = 'mapa'; S.modo = 'form'; S.edit = null; S.coord = null; S.formTipo = 'as24'; S.formSvc = []; mapaDestruir(); renderTab(); return; }
   S.modo = 'form'; S.edit = null; S.coord = null; S.formTipo = 'as24'; S.formSvc = [];
   mapaLimpiarTmp(); mapaPanel();
 }
