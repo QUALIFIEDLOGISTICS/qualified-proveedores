@@ -1012,6 +1012,16 @@
   .crm-blk.op .crm-add-big span{background:#0E8A9B;}
   .crm-blk.op .crm-add-big:hover{background:color-mix(in srgb,#0E8A9B 12%,var(--panel));border-color:#0E8A9B;}
   .crm-op-ln .crm-rt-t span{font-family:inherit;}
+  .crm-op-ln .crm-precio-l input{font-size:14px;font-weight:600;}
+  .crm-oa-h{display:grid;grid-template-columns:1fr 150px 30px;gap:8px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--mutedFaint);padding:0 2px;}
+  .crm-oas{display:flex;flex-direction:column;gap:7px;}
+  .crm-oa{display:grid;grid-template-columns:1fr 150px 30px;gap:8px;align-items:center;}
+  .crm-oa>input{width:100%;min-width:0;}
+  .crm-oa .crm-eur input{width:150px !important;font-size:15px;}
+  .crm-oa-f{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:6px;border-top:1px dashed var(--border);font-size:13px;color:var(--muted);}
+  .crm-oa-f b{font-size:16px;color:#0E8A9B;margin-left:6px;}
+  .crm-lns-op span{display:block;}
+  @media(max-width:560px){.crm-oa-h{display:none;}.crm-oa{grid-template-columns:1fr 110px 30px;}.crm-oa .crm-eur input{width:110px !important;}}
   .crm-rt-t{display:flex;flex-direction:column;min-width:0;flex:1;line-height:1.25;}
   .crm-rt-t b{font-size:14px;}
   .crm-rt-t span{font-size:12.5px;color:var(--muted);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -18780,7 +18790,7 @@ function crmFormEstado(o){
     f.emp = o.contactoId ? { tipo: 'cliente', id: o.contactoId } : { tipo: 'prospecto', id: o.prospectoId }; f.cerrada = true;
     (o.conceptos || []).forEach(x => {
       if (x.t === 'transporte') f.tr.push({ k: ++f.n, tipo: x.c || 'FTL', metros: x.metros != null ? String(x.metros).replace('.', ',') : '', o: Object.assign({ z: '', cp: '', ciudad: '' }, x.o || {}), d: Object.assign({ z: '', cp: '', ciudad: '' }, x.d || {}), precio: x.precio != null ? String(x.precio).replace('.', ',') : '' });
-      else if (x.t === 'operativa') f.op.push({ k: ++f.n, nombre: x.n || x.c || '', precio: x.precio != null ? String(x.precio).replace('.', ',') : '' });
+      else if (x.t === 'operativa') f.op.push({ k: ++f.n, nombre: x.n || x.c || '', acts: (Array.isArray(x.apartados) && x.apartados.length ? x.apartados : [{ concepto: 'Operación completa', precio: x.precio }]).map(a => ({ k: ++f.n, concepto: a.concepto || '', precio: a.precio != null ? String(a.precio).replace('.', ',') : '' })) });
       else f.al.push({ k: ++f.n, prod: x.c, cantidad: x.cantidad != null ? String(x.cantidad).replace('.', ',') : '', precio: x.precio != null ? String(x.precio).replace('.', ',') : '' });
     });
   }
@@ -18919,32 +18929,84 @@ function crmTrListaHtml(f){
   return (f.tr.length ? crmGasoilHtml(f) + f.tr.map(crmTrHtml).join('') : '<div class="crm-vacio-blk">Todavía no hay ninguna ruta. Añade la primera con su tipo de camión, origen, destino y precio.</div>')
     + `<button type="button" class="crm-add-big" onclick="crmTrAddFoco()"><span>+</span>${f.tr.length ? 'Añadir otra ruta' : 'Añadir una ruta'}</button>`;
 }
-/* ---- Operativas: tercer bloque de la cotización (carga, descarga, manipulación, contenedores…), con su propio precio por operación ---- */
-function crmOpNombres(){ const g = crmCatalogo().find(x => x.t === 'operativa'); return g ? g.items.map(i => i.n) : []; }
+/* ---- Operativas: tercer bloque de la cotización. Cada operativa lleva su nombre y varias actividades, cada una con su precio ---- */
+const crmOpUnicos = lista => { const v = new Set(), r = []; lista.forEach(n => { const t = String(n || '').trim(), k = crmNorm(t); if (t && !v.has(k)) { v.add(k); r.push(t); } }); return r.sort((a, b) => a.localeCompare(b, 'es')); };
+function crmOpNombres(){ return crmOpUnicos(operativas.map(o => o.nombre)); }
+function crmOpConceptos(){ return crmOpUnicos([...OPERATIVA_CONCEPTOS_HABITUALES, ...operativas.flatMap(o => (o.apartados || []).map(a => a.concepto))]); }
+// Tarifa de una operativa ya creada (la del cliente si se sabe, si no la más reciente con ese nombre)
+function crmOpTarifa(nombre){
+  const n = crmNorm(nombre); if (!n) return null;
+  const cid = crmClienteIdForm(), h = today();
+  const mias = operativas.filter(o => crmNorm(o.nombre) === n && o.fecha <= h).sort((a, b) => b.fecha.localeCompare(a.fecha));
+  return (cid && mias.find(o => o.clienteId === cid)) || mias[0] || null;
+}
+function crmOpActNueva(f){ return { k: ++f.n, concepto: '', precio: '' }; }
 function crmOpAdd(){
-  const f = crmS().form, l = { k: ++f.n, nombre: '', precio: '' };
+  const f = crmS().form, l = { k: ++f.n, nombre: '', acts: [crmOpActNueva(f)] };
   f.op.push(l); crmLineasPinta();
   setTimeout(() => { const e = document.getElementById('crm-on-' + l.k); if (e) e.focus(); }, 40);
 }
 function crmOpDel(k){ const f = crmS().form; f.op = f.op.filter(l => l.k !== k); crmLineasPinta(); }
-function crmOpSet(k, campo, v){
+function crmOpTotalDe(l){ return l.acts.reduce((s, a) => s + (crmNumTxt(a.precio) || 0), 0); }
+function crmOpTotalPinta(l){
+  const t = crmOpTotalDe(l), el = document.getElementById('crm-opt-' + l.k);
+  if (el) el.textContent = t ? crmEur2(t) : '';
+}
+function crmOpSet(k, v){
   const f = crmS().form, l = f.op.find(x => x.k === k); if (!l) return;
-  l[campo] = v;
-  if (campo === 'nombre') { const t = document.getElementById('crm-ot-' + k); if (t) t.textContent = v.trim() || 'Operativa ' + (f.op.indexOf(l) + 1); }
+  l.nombre = v;
+  const t = document.getElementById('crm-ot-' + k); if (t) t.textContent = v.trim() || 'Operativa ' + (f.op.indexOf(l) + 1);
+}
+// Al elegir el nombre de una operativa que ya existe, se cargan sus actividades y precios (solo si todavía no se ha rellenado ninguna)
+function crmOpNombreCambio(k){
+  const f = crmS().form, l = f.op.find(x => x.k === k); if (!l) return;
+  const vacia = l.acts.every(a => !a.concepto.trim() && !a.precio);
+  const t = crmOpTarifa(l.nombre);
+  if (!t || !vacia) return;
+  const fijos = operativaFijos(t);
+  if (!fijos.length) return;
+  l.acts = fijos.map(a => ({ k: ++f.n, concepto: a.concepto || '', precio: a.precio != null ? String(a.precio).replace('.', ',') : '' }));
+  crmOpActsPinta(k);
+  const h = document.getElementById('crm-oph-' + k); if (h) h.textContent = `Cargadas las ${fijos.length} actividades de la tarifa «${t.nombre}» (${crmFecha(t.fecha)}). Puedes cambiarlas.`;
+}
+function crmOpActAdd(k){
+  const f = crmS().form, l = f.op.find(x => x.k === k); if (!l) return;
+  const a = crmOpActNueva(f); l.acts.push(a); crmOpActsPinta(k);
+  setTimeout(() => { const e = document.getElementById('crm-oac-' + a.k); if (e) e.focus(); }, 40);
+}
+function crmOpActDel(k, ak){
+  const f = crmS().form, l = f.op.find(x => x.k === k); if (!l) return;
+  l.acts = l.acts.filter(a => a.k !== ak); crmOpActsPinta(k);
+}
+function crmOpActSet(k, ak, campo, v){
+  const l = crmS().form.op.find(x => x.k === k), a = l && l.acts.find(x => x.k === ak); if (!a) return;
+  a[campo] = v; if (campo === 'precio') crmOpTotalPinta(l);
+}
+function crmOpActsHtml(l){
+  return l.acts.map(a => `<div class="crm-oa">
+      <input id="crm-oac-${a.k}" data-combo="crm-opc-dl" autocomplete="off" maxlength="120" placeholder="Actividad (carga, descarga, manipulación…)" value="${esc(a.concepto)}" oninput="crmOpActSet(${l.k}, ${a.k}, 'concepto', this.value)" />
+      <span class="crm-eur"><input inputmode="decimal" maxlength="9" placeholder="0,00" value="${esc(a.precio)}" oninput="crmOpActSet(${l.k}, ${a.k}, 'precio', this.value)" /><i>€</i></span>
+      <button type="button" class="crm-x2" title="Quitar esta actividad" onclick="crmOpActDel(${l.k}, ${a.k})">✕</button></div>`).join('')
+    + `<div class="crm-oa-f"><button type="button" class="crm-link" onclick="crmOpActAdd(${l.k})">+ Añadir actividad</button><span>Total de la operativa <b id="crm-opt-${l.k}">${crmOpTotalDe(l) ? esc(crmEur2(crmOpTotalDe(l))) : ''}</b></span></div>`;
+}
+function crmOpActsPinta(k){
+  const l = crmS().form.op.find(x => x.k === k), e = document.getElementById('crm-opa-' + k);
+  if (l && e) e.innerHTML = crmOpActsHtml(l);
 }
 function crmOpHtml(l, i){
   return `<div class="crm-ln crm-rt crm-op-ln">
-    <div class="crm-rt-h"><span class="crm-rt-n op">${i + 1}</span><div class="crm-rt-t"><b id="crm-ot-${l.k}">${esc(l.nombre.trim() || 'Operativa ' + (i + 1))}</b><span><i class="crm-catc" style="--c:#0E8A9B">Operativa</i>Precio por operación</span></div>
+    <div class="crm-rt-h"><span class="crm-rt-n op">${i + 1}</span><div class="crm-rt-t"><b id="crm-ot-${l.k}">${esc(l.nombre.trim() || 'Operativa ' + (i + 1))}</b><span><i class="crm-catc" style="--c:#0E8A9B">Operativa</i>Con las actividades que incluye y su precio</span></div>
       <div class="crm-rt-a"><button type="button" class="crm-x2" title="Quitar esta operativa" onclick="crmOpDel(${l.k})">✕</button></div></div>
-    <div class="crm-rt-p">
-      <label class="crm-precio-l" style="flex:1;min-width:240px;">Operativa<input id="crm-on-${l.k}" data-combo="crm-ops-dl" autocomplete="off" maxlength="120" placeholder="Elige de tu lista o escribe una nueva" value="${esc(l.nombre)}" oninput="crmOpSet(${l.k}, 'nombre', this.value)" style="width:100%;" /></label>
-      <label class="crm-precio-l">Precio por operación<span class="crm-eur"><input id="crm-op-${l.k}" inputmode="decimal" maxlength="9" placeholder="0,00" value="${esc(l.precio)}" oninput="crmOpSet(${l.k}, 'precio', this.value)" /><i>€</i></span></label>
-    </div></div>`;
+    <label class="crm-precio-l">Nombre de la operativa<input id="crm-on-${l.k}" data-combo="crm-ops-dl" autocomplete="off" maxlength="120" placeholder="Ej. Contenedor puerto Barcelona: elige una existente o escribe una nueva" value="${esc(l.nombre)}" oninput="crmOpSet(${l.k}, this.value)" onchange="crmOpNombreCambio(${l.k})" style="width:100%;" /></label>
+    <div id="crm-oph-${l.k}" class="crm-hint"></div>
+    <div class="crm-oa-h"><span>Actividad</span><span>Precio</span></div>
+    <div id="crm-opa-${l.k}" class="crm-oas">${crmOpActsHtml(l)}</div>
+  </div>`;
 }
 function crmOpListaHtml(f){
-  return (f.op.length ? f.op.map(crmOpHtml).join('') : '<div class="crm-vacio-blk">Todavía no hay ninguna operativa. Añade las que le cotizas: carga, descarga, manipulación, contenedores…</div>')
+  return (f.op.length ? f.op.map(crmOpHtml).join('') : '<div class="crm-vacio-blk">Todavía no hay ninguna operativa. Añade las que le cotizas (por ejemplo «Contenedor puerto Barcelona») con las actividades que incluye: carga, descarga, manipulación…</div>')
     + `<button type="button" class="crm-add-big" onclick="crmOpAdd()"><span>+</span>${f.op.length ? 'Añadir otra operativa' : 'Añadir una operativa'}</button>`
-    + `<datalist id="crm-ops-dl">${crmOpNombres().map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist>`;
+    + `<datalist id="crm-ops-dl">${crmOpNombres().map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist><datalist id="crm-opc-dl">${crmOpConceptos().map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist>`;
 }
 function crmAlListaHtml(f){
   return (f.al.length ? f.al.map(crmAlHtml).join('') : '<div class="crm-vacio-blk">Todavía no hay ningún producto. Añade los de almacén que le cotizas, con su precio.</div>')
@@ -19007,7 +19069,7 @@ function crmConceptosDeForm(f){
   const out = [];
   f.tr.forEach(l => out.push({ t: 'transporte', c: l.tipo, n: CRM_TIPOS_TRANSPORTE[l.tipo] || l.tipo, metros: l.tipo === 'LTL' ? crmNumTxt(l.metros) : null, o: { z: l.o.z, cp: l.o.cp, ciudad: l.o.ciudad }, d: { z: l.d.z, cp: l.d.cp, ciudad: l.d.ciudad }, precio: crmNumTxt(l.precio) }));
   f.al.forEach(l => { const p = crmProdInfo(l.prod); if (p) out.push({ t: p.t, c: p.c, n: p.n, unidad: p.unidad, cat: crmCatClave(p), cantidad: crmNumTxt(l.cantidad), precio: crmNumTxt(l.precio) }); });
-  f.op.forEach(l => { const n = l.nombre.trim(); if (n) out.push({ t: 'operativa', c: crmNorm(n), n, unidad: 'operativa', cat: 'operativa', cantidad: null, precio: crmNumTxt(l.precio) }); });
+  f.op.forEach(l => { const n = l.nombre.trim(); if (!n) return; const ap = l.acts.filter(a => a.concepto.trim() || a.precio !== '').map(a => ({ concepto: a.concepto.trim(), precio: crmNumTxt(a.precio) })); const tot = ap.reduce((s, a) => s + (a.precio || 0), 0); out.push({ t: 'operativa', c: crmNorm(n), n, unidad: 'operativa', cat: 'operativa', cantidad: null, apartados: ap, precio: ap.some(a => a.precio != null) ? Math.round(tot * 100) / 100 : null }); });
   return out;
 }
 function crmLineaTxt(x){
@@ -19073,7 +19135,11 @@ async function crmFormGuardar(id, pdf){
   for (let i = 0; i < f.op.length; i++) {
     const l = f.op[i], n = `Operativa ${i + 1}`;
     if (!l.nombre.trim()) { err.textContent = `${n}: elige o escribe cuál es.`; return; }
-    if (l.precio !== '' && (crmNumTxt(l.precio) == null || crmNumTxt(l.precio) < 0)) { err.textContent = `${n}: el precio tiene que ser un número.`; return; }
+    for (const a of l.acts) {
+      if (!a.concepto.trim() && a.precio === '') continue;
+      if (!a.concepto.trim()) { err.textContent = `${n}: hay un precio sin actividad.`; return; }
+      if (a.precio !== '' && (crmNumTxt(a.precio) == null || crmNumTxt(a.precio) < 0)) { err.textContent = `${n} · ${a.concepto.trim()}: el precio tiene que ser un número.`; return; }
+    }
   }
   for (let i = 0; i < f.tr.length; i++) {
     const l = f.tr[i], n = `Ruta ${i + 1}`;
@@ -19330,7 +19396,8 @@ async function crmOfertaPdfBytes(o, num){
   const ops = (o.conceptos || []).filter(x => x.t === 'operativa');
   if (ops.length) {
     seccion('Operativas');
-    tabla([{ t: 'Concepto', w: 0.62, b: true }, { t: 'Tarifa', w: 0.38, a: 'r', b: true }], ops.map(x => [x.n, x.precio == null ? 'A consultar' : eur(x.precio) + ' por operación']));
+    tabla([{ t: 'Operativa', w: 0.3, b: true }, { t: 'Actividad', w: 0.42 }, { t: 'Precio', w: 0.28, a: 'r', b: true }],
+      ops.flatMap(x => { const ap = (x.apartados || []).length ? x.apartados : [{ concepto: '', precio: x.precio }]; const filas = ap.map((a, i) => [i ? '' : x.n, a.concepto || '—', a.precio == null ? 'A consultar' : eur(a.precio)]); if (ap.length > 1 && x.precio != null) filas.push(['', 'Total de la operativa', eur(x.precio)]); return filas; }));
   }
   if (al.length) {
     seccion('Almacén');
@@ -19373,7 +19440,7 @@ function crmLineasHtml(o){
   const lugar = z => z && (z.ciudad || z.z) ? esc([z.ciudad, z.z ? '(' + z.z + ')' : ''].filter(Boolean).join(' ')) : '—';
   return `<div class="crm-lns">
     ${tr.length ? `<div class="crm-lns-t">Transporte</div>${tr.map(x => `<div class="crm-lns-r"><div><b>${esc(x.n)}${x.metros ? ' · ' + String(x.metros).replace('.', ',') + ' m' : ''}</b><span>${lugar(x.o)} → ${lugar(x.d)}</span></div><b class="crm-lns-p">${x.precio != null ? esc(crmEur2(x.precio) + (x.c === 'GRANEL' ? '/t' : x.c === 'GRUA' ? '/h' : '')) : '—'}</b></div>`).join('')}` : ''}
-    ${op.length ? `<div class="crm-lns-t">Operativas</div>${op.map(x => `<div class="crm-lns-r"><div><b>${esc(x.n)} ${crmCatChip(x)}</b><span>${x.precio != null ? esc(crmEur2(x.precio)) + ' por operación' : 'sin precio'}</span></div></div>`).join('')}` : ''}
+    ${op.length ? `<div class="crm-lns-t">Operativas</div>${op.map(x => `<div class="crm-lns-r crm-lns-op"><div><b>${esc(x.n)} ${crmCatChip(x)}</b>${(x.apartados || []).length ? x.apartados.map(a => `<span>${esc(a.concepto || '—')} · ${a.precio != null ? esc(crmEur2(a.precio)) : 'sin precio'}</span>`).join('') : `<span>${x.precio != null ? esc(crmEur2(x.precio)) : 'sin precio'}</span>`}</div>${x.precio != null && (x.apartados || []).length > 1 ? `<b class="crm-lns-p">${esc(crmEur2(x.precio))}</b>` : ''}</div>`).join('')}` : ''}
     ${al.length ? `<div class="crm-lns-t">Almacén</div>${al.map(x => { const u = CRM_UNIDAD_AL[x.unidad]; return `<div class="crm-lns-r"><div><b>${esc(x.n)} ${crmCatChip(x)}</b><span>${x.cantidad != null ? String(x.cantidad).replace('.', ',') + (x.unidad === 'operativa' ? ' × ' : ' × ') : ''}${x.precio != null ? esc(crmEur2(x.precio)) + (u ? ' ' + u.txt : x.unidad === 'operativa' ? ' por operación' : '') : 'sin precio'}</span></div></div>`; }).join('')}` : ''}</div>`;
 }
 async function crmEliminar(id){
