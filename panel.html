@@ -625,6 +625,7 @@
   /* ---- Mapa · planificador de ruta ---- */
   .mp-lugar{display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);font-size:13px;margin-bottom:6px;}
   .mp-lugar span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .mp-via-n{flex:0 0 auto;width:20px;height:20px;border-radius:50%;background:#2F6FED;color:#fff;font-style:normal;font-size:11px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;}
   .mp-check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;color:var(--text);flex-wrap:wrap;}
   .mp-num{width:58px;padding:6px 8px;text-align:center;}
   .mp-camion{display:flex;gap:12px;flex-wrap:wrap;}
@@ -14779,8 +14780,13 @@ function mapaRutaHtml(){
   if (r.fase === 'listo' && r.res) return `${cab}${mapaRutaResultadosHtml()}`;
   return `${cab}<div class="mp-cuerpo">
     ${lugar('origen', 'Origen <span class="dc-req">*</span>', 'Ciudad, dirección, código postal o nombre…')}
+    <div class="field"><label>Puntos intermedios <small style="font-weight:400;color:var(--mutedFaint);">· opcional, para que pase por un sitio concreto</small></label>
+      ${r.vias.map((v, i) => `<div class="mp-lugar"><i class="mp-via-n">${i + 1}</i><span>${esc(v.nombre)}</span>
+        ${i > 0 ? `<button type="button" class="mp-x" title="Subir" onclick="mapaRutaMoverVia(${i}, -1)">↑</button>` : ''}${i < r.vias.length - 1 ? `<button type="button" class="mp-x" title="Bajar" onclick="mapaRutaMoverVia(${i}, 1)">↓</button>` : ''}
+        <button type="button" class="mp-x" title="Quitar" onclick="mapaRutaQuitarVia(${i})">✕</button></div>`).join('')}
+      ${r.viaAbierta ? lugar('via', '', 'Ciudad, dirección, código postal o nombre…') : `<button type="button" class="mp-link" onclick="mapaRutaViaAbrir()">+ Añadir un punto intermedio</button>`}
+      ${r.vias.length ? '<div class="mp-hint">La ruta pasa por ellos en este orden, entre el origen y el destino.</div>' : ''}</div>
     ${lugar('destino', 'Destino <span class="dc-req">*</span>', 'Ciudad, dirección, código postal o nombre…')}
-    ${r.vias.length ? `<div class="field"><label>Pasando por</label>${r.vias.map((v, i) => `<div class="mp-lugar"><span>${esc(v.nombre)}</span><button type="button" class="mp-x" title="Quitar" onclick="mapaRutaQuitarVia(${i})">✕</button></div>`).join('')}</div>` : ''}
     <div class="field"><label>¿Qué necesitas?</label><div class="mp-svcs-e">
       ${[['as24', 'Repostar (AS24)'], ['parking', 'Descansar (parking)'], ['lavadero', 'Lavar']].map(([t, l]) => `<button type="button" class="mp-sv${r.tipos[t] ? ' on' : ''}" onclick="mapaRutaTipo('${t}')">${l}</button>`).join('')}</div></div>
     ${r.tipos.parking ? `<div class="field"><label class="mp-check"><input type="checkbox" ${r.descanso ? 'checked' : ''} onchange="mapaRutaCampo('descanso', this.checked); mapaPanel();" /> Descansar tras <input class="mp-num" value="${String(r.descansoH).replace('.', ',')}" inputmode="decimal" maxlength="4" onchange="mapaRutaCampo('descansoH', this.value)" ${r.descanso ? '' : 'disabled'} /> h de conducción</label><div class="mp-hint">El tacógrafo obliga a parar 45 min tras 4 h 30. Se buscará el parking entre la hora y media anterior y ese momento.</div></div>` : ''}
@@ -14799,15 +14805,21 @@ function mapaRutaHtml(){
   </div>`;
 }
 function mapaRutaQuitar(k){ const r = mapaRutaS(); r[k] = null; mapaPanel(); }
+function mapaRutaViaAbrir(){ const r = mapaRutaS(); r.viaAbierta = true; mapaPanel(); setTimeout(() => { const i = document.getElementById('mp-r-via'); if (i) i.focus(); }, 30); }
+async function mapaRutaQuitarViaYCalcular(i){ mapaRutaS().vias.splice(i, 1); await mapaRutaCalcular(); }
+function mapaRutaMoverVia(i, d){ const r = mapaRutaS(), j = i + d; if (j < 0 || j >= r.vias.length) return; [r.vias[i], r.vias[j]] = [r.vias[j], r.vias[i]]; mapaPanel(); }
 function mapaRutaQuitarVia(i){ const r = mapaRutaS(); r.vias.splice(i, 1); mapaPanel(); }
 function mapaRutaElegirEnMapa(k){
   const r = mapaRutaS(); r.pick = k;
   const el = document.querySelector('.mp-map'); if (el) el.classList.add('mp-eligiendo');
-  appToast('Pincha en el mapa para elegir el ' + (k === 'origen' ? 'origen' : 'destino') + '.', 'info');
+  appToast('Pincha en el mapa para elegir ' + (k === 'origen' ? 'el origen' : k === 'via' ? 'el punto intermedio' : 'el destino') + '.', 'info');
 }
 function mapaRutaPunto(k, lugar){
   const r = mapaRutaS(), S = mapaS();
-  r[k] = lugar; r.pick = null;
+  r.pick = null;
+  const mp = document.querySelector('.mp-map'); if (mp) mp.classList.remove('mp-eligiendo');
+  if (k === 'via') { r.vias.push(lugar); r.viaAbierta = false; mapaPanel(); return; }   // los intermedios se van sumando, en el orden en que los eliges
+  r[k] = lugar;
   const el = document.querySelector('.mp-map'); if (el) el.classList.remove('mp-eligiendo');
   mapaPanel();
   if (S.map && r.origen && r.destino) S.map.fitBounds([[r.origen.lat, r.origen.lng], [r.destino.lat, r.destino.lng]], { padding: [60, 60] });
@@ -15051,7 +15063,7 @@ function mapaRutaResultadosHtml(){
   return `<div class="mp-cuerpo">
     <div class="mp-r-resumen"><div><b>${esc(r.origen.nombre.split(',')[0])}</b> → <b>${esc(r.destino.nombre.split(',')[0])}</b></div>
       <div class="mp-r-tot"><span><b>${mapaKmTxt(R.km)}</b>distancia</span><span><b>${mapaHoras(R.min)}</b>conduciendo</span></div>
-      ${r.vias.length ? `<div class="mp-hint" style="margin:0;">Pasando por ${r.vias.map(v => esc(v.nombre.split(',')[0])).join(', ')} <button type="button" class="mp-link" onclick="mapaRutaQuitarVia(${r.vias.length - 1}); mapaRutaCalcular();">quitar la última</button></div>` : ''}
+      ${r.vias.length ? `<div class="mp-hint" style="margin:0;">Pasando por: ${r.vias.map((v, i) => `<b>${esc(v.nombre.split(',')[0])}</b> <button type="button" class="mp-x" title="Quitar este punto y recalcular" onclick="mapaRutaQuitarViaYCalcular(${i})">✕</button>`).join(' → ')}</div>` : ''}
       <div class="mp-acc"><a class="btn btn-primary" href="${esc(mapaRutaGoogleUrl())}" target="_blank" rel="noopener">Abrir en Google Maps</a><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="mapaRutaCambiar()">Cambiar</button></div></div>
     <div class="field" style="margin:0;"><label>Ordenar por</label><select onchange="mapaRutaCampo('orden', this.value)">${Object.keys(MAPA_ORDENES).map(k => `<option value="${k}"${r.orden === k ? ' selected' : ''}>${MAPA_ORDENES[k]}</option>`).join('')}</select></div>
     <div class="mp-svcs-e">${MAPA_REQS.map(q => `<button type="button" class="mp-sv${r.reqs.includes(q.id) ? ' on' : ''}" onclick="mapaRutaReq('${q.id}')">${esc(q.label)}</button>`).join('')}</div>
@@ -15066,12 +15078,13 @@ async function mapaRutaPasarPor(id){
   const S = mapaS(), r = mapaRutaS();
   const c = r.res && r.res.cand.find(x => x.p.id === id);
   if (!c) return;
-  const via = { lat: c.p.lat, lng: c.p.lng, nombre: c.p.nombre, pos: c.pos };
-  r.vias = r.vias.filter(v => v.lat !== via.lat || v.lng !== via.lng).concat(via);
-  // las paradas intermedias van en el orden en que se encuentran por el camino
+  const via = { lat: c.p.lat, lng: c.p.lng, nombre: c.p.nombre };
+  r.vias = r.vias.filter(v => v.lat !== via.lat || v.lng !== via.lng);
+  // se mete donde le toca por el camino (antes del primer intermedio que queda más adelante), sin cambiar el orden que ya tuvieras
   const R0 = r.res.R;
-  r.vias.forEach(v => { if (v.pos == null) v.pos = mapaRutaProyecta(R0, v.lat, v.lng).pos; });
-  r.vias.sort((a, b) => a.pos - b.pos);
+  let idx = r.vias.findIndex(v => mapaRutaProyecta(R0, v.lat, v.lng).pos > c.pos);
+  if (idx < 0) idx = r.vias.length;
+  r.vias.splice(idx, 0, via);
   await mapaRutaCalcular();
   void S;
 }
