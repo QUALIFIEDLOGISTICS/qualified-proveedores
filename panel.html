@@ -901,6 +901,8 @@
   .crm-blk-h b{font-size:15px;}
   .crm-blk-n{font-size:11.5px;font-weight:700;color:var(--muted);background:var(--panel2);border-radius:999px;padding:3px 10px;}
   .crm-rt{gap:12px;box-shadow:0 1px 4px rgba(0,0,0,.05);}
+  .crm-gas{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:2px 2px 0;}
+  .crm-gas>span{font-size:12.5px;font-weight:700;color:var(--muted);}
   .crm-rt-h{display:flex;align-items:center;gap:10px;}
   .crm-rt-n{flex:0 0 auto;width:28px;height:28px;border-radius:50%;background:var(--primary);color:#fff;font-size:13px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;}
   .crm-rt-n.al{background:#C77A12;}
@@ -17556,7 +17558,7 @@ const crmNorm = s => String(s == null ? '' : s).toLowerCase().normalize('NFD').r
 function crmOppDeFila(r){
   return { id: r.id, titulo: r.titulo || '', servicio: r.servicio || 'transporte', prospectoId: r.prospecto_id || '', contactoId: r.contacto_id || '', persona: r.persona || '', email: r.email || '', telefono: r.telefono || '',
     importe: r.importe == null ? null : Number(r.importe), importeRec: r.importe_rec == null ? 0 : Number(r.importe_rec), periodicidad: r.periodicidad || 'unico', fase: r.fase || 'cotizada', fechaCot: r.fecha_cotizacion || '', proxFecha: r.proxima_fecha || '',
-    proxAccion: r.proxima_accion || '', ultimo: r.ultimo_contacto || '', motivo: r.motivo_perdida || '', cerradaAt: r.cerrada_at || '', notas: r.notas || '', conceptos: Array.isArray(r.conceptos) ? r.conceptos : [], oferta: r.oferta || '', ofertaFecha: r.oferta_fecha || '', createdAt: r.created_at, updatedAt: r.updated_at };
+    proxAccion: r.proxima_accion || '', ultimo: r.ultimo_contacto || '', motivo: r.motivo_perdida || '', cerradaAt: r.cerrada_at || '', notas: r.notas || '', conceptos: Array.isArray(r.conceptos) ? r.conceptos : [], oferta: r.oferta || '', ofertaFecha: r.oferta_fecha || '', validezDias: r.oferta_validez_dias == null ? null : Number(r.oferta_validez_dias), gasoil: r.gasoil || '', createdAt: r.created_at, updatedAt: r.updated_at };
 }
 function crmProspectoDeFila(r){ return { id: r.id, nombre: r.nombre || '', origen: r.origen || '', notas: r.notas || '', estado: r.estado || 'activo', contactoId: r.contacto_id || '', createdAt: r.created_at }; }
 function crmEmpresa(o){
@@ -17782,7 +17784,7 @@ function crmVacioInicial(){
 async function crmGuardarOpp(o, cambios){
   const fila = {};
   const mapa = { titulo: 'titulo', servicio: 'servicio', prospectoId: 'prospecto_id', contactoId: 'contacto_id', persona: 'persona', email: 'email', telefono: 'telefono', importe: 'importe', importeRec: 'importe_rec', periodicidad: 'periodicidad',
-    conceptos: 'conceptos', fase: 'fase', fechaCot: 'fecha_cotizacion', proxFecha: 'proxima_fecha', proxAccion: 'proxima_accion', ultimo: 'ultimo_contacto', motivo: 'motivo_perdida', cerradaAt: 'cerrada_at', notas: 'notas' };
+    conceptos: 'conceptos', fase: 'fase', fechaCot: 'fecha_cotizacion', proxFecha: 'proxima_fecha', proxAccion: 'proxima_accion', ultimo: 'ultimo_contacto', motivo: 'motivo_perdida', cerradaAt: 'cerrada_at', notas: 'notas', validezDias: 'oferta_validez_dias', gasoil: 'gasoil' };
   Object.keys(cambios).forEach(k => { fila[mapa[k]] = cambios[k] === '' && k !== 'titulo' ? null : cambios[k]; });
   fila.updated_at = new Date().toISOString(); fila.updated_by = currentUserEmail();
   const { error } = await supabaseClient.from('crm_oportunidades').update(fila).eq('id', o.id);
@@ -18267,7 +18269,7 @@ const CRM_UNIDAD_AL = { dia: { txt: 'por día', cant: 'Cantidad media (palets, m
 const crmNumTxt = s => { const t = String(s == null ? '' : s).replace(/\s/g, ''); const n = Number(t.includes(',') ? t.replace(/\./g, '').replace(',', '.') : t); return t === '' || !isFinite(n) ? null : n; };
 const crmEur2 = n => Number(n).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
 function crmFormEstado(o){
-  const f = { servicio: o ? o.servicio : 'transporte', conceptos: [], tr: [], al: [], n: 0 };
+  const f = { servicio: o ? o.servicio : 'transporte', conceptos: [], tr: [], al: [], n: 0, gasoil: o ? o.gasoil : '' };
   if (o) {
     f.emp = o.contactoId ? { tipo: 'cliente', id: o.contactoId } : { tipo: 'prospecto', id: o.prospectoId }; f.cerrada = true;
     (o.conceptos || []).forEach(x => {
@@ -18397,8 +18399,17 @@ function crmTrHtml(l, i){
     </div>
     <datalist id="crm-zonas-dl">${zonas.map(z => `<option value="${esc(z)}" label="${esc(tarifaZonaHint(z))}">`).join('')}</datalist></div>`;
 }
+// ¿Los precios de transporte llevan indexación de gasoil? Va en la oferta en PDF; «Sin indicar» no escribe nada
+function crmGasoilSet(v){
+  const f = crmS().form; if (!f) return;
+  f.gasoil = v;
+  document.querySelectorAll('#crm-gas button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+}
+function crmGasoilHtml(f){
+  return `<div class="crm-gas"><span>Indexación de gasoil</span><div class="crm-seg" id="crm-gas">${[['', 'Sin indicar'], ['si', 'Sí lleva'], ['no', 'No lleva']].map(([v, t]) => `<button type="button" data-v="${v}" class="${(f.gasoil || '') === v ? 'on' : ''}" onclick="crmGasoilSet('${v}')">${t}</button>`).join('')}</div></div>`;
+}
 function crmTrListaHtml(f){
-  return (f.tr.length ? f.tr.map(crmTrHtml).join('') : '<div class="crm-vacio-blk">Todavía no hay ninguna ruta. Añade la primera con su tipo de camión, origen, destino y precio.</div>')
+  return (f.tr.length ? crmGasoilHtml(f) + f.tr.map(crmTrHtml).join('') : '<div class="crm-vacio-blk">Todavía no hay ninguna ruta. Añade la primera con su tipo de camión, origen, destino y precio.</div>')
     + `<button type="button" class="crm-add-big" onclick="crmTrAddFoco()"><span>+</span>${f.tr.length ? 'Añadir otra ruta' : 'Añadir una ruta'}</button>`;
 }
 function crmAlListaHtml(f){
@@ -18484,7 +18495,10 @@ function crmFormHtml(o){
       <div class="crm-blk al"><div class="crm-blk-h" id="crm-blk-al">${crmBlkCabHtml(f, 'al')}</div><div id="crm-al">${crmAlListaHtml(f)}</div></div>
       <div class="field" id="crm-f-serv-w" style="${f.tr.length || f.al.length ? 'display:none;' : ''}"><label>Tipo de servicio <small style="font-weight:400;color:var(--mutedFaint);">· si no añades rutas ni productos</small></label>${chs('servicio', CRM_SERVICIOS, f.servicio)}</div>
       <div class="field"><label>Detalle <small style="font-weight:400;color:var(--mutedFaint);">· frecuencia, condiciones, lo que quieras recordar (opcional)</small></label><input id="crm-f-tit" maxlength="140" placeholder="Ej. 2 camiones a la semana · validez 30 días" value="${esc(o ? o.titulo : '')}" /></div>
-      <div class="field"><label>Fecha de la cotización</label><input id="crm-f-fec" type="date" value="${o ? o.fechaCot : today()}" /></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:150px;"><label>Fecha de la cotización</label><input id="crm-f-fec" type="date" value="${o ? o.fechaCot : today()}" /></div>
+        <div class="field" style="flex:1;min-width:150px;"><label>Validez de la oferta (días)</label><input id="crm-f-val" inputmode="numeric" maxlength="3" placeholder="${CRM_OFERTA_VALIDEZ_DIAS}" value="${o && o.validezDias ? o.validezDias : CRM_OFERTA_VALIDEZ_DIAS}" /></div>
+      </div>
       <div class="crm-form-sec">Con quién has hablado</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         <div class="field" style="flex:1;min-width:150px;"><label>Persona</label><input id="crm-f-per" maxlength="80" value="${esc(o ? o.persona : '')}" /></div>
@@ -18526,6 +18540,8 @@ async function crmFormGuardar(id, pdf){
   }
   const mail = v('crm-f-mail');
   if (mail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail)) { err.textContent = 'El correo no parece válido.'; return; }
+  const valTxt = v('crm-f-val'), validez = valTxt === '' ? CRM_OFERTA_VALIDEZ_DIAS : Number(valTxt);
+  if (!Number.isInteger(validez) || validez < 1 || validez > 365) { err.textContent = 'La validez de la oferta son días enteros, entre 1 y 365.'; return; }
   const btn = document.getElementById('crm-f-ok'), btnPdf = document.getElementById('crm-f-pdf'); if (btn) btn.disabled = true; if (btnPdf) btnPdf.disabled = true;
   try {
     const emp = crmEmpresaResolver(empNombre, id);
@@ -18544,6 +18560,9 @@ async function crmFormGuardar(id, pdf){
     if (id) {
       const o = S.opps.find(x => x.id === id);
       if (conceptos.length || (o.conceptos || []).length) datos.conceptos = conceptos;
+      // Validez e indexación solo se envían si se usan (o ya se usaban): así sigue funcionando aunque falte el SQL
+      if (validez !== CRM_OFERTA_VALIDEZ_DIAS || o.validezDias != null) datos.validezDias = validez;
+      if (f.gasoil || o.gasoil) datos.gasoil = f.gasoil || '';
       if (!(await crmGuardarOpp(o, datos))) { if (btn) btn.disabled = false; if (btnPdf) btnPdf.disabled = false; return; }
       appToast('Cotización actualizada.', 'ok');
       crmPinta(); crmAbrir(id);
@@ -18553,6 +18572,8 @@ async function crmFormGuardar(id, pdf){
     const fila = { titulo, servicio: datos.servicio, prospecto_id: prospectoId || null, contacto_id: contactoId || null, persona: datos.persona || null, email: mail || null, telefono: datos.telefono || null,
       importe: null, periodicidad: 'unico', fase: 'cotizada', fecha_cotizacion: datos.fechaCot, proxima_fecha: datos.proxFecha || null, proxima_accion: datos.proxAccion || null, notas: datos.notas || null, created_by: currentUserEmail() };
     if (conceptos.length) fila.conceptos = conceptos;
+    if (validez !== CRM_OFERTA_VALIDEZ_DIAS) fila.oferta_validez_dias = validez;
+    if (f.gasoil) fila.gasoil = f.gasoil;
     const { data, error } = await supabaseClient.from('crm_oportunidades').insert(fila).select().single();
     if (error) throw error;
     const o = crmOppDeFila(data); S.opps.unshift(o);
@@ -18562,17 +18583,19 @@ async function crmFormGuardar(id, pdf){
     crmCerrarDrawer(); crmPinta();
     if (quierePdf) await crmOfertaGenerar(o.id);
   } catch (e) {
-    err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache|conceptos|importe_rec/i.test((e && e.message) || '') ? 'falta ejecutar el SQL del CRM en Supabase.' : ((e && e.message) || 'error desconocido'));
+    err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache|conceptos|importe_rec|oferta_validez_dias|gasoil/i.test((e && e.message) || '') ? 'falta ejecutar el SQL del CRM en Supabase.' : ((e && e.message) || 'error desconocido'));
     if (btn) btn.disabled = false; if (btnPdf) btnPdf.disabled = false;
   }
 }
 /* ---- Oferta en PDF: número de oferta (OF-AAAA-NNNN), datos del cliente, rutas y productos con sus precios ---- */
-const CRM_OFERTA_VALIDEZ_DIAS = 30;
-// Condiciones que salen al pie de todas las ofertas (se cambian aquí)
-const CRM_OFERTA_CONDICIONES = [
-  'Precios en euros, IVA no incluido.',
-  `Oferta válida durante ${CRM_OFERTA_VALIDEZ_DIAS} días desde su fecha.`,
-];
+const CRM_OFERTA_VALIDEZ_DIAS = 30;   // por defecto; en cada cotización se puede cambiar
+const crmOfertaDias = o => (o && o.validezDias > 0) ? o.validezDias : CRM_OFERTA_VALIDEZ_DIAS;
+// Condiciones que salen al pie de la oferta: las fijas (se cambian aquí) y las que dependen de lo marcado en la cotización
+function crmOfertaCondiciones(o){
+  const c = ['Precios en euros, IVA no incluido.', `Oferta válida durante ${crmOfertaDias(o)} días desde su fecha.`];
+  if ((o.conceptos || []).some(x => x.t === 'transporte') && o.gasoil) c.push(o.gasoil === 'si' ? 'Los precios de transporte llevan indexación de gasoil.' : 'Los precios de transporte no llevan indexación de gasoil.');
+  return c;
+}
 function crmOfertaCliente(o){
   const c = o.contactoId ? contactos.find(x => x.id === o.contactoId) : null;
   if (!c) return { nombre: crmEmpresa(o), nif: '', dir: [] };
@@ -18639,7 +18662,8 @@ async function crmOfertaPdfBytes(o, num){
   const NAVY = rgb(0.106, 0.227, 0.42), INK = rgb(0.1, 0.12, 0.16), MUTED = rgb(0.42, 0.46, 0.52);
   const LINE = rgb(0.84, 0.86, 0.9), SOFT = rgb(0.95, 0.96, 0.98), WHITE = rgb(1, 1, 1), AMBER = rgb(0.78, 0.48, 0.07);
   const W = 595.28, H = 841.89, M = 42, CW = W - M * 2, BOTTOM = M + 30;
-  const fecha = o.ofertaFecha || today(), valida = crmSuma(fecha, CRM_OFERTA_VALIDEZ_DIAS);
+  const fecha = o.ofertaFecha || today(), valida = crmSuma(fecha, crmOfertaDias(o));
+  const condiciones = crmOfertaCondiciones(o);
   const pages = [];
   let page, y;
   const txt = (s, x, yy, size, f, color) => page.drawText(T(s), { x, y: yy, size, font: f || font, color: color || INK });
@@ -18659,7 +18683,15 @@ async function crmOfertaPdfBytes(o, num){
   const nueva = primera => { page = pdf.addPage([W, H]); pages.push(page); cabecera(primera); };
   const asegurar = h => { if (y - h < BOTTOM) nueva(false); };
   const wrap = (s, f, size, ancho) => {
-    const palabras = T(s).split(/\s+/).filter(Boolean), ls = [];
+    const palabras = [], ls = [];
+    // Una palabra más ancha que el hueco (un correo larguísimo, por ejemplo) se parte en trozos para que nunca se salga
+    T(s).split(/\s+/).filter(Boolean).forEach(p => {
+      while (f.widthOfTextAtSize(p, size) > ancho && p.length > 1) {
+        let k = p.length - 1; while (k > 1 && f.widthOfTextAtSize(p.slice(0, k), size) > ancho) k--;
+        palabras.push(p.slice(0, k)); p = p.slice(k);
+      }
+      palabras.push(p);
+    });
     let l = '';
     palabras.forEach(p => { const t = l ? l + ' ' + p : p; if (l && f.widthOfTextAtSize(t, size) > ancho) { ls.push(l); l = p; } else l = t; });
     if (l) ls.push(l);
@@ -18707,10 +18739,13 @@ async function crmOfertaPdfBytes(o, num){
     derecha(v, W - M, y - 4 - i * 13.5, 9.6, bold, INK);
   });
   y -= 56;
-  const izq = [[cli.nombre, bold, 10.4], ...(cli.nif ? [[`NIF ${cli.nif}`, font, 8.6]] : []), ...cli.dir.map(d => [d, font, 8.6])];
-  const der = [...(o.persona ? [[o.persona, bold, 9]] : []), ...(o.telefono ? [[`Tel. ${o.telefono}`, font, 8.6]] : []), ...(o.email ? [[o.email, font, 8.6]] : [])];
-  const wi = der.length ? CW * 0.6 - 5 : CW, wd = CW - wi - 10;
-  const hCaja = 26 + Math.max(izq.length, der.length, 1) * 12.2;
+  const izqRaw = [[cli.nombre, bold, 10.4], ...(cli.nif ? [[`NIF ${cli.nif}`, font, 8.6]] : []), ...cli.dir.map(d => [d, font, 8.6])];
+  const derRaw = [...(o.persona ? [[o.persona, bold, 9]] : []), ...(o.telefono ? [[`Tel. ${o.telefono}`, font, 8.6]] : []), ...(o.email ? [[o.email, font, 8.6]] : [])];
+  const wi = derRaw.length ? CW * 0.6 - 5 : CW, wd = CW - wi - 10;
+  // Cada línea se ajusta al ancho de su recuadro (nombre y dirección largos pasan a la línea siguiente, dentro del recuadro)
+  const ajustar = (lineas, ancho) => lineas.flatMap(([t, f, s]) => wrap(t, f, s, ancho - 22).map(l => [l, f, s]));
+  const izq = ajustar(izqRaw, wi), der = ajustar(derRaw, wd);
+  const hCaja = 30 + Math.max(izq.length, der.length, 1) * 12.2;
   rr(M, y, wi, hCaja, 5, WHITE, LINE);
   txt('CLIENTE', M + 11, y - 14, 6.8, bold, MUTED);
   izq.forEach(([t, f, s], i) => txt(t, M + 11, y - 28 - i * 12.2, s, f, INK));
@@ -18748,9 +18783,9 @@ async function crmOfertaPdfBytes(o, num){
     ls.forEach((l, i) => txt(l, M + 11, y - 26 - i * 11.5, 8.8, font, INK));
     y -= h + 12;
   }
-  asegurar(30 + CRM_OFERTA_CONDICIONES.length * 12);
+  asegurar(30 + condiciones.length * 12);
   txt('CONDICIONES', M, y - 8, 6.8, bold, MUTED); y -= 20;
-  CRM_OFERTA_CONDICIONES.forEach(c => { wrap(c, font, 8.6, CW - 14).forEach((l, i) => { if (i === 0) txt('•', M + 2, y, 8.6, bold, NAVY); txt(l, M + 14, y, 8.6, font, INK); y -= 11.5; }); });
+  condiciones.forEach(c => { wrap(c, font, 8.6, CW - 14).forEach((l, i) => { if (i === 0) txt('•', M + 2, y, 8.6, bold, NAVY); txt(l, M + 14, y, 8.6, font, INK); y -= 11.5; }); });
   y -= 10;
   asegurar(46);
   txt('Quedamos a su disposición para cualquier consulta.', M, y, 9, font, INK); y -= 13;
