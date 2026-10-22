@@ -1428,6 +1428,9 @@
   .combo-item.selected::after{content:"\2713";position:absolute;right:12px;color:var(--primary);font-size:12px;}
   .combo-item{position:relative;}
   .combo-item.disabled{opacity:.45;cursor:default;}
+  .combo-group{padding:9px 11px 4px;font-size:10.5px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);cursor:default;}
+  .combo-group:not(:first-child){margin-top:4px;border-top:1px solid var(--border);}
+  .combo-item.grouped{padding-left:18px;}
   select{appearance:none;-webkit-appearance:none;padding-right:32px !important;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2369727C' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important;background-repeat:no-repeat !important;background-position:right 12px center !important;background-size:12px 8px !important;}
   select:disabled{cursor:default;opacity:.6;}
   input.switch{appearance:none;-webkit-appearance:none;flex-shrink:0;width:38px !important;height:22px;padding:0 !important;border:none !important;border-radius:99px;background:var(--border) !important;position:relative;cursor:pointer;transition:background .15s;}
@@ -10349,12 +10352,23 @@ function comboPick(i){
 // diseñar: se intercepta el clic y se abre este mismo panel. El select sigue
 // en su sitio (con su valor y su onchange), solo cambia la lista desplegada.
 function comboOpenSelect(sel){
-  const items = [...sel.options].filter(o => !o.hidden).map(o => ({ value: o.value, text: o.textContent.trim(), disabled: o.disabled, selected: o.value === sel.value }));
-  Combo.input = sel; Combo.items = items; Combo.active = Math.max(0, items.findIndex(i => i.selected));
+  // Las opciones agrupadas (optgroup) se enseñan con el título del grupo encima, que no se puede elegir
+  const items = [];
+  [...sel.children].forEach(ch => {
+    if (ch.tagName === 'OPTGROUP') {
+      const ops = [...ch.children].filter(o => o.tagName === 'OPTION' && !o.hidden);
+      if (!ops.length) return;
+      items.push({ value: '', text: ch.label, disabled: true, group: true });
+      ops.forEach(o => items.push({ value: o.value, text: o.textContent.trim(), disabled: o.disabled || ch.disabled, selected: o.value === sel.value, grouped: true }));
+    } else if (ch.tagName === 'OPTION' && !ch.hidden) items.push({ value: ch.value, text: ch.textContent.trim(), disabled: ch.disabled, selected: ch.value === sel.value });
+  });
+  Combo.input = sel; Combo.items = items;
+  Combo.active = items.findIndex(i => i.selected);
+  if (Combo.active < 0) Combo.active = items.findIndex(i => !i.disabled);
   Combo.typeahead = ''; Combo.typeaheadAt = 0;
   const p = comboPanel();
   if (!items.length) { p.style.display = 'none'; return; }
-  p.innerHTML = items.map((o, i) => `<div class="combo-item${o.selected?' selected':''}${o.disabled?' disabled':''}${i===Combo.active?' active':''}" data-idx="${i}"><span class="combo-main">${o.text ? esc(o.text) : '&nbsp;'}</span></div>`).join('');
+  p.innerHTML = items.map((o, i) => o.group ? `<div class="combo-group">${esc(o.text)}</div>` : `<div class="combo-item${o.selected?' selected':''}${o.disabled?' disabled':''}${o.grouped?' grouped':''}${i===Combo.active?' active':''}" data-idx="${i}"><span class="combo-main">${o.text ? esc(o.text) : '&nbsp;'}</span></div>`).join('');
   p.style.display = 'block';
   p.style.minWidth = Math.max(sel.getBoundingClientRect().width, 160) + 'px';
   comboPosition();
@@ -18265,8 +18279,9 @@ function crmProdInfo(valor){
   return p ? { t: 'almacen', c: p.id, n: almacenajeProductoTexto(p), unidad: p.unidad } : null;
 }
 function crmProdSelectHtml(l){
-  const grupos = crmCatalogo().filter(g => g.t !== 'transporte');
-  return `<select onchange="crmAlSet(${l.k}, 'prod', this.value)"><option value="">Elige el producto…</option>${grupos.map(g => `<optgroup label="${esc(g.titulo)}">${g.items.map(it => {
+  // Solo los productos de almacén, separados por apartado; las operativas solo si la línea ya era una (cotizaciones antiguas)
+  const grupos = crmCatalogo().filter(g => g.t === 'almacen' || (g.t === 'operativa' && (l.prod || '').startsWith('op:')));
+  return `<select onchange="crmAlSet(${l.k}, 'prod', this.value)"><option value="">Elige el producto…</option>${grupos.map(g => `<optgroup label="${esc(g.titulo.replace('Almacén · ', ''))}">${g.items.map(it => {
     const val = (g.t === 'operativa' ? 'op:' : '') + it.c;
     return `<option value="${esc(val)}"${l.prod === val ? ' selected' : ''}>${esc(it.n)}</option>`; }).join('')}</optgroup>`).join('')}</select>`;
 }
