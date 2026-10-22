@@ -1,8 +1,9 @@
 -- ============================================================
 -- QUALIFIED PROVEEDORES — Transporte → Mapa: estaciones AS24 (convenio), parkings vigilados y
 -- lavaderos de camión de toda Europa, con sus precios (con histórico) y sus notas.
--- Solo administradores y cuentas con la pestaña Transporte lo ven y lo editan.
--- Instrucciones: Supabase → SQL Editor → pega esto ENTERO → Run. Se puede ejecutar más de una vez.
+-- Solo administradores y cuentas con la pestaña Transporte lo ven y lo editan (Row Level Security activado).
+-- Instrucciones: Supabase → SQL Editor → pega esto ENTERO → Run. Ejecútalo UNA vez (las tablas ya creadas no se tocan,
+-- pero las reglas de seguridad de más abajo darían error si ya existen).
 -- ============================================================
 
 create table if not exists public.transporte_puntos (
@@ -53,20 +54,36 @@ create table if not exists public.transporte_puntos_notas (
 );
 create index if not exists transporte_puntos_notas_punto_idx on public.transporte_puntos_notas (punto_id, created_at desc);
 
--- Permisos: administradores y cuentas con Transporte
-do $$
-declare t text; p text;
-begin
-  foreach t in array array['transporte_puntos', 'transporte_puntos_precios', 'transporte_puntos_notas'] loop
-    execute format('alter table public.%I enable row level security', t);
-    foreach p in array array['select', 'insert', 'update', 'delete'] loop
-      execute format('drop policy if exists %I on public.%I', t || '_' || p, t);
-    end loop;
-    execute format($f$create policy %I on public.%I for select using (exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])))$f$, t || '_select', t);
-    execute format($f$create policy %I on public.%I for insert with check (exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])))$f$, t || '_insert', t);
-    execute format($f$create policy %I on public.%I for update using (exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])))$f$, t || '_update', t);
-    execute format($f$create policy %I on public.%I for delete using (exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])))$f$, t || '_delete', t);
-  end loop;
-end $$;
+-- Seguridad: solo administradores y cuentas con Transporte
+alter table public.transporte_puntos enable row level security;
+alter table public.transporte_puntos_precios enable row level security;
+alter table public.transporte_puntos_notas enable row level security;
+
+create policy transporte_puntos_select on public.transporte_puntos for select using (
+  exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])));
+create policy transporte_puntos_insert on public.transporte_puntos for insert with check (
+  exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])));
+create policy transporte_puntos_update on public.transporte_puntos for update using (
+  exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])));
+create policy transporte_puntos_delete on public.transporte_puntos for delete using (
+  exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])));
+
+create policy transporte_puntos_precios_select on public.transporte_puntos_precios for select using (
+  exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])));
+create policy transporte_puntos_precios_insert on public.transporte_puntos_precios for insert with check (
+  exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])));
+create policy transporte_puntos_precios_update on public.transporte_puntos_precios for update using (
+  exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])));
+create policy transporte_puntos_precios_delete on public.transporte_puntos_precios for delete using (
+  exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])));
+
+create policy transporte_puntos_notas_select on public.transporte_puntos_notas for select using (
+  exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])));
+create policy transporte_puntos_notas_insert on public.transporte_puntos_notas for insert with check (
+  exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])));
+create policy transporte_puntos_notas_update on public.transporte_puntos_notas for update using (
+  exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])));
+create policy transporte_puntos_notas_delete on public.transporte_puntos_notas for delete using (
+  exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or p.allowed_tabs ?| array['trafico'])));
 
 notify pgrst, 'reload schema';
