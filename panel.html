@@ -675,7 +675,9 @@
   .crm-b.mal{color:var(--danger);}
   .crm-b.sm{padding:5px 10px;font-size:12px;}
   .crm-pos{display:inline-flex;align-items:center;gap:4px;margin-left:auto;}
-  .crm-pos::before{content:'Posponer';font-size:11.5px;color:var(--mutedFaint);margin-right:3px;}
+  .crm-sub{font-size:11.5px;color:var(--muted);font-weight:400;margin-top:1px;}
+  .crm-trunc{display:block;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .crm-pos::before{content:var(--l,'Posponer');font-size:11.5px;color:var(--mutedFaint);margin-right:3px;}
   .crm-pos button{padding:6px 9px;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:var(--muted);font:600 12px/1 inherit;cursor:pointer;}
   .crm-pos button:hover{border-color:var(--primary);color:var(--primary);}
   .crm-nada{padding:12px;text-align:center;color:var(--mutedFaint);font-size:13px;}
@@ -17560,7 +17562,7 @@ function crmOppDeFila(r){
     importe: r.importe == null ? null : Number(r.importe), importeRec: r.importe_rec == null ? 0 : Number(r.importe_rec), periodicidad: r.periodicidad || 'unico', fase: r.fase || 'cotizada', fechaCot: r.fecha_cotizacion || '', proxFecha: r.proxima_fecha || '',
     proxAccion: r.proxima_accion || '', ultimo: r.ultimo_contacto || '', motivo: r.motivo_perdida || '', cerradaAt: r.cerrada_at || '', notas: r.notas || '', conceptos: Array.isArray(r.conceptos) ? r.conceptos : [], oferta: r.oferta || '', ofertaFecha: r.oferta_fecha || '', validezDias: r.oferta_validez_dias == null ? null : Number(r.oferta_validez_dias), gasoil: r.gasoil || '', createdAt: r.created_at, updatedAt: r.updated_at };
 }
-function crmProspectoDeFila(r){ return { id: r.id, nombre: r.nombre || '', origen: r.origen || '', notas: r.notas || '', estado: r.estado || 'activo', contactoId: r.contacto_id || '', createdAt: r.created_at }; }
+function crmProspectoDeFila(r){ return { id: r.id, nombre: r.nombre || '', origen: r.origen || '', notas: r.notas || '', estado: r.estado || 'activo', contactoId: r.contacto_id || '', persona: r.persona || '', telefono: r.telefono || '', email: r.email || '', servicio: r.servicio || '', potencial: r.potencial || '', interes: r.interes || '', revisar: r.revisar_el || '', createdAt: r.created_at }; }
 function crmEmpresa(o){
   if (o.contactoId) { const c = contactos.find(x => x.id === o.contactoId); return c ? ((c.nombreComercial || '').trim() || c.nombre) : '—'; }
   const p = crmS().prospectos.find(x => x.id === o.prospectoId);
@@ -17724,8 +17726,8 @@ function crmFilaHtml(o){
 function crmHoyHtml(){
   const g = crmGrupos(false), S = crmS(), h = today();
   const abiertas = crmOpps().filter(crmAbierta);
-  if (!S.opps.length) return crmVacioInicial();
-  const pend = g.atrasados.length + g.hoy.length;
+  if (!S.opps.length && !S.prospectos.length) return crmVacioInicial();
+  const pend = g.atrasados.length + g.hoy.length, retomar = crmProspectosParaRetomar();
   const hora = new Date().getHours(), saludo = hora < 13 ? 'Buenos días' : hora < 20 ? 'Buenas tardes' : 'Buenas noches';
   const fecha = new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
   const resumen = pend
@@ -17754,7 +17756,8 @@ function crmHoyHtml(){
       ${seccion('hoy', 'Para hoy', 'Toca hablar con ellos hoy', '#E0A100', g.hoy)}
       ${seccion('sinPaso', 'Sin siguiente paso', 'Se pueden quedar olvidadas: ponles una fecha', '#9B51E0', g.sinPaso)}
       ${seccion('semana', 'Esta semana', 'Los próximos 7 días', '#4F7DF3', g.semana)}
-      ${!pend && !g.sinPaso.length && !g.semana.length ? '<div class="crm-ok"><b>Sin nada pendiente.</b> Anota una cotización nueva cuando envíes la siguiente.</div>' : ''}
+      ${retomar.length ? `<section class="crm-hs" id="crm-h-retomar"><div class="crm-hs-h"><span class="crm-dot" style="--c:#0E8A9B"></span><b>Prospectos para retomar</b><span class="crm-hs-n">${retomar.length}</span><small>Empresas a futuro cuya fecha de volver a mirar ya ha llegado</small></div>${retomar.map(crmRetomarFilaHtml).join('')}</section>` : ''}
+      ${!pend && !g.sinPaso.length && !g.semana.length && !retomar.length ? '<div class="crm-ok"><b>Sin nada pendiente.</b> Anota una cotización nueva cuando envíes la siguiente.</div>' : ''}
       ${g.mas.length ? `<div class="crm-mas">Más adelante: ${g.mas.length} cotización${g.mas.length === 1 ? '' : 'es'} con seguimiento programado después de 7 días. Las ves en «Cotizaciones».</div>` : ''}
     </div>
     <aside class="crm-h-side">
@@ -17997,27 +18000,137 @@ function crmListaTablaHtml(){
         <td style="white-space:nowrap;" data-sort-value="${esc(o.ultimo || '')}">${o.ultimo ? crmFecha(o.ultimo) : '—'}</td></tr>`; }).join('')}</tbody></table></div>`;
 }
 /* ---- Prospectos ---- */
+/* ---- Prospectos a futuro: empresas que interesan a largo plazo aunque ahora no se negocie con ellas ---- */
+const CRM_POTENCIAL = { alto: ['Alto', '#1F9D55'], medio: ['Medio', '#E0A100'], bajo: ['Bajo', '#8A93A0'] };
+const crmPotChip = p => CRM_POTENCIAL[p] ? `<span class="crm-chip" style="--c:${CRM_POTENCIAL[p][1]}">${CRM_POTENCIAL[p][0]}</span>` : '<span style="color:var(--mutedFaint)">—</span>';
+// Prospectos activos sin ninguna cotización abierta cuya fecha de «volver a mirar» ya ha llegado
+function crmProspectosParaRetomar(){
+  const S = crmS(), h = today();
+  return S.prospectos.filter(p => p.estado === 'activo' && p.revisar && p.revisar <= h && !S.opps.some(o => o.prospectoId === p.id && crmAbierta(o)))
+    .sort((a, b) => a.revisar.localeCompare(b.revisar));
+}
+function crmRetomarFilaHtml(p){
+  const atras = p.revisar < today();
+  const contacto = [p.persona ? `<span>${esc(p.persona)}</span>` : '', p.telefono ? `<a href="tel:${esc(p.telefono.replace(/\s+/g, ''))}">${esc(p.telefono)}</a>` : '', p.email ? `<a href="mailto:${esc(p.email)}">${esc(p.email)}</a>` : ''].filter(Boolean).join('');
+  return `<div class="crm-row${atras ? ' atras' : ''}">
+    ${crmAvatar(p.nombre)}
+    <div class="crm-row-m">
+      <div class="crm-row-t" onclick="crmProspectoForm('${p.id}')"><b>${esc(p.nombre)}</b><span class="crm-pros">prospecto</span>${crmPotChip(p.potencial)}${p.servicio ? `<span class="crm-serv-t">${esc(CRM_SERVICIOS[p.servicio])}</span>` : ''}</div>
+      ${p.interes ? `<div class="crm-row-s">${esc(p.interes)}</div>` : ''}
+      ${contacto ? `<div class="crm-row-c">${contacto}</div>` : ''}
+      <div class="crm-row-a">
+        <button type="button" class="crm-b pri" onclick="crmNuevaDesdeProspecto('${p.id}')">Cotizar</button>
+        <span class="crm-pos" style="--l:'Volver a mirar'"><button type="button" onclick="crmProspectoRevisar('${p.id}', 1)">1 mes</button><button type="button" onclick="crmProspectoRevisar('${p.id}', 3)">3 meses</button><button type="button" onclick="crmProspectoRevisar('${p.id}', 6)">6 meses</button></span>
+        <button type="button" class="crm-b" onclick="crmProspectoForm('${p.id}')">Abrir</button>
+      </div>
+    </div>
+    <div class="crm-row-d${atras ? ' atras' : ''}"><b>${crmRel(p.revisar)}</b><small>${crmFecha(p.revisar)}</small><em>Volver a mirar</em></div>
+  </div>`;
+}
+async function crmProspectoRevisar(id, meses){
+  const p = crmS().prospectos.find(x => x.id === id); if (!p) return;
+  const d = new Date(today() + 'T00:00:00'); d.setMonth(d.getMonth() + meses);
+  const { error } = await supabaseClient.from('crm_prospectos').update({ revisar_el: toDateStr(d) }).eq('id', id);
+  if (error) { appToast('No se pudo cambiar: ' + (/revisar_el/i.test(error.message || '') ? 'falta ejecutar el SQL de los prospectos a futuro (comercial-crm-prospectos-futuro.sql).' : (error.message || 'error')), 'error'); return; }
+  p.revisar = toDateStr(d); crmPinta(); appToast(`Te lo recuerdo de nuevo el ${fmtDateDMY(p.revisar)}.`, 'ok');
+}
+// Abre una cotización nueva con el prospecto ya elegido y sus datos de contacto puestos
+function crmNuevaDesdeProspecto(id){
+  const p = crmS().prospectos.find(x => x.id === id); if (!p) return;
+  crmNueva();
+  const f = crmS().form; f.emp = { tipo: 'prospecto', id: p.id }; f.cerrada = true;
+  const set = (k, v) => { const e = document.getElementById(k); if (e && v) e.value = v; };
+  set('crm-f-emp', p.nombre); set('crm-f-per', p.persona); set('crm-f-tel', p.telefono); set('crm-f-mail', p.email);
+  if (p.servicio === 'almacen') f.servicio = 'almacen';
+  crmEmpresaCambio(); crmEmpSugPinta();
+  const e = document.getElementById('crm-tr'); if (e) e.scrollIntoView({ block: 'start' });
+}
+function crmPfSet(k, v, el){
+  const s = window.__crmPF; s[k] = s[k] === v ? '' : v;   // pulsar otra vez lo quita
+  el.parentElement.querySelectorAll('.crm-ch').forEach(b => b.classList.toggle('on', b.dataset.v === s[k]));
+}
 function crmProspectosHtml(){
-  const S = crmS();
-  const filas = S.prospectos.map(p => {
+  const S = crmS(), f = S.pfiltro || 'activos';
+  const todas = S.prospectos.map(p => {
     const os = S.opps.filter(o => o.prospectoId === p.id);
-    const abiertas = os.filter(crmAbierta);
-    return { p, n: os.length, ab: abiertas.length, ult: os.map(o => o.ultimo || o.fechaCot).sort().pop() || '' };
+    return { p, n: os.length, ab: os.filter(crmAbierta).length, ult: os.map(o => o.ultimo || o.fechaCot).sort().pop() || '' };
   });
-  if (!filas.length) return `<div class="card crm-inicio"><h3>Todavía no hay prospectos</h3><p>Un prospecto es una empresa a la que has cotizado y que aún no es cliente. Se crean solos al anotar una cotización a una empresa nueva, o los puedes añadir a mano.</p><button type="button" class="btn btn-primary" onclick="crmProspectoForm()">+ Nuevo prospecto</button></div>`;
-  return `<div class="crm-filtros"><div style="flex:1"></div><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="crmProspectoForm()">+ Nuevo prospecto</button></div>
-    <div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
-    <thead><tr>${thSort('Empresa', 'text')}${thSort('Estado', 'text')}${thSort('Origen', 'text')}${thSort('Cotizaciones', 'number', 'style="text-align:right;"')}${thSort('Abiertas', 'number', 'style="text-align:right;"')}${thSort('Último movimiento', 'date')}<th></th></tr></thead>
-    <tbody>${filas.map(({ p, n, ab, ult }) => `<tr>
-      <td data-sort-value="${esc(p.nombre)}"><b>${esc(p.nombre)}</b></td>
-      <td data-sort-value="${esc(p.estado)}">${p.estado === 'cliente' ? '<span class="crm-chip" style="--c:#2E9D6B">Cliente</span>' : p.estado === 'descartado' ? '<span class="crm-chip" style="--c:#8A93A0">Descartado</span>' : '<span class="crm-chip" style="--c:#4F7DF3">Activo</span>'}</td>
-      <td data-sort-value="${esc(p.origen)}">${esc(p.origen) || '—'}</td>
-      <td class="tf-precio" data-sort-value="${n}">${n}</td><td class="tf-precio" data-sort-value="${ab}">${ab}</td>
+  if (!todas.length) return `<div class="card crm-inicio"><h3>Todavía no hay prospectos</h3><p>Aquí guardas las empresas que te interesan aunque ahora no vayas a negociar con ellas: apuntas quién es el contacto, qué servicio les encajaría, cuánto potencial tienen y por qué, y la fecha en la que quieres volver a mirarlas. Ese día te salen en «Hoy».</p><button type="button" class="btn btn-primary" onclick="crmProspectoForm()">+ Nuevo prospecto</button></div>`;
+  const cuenta = { activos: todas.filter(x => x.p.estado === 'activo').length, sin: todas.filter(x => x.p.estado === 'activo' && !x.n).length, con: todas.filter(x => x.p.estado === 'activo' && x.n).length, todos: todas.length };
+  const filas = todas.filter(x => f === 'todos' ? true : f === 'sin' ? x.p.estado === 'activo' && !x.n : f === 'con' ? x.p.estado === 'activo' && x.n : x.p.estado === 'activo');
+  const chips = [['activos', 'Activos'], ['sin', 'A futuro · sin cotizar'], ['con', 'Con cotización'], ['todos', 'Todos']];
+  const h = today();
+  return `<div class="crm-filtros"><div class="crm-chs">${chips.map(([v, t]) => `<button type="button" class="crm-ch${f === v ? ' on' : ''}" onclick="crmProsFiltro('${v}')">${t} <small>${cuenta[v]}</small></button>`).join('')}</div><div style="flex:1"></div><button type="button" class="btn btn-primary" onclick="crmProspectoForm()">+ Nuevo prospecto</button></div>
+    ${filas.length ? `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
+    <thead><tr>${thSort('Empresa', 'text')}${thSort('Potencial', 'number')}${thSort('Servicio', 'text')}${thSort('Por qué nos interesa', 'text')}${thSort('Volver a mirar', 'date')}${thSort('Cotizaciones', 'number', 'style="text-align:right;"')}${thSort('Último movimiento', 'date')}<th></th></tr></thead>
+    <tbody>${filas.map(({ p, n, ab, ult }) => {
+      const venc = p.estado === 'activo' && p.revisar && p.revisar <= h && !ab;
+      return `<tr>
+      <td data-sort-value="${esc(p.nombre)}" style="min-width:190px;"><b>${esc(p.nombre)}</b>${p.estado === 'cliente' ? ' <span class="crm-chip" style="--c:#2E9D6B">Cliente</span>' : p.estado === 'descartado' ? ' <span class="crm-chip" style="--c:#8A93A0">Descartado</span>' : ''}${p.persona || p.telefono || p.email ? `<div class="crm-sub">${esc([p.persona, p.telefono, p.email].filter(Boolean).join(' · '))}</div>` : ''}</td>
+      <td data-sort-value="${{ alto: 3, medio: 2, bajo: 1 }[p.potencial] || 0}">${crmPotChip(p.potencial)}</td>
+      <td data-sort-value="${esc(p.servicio)}">${p.servicio ? esc(CRM_SERVICIOS[p.servicio]) : '—'}</td>
+      <td data-sort-value="${esc(p.interes)}" style="max-width:260px;">${p.interes ? `<span class="crm-trunc" title="${esc(p.interes)}">${esc(p.interes)}</span>` : '—'}</td>
+      <td style="white-space:nowrap;${venc ? 'color:var(--danger);font-weight:700;' : ''}" data-sort-value="${esc(p.revisar || '9999')}">${p.revisar ? crmFecha(p.revisar) + (venc ? ' · ' + crmRel(p.revisar) : '') : '—'}</td>
+      <td class="tf-precio" data-sort-value="${n}">${n}${ab ? ` <small style="color:var(--primary);">(${ab} abierta${ab === 1 ? '' : 's'})</small>` : ''}</td>
       <td style="white-space:nowrap;" data-sort-value="${esc(ult)}">${ult ? crmFecha(ult) : '—'}</td>
       <td style="text-align:right;white-space:nowrap;">
-        ${p.estado === 'cliente' ? '' : `<button type="button" class="crm-b pri sm" onclick="crmConvertir('${p.id}')">Pasar a cliente</button>`}
+        ${p.estado === 'activo' ? `<button type="button" class="crm-b pri sm" onclick="crmNuevaDesdeProspecto('${p.id}')">Cotizar</button>` : ''}
+        ${p.estado === 'cliente' ? '' : `<button type="button" class="crm-b sm" onclick="crmConvertir('${p.id}')">Pasar a cliente</button>`}
         <button type="button" class="crm-b sm" onclick="crmProspectoForm('${p.id}')">Editar</button>
-        <button type="button" class="crm-b sm mal" onclick="crmProspectoEliminar('${p.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table></div>`;
+        <button type="button" class="crm-b sm mal" onclick="crmProspectoEliminar('${p.id}')">Eliminar</button></td></tr>`; }).join('')}</tbody></table></div>` : '<div class="card crm-vacio">No hay prospectos en este filtro.</div>'}`;
+}
+function crmProsFiltro(v){ crmS().pfiltro = v; crmPinta(); }
+function crmProspectoForm(id){ crmDrawerAbre({ tipo: 'prospecto', id: id || null }); }
+function crmProspectoFormHtml(p){
+  const orig = ['Recomendación', 'Llamada en frío', 'Correo', 'Web', 'LinkedIn', 'Feria o evento', 'Cliente antiguo'];
+  const s = window.__crmPF = { servicio: p ? p.servicio : '', potencial: p ? p.potencial : '' };
+  const chs = (k, mapa) => `<div class="crm-chs">${Object.keys(mapa).map(v => `<button type="button" class="crm-ch${s[k] === v ? ' on' : ''}" data-v="${v}" onclick="crmPfSet('${k}', '${v}', this)">${mapa[v]}</button>`).join('')}</div>`;
+  return `<div class="crm-dr-h"><button type="button" class="crm-x" onclick="crmCerrarDrawer()" title="Cerrar">✕</button><small>${p ? 'Editar prospecto' : 'Nuevo prospecto'}</small><h3>${p ? esc(p.nombre) : 'Añadir un prospecto'}</h3></div>
+    <div class="crm-dr-b crm-form">
+      <div class="field"><label>Empresa <span class="dc-req">*</span></label><input id="crm-p-nom" maxlength="120" oninput="crmMayus(this)" value="${esc(p ? p.nombre : '')}" /></div>
+      <div class="field"><label>Por qué nos interesa <small style="font-weight:400;color:var(--mutedFaint);">· qué tienen de bueno a largo plazo</small></label><textarea id="crm-p-int" rows="3" maxlength="500" placeholder="Ej. Mueven mucho volumen a Francia y están ampliando; contrato anual a la vista">${esc(p ? p.interes : '')}</textarea></div>
+      <div class="field"><label>Potencial</label>${chs('potencial', { alto: 'Alto', medio: 'Medio', bajo: 'Bajo' })}</div>
+      <div class="field"><label>Servicio que les encajaría</label>${chs('servicio', { transporte: 'Transporte', almacen: 'Almacén', mixto: 'Transporte + Almacén' })}</div>
+      <div class="field"><label>Volver a mirar el <small style="font-weight:400;color:var(--mutedFaint);">· ese día te sale en «Hoy»</small></label>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><input id="crm-p-rev" type="date" style="width:auto;" value="${p && p.revisar ? p.revisar : ''}" />
+          <span class="crm-chs sm"><button type="button" class="crm-ch" onclick="crmPfRev(1)">+1 mes</button><button type="button" class="crm-ch" onclick="crmPfRev(3)">+3 meses</button><button type="button" class="crm-ch" onclick="crmPfRev(6)">+6 meses</button><button type="button" class="crm-ch" onclick="crmPfRev(12)">+1 año</button></span></div></div>
+      <div class="crm-form-sec">Contacto</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:150px;"><label>Persona</label><input id="crm-p-per" maxlength="80" value="${esc(p ? p.persona : '')}" /></div>
+        <div class="field" style="flex:1;min-width:130px;"><label>Teléfono</label><input id="crm-p-tel" maxlength="30" value="${esc(p ? p.telefono : '')}" /></div>
+      </div>
+      <div class="field"><label>Correo</label><input id="crm-p-mail" type="email" maxlength="120" value="${esc(p ? p.email : '')}" /></div>
+      <div class="field"><label>Cómo ha llegado</label><input id="crm-p-ori" data-combo="crm-ori-dl" autocomplete="off" maxlength="80" placeholder="Opcional" value="${esc(p ? p.origen : '')}" /><datalist id="crm-ori-dl">${orig.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist></div>
+      <div class="field"><label>Notas</label><textarea id="crm-p-not" rows="3" maxlength="800">${esc(p ? p.notas : '')}</textarea></div>
+      ${p && p.estado !== 'activo' ? `<div class="field"><label>Estado</label><div class="crm-hint">${p.estado === 'cliente' ? 'Ya es cliente (está en Contactos).' : 'Descartado.'} <button type="button" class="crm-link" onclick="crmProspectoEstado('${p.id}', 'activo')">Volver a ponerlo como activo</button></div></div>` : (p ? `<div class="field"><button type="button" class="crm-link" onclick="crmProspectoEstado('${p.id}', 'descartado')">Descartar este prospecto</button></div>` : '')}
+      <div id="crm-p-err" class="crm-err"></div>
+    </div>
+    <div class="crm-dr-f"><button type="button" class="btn btn-ghost" onclick="crmCerrarDrawer()">Cancelar</button>${p && p.estado === 'activo' ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="crmProspectoGuardar('${p.id}', true)">Guardar y cotizar</button>` : ''}<button type="button" class="btn btn-primary" onclick="crmProspectoGuardar(${p ? `'${p.id}'` : 'null'})">Guardar</button></div>`;
+}
+function crmPfRev(meses){ const d = new Date(today() + 'T00:00:00'); d.setMonth(d.getMonth() + meses); const e = document.getElementById('crm-p-rev'); if (e) e.value = toDateStr(d); }
+async function crmProspectoGuardar(id, cotizar){
+  const S = crmS(), s = window.__crmPF || {};
+  const v = k => ((document.getElementById(k) || {}).value || '').trim();
+  const err = document.getElementById('crm-p-err');
+  const nombre = v('crm-p-nom').toUpperCase();
+  if (!nombre) { err.textContent = 'Escribe el nombre de la empresa.'; return; }
+  if (S.prospectos.some(p => p.id !== id && crmNorm(p.nombre) === crmNorm(nombre))) { err.textContent = 'Ya hay un prospecto con ese nombre.'; return; }
+  const mail = v('crm-p-mail');
+  if (mail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail)) { err.textContent = 'El correo no parece válido.'; return; }
+  const fila = { nombre, origen: v('crm-p-ori') || null, notas: v('crm-p-not') || null };
+  // Los datos de «a futuro» solo se envían si se usan (o ya se usaban): así sigue funcionando aunque falte el SQL
+  const nuevos = { persona: v('crm-p-per') || null, telefono: v('crm-p-tel') || null, email: mail || null, servicio: s.servicio || null, potencial: s.potencial || null, interes: v('crm-p-int') || null, revisar_el: v('crm-p-rev') || null };
+  const prev = id ? S.prospectos.find(x => x.id === id) : null;
+  const prevDe = { persona: 'persona', telefono: 'telefono', email: 'email', servicio: 'servicio', potencial: 'potencial', interes: 'interes', revisar_el: 'revisar' };
+  Object.keys(nuevos).forEach(k => { if (nuevos[k] != null || (prev && prev[prevDe[k]])) fila[k] = nuevos[k]; });
+  const { data, error } = id ? await supabaseClient.from('crm_prospectos').update(fila).eq('id', id).select().single() : await supabaseClient.from('crm_prospectos').insert({ ...fila, created_by: currentUserEmail() }).select().single();
+  if (error) { err.textContent = 'No se pudo guardar: ' + (/persona|telefono|email|servicio|potencial|interes|revisar_el|schema cache/i.test(error.message || '') ? 'falta ejecutar el SQL de los prospectos a futuro (comercial-crm-prospectos-futuro.sql).' : (error.message || 'error desconocido')); return; }
+  const p = crmProspectoDeFila(data);
+  const i = S.prospectos.findIndex(x => x.id === p.id);
+  if (i >= 0) S.prospectos[i] = p; else S.prospectos.push(p);
+  S.prospectos.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  crmCerrarDrawer(); crmPinta(); appToast('Prospecto guardado.', 'ok');
+  if (cotizar) crmNuevaDesdeProspecto(p.id);
 }
 /* ---- Informes ---- */
 function crmInformesHtml(){
@@ -18821,35 +18934,6 @@ async function crmEliminar(id){
   appToast('Cotización eliminada.', 'ok');
 }
 /* ---- Prospectos: formulario, eliminar y pasarlos a cliente ---- */
-function crmProspectoForm(id){ crmDrawerAbre({ tipo: 'prospecto', id: id || null }); }
-function crmProspectoFormHtml(p){
-  const orig = ['Recomendación', 'Llamada en frío', 'Correo', 'Web', 'LinkedIn', 'Feria o evento', 'Cliente antiguo'];
-  return `<div class="crm-dr-h"><button type="button" class="crm-x" onclick="crmCerrarDrawer()" title="Cerrar">✕</button><small>${p ? 'Editar prospecto' : 'Nuevo prospecto'}</small><h3>${p ? esc(p.nombre) : 'Añadir un prospecto'}</h3></div>
-    <div class="crm-dr-b crm-form">
-      <div class="field"><label>Empresa <span class="dc-req">*</span></label><input id="crm-p-nom" maxlength="120" oninput="crmMayus(this)" value="${esc(p ? p.nombre : '')}" /></div>
-      <div class="field"><label>Cómo ha llegado</label><input id="crm-p-ori" data-combo="crm-ori-dl" autocomplete="off" maxlength="80" placeholder="Opcional" value="${esc(p ? p.origen : '')}" /><datalist id="crm-ori-dl">${orig.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist></div>
-      <div class="field"><label>Notas</label><textarea id="crm-p-not" rows="4" maxlength="800">${esc(p ? p.notas : '')}</textarea></div>
-      ${p && p.estado !== 'activo' ? `<div class="field"><label>Estado</label><div class="crm-hint">${p.estado === 'cliente' ? 'Ya es cliente (está en Contactos).' : 'Descartado.'} <button type="button" class="crm-link" onclick="crmProspectoEstado('${p.id}', 'activo')">Volver a ponerlo como activo</button></div></div>` : (p ? `<div class="field"><button type="button" class="crm-link" onclick="crmProspectoEstado('${p.id}', 'descartado')">Descartar este prospecto</button></div>` : '')}
-      <div id="crm-p-err" class="crm-err"></div>
-    </div>
-    <div class="crm-dr-f"><button type="button" class="btn btn-ghost" onclick="crmCerrarDrawer()">Cancelar</button><button type="button" class="btn btn-primary" onclick="crmProspectoGuardar(${p ? `'${p.id}'` : 'null'})">Guardar</button></div>`;
-}
-async function crmProspectoGuardar(id){
-  const S = crmS();
-  const v = k => ((document.getElementById(k) || {}).value || '').trim();
-  const err = document.getElementById('crm-p-err');
-  const nombre = v('crm-p-nom').toUpperCase();
-  if (!nombre) { err.textContent = 'Escribe el nombre de la empresa.'; return; }
-  if (S.prospectos.some(p => p.id !== id && crmNorm(p.nombre) === crmNorm(nombre))) { err.textContent = 'Ya hay un prospecto con ese nombre.'; return; }
-  const fila = { nombre, origen: v('crm-p-ori') || null, notas: v('crm-p-not') || null };
-  const { data, error } = id ? await supabaseClient.from('crm_prospectos').update(fila).eq('id', id).select().single() : await supabaseClient.from('crm_prospectos').insert({ ...fila, created_by: currentUserEmail() }).select().single();
-  if (error) { err.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido'); return; }
-  const p = crmProspectoDeFila(data);
-  const i = S.prospectos.findIndex(x => x.id === p.id);
-  if (i >= 0) S.prospectos[i] = p; else S.prospectos.push(p);
-  S.prospectos.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
-  crmCerrarDrawer(); crmPinta(); appToast('Prospecto guardado.', 'ok');
-}
 async function crmProspectoEstado(id, estado){
   const p = crmS().prospectos.find(x => x.id === id);
   if (!p) return;
