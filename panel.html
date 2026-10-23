@@ -506,6 +506,7 @@
   .mp-map.mp-colocando #mapa-canvas{cursor:crosshair;}
   .mp-map.mp-colocando::after{content:"Pincha en el mapa para situar el punto";position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:900;background:var(--text);color:var(--panel);padding:7px 14px;border-radius:999px;font-size:12.5px;font-weight:600;pointer-events:none;box-shadow:0 4px 14px rgba(0,0,0,.25);}
   @media(max-width:900px){.mp-wrap{grid-template-columns:1fr;}.mp-map{order:-1;height:56vh;min-height:360px;}.mp-side{height:auto;max-height:none;min-height:0;}}
+  .mp-reg{display:inline-block;font-family:var(--mono);font-size:12px;font-weight:700;padding:2px 8px;border-radius:7px;background:color-mix(in srgb,var(--primary) 9%,var(--panel));color:var(--primary);}
   .mp-vacio{padding:38px 22px;text-align:center;color:var(--muted);font-size:13.5px;display:flex;flex-direction:column;gap:6px;}
   .mp-vacio b{color:var(--text);font-size:15px;}
   .mp-side-h{padding:13px 16px 9px;font-weight:700;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);position:sticky;top:0;background:var(--panel);z-index:2;border-bottom:1px solid var(--border);}
@@ -15095,6 +15096,18 @@ function mapaRegionDe(p){
   S.regCache[p.id] = { lat: p.lat, lng: p.lng, f: hallada };
   return hallada;
 }
+// Código de región de un punto, como en la vista Regiones: país + provincia o departamento (ES08 = Barcelona, FR13 = Bocas del Ródano…)
+function mapaRegCod(f){ const c = f.properties.CNTR_CODE, iso = c === 'EL' ? 'GR' : c === 'UK' ? 'GB' : c; return f._cod ? iso + f._cod : f._id; }
+// Mientras no se han bajado los límites, en España y Francia se saca del código postal (sus dos primeros números)
+function mapaRegCodCP(p){
+  const cp = String(p.cp || '').replace(/\D/g, '');
+  const iso = /^(españa|spain)$/i.test(p.pais) ? 'ES' : /^(francia|france)$/i.test(p.pais) ? 'FR' : '';
+  return iso && cp.length >= 2 ? iso + cp.slice(0, 2) : '';
+}
+function mapaRegPunto(p){
+  if (mapaRegGeo) { const f = mapaRegionDe(p); if (f) return { cod: mapaRegCod(f), nombre: f._nombre }; }
+  return { cod: mapaRegCodCP(p), nombre: '' };
+}
 // Puntos (con los filtros activos) agrupados por región
 function mapaRegionCuentas(){
   const out = {};
@@ -16510,8 +16523,13 @@ function mapaTabla(){
   const ps = mapaFiltrados();
   if (!Object.values(mapaS().tipos).some(Boolean) && mapaS().puntos.length) { el.innerHTML = `<div class="mp-vacio"><b>Elige qué quieres ver</b><span>Activa arriba AS24, Parking o Lavadero para ver sus puntos.</span></div>`; return; }
   if (!ps.length) { el.innerHTML = `<div class="mp-vacio"><b>${mapaS().puntos.length ? 'Ningún punto coincide' : 'Todavía no hay puntos'}</b><span>${mapaS().puntos.length ? 'Prueba con otra búsqueda o activa más tipos.' : 'Pulsa «+ Añadir punto» para crear el primero.'}</span></div>`; return; }
+  // Los límites de las regiones se bajan una vez (el navegador los guarda); hasta entonces el código sale del código postal
+  if (!mapaRegGeo && !mapaS().regCargando) {
+    const S = mapaS(); S.regCargando = true;
+    mapaRegionesCargar().then(() => { S.regCargando = false; if (S.vista === 'lista' && document.getElementById('mp-tabla')) mapaTabla(); }).catch(() => { S.regCargando = false; });
+  }
   el.innerHTML = `<table class="tf-table">
-    <thead><tr>${thSort('Tipo', 'text')}${thSort('Nombre', 'text')}${thSort('País', 'text')}${thSort('Localidad', 'text')}${thSort('Teléfono', 'text')}${thSort('Precios', 'text')}${thSort('Actualizado', 'date')}</tr></thead>
+    <thead><tr>${thSort('Tipo', 'text')}${thSort('Nombre', 'text')}${thSort('País', 'text')}${thSort('Región', 'text')}${thSort('Localidad', 'text')}${thSort('Teléfono', 'text')}${thSort('Precios', 'text')}${thSort('Actualizado', 'date')}</tr></thead>
     <tbody>${ps.map(p => {
       const t = MAPA_TIPOS[p.tipo], pr = mapaPreciosDe(p.id);
       const act = [p.updatedAt || p.createdAt, ...mapaS().precios.filter(x => x.puntoId === p.id).map(x => x.createdAt)].filter(Boolean).sort().pop();
@@ -16519,6 +16537,7 @@ function mapaTabla(){
         <td data-sort-value="${esc(t.label)}"><span class="mp-tag" style="--c:${t.color}">${esc(t.corto)}</span></td>
         <td data-sort-value="${esc(p.nombre)}"><b>${esc(p.nombre)}</b></td>
         <td data-sort-value="${esc(p.pais)}">${esc(p.pais) || '—'}</td>
+        ${(() => { const rg = mapaRegPunto(p); return `<td data-sort-value="${esc(rg.cod)}" style="white-space:nowrap;">${rg.cod ? `<span class="mp-reg">${esc(rg.cod)}</span>${rg.nombre ? ` <small style="color:var(--muted);">${esc(rg.nombre)}</small>` : ''}` : '—'}</td>`; })()}
         <td data-sort-value="${esc(p.localidad)}">${esc(p.localidad) || '—'}</td>
         <td data-sort-value="${esc(p.telefono)}" style="white-space:nowrap;">${esc(p.telefono) || '—'}</td>
         <td data-sort-value="${esc(pr.map(x => x.actual.concepto).join(' '))}" style="font-size:12.5px;">${pr.length ? pr.slice(0, 3).map(x => `${esc(x.actual.concepto)}: <b>${esc(mapaImporteTxt(x.actual))}</b>`).join('<br>') : '—'}</td>
@@ -16528,8 +16547,8 @@ function mapaExportar(){
   const ps = mapaFiltrados();
   if (!ps.length) { appToast('No hay puntos que exportar.', 'info'); return; }
   const cel = x => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"';
-  const cab = ['Tipo', 'Nombre', 'País', 'Localidad', 'Dirección', 'Teléfono', 'Web', 'Horario', 'Plazas', 'Servicios', 'Precios', 'Latitud', 'Longitud', 'Google Maps', 'Código AS24', 'CP', 'Estado', 'Aviso', 'Combustibles', 'Observaciones'];
-  const filas = ps.map(p => [MAPA_TIPOS[p.tipo].label, p.nombre, p.pais, p.localidad, p.direccion, p.telefono, p.web, p.horario, p.plazas == null ? '' : p.plazas, p.servicios.join(', '),
+  const cab = ['Tipo', 'Nombre', 'País', 'Región', 'Localidad', 'Dirección', 'Teléfono', 'Web', 'Horario', 'Plazas', 'Servicios', 'Precios', 'Latitud', 'Longitud', 'Google Maps', 'Código AS24', 'CP', 'Estado', 'Aviso', 'Combustibles', 'Observaciones'];
+  const filas = ps.map(p => [MAPA_TIPOS[p.tipo].label, p.nombre, p.pais, mapaRegPunto(p).cod, p.localidad, p.direccion, p.telefono, p.web, p.horario, p.plazas == null ? '' : p.plazas, p.servicios.join(', '),
     mapaPreciosDe(p.id).map(x => `${x.actual.concepto}${x.actual.unidad ? ' (' + x.actual.unidad.toLowerCase() + ')' : ''}: ${mapaImporteTxt(x.actual)}`).join(' | '), p.lat, p.lng, p.mapsUrl, p.codigo, p.cp, p.estado, p.aviso, p.combustibles.join(', '), p.observaciones]);
   const csv = '﻿' + [cab, ...filas].map(f => f.map(cel).join(';')).join('\r\n');
   const a = document.createElement('a');
