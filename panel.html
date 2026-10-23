@@ -3341,6 +3341,7 @@ const TABS = [
   {id:'clientes', label:'Clientes', group:'Almacén'},
   {id:'citas', label:'Franjas horarias', group:'Almacén'},
   {id:'stock', label:'Control Stock SGA', group:'Almacén'},
+  {id:'almacendash', label:'Dashboard de almacén (ingresos)', group:'Almacén'},
   {id:'documentos', label:'Documentos de almacén', group:'Almacén'},
   {id:'almacenconfig', label:'Configuración de almacenes', group:'Almacén'},
   {id:'trafico', label:'Transporte', group:'Transporte'},
@@ -3555,7 +3556,7 @@ function renderHeader(){
   // Los módulos con banner propio en cada pantalla (Almacén, Transporte, Comercial, Administración)
   // no repiten el título grande: ya se ve en la barra de arriba y en el banner.
   const titleWrap = document.getElementById('page-title-wrap');
-  if (titleWrap) titleWrap.style.display = (!window.__kioskMode && ['clientes', 'citas', 'stock', 'documentos', 'almacenconfig', 'trafico', 'autonomos', 'comercial', 'administracion', 'admin'].includes(currentTab)) ? 'none' : '';
+  if (titleWrap) titleWrap.style.display = (!window.__kioskMode && ['clientes', 'citas', 'stock', 'almacendash', 'documentos', 'almacenconfig', 'trafico', 'autonomos', 'comercial', 'administracion', 'admin'].includes(currentTab)) ? 'none' : '';
   const titleRow = document.getElementById('wh-title-row');
   if (currentTab === 'inicio') {
     titleRow.innerHTML = `<div style="${PLAIN_TITLE_STYLE}">Inicio</div>`;
@@ -3887,6 +3888,7 @@ function renderBreadcrumbHtml(){
 const ALMACEN_SECTIONS = [
   { id: 'clientes', label: 'Clientes' },
   { id: 'stock', label: 'Control Stock SGA' },
+  { id: 'almacendash', label: 'Dashboard' },
   { id: 'documentos', label: 'Documentos' },
   { id: 'citas', label: 'Franjas horarias' },
 ];
@@ -3913,7 +3915,7 @@ function moduleTabBtnHtml(onclick, label, on, extra){
 }
 function tplAlmacenBar(){
   const sections = almacenVisibleSections();
-  const inConfig = currentTab === ALMACEN_CONFIG_TAB || currentTab === 'clientes' || currentTab === 'stock';
+  const inConfig = currentTab === ALMACEN_CONFIG_TAB || currentTab === 'clientes' || currentTab === 'stock' || currentTab === 'almacendash';
   const tabBtn = (id, label) => moduleTabBtnHtml(`setTab('${id}')`, label, id === currentTab);
   const verConfig = PROFILE.isAdmin || PROFILE.allowedTabs.includes(ALMACEN_CONFIG_TAB);
   // Las secciones van a la izquierda; a la derecha del todo, el selector de almacén (donde hace falta) y Configuración.
@@ -5102,7 +5104,7 @@ function sgaSitioTxt(p){
   const z = sgaZonaDe(p.zonaId), u = sgaUbicDe(p.ubicacionId);
   return z ? sgaZonaNombre(z) + (u ? ' · ' + u.codigo : '') : '—';
 }
-function stockSeg(){ return ['dashboard', 'catalogo', 'entradas', 'salidas', 'operativas', 'resumen'].includes(window.__stockSeg) ? window.__stockSeg : 'dashboard'; }   // «Stock» se fusionó con el catálogo
+function stockSeg(){ return ['catalogo', 'entradas', 'salidas', 'operativas', 'resumen'].includes(window.__stockSeg) ? window.__stockSeg : 'catalogo'; }   // «Stock» se fusionó con el catálogo
 
 /* ---- Pantalla principal: stock por cliente y recepciones ---- */
 function whNombre(id){ const w = allWarehouses.find(x => x.id === id); return w ? w.name : '—'; }
@@ -5162,7 +5164,6 @@ function stockClienteRowHtml(c, ps){
 }
 function stockBodyHtml(){
   if (stockSeg() === 'catalogo') return stockCatalogoBodyHtml();
-  if (stockSeg() === 'dashboard') return stockDashboardBodyHtml();
   if (stockSeg() === 'resumen') return stockResumenBodyHtml();
   if (stockSeg() === 'operativas') return stockOperativasBodyHtml();
   const q = (window.__stockSearch || '').trim().toLowerCase();
@@ -5197,7 +5198,7 @@ function stockBodyHtml(){
   if (!filas.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q ? 'Ningún cliente coincide con la búsqueda.' : 'Todavía no hay stock. Registra una recepción, o una regularización si ya tienes mercancía en el almacén.'}</div>`;
   return filas.map(c => stockClienteRowHtml(c, porCliente[c.id])).join('');
 }
-function refreshStockBody(){ const el = document.getElementById('stock-body'); if (el) el.innerHTML = stockBodyHtml(); if (typeof catRefrescarFiltros === 'function') catRefrescarFiltros(); }
+function refreshStockBody(){ if (currentTab === 'almacendash') { renderTab(); return; } const el = document.getElementById('stock-body'); if (el) el.innerHTML = stockBodyHtml(); if (typeof catRefrescarFiltros === 'function') catRefrescarFiltros(); }
 function stockToggle(id){
   const o = (window.__stockOpen = window.__stockOpen || {});
   o[id] = !o[id];
@@ -6217,7 +6218,7 @@ function dashToolbarHtml(){
     ${wh.length > 1 ? `<select id="dash-wh" onchange="sgaDashFiltro()" style="width:auto;flex:0 1 200px;min-width:150px;"><option value="">Todos los almacenes</option>${wh.map(w => `<option value="${w.id}" ${w.id === st.wid ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>` : ''}
     <button class="btn btn-ghost" style="margin-left:auto;" onclick="sgaDashRefrescar()" title="Volver a calcular con los datos de ahora">↻ Actualizar${hora ? ` <small style="color:var(--mutedFaint);font-weight:400;">· ${hora}</small>` : ''}</button>`;
 }
-function dashIr(seg){ window.__stockSeg = seg; renderTab(); }
+function dashIr(seg){ window.__stockSeg = seg; setTab('stock'); }   // desde el dashboard se va a la pantalla de Control Stock SGA
 function stockDashboardBodyHtml(){
   const st = sgaDashEstado();
   if (!st.datos) {
@@ -6351,8 +6352,23 @@ function sgaDashIrResumen(clienteId){
   const rm = sgaResumenEstado();
   rm.clienteId = clienteId; rm.periodo = sgaDashEstado().periodo; rm.datos = null;
   window.__stockSeg = 'resumen';
-  renderTab();
+  setTab('stock');   // el resumen del cliente está en Control Stock SGA
   sgaResumenCargar();
+}
+// El dashboard del almacén, como apartado propio de la barra de Almacén (antes era una pestaña dentro de Control Stock SGA)
+function tplAlmacenDashboard(){
+  return `
+    <div style="--bn-accent:var(--primary);--dc-accent:var(--primary);">
+      <div class="deca-banner">
+        <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.list, 26, '#fff', 1.8)}</span>
+        <div style="min-width:0;flex:1 1 280px;">
+          <div class="deca-banner-title">Dashboard</div>
+          <div class="deca-banner-sub">El ingreso del almacén mes a mes, el stock, las recepciones y expediciones, y lo que hay que atender.</div>
+        </div>
+      </div>
+      <div class="card deca-toolbar">${dashToolbarHtml()}</div>
+      <div id="stock-body">${stockDashboardBodyHtml()}</div>
+    </div>`;
 }
 // Filtro por empresa (cliente) de las listas de Recepciones y Expediciones: solo salen las empresas que tienen albaranes de ese tipo.
 function stockEmpresasConAlbaran(seg){
@@ -6400,9 +6416,9 @@ function tplStock(){
       ${acc('#C0721A', 'salida', 'Nueva expedición', 'Sacar mercancía y emitir albarán', 'sgaSalidaAbrir()', 'Sacar mercancía del almacén y generar el albarán')}
       ${acc('#2F7F86', 'regul', 'Regularizar', 'Ajustar el stock a lo contado', 'sgaRegulAbrir()', 'Ajustar el stock a lo que hay de verdad')}
     </div>
-    <div class="sga-tabs">${segBtn('dashboard', 'Dashboard')}${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('operativas', 'Operativas')}${segBtn('resumen', 'Resumen mensual')}</div>
+    <div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('operativas', 'Operativas')}${segBtn('resumen', 'Resumen mensual')}</div>
     <div class="card deca-toolbar">
-      ${seg === 'dashboard' ? dashToolbarHtml() : seg === 'catalogo' ? `
+      ${seg === 'catalogo' ? `
       <select id="cat-cliente" onchange="catElegirCliente(this.value)" style="width:auto;flex:0 0 210px;min-width:0;"><option value="">Todos los clientes</option>${contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es')).map(c => `<option value="${c.id}" ${c.id === catClienteSel() ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
       <div class="deca-search" style="flex:1 1 230px;">
         <input id="cat-buscar" placeholder="Buscar código, descripción o proveedor…" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
@@ -6418,7 +6434,7 @@ function tplStock(){
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
       ${seg === 'entradas' || seg === 'salidas' || seg === 'operativas' ? stockEmpresaSelectHtml(seg) + stockEstadoSelectHtml(seg) : ''}${seg === 'operativas' && sgaPuedeEditarStock() ? '<button class="btn btn-primary" style="margin-left:auto;" onclick="sgaOperativaAbrir()">+ Nueva operativa</button>' : ''}`}
-      ${seg === 'resumen' || seg === 'operativas' || seg === 'dashboard' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
+      ${seg === 'resumen' || seg === 'operativas' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
     </div>
     <div id="stock-body">${stockBodyHtml()}</div>
     </div>`;
@@ -9269,6 +9285,7 @@ function renderTab(){
   else if (currentTab === 'clientes') bodyHtml = tplClientes();
   else if (currentTab === 'citas') bodyHtml = tplCitas();
   else if (currentTab === 'stock') bodyHtml = tplStock();
+  else if (currentTab === 'almacendash') bodyHtml = tplAlmacenDashboard();
   else if (currentTab === 'documentos') bodyHtml = tplDocumentos();
   else if (currentTab === 'autonomos') bodyHtml = tplAutonomos();
   else if (currentTab === 'trafico') bodyHtml = tplTrafico();
