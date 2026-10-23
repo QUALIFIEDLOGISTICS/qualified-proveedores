@@ -14914,7 +14914,7 @@ function tdDeltaPP(a, b){
   return `<span class="dash-delta ${cls}">${dif > 0.05 ? '▲' : dif < -0.05 ? '▼' : '■'} ${Math.abs(dif).toLocaleString('es-ES', { maximumFractionDigits: 1 })} pp <i>vs periodo anterior</i></span>`;
 }
 
-/* ---- Evolución: barras por día, semana o mes según lo largo que sea el periodo ---- */
+/* ---- Serie por día, semana o mes según lo largo que sea el periodo (para las miniaturas de las tarjetas) ---- */
 function tdSerie(os, d, h){
   let desde = d, hasta = h;
   if (!desde || !hasta) { const fs = os.map(tdFechaDe).filter(Boolean).sort(); if (!fs.length) return []; desde = desde || fs[0]; hasta = hasta || fs[fs.length - 1]; }
@@ -14935,31 +14935,6 @@ function tdSerie(os, d, h){
   const largo = k => tipo === 'dia' ? fmtDateDMY(k) : tipo === 'semana' ? 'Semana del ' + fmtDateDMY(k) : MONTH_NAMES[Number(k.slice(5)) - 1] + ' ' + k.slice(0, 4);
   return claves.map(k => ({ ...mapa.get(k), etiqueta: etiqueta(k), largo: largo(k), tipo }));
 }
-function tdBarrasSvg(serie){
-  const W = 760, H = 230, pl = 46, pr = 8, pt = 12, pb = 26;
-  const max = Math.max(1, ...serie.map(s => Math.max(s.venta, s.coste)));
-  const paso = (W - pl - pr) / serie.length, bw = Math.max(4, Math.min(38, paso * 0.62));
-  const y = v => pt + (H - pt - pb) * (1 - v / max);
-  const cada = Math.ceil(serie.length / 14);
-  const ticks = [0, .5, 1].map(f => ({ v: max * f, y: y(max * f) }));
-  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;" role="img" aria-label="Coste y beneficio de las órdenes vendidas">
-    ${ticks.map(t => `<line x1="${pl}" x2="${W - pr}" y1="${t.y.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="var(--border)"/><text x="${pl - 6}" y="${(t.y + 3.5).toFixed(1)}" text-anchor="end" font-size="10.5" fill="var(--mutedFaint)">${dashCorto(t.v)}</text>`).join('')}
-    ${serie.map((s, i) => {
-      const x0 = pl + i * paso + (paso - bw) / 2;
-      const tip = `<title>${esc(s.largo)}: ${s.n} orden${s.n === 1 ? '' : 'es'} · venta ${dashEur(s.venta)} · coste ${dashEur(s.coste)} · beneficio ${dashEur(s.benef)}</title>`;
-      let barras = '';
-      if (s.venta > 0 || s.coste > 0) {
-        if (s.benef >= 0) barras = `<rect x="${x0.toFixed(1)}" y="${y(s.coste).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y(0) - y(s.coste)).toFixed(1)}" fill="${DASH_COLORES.mov}" rx="2"/>
-          <rect x="${x0.toFixed(1)}" y="${y(s.venta).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y(s.coste) - y(s.venta)).toFixed(1)}" fill="#3F8F5F" rx="2"/>`;
-        else barras = `<rect x="${x0.toFixed(1)}" y="${y(s.venta).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y(0) - y(s.venta)).toFixed(1)}" fill="${DASH_COLORES.mov}" rx="2"/>
-          <rect x="${x0.toFixed(1)}" y="${y(s.coste).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y(s.venta) - y(s.coste)).toFixed(1)}" fill="#C1443D" rx="2"/>`;
-      }
-      return `<g>${tip}<rect x="${(pl + i * paso).toFixed(1)}" y="${pt}" width="${paso.toFixed(1)}" height="${H - pt - pb}" fill="transparent"/>${barras}
-        ${(i % cada === 0 || i === serie.length - 1) ? `<text x="${(x0 + bw / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="var(--mutedFaint)">${esc(s.etiqueta)}</text>` : ''}</g>`;
-    }).join('')}
-  </svg>`;
-}
-
 /* ---- Agrupaciones ---- */
 function tdAgrupar(os, claveFn, nombreFn){
   const m = new Map();
@@ -15058,16 +15033,6 @@ function tplTraficoDashboard(){
     ${tk('truck', 'Transportistas', String(new Set(os.map(tdTranspKey).filter(Boolean)).size), `${new Set(os.map(o => o.clienteId).filter(Boolean)).size} cliente${new Set(os.map(o => o.clienteId).filter(Boolean)).size === 1 ? '' : 's'} servido${new Set(os.map(o => o.clienteId).filter(Boolean)).size === 1 ? '' : 's'}`, '', '', '#8A94A0')}
   </div>`;
 
-  // ---- Evolución
-  const tipoTxt = serie.length ? { dia: 'por día', semana: 'por semana', mes: 'por mes' }[serie[0].tipo] : '';
-  const cardEvol = `
-    <div class="card deca-card dash-card">
-      ${decaCardHead('tag', 'Coste y beneficio', 'Lo que se ha vendido ' + tipoTxt + ': la altura es la venta, repartida en coste y beneficio')}
-      <div class="deca-card-body">${serie.length && T.nCompl ? tdBarrasSvg(serie) : '<div class="dash-vacio">No hay órdenes vendidas con precio de venta y de coste en este periodo.</div>'}
-        <div class="dash-leyenda"><span><i style="background:${DASH_COLORES.mov}"></i>Coste</span><span><i style="background:#3F8F5F"></i>Beneficio</span><span><i style="background:#C1443D"></i>Pérdida (se vendió por debajo del coste)</span></div>
-      </div>
-    </div>`;
-
   // ---- Clientes
   const porCli = tdAgrupar(os, o => o.clienteId, o => ocClienteNombre(o) || 'Sin nombre').filter(g => g.t.nVenta).sort((a, b) => b.t.venta - a.t.venta);
   const maxCli = Math.max(1, ...porCli.map(g => g.t.ventaCompl));
@@ -15144,7 +15109,7 @@ function tplTraficoDashboard(){
 
   return banner + barra + kpis + kpis2 + `
     <div class="dash-grid">
-      <div class="dash-main">${cardEvol}${cardTabla}</div>
+      <div class="dash-main">${cardTabla}</div>
       <div class="dash-side">${cardRev}${cardCli}${cardTr}${cardSv}${cardRu}</div>
     </div>`;
 }
