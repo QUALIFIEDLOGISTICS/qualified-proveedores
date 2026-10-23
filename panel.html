@@ -3158,7 +3158,13 @@ const ADMINISTRACION_SECTIONS = [
   { id: 'contactos', label: 'Contactos', desc: 'Razón social, NIF y dirección de tus contactos.' },
   { id: 'flota', label: 'Flota', desc: 'Tractoras y remolques con sus vencimientos.' },
 ];
-function moduleSectionList(mod){ return mod === 'trafico' ? TRAFICO_SECTIONS : mod === 'comercial' ? COMERCIAL_SECTIONS : mod === 'administracion' ? ADMINISTRACION_SECTIONS : null; }
+// Autónomos vive dentro de Transporte, pero su permiso sigue siendo el módulo «autonomos» (es el que mira la base de datos);
+// aquí se reparten sus pantallas. Una cuenta con el módulo y sin ningún apartado apuntado lo ve entero, como hasta ahora.
+const AUTONOMOS_SECTIONS = [
+  { id: 'conductores', label: 'Autónomos · Conductores y tarifas', desc: 'Transporte → Autónomos: conductores, empresas, fichajes, tarifas, indexaciones y liquidación.' },
+  { id: 'resumen', label: 'Autónomos · Resumen y costes', desc: 'Transporte → Autónomos: dashboard con los costes y el detalle de todos los autónomos.' },
+];
+function moduleSectionList(mod){ return mod === 'trafico' ? TRAFICO_SECTIONS : mod === 'comercial' ? COMERCIAL_SECTIONS : mod === 'administracion' ? ADMINISTRACION_SECTIONS : mod === 'autonomos' ? AUTONOMOS_SECTIONS : null; }
 // Apartados que no se heredan: hay que dárselos expresamente a la persona (Gestión de Permisos).
 const SECCIONES_SOLO_EXPLICITAS = ['trafico:configuracion'];
 function sectionAllowedFor(s, mod, sec){
@@ -3173,7 +3179,7 @@ function moduleAllowedSections(mod){ return moduleSectionList(mod).filter(x => s
 // que marcar/desmarcar un apartado parta siempre de una lista completa.
 function permExpandTabs(tabs){
   const out = tabs.slice();
-  ['trafico','comercial','administracion'].forEach(mod => {
+  ['trafico','comercial','administracion','autonomos'].forEach(mod => {
     if (out.includes(mod) && !out.some(t => t.startsWith(mod + ':'))) moduleSectionList(mod).forEach(x => { if (!SECCIONES_SOLO_EXPLICITAS.includes(mod + ':' + x.id)) out.push(mod + ':' + x.id); });
   });
   return out;
@@ -3252,7 +3258,7 @@ async function setTab(id){
   if (id === 'stock') { window.__stockView = 'home'; window.__stockDirty = false; }
   // Pulsar la pestaña del panel siempre lleva a su pantalla principal
   // (lista), aunque ya estuvieras dentro viendo el detalle de algo.
-  if (id === 'autonomos') { window.__autonomosView = 'home'; window.__autonomosDriverId = null; window.__driversCompanyFilter = null; window.__companiesFilterOpen = false; }
+  if (id === 'autonomos') { window.__autonomosView = autonomosVistaInicial(); window.__autonomosDriverId = null; window.__driversCompanyFilter = null; window.__companiesFilterOpen = false; }
   if (id === 'fichajes') { window.__fichajesView = 'lista'; window.__fichajesDriverId = null; }
   if (id === 'administracion') {
     window.__administracionView = 'home';
@@ -3286,8 +3292,8 @@ function headerNavItems(){
   const cur = window.__showingContactoDetail ? (window.__contactoDetailHomeTab || currentTab) : currentTab;
   const items = [];
   if (tabs.some(t => isAlmacenTab(t.id)) && almacenDefaultSection()) items.push({ label: 'Almacén', go: `setTab('${almacenDefaultSection()}')`, on: isAlmacenTab(cur) });
-  if (has('trafico')) items.push({ label: 'Transporte', go: "setTab('trafico')", on: cur === 'trafico' });
-  if (has('autonomos')) items.push({ label: 'Autónomos', go: "setTab('autonomos')", on: cur === 'autonomos' });
+  // Autónomos ya no tiene entrada propia: está dentro de Transporte (quien solo tiene Autónomos entra a Transporte directamente en él)
+  if (has('trafico') || has('autonomos')) items.push({ label: 'Transporte', go: has('trafico') ? "setTab('trafico')" : "setTab('autonomos')", on: cur === 'trafico' || cur === 'autonomos' });
   if (has('comercial')) items.push({ label: 'Comercial', go: "setTab('comercial')", on: cur === 'comercial' });
   // Administración reúne Contactos, Flota y Fichajes (cada uno con su permiso).
   const secs = has('administracion') ? [sectionAllowedFor(PROFILE, 'administracion', 'contactos') && 'contactos', sectionAllowedFor(PROFILE, 'administracion', 'flota') && 'flota'].filter(Boolean) : [];
@@ -3362,7 +3368,7 @@ function renderHeader(){
     return;
   }
   if (currentTab === 'autonomos') {
-    titleRow.innerHTML = `<div style="${PLAIN_TITLE_STYLE}">Panel de Control Autónomos</div>`;
+    titleRow.innerHTML = `<div style="${PLAIN_TITLE_STYLE}">Panel de Control Transporte</div>`;
     document.getElementById('wh-sub').textContent = '';
     return;
   }
@@ -3469,6 +3475,9 @@ function tplInicio(){
       // Contactos y Flota son apartados independientes: solo su tarjeta si se tiene permiso para ese apartado.
       if (sectionAllowedFor(PROFILE, 'administracion', 'contactos')) g.items.push({ ...t, action: 'openContactosFromHome()' });
       if (sectionAllowedFor(PROFILE, 'administracion', 'flota')) g.items.push({ id: 'flota', label: 'Flota', group: t.group, action: 'openFlotaFromHome()' });
+    } else if (t.id === 'autonomos') {
+      // Autónomos va dentro de Transporte: solo tiene tarjeta propia (llamada Transporte) quien no tiene el módulo Transporte
+      if (!items.some(x => x.id === 'trafico')) g.items.push({ id: 'trafico', label: 'Transporte', group: t.group, action: "setTab('autonomos')" });
     } else g.items.push(t);
   });
   return `
@@ -9065,7 +9074,7 @@ function renderTab(){
   // Igual en Transporte (Transportistas / DeCA / Direcciones): la barra ubica, y
   // solo los formularios llevan además el camino de arriba para volver a su lista.
   const almacenBar = (isAlmacenTab(currentTab) && !window.__showingContactoDetail) ? tplAlmacenBar() : '';
-  const traficoBar = (currentTab === 'trafico' && !window.__showingContactoDetail) ? tplTraficoBar() : '';
+  const traficoBar = ((currentTab === 'trafico' || currentTab === 'autonomos') && !window.__showingContactoDetail) ? tplTraficoBar() : '';
   const comercialBar = (currentTab === 'comercial' && !window.__showingContactoDetail) ? tplComercialBar() : '';
   const moduleBar = almacenBar || traficoBar || comercialBar;
   const hideBreadcrumb = (currentTab === 'inicio' && !window.__showingContactoDetail) || (almacenBar && !almacenIsSubpage()) || (traficoBar && !traficoIsSubpage()) || (comercialBar && !comercialIsSubpage()) || (currentTab === 'admin' && window.__adminView !== 'ficha' && !window.__showingContactoDetail);
@@ -14214,14 +14223,29 @@ async function deleteRate(id){
   closeModal(); renderTab();
 }
 
-function tplAutonomos(){
-  if (window.__autonomosView === 'detalle' && window.__autonomosDriverId) return tplDriverDetail();
-  if (window.__autonomosView === 'empresas') return tplCompaniesList();
-  if (window.__autonomosView === 'lista') return tplDriversManage();
-  if (window.__autonomosView === 'dashboard') return tplAutonomosDashboardPage();
-  return tplAutonomosHome();
+const autonomosPuede = sec => sectionAllowedFor(PROFILE, 'autonomos', sec);
+// Primera pantalla de Autónomos: la de conductores (o el resumen, si es lo único que se tiene permitido)
+function autonomosVistaInicial(){ return autonomosPuede('conductores') ? 'lista' : (autonomosPuede('resumen') ? 'dashboard' : 'lista'); }
+// Submenú de Autónomos dentro de Transporte
+function tplAutonomosBar(){
+  const v = window.__autonomosView;
+  const act = v === 'dashboard' ? 'dashboard' : v === 'empresas' ? 'empresas' : 'lista';
+  const items = [];
+  if (autonomosPuede('conductores')) items.push(['lista', 'Conductores', 'openDriversList()'], ['empresas', 'Empresas', 'openCompaniesList()']);
+  if (autonomosPuede('resumen')) items.push(['dashboard', 'Resumen', 'openAutonomosDashboard()']);
+  if (items.length < 2) return '';
+  return `<div class="doc-seg" style="margin-bottom:18px;">${items.map(([id, l, fn]) => `<button type="button" class="${act === id ? 'on' : ''}" onclick="${fn}">${l}</button>`).join('')}</div>`;
 }
-function backToAutonomosHome(){ window.__autonomosView='home'; renderHeader(); renderTab(); }
+function tplAutonomos(){
+  const v0 = window.__autonomosView;
+  // Sin permiso para la pantalla pedida (el resumen o los conductores), se va a la que sí se tiene
+  if (!autonomosPuede(v0 === 'dashboard' ? 'resumen' : 'conductores')) window.__autonomosView = autonomosVistaInicial();
+  const v = window.__autonomosView;
+  if (v === 'detalle' && window.__autonomosDriverId) return tplDriverDetail();
+  const cuerpo = v === 'empresas' ? tplCompaniesList() : v === 'dashboard' ? tplAutonomosDashboardPage() : tplDriversManage();
+  return tplAutonomosBar() + cuerpo;
+}
+function backToAutonomosHome(){ window.__autonomosView = autonomosVistaInicial(); window.__autonomosDriverId = null; window.__driversCompanyFilter = null; renderHeader(); renderTab(); }
 function openCompaniesList(){
   window.__autonomosView = 'empresas';
   window.__companiesView = 'activos';
@@ -16349,19 +16373,33 @@ function traficoSection(){
   const s = window.__traficoSection || 'transportistas';
   return allowed.some(x => x.id === s) || !allowed.length ? s : allowed[0].id;
 }
+// Autónomos cuelga de Transporte como un apartado más; quien tiene el módulo (aunque no tenga Transporte) lo ve en la barra
+const puedeAutonomos = () => !!PROFILE && (PROFILE.isAdmin || PROFILE.allowedTabs.includes('autonomos'));
 function tplTraficoBar(){
-  const sec = traficoSection();
+  const enAut = currentTab === 'autonomos';
+  const sec = enAut ? 'autonomos' : traficoSection();
   // Los apartados a la izquierda; «Configuración» (se da aparte en Gestión de Permisos) a la derecha del todo
   return `
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
       <div style="display:flex;gap:2px;flex-wrap:wrap;">
-        ${moduleAllowedSections('trafico').filter(s => s.id !== 'configuracion').map(s => moduleTabBtnHtml(`setTraficoSection('${s.id}')`, s.label, s.id === sec)).join('')}
+        ${moduleAllowedSections('trafico').filter(s => s.id !== 'configuracion').map(s => moduleTabBtnHtml(`traficoIr('${s.id}')`, s.label, s.id === sec)).join('')}
+        ${puedeAutonomos() ? moduleTabBtnHtml("setTab('autonomos')", 'Autónomos', enAut) : ''}
       </div>
-      ${sectionAllowedFor(PROFILE, 'trafico', 'configuracion') ? `<div>${moduleTabBtnHtml("setTraficoSection('configuracion')", 'Configuración', sec === 'configuracion')}</div>` : ''}
+      ${sectionAllowedFor(PROFILE, 'trafico', 'configuracion') ? `<div>${moduleTabBtnHtml("traficoIr('configuracion')", 'Configuración', sec === 'configuracion')}</div>` : ''}
     </div>`;
 }
 // arriba para poder volver a su lista; las listas ya se ubican con la barra.
+// Desde Autónomos (que es otro «módulo» por dentro) se vuelve a un apartado de Transporte pasando antes por setTab
+function traficoIr(id){
+  if (currentTab === 'autonomos') {
+    if (!sectionAllowedFor(PROFILE, 'trafico', id)) return;
+    setTab('trafico').then(() => setTraficoSection(id));
+    return;
+  }
+  setTraficoSection(id);
+}
 function traficoIsSubpage(){
+  if (currentTab === 'autonomos') return window.__autonomosView === 'detalle';
   return (traficoSection() === 'deca' && window.__traficoView === 'decaForm')
     || (traficoSection() === 'direcciones' && window.__administracionView === 'direccionForm')
     || (traficoSection() === 'colaboradores' && window.__colabView === 'rutaForm')
