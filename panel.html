@@ -3365,11 +3365,10 @@ const AUTONOMOS_SECTIONS = [
   { id: 'fichajes', label: 'Autónomos · Fichajes e incidencias', desc: 'Transporte → Autónomos: meter y corregir fichajes e incidencias de los conductores de Plaza. No ve tarifas ni importes.' },
   { id: 'liquidaciones', label: 'Autónomos · Liquidaciones', desc: 'Transporte → Autónomos: la liquidación mensual de todos los autónomos en una tabla, con importes.' },
   { id: 'conductores', label: 'Autónomos · Conductores y tarifas', desc: 'Transporte → Autónomos: conductores, empresas, fichajes, tarifas, indexaciones y liquidación.' },
-  { id: 'resumen', label: 'Autónomos · Resumen y costes', desc: 'Transporte → Autónomos: dashboard con los costes y el detalle de todos los autónomos.' },
 ];
 function moduleSectionList(mod){ return mod === 'trafico' ? TRAFICO_SECTIONS : mod === 'comercial' ? COMERCIAL_SECTIONS : mod === 'administracion' ? ADMINISTRACION_SECTIONS : mod === 'autonomos' ? AUTONOMOS_SECTIONS : null; }
 // Apartados que no se heredan: hay que dárselos expresamente a la persona (Gestión de Permisos).
-const SECCIONES_SOLO_EXPLICITAS = ['trafico:configuracion'];
+const SECCIONES_SOLO_EXPLICITAS = ['trafico:configuracion', 'trafico:dashboard'];
 function sectionAllowedFor(s, mod, sec){
   if (s.isAdmin) return true;
   if (!s.allowedTabs.includes(mod)) return false;
@@ -3801,6 +3800,7 @@ function computeBreadcrumbSegments(){
       return [{label:'DeCA', onclick:null}];
     }
     if (traficoSection() === 'configuracion') return [{label:'Configuración', onclick:null}];
+    if (traficoSection() === 'dashboard') return [{label:'Dashboard', onclick:null}];
     if (traficoSection() === 'ordenes') {
       if (window.__ocView === 'form') {
         const ed = window.__ocFormId ? ordenesCarga.find(x => x.id === window.__ocFormId) : null;
@@ -3835,7 +3835,6 @@ function computeBreadcrumbSegments(){
       }
       return [{label:'Autónomos', onclick:'backToAutonomosHome()'}, {label:'Conductores', onclick:null}];
     }
-    if (window.__autonomosView === 'dashboard') return [{label:'Autónomos', onclick:'backToAutonomosHome()'}, {label:'Dashboard', onclick:null}];
     return [{label:'Autónomos', onclick:null}];
   }
   if (currentTab === 'fichajes') {
@@ -14431,19 +14430,18 @@ async function deleteRate(id){
 }
 
 const autonomosPuede = sec => sectionAllowedFor(PROFILE, 'autonomos', sec);
-// Primera pantalla de Autónomos: la de conductores (o el resumen, si es lo único que se tiene permitido)
-function autonomosVistaInicial(){ return autonomosPuede('fichajes') ? 'fichajes' : autonomosPuede('conductores') ? 'lista' : autonomosPuede('liquidaciones') ? 'liquidaciones' : (autonomosPuede('resumen') ? 'dashboard' : 'fichajes'); }
+// Primera pantalla de Autónomos: la primera que se tenga permitida
+function autonomosVistaInicial(){ return autonomosPuede('fichajes') ? 'fichajes' : autonomosPuede('conductores') ? 'lista' : autonomosPuede('liquidaciones') ? 'liquidaciones' : 'fichajes'; }
 function openFichajesGrid(){ window.__autonomosView = 'fichajes'; renderHeader(); renderTab(); }
 // Submenú de Autónomos dentro de Transporte
 // Submenú de Autónomos dentro de Transporte: va como primera pieza de la barra de herramientas, bajo el banner (igual que Órdenes de carga o DeCA)
 function tplAutonomosSeg(){
   const v = window.__autonomosView;
-  const act = v === 'dashboard' ? 'dashboard' : v === 'fichajes' ? 'fichajes' : v === 'liquidaciones' ? 'liquidaciones' : 'lista';
+  const act = v === 'fichajes' ? 'fichajes' : v === 'liquidaciones' ? 'liquidaciones' : 'lista';
   const items = [];
   if (autonomosPuede('fichajes')) items.push(['fichajes', 'Fichajes', 'openFichajesGrid()']);
   if (autonomosPuede('liquidaciones')) items.push(['liquidaciones', 'Liquidaciones', "window.__autonomosView='liquidaciones'; renderTab()"]);
   if (autonomosPuede('conductores')) items.push(['lista', 'Conductores', 'openDriversList()']);
-  if (autonomosPuede('resumen')) items.push(['dashboard', 'Resumen', 'openAutonomosDashboard()']);
   if (items.length < 2) return '';
   return `<div class="doc-seg">${tabsOrdenar('autonomos', items.map(([id, l, fn]) => ({ id, l, fn }))).map(({ id, l, fn }) => tabsMov('autonomos', id, `<button type="button" class="${act === id ? 'on' : ''}" onclick="${fn}">${l}</button>`)).join('')}</div>`;
 }
@@ -14451,7 +14449,6 @@ const AUT_BANNER = {
   fichajes: { icon: 'clock', t: 'Fichajes', s: 'Los fichajes e incidencias de los conductores de Plaza, semana a semana.' },
   liquidaciones: { icon: 'file', t: 'Liquidaciones', s: 'La liquidación mensual de todos los autónomos, con su estado.' },
   lista: { icon: 'user', t: 'Conductores', s: 'Conductores autónomos, sus datos, tarifas y modalidad de contrato.' },
-  dashboard: { icon: 'home', t: 'Resumen', s: 'Costes, km y horas de los autónomos por periodo.' },
 };
 function tplAutonomosBanner(act){
   const b = AUT_BANNER[act] || AUT_BANNER.lista;
@@ -14466,21 +14463,18 @@ function tplAutonomosBanner(act){
 }
 function tplAutonomos(){
   const v0 = window.__autonomosView;
-  // Sin permiso para la pantalla pedida (el resumen o los conductores), se va a la que sí se tiene
-  if (!autonomosPuede(v0 === 'dashboard' ? 'resumen' : v0 === 'fichajes' ? 'fichajes' : v0 === 'liquidaciones' ? 'liquidaciones' : 'conductores')) window.__autonomosView = autonomosVistaInicial();
+  // Sin permiso para la pantalla pedida, se va a la que sí se tiene
+  if (v0 === 'dashboard') window.__autonomosView = autonomosVistaInicial();   // el resumen de autónomos ahora vive en Transporte → Dashboard
+  if (!autonomosPuede(v0 === 'fichajes' ? 'fichajes' : v0 === 'liquidaciones' ? 'liquidaciones' : 'conductores')) window.__autonomosView = autonomosVistaInicial();
   const v = window.__autonomosView;
   if (v === 'detalle' && window.__autonomosDriverId) return tplDriverDetail();
   if (v === 'conductorForm') return tplDriverForm();
-  const act = v === 'dashboard' ? 'dashboard' : v === 'fichajes' ? 'fichajes' : v === 'liquidaciones' ? 'liquidaciones' : 'lista';
-  const vista = v === 'liquidaciones' ? tplLiquidaciones() : v === 'fichajes' ? tplFichajesGrid() : v === 'dashboard' ? { barra: '', cuerpo: tplAutonomosDashboardBody() } : tplDriversManage();
+  const act = v === 'fichajes' ? 'fichajes' : v === 'liquidaciones' ? 'liquidaciones' : 'lista';
+  const vista = v === 'liquidaciones' ? tplLiquidaciones() : v === 'fichajes' ? tplFichajesGrid() : tplDriversManage();
   const seg = tplAutonomosSeg(), barra = seg + (vista.barra || '');
   return tplAutonomosBanner(act) + (barra.trim() ? `<div class="card deca-toolbar au-tb">${barra}</div>` : '') + vista.cuerpo;
 }
 function backToAutonomosHome(){ window.__autonomosView = autonomosVistaInicial(); window.__autonomosDriverId = null; window.__driversCompanyFilter = null; renderHeader(); renderTab(); }
-function openAutonomosDashboard(){
-  window.__autonomosView = 'dashboard';
-  renderHeader(); renderTab();
-}
 const DASH_PERIODS = {
   ayer: 'Ayer', semana: 'Esta semana', semana_anterior: 'Semana anterior',
   mes: 'Este mes', mes_anterior: 'Mes anterior', trimestre: 'Últimos 3 meses', personalizado: 'Personalizado',
@@ -14844,6 +14838,317 @@ function tplAutonomosDashboardBody(){
     </div>
     ${dashboardTable(stats)}`;
 }
+/* ============================= TRÁFICO · DASHBOARD =============================
+   Dos vistas: lo vendido en las órdenes de carga (facturación, coste, beneficio, margen, clientes, transportistas, rutas) y el
+   rendimiento de los autónomos (costes, km, horas y extras, que es el resumen que antes colgaba de Autónomos).
+   Una orden «vendida» es la que no está anulada y tiene precio de venta (lo que cobramos al cliente). El beneficio se calcula solo con las
+   que tienen también precio de coste (lo que pagamos al transportista), para no inflarlo; el resto se avisa en «Para revisar». */
+const TD_PERIODOS = [['mes', 'Este mes'], ['mes_ant', 'Mes anterior'], ['trim', 'Últimos 3 meses'], ['anio', 'Este año'], ['anio_ant', 'Año anterior'], ['todo', 'Todo'], ['pers', 'Personalizado']];
+const TD_COLORES = ['#1B3A6B', '#2F7F86', '#C0721A', '#7C5CBF', '#3F8F5F', '#C1443D', '#8A94A0'];
+const TD_MARGEN_BAJO = 8;   // % de margen por debajo del cual una orden se enseña como «margen bajo»
+function tdS(){
+  return (window.__td = window.__td || { seg: 'ordenes', periodo: 'mes', desde: '', hasta: '', cliente: '', transp: '', servicio: '' });
+}
+const tdPuedeAut = () => puedeAutonomos();
+function tdSeg(){ return tdS().seg === 'autonomos' && tdPuedeAut() ? 'autonomos' : 'ordenes'; }
+function tdIrSeg(v){ tdS().seg = v; renderTab(); }
+function tdPeriodo(v){ tdS().periodo = v; renderTab(); }
+function tdFechaCambio(cual, v){ tdS()[cual] = v; renderTab(); }
+function tdFiltro(k, v){ tdS()[k] = v || ''; renderTab(); }
+function tdLimpiar(){ const S = tdS(); S.cliente = ''; S.transp = ''; S.servicio = ''; renderTab(); }
+
+/* ---- Fechas ---- */
+function tdMesDesp(str, n){   // misma fecha n meses después (ajustando si el mes no tiene ese día)
+  const [y, m, d] = str.split('-').map(Number);
+  const t = new Date(y, m - 1 + n, 1), ult = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
+  return toDateStr(new Date(t.getFullYear(), t.getMonth(), Math.min(d, ult)));
+}
+function tdFinMes(str){ const [y, m] = str.split('-').map(Number); return toDateStr(new Date(y, m, 0)); }
+function tdDias(a, b){ return Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000); }
+function tdRango(){
+  const S = tdS(), hoy = today(), y = Number(hoy.slice(0, 4)), m = Number(hoy.slice(5, 7));
+  const ini = (yy, mm) => `${yy}-${String(mm).padStart(2, '0')}-01`;
+  let d = '', h = '', ant = null;
+  if (S.periodo === 'mes') { d = ini(y, m); h = hoy; ant = [tdMesDesp(d, -1), tdMesDesp(h, -1)]; }
+  else if (S.periodo === 'mes_ant') { d = tdMesDesp(ini(y, m), -1); h = tdFinMes(d); const a = tdMesDesp(d, -1); ant = [a, tdFinMes(a)]; }
+  else if (S.periodo === 'trim') { d = tdMesDesp(ini(y, m), -2); h = hoy; ant = [tdMesDesp(d, -3), tdMesDesp(h, -3)]; }
+  else if (S.periodo === 'anio') { d = `${y}-01-01`; h = hoy; ant = [`${y - 1}-01-01`, tdMesDesp(hoy, -12)]; }
+  else if (S.periodo === 'anio_ant') { d = `${y - 1}-01-01`; h = `${y - 1}-12-31`; ant = [`${y - 2}-01-01`, `${y - 2}-12-31`]; }
+  else if (S.periodo === 'pers') {
+    d = S.desde || ini(y, m); h = S.hasta || hoy;
+    if (h < d) [d, h] = [h, d];
+    const n = tdDias(d, h) + 1; ant = [toDateStr(new Date(new Date(d + 'T00:00:00').getTime() - n * 86400000)), toDateStr(new Date(new Date(d + 'T00:00:00').getTime() - 86400000))];
+  }
+  return { d, h, ant };
+}
+const tdFechaDe = o => o.fechaPedido || (o.createdAt || '').slice(0, 10);
+const tdTranspKey = o => o.transportistaId || o.transportistaNombre || '';
+function tdOrdenes(d, h){
+  const S = tdS();
+  return ordenesCarga.filter(o => {
+    if (o.estado === 'anulada') return false;
+    const f = tdFechaDe(o);
+    if (d && f < d) return false;
+    if (h && f > h) return false;
+    if (S.cliente && o.clienteId !== S.cliente) return false;
+    if (S.transp && tdTranspKey(o) !== S.transp) return false;
+    if (S.servicio && o.servicio !== S.servicio) return false;
+    return true;
+  });
+}
+function tdTotales(os){
+  const t = { n: os.length, venta: 0, nVenta: 0, ventaCompl: 0, coste: 0, benef: 0, nCompl: 0, sinVenta: 0, sinCoste: 0 };
+  os.forEach(o => {
+    const v = o.precioCliente, c = o.precio, hayV = v != null && v > 0;
+    if (hayV) { t.venta += v; t.nVenta++; } else t.sinVenta++;
+    if (c == null) t.sinCoste++;
+    if (hayV && c != null) { t.nCompl++; t.ventaCompl += v; t.coste += c; t.benef += v - c; }
+  });
+  t.margen = t.ventaCompl > 0 ? t.benef / t.ventaCompl * 100 : null;
+  return t;
+}
+const tdPct = n => n == null ? '—' : n.toLocaleString('es-ES', { maximumFractionDigits: 1 }) + ' %';
+function tdDeltaPP(a, b){
+  if (a == null || b == null) return `<span class="dash-delta flat">sin dato anterior</span>`;
+  const dif = a - b, cls = Math.abs(dif) < 0.05 ? 'flat' : dif > 0 ? 'up' : 'down';
+  return `<span class="dash-delta ${cls}">${dif > 0.05 ? '▲' : dif < -0.05 ? '▼' : '■'} ${Math.abs(dif).toLocaleString('es-ES', { maximumFractionDigits: 1 })} pp <i>vs periodo anterior</i></span>`;
+}
+
+/* ---- Evolución: barras por día, semana o mes según lo largo que sea el periodo ---- */
+function tdSerie(os, d, h){
+  let desde = d, hasta = h;
+  if (!desde || !hasta) { const fs = os.map(tdFechaDe).filter(Boolean).sort(); if (!fs.length) return []; desde = desde || fs[0]; hasta = hasta || fs[fs.length - 1]; }
+  const dias = tdDias(desde, hasta) + 1;
+  const tipo = dias <= 45 ? 'dia' : dias <= 140 ? 'semana' : 'mes';
+  const lunes = f => { const t = new Date(f + 'T00:00:00'); t.setDate(t.getDate() - ((t.getDay() + 6) % 7)); return toDateStr(t); };
+  const clave = f => tipo === 'dia' ? f : tipo === 'semana' ? lunes(f) : f.slice(0, 7);
+  const mapa = new Map(), claves = [];
+  if (tipo === 'mes') { let c = desde.slice(0, 7) + '-01'; while (c.slice(0, 7) <= hasta.slice(0, 7) && claves.length < 60) { claves.push(c.slice(0, 7)); c = tdMesDesp(c, 1); } }
+  else { const paso = tipo === 'dia' ? 1 : 7; let c = tipo === 'dia' ? desde : lunes(desde); while (c <= hasta && claves.length < 60) { claves.push(c); const t = new Date(c + 'T00:00:00'); t.setDate(t.getDate() + paso); c = toDateStr(t); } }
+  claves.forEach(k => mapa.set(k, { k, n: 0, venta: 0, coste: 0, benef: 0 }));
+  os.forEach(o => {
+    const b = mapa.get(clave(tdFechaDe(o))); if (!b) return;
+    b.n++;
+    if (o.precioCliente > 0 && o.precio != null) { b.venta += o.precioCliente; b.coste += o.precio; b.benef += o.precioCliente - o.precio; }
+  });
+  const etiqueta = k => tipo === 'dia' ? String(Number(k.slice(8))) : tipo === 'semana' ? fmtDateDMY(k).slice(0, 5) : MONTH_NAMES[Number(k.slice(5)) - 1].slice(0, 3);
+  const largo = k => tipo === 'dia' ? fmtDateDMY(k) : tipo === 'semana' ? 'Semana del ' + fmtDateDMY(k) : MONTH_NAMES[Number(k.slice(5)) - 1] + ' ' + k.slice(0, 4);
+  return claves.map(k => ({ ...mapa.get(k), etiqueta: etiqueta(k), largo: largo(k), tipo }));
+}
+function tdBarrasSvg(serie){
+  const W = 760, H = 230, pl = 46, pr = 8, pt = 12, pb = 26;
+  const max = Math.max(1, ...serie.map(s => Math.max(s.venta, s.coste)));
+  const paso = (W - pl - pr) / serie.length, bw = Math.max(4, Math.min(38, paso * 0.62));
+  const y = v => pt + (H - pt - pb) * (1 - v / max);
+  const cada = Math.ceil(serie.length / 14);
+  const ticks = [0, .5, 1].map(f => ({ v: max * f, y: y(max * f) }));
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;" role="img" aria-label="Coste y beneficio de las órdenes vendidas">
+    ${ticks.map(t => `<line x1="${pl}" x2="${W - pr}" y1="${t.y.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="var(--border)"/><text x="${pl - 6}" y="${(t.y + 3.5).toFixed(1)}" text-anchor="end" font-size="10.5" fill="var(--mutedFaint)">${dashCorto(t.v)}</text>`).join('')}
+    ${serie.map((s, i) => {
+      const x0 = pl + i * paso + (paso - bw) / 2;
+      const tip = `<title>${esc(s.largo)}: ${s.n} orden${s.n === 1 ? '' : 'es'} · venta ${dashEur(s.venta)} · coste ${dashEur(s.coste)} · beneficio ${dashEur(s.benef)}</title>`;
+      let barras = '';
+      if (s.venta > 0 || s.coste > 0) {
+        if (s.benef >= 0) barras = `<rect x="${x0.toFixed(1)}" y="${y(s.coste).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y(0) - y(s.coste)).toFixed(1)}" fill="${DASH_COLORES.mov}" rx="2"/>
+          <rect x="${x0.toFixed(1)}" y="${y(s.venta).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y(s.coste) - y(s.venta)).toFixed(1)}" fill="#3F8F5F" rx="2"/>`;
+        else barras = `<rect x="${x0.toFixed(1)}" y="${y(s.venta).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y(0) - y(s.venta)).toFixed(1)}" fill="${DASH_COLORES.mov}" rx="2"/>
+          <rect x="${x0.toFixed(1)}" y="${y(s.coste).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y(s.venta) - y(s.coste)).toFixed(1)}" fill="#C1443D" rx="2"/>`;
+      }
+      return `<g>${tip}<rect x="${(pl + i * paso).toFixed(1)}" y="${pt}" width="${paso.toFixed(1)}" height="${H - pt - pb}" fill="transparent"/>${barras}
+        ${(i % cada === 0 || i === serie.length - 1) ? `<text x="${(x0 + bw / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="var(--mutedFaint)">${esc(s.etiqueta)}</text>` : ''}</g>`;
+    }).join('')}
+  </svg>`;
+}
+
+/* ---- Agrupaciones ---- */
+function tdAgrupar(os, claveFn, nombreFn){
+  const m = new Map();
+  os.forEach(o => {
+    const k = claveFn(o); if (!k) return;
+    if (!m.has(k)) m.set(k, { k, nombre: nombreFn(o), os: [] });
+    m.get(k).os.push(o);
+  });
+  return [...m.values()].map(g => ({ ...g, t: tdTotales(g.os) }));
+}
+function tdRutaDe(o){
+  const a = o.cargas && o.cargas[0], b = o.descargas && o.descargas[o.descargas.length - 1];
+  if (!a || !b || !a.pais || !b.pais) return '';
+  const cod = p => CONTACTO_PAIS_CODIGOS[String(p).trim()] || String(p).trim();
+  return `${cod(a.pais)} → ${cod(b.pais)}`;
+}
+function tdFilaRank(i, nombre, importe, sub, barraHtml, onclick, title){
+  return `<div class="dash-cli" ${onclick ? `onclick="${onclick}"` : 'style="cursor:default;"'} ${title ? `title="${esc(title)}"` : ''}>
+    <span class="dash-rank">${i}</span>
+    <div class="dash-cli-c"><div class="dash-cli-n"><b>${esc(nombre)}</b><span>${importe}<small>${sub}</small></span></div>${barraHtml}</div>
+  </div>`;
+}
+// Barra partida en lo que pagamos (azul) y lo que ganamos (verde), de largo proporcional a lo máximo de la lista
+function tdBarraMargen(t, max){
+  if (!(t.ventaCompl > 0)) return `<div class="dash-barra" style="width:6px;"></div>`;
+  const w = Math.max(3, t.ventaCompl / Math.max(1, max) * 100);
+  return `<div class="dash-barra" style="width:${w.toFixed(1)}%;"><i style="flex:${Math.max(0, t.coste)};background:${DASH_COLORES.mov};"></i>${t.benef >= 0 ? `<i style="flex:${t.benef};background:#3F8F5F;"></i>` : `<i style="flex:${-t.benef};background:#C1443D;"></i>`}</div>`;
+}
+
+function tdOpcionesFiltro(){
+  const todas = ordenesCarga.filter(o => o.estado !== 'anulada');
+  const clientes = tdAgrupar(todas, o => o.clienteId, o => ocClienteNombre(o) || 'Sin nombre').sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  const transps = tdAgrupar(todas, tdTranspKey, o => o.transportistaNombre || 'Sin nombre').sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  const servicios = [...new Set(todas.map(o => o.servicio).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
+  return { clientes, transps, servicios };
+}
+
+function tplTraficoDashboard(){
+  const S = tdS(), seg = tdSeg();
+  const segHtml = tdPuedeAut() ? `<div class="doc-seg"><button type="button" class="${seg === 'ordenes' ? 'on' : ''}" onclick="tdIrSeg('ordenes')">Órdenes de carga</button><button type="button" class="${seg === 'autonomos' ? 'on' : ''}" onclick="tdIrSeg('autonomos')">Autónomos</button></div>` : '';
+  const banner = `
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.list, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 280px;"><div class="deca-banner-title">Dashboard</div><div class="deca-banner-sub">${seg === 'ordenes' ? 'Lo vendido en las órdenes de carga: facturación, coste, beneficio y margen.' : 'El rendimiento de los autónomos: costes, km, horas y extras.'}</div></div>
+    </div>`;
+  if (seg === 'autonomos') return banner + (segHtml ? `<div class="card deca-toolbar">${segHtml}</div>` : '') + tplAutonomosDashboardBody();
+
+  // ---- Órdenes de carga
+  const R = tdRango();
+  const os = tdOrdenes(R.d, R.h), T = tdTotales(os);
+  const osAnt = R.ant ? tdOrdenes(R.ant[0], R.ant[1]) : null, TA = osAnt ? tdTotales(osAnt) : null;
+  const anuladas = ordenesCarga.filter(o => { if (o.estado !== 'anulada') return false; const f = tdFechaDe(o); return (!R.d || f >= R.d) && (!R.h || f <= R.h); }).length;
+  const op = tdOpcionesFiltro();
+  const hayFiltro = !!(S.cliente || S.transp || S.servicio);
+  const sel = (id, k, vacio, lista) => `<select id="${id}" onchange="tdFiltro('${k}', this.value)" style="width:auto;flex:0 1 210px;min-width:150px;"><option value="">${vacio}</option>${lista.map(([v, t]) => `<option value="${esc(v)}" ${S[k] === v ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
+  const barra = `<div class="card deca-toolbar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    ${segHtml}
+    <select onchange="tdPeriodo(this.value)" style="width:auto;flex:0 0 170px;">${TD_PERIODOS.map(([v, t]) => `<option value="${v}" ${S.periodo === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+    ${S.periodo === 'pers' ? `<input type="date" value="${esc(R.d)}" onchange="tdFechaCambio('desde', this.value)" style="width:150px;" /><span style="color:var(--muted);font-size:12.5px;">a</span><input type="date" value="${esc(R.h)}" onchange="tdFechaCambio('hasta', this.value)" style="width:150px;" />` : ''}
+    ${sel('td-cli', 'cliente', 'Todos los clientes', op.clientes.map(g => [g.k, g.nombre]))}
+    ${sel('td-tr', 'transp', 'Todos los transportistas', op.transps.map(g => [g.k, g.nombre]))}
+    ${op.servicios.length ? sel('td-sv', 'servicio', 'Todos los servicios', op.servicios.map(s => [s, s])) : ''}
+    ${hayFiltro ? `<button class="btn btn-ghost" onclick="tdLimpiar()">Quitar filtros</button>` : ''}
+    <span style="margin-left:auto;font-size:12.5px;color:var(--muted);">${R.d ? `${fmtDateDMY(R.d)} – ${fmtDateDMY(R.h)}` : 'Todas las fechas'}</span>
+  </div>`;
+  if (!ordenesCarga.length) return banner + barra + `<div class="card"><div class="dash-vacio" style="padding:30px;text-align:center;">Todavía no hay órdenes de carga.</div></div>`;
+
+  // ---- Tarjetas de arriba
+  const serie = tdSerie(os, R.d, R.h);
+  const ref = R.ant ? 'vs periodo anterior' : '';
+  const tk = (icono, titulo, valor, sub, delta, spark, color, alIr) => `
+    <div class="dash-kpi${alIr ? ' clic' : ''}" ${alIr ? `onclick="${alIr}"` : ''}>
+      <div class="dash-kpi-h"><span class="dash-ico" style="background:${color}1F;color:${color};">${homeIcon(HOME_ICON_PATHS[icono] || HOME_ICON_PATHS.box, 17, 'currentColor', 2)}</span><small>${titulo}</small>${alIr ? '<em>ver →</em>' : ''}</div>
+      <b>${valor}</b>
+      <div class="dash-kpi-s">${delta || ''}<span>${sub}</span></div>
+      ${spark || ''}
+    </div>`;
+  const pctMargen = T.margen == null ? 0 : Math.max(0, Math.min(100, T.margen));
+  const hero = `
+    <div class="dash-hero">
+      <div class="dash-kpi-h"><span class="dash-ico" style="background:rgba(255,255,255,.18);color:#fff;">${homeIcon(HOME_ICON_PATHS.tag, 17, 'currentColor', 2)}</span><small>Beneficio de las órdenes vendidas</small></div>
+      <b>${dashEur(T.benef)}</b>
+      <div class="dash-hero-b"><i style="width:${pctMargen.toFixed(1)}%;"></i></div>
+      <div class="dash-hero-s"><span>Margen <b>${tdPct(T.margen)}</b></span><span>sobre <b>${dashEur(T.ventaCompl)}</b> facturados</span><span><b>${T.nCompl}</b> orden${T.nCompl === 1 ? '' : 'es'}</span></div>
+      <div class="dash-hero-c">${TA ? dashDelta(dashPct(T.benef, TA.benef), ref + ' (' + dashEur(TA.benef) + ')') : ''}</div>
+    </div>`;
+  const kpis = `<div class="dash-top">${hero}
+    ${tk('tag', 'Facturación', dashEur(T.venta), `${T.nVenta} orden${T.nVenta === 1 ? '' : 'es'} con precio de venta`, TA ? dashDelta(dashPct(T.venta, TA.venta), ref) : '', dashSpark(serie.map(s => s.venta), '#1B3A6B'), '#1B3A6B')}
+    ${tk('truck', 'Coste de transporte', dashEur(T.coste), 'lo pagado a los transportistas', TA ? dashDelta(dashPct(T.coste, TA.coste), ref, true) : '', dashSpark(serie.map(s => s.coste), '#C0721A'), '#C0721A')}
+    ${tk('list', 'Órdenes', String(T.n), `${anuladas} anulada${anuladas === 1 ? '' : 's'} en el periodo`, TA ? dashDelta(dashPct(T.n, TA.n), ref, true) : '', dashSpark(serie.map(s => s.n), '#7C5CBF'), '#7C5CBF')}
+  </div>`;
+  const kpis2 = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:14px;">
+    ${tk('file', 'Margen medio', tdPct(T.margen), 'beneficio ÷ facturación', TA ? tdDeltaPP(T.margen, TA.margen) : '', '', '#3F8F5F')}
+    ${tk('tag', 'Beneficio por orden', T.nCompl ? dashEur(T.benef / T.nCompl) : '—', 'media de las órdenes con coste y venta', TA ? dashDelta(dashPct(T.nCompl ? T.benef / T.nCompl : 0, TA.nCompl ? TA.benef / TA.nCompl : 0), ref) : '', '', '#2F7F86')}
+    ${tk('tag', 'Venta por orden', T.nVenta ? dashEur(T.venta / T.nVenta) : '—', 'lo que cobramos de media', TA ? dashDelta(dashPct(T.nVenta ? T.venta / T.nVenta : 0, TA.nVenta ? TA.venta / TA.nVenta : 0), ref, true) : '', '', '#1B3A6B')}
+    ${tk('truck', 'Transportistas', String(new Set(os.map(tdTranspKey).filter(Boolean)).size), `${new Set(os.map(o => o.clienteId).filter(Boolean)).size} cliente${new Set(os.map(o => o.clienteId).filter(Boolean)).size === 1 ? '' : 's'} servido${new Set(os.map(o => o.clienteId).filter(Boolean)).size === 1 ? '' : 's'}`, '', '', '#8A94A0')}
+  </div>`;
+
+  // ---- Evolución
+  const tipoTxt = serie.length ? { dia: 'por día', semana: 'por semana', mes: 'por mes' }[serie[0].tipo] : '';
+  const cardEvol = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('tag', 'Coste y beneficio', 'Lo que se ha vendido ' + tipoTxt + ': la altura es la venta, repartida en coste y beneficio')}
+      <div class="deca-card-body">${serie.length && T.nCompl ? tdBarrasSvg(serie) : '<div class="dash-vacio">No hay órdenes vendidas con precio de venta y de coste en este periodo.</div>'}
+        <div class="dash-leyenda"><span><i style="background:${DASH_COLORES.mov}"></i>Coste</span><span><i style="background:#3F8F5F"></i>Beneficio</span><span><i style="background:#C1443D"></i>Pérdida (se vendió por debajo del coste)</span></div>
+      </div>
+    </div>`;
+
+  // ---- Clientes
+  const porCli = tdAgrupar(os, o => o.clienteId, o => ocClienteNombre(o) || 'Sin nombre').filter(g => g.t.nVenta).sort((a, b) => b.t.venta - a.t.venta);
+  const maxCli = Math.max(1, ...porCli.map(g => g.t.ventaCompl));
+  const cardCli = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('home', 'Por cliente', 'Quién genera más venta y con qué margen. Pulsa uno para filtrarlo')}
+      <div class="deca-card-body">${porCli.length ? porCli.slice(0, 10).map((g, i) => tdFilaRank(i + 1, g.nombre, dashEur(g.t.venta), g.t.margen == null ? 'sin coste' : tdPct(g.t.margen), tdBarraMargen(g.t, maxCli), `tdFiltro('cliente','${g.k}')`, `${g.t.n} órdenes · beneficio ${dashEur(g.t.benef)}`)).join('') + (porCli.length > 10 ? `<div class="dash-nota">y ${porCli.length - 10} clientes más</div>` : '') : '<div class="dash-vacio">Sin ventas en este periodo.</div>'}</div>
+    </div>`;
+
+  // ---- Transportistas
+  const porTr = tdAgrupar(os, tdTranspKey, o => o.transportistaNombre || 'Sin nombre').sort((a, b) => b.t.n - a.t.n);
+  const maxTr = Math.max(1, ...porTr.map(g => g.t.ventaCompl));
+  const cardTr = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('truck', 'Por transportista', 'A quién se contrata más y cuánto se gana con cada uno')}
+      <div class="deca-card-body">${porTr.length ? porTr.slice(0, 10).map((g, i) => tdFilaRank(i + 1, g.nombre, `${g.t.n} orden${g.t.n === 1 ? '' : 'es'}`, g.t.margen == null ? 'sin venta' : tdPct(g.t.margen), tdBarraMargen(g.t, maxTr), `tdFiltro('transp', decodeURIComponent('${encodeURIComponent(g.k)}'))`, `Coste ${dashEur(g.t.coste)} · beneficio ${dashEur(g.t.benef)}`)).join('') + (porTr.length > 10 ? `<div class="dash-nota">y ${porTr.length - 10} transportistas más</div>` : '') : '<div class="dash-vacio">Sin órdenes en este periodo.</div>'}</div>
+    </div>`;
+
+  // ---- Servicios (anillo) y rutas
+  const porSv = tdAgrupar(os, o => o.servicio || 'Sin servicio', o => o.servicio || 'Sin servicio').filter(g => g.t.venta > 0).sort((a, b) => b.t.venta - a.t.venta);
+  const partesSv = porSv.map((g, i) => ({ t: g.nombre, v: g.t.venta, color: TD_COLORES[i % TD_COLORES.length], g }));
+  const cardSv = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('list', 'Por servicio', 'De qué tipo de servicio viene la venta')}
+      <div class="deca-card-body">${T.venta > 0 ? `<div class="dash-donut">${dashDonutSvg(partesSv, T.venta)}<div class="dash-donut-l">${partesSv.map(p => `<div><i style="background:${p.color}"></i><span>${esc(p.t)}</span><b>${dashEur(p.v)}</b><em>${p.g.t.margen == null ? '—' : tdPct(p.g.t.margen)}</em></div>`).join('')}</div></div><div class="dash-nota">A la derecha, el margen de cada servicio.</div>` : '<div class="dash-vacio">Sin ventas en este periodo.</div>'}</div>
+    </div>`;
+  const porRu = tdAgrupar(os, tdRutaDe, tdRutaDe).sort((a, b) => b.t.n - a.t.n);
+  const maxRu = Math.max(1, ...porRu.map(g => g.t.ventaCompl));
+  const cardRu = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('pin', 'Rutas más repetidas', 'País de la primera carga → país de la última descarga')}
+      <div class="deca-card-body">${porRu.length ? porRu.slice(0, 8).map((g, i) => tdFilaRank(i + 1, g.nombre, `${g.t.n} orden${g.t.n === 1 ? '' : 'es'}`, g.t.margen == null ? 'sin coste' : tdPct(g.t.margen), tdBarraMargen(g.t, maxRu), '', `Venta ${dashEur(g.t.venta)} · beneficio ${dashEur(g.t.benef)}`)).join('') : '<div class="dash-vacio">Las órdenes de este periodo no tienen país de carga y descarga.</div>'}</div>
+    </div>`;
+
+  // ---- Para revisar
+  const completas = os.filter(o => o.precioCliente > 0 && o.precio != null).map(o => ({ o, m: ocMargenPct(o), b: o.precioCliente - o.precio })).sort((a, b) => a.m - b.m);
+  const bajas = completas.filter(x => x.m < TD_MARGEN_BAJO).slice(0, 6);
+  const aviso = (cls, txt) => `<div class="dash-alerta ${cls}">${txt}</div>`;
+  const cardRev = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('clock', 'Para revisar', 'Órdenes que conviene mirar')}
+      <div class="deca-card-body">
+        ${T.sinVenta ? aviso('warn', `<b>${T.sinVenta}</b> orden${T.sinVenta === 1 ? '' : 'es'} <b>sin precio de venta</b>: no cuentan en la facturación.`) : ''}
+        ${T.sinCoste ? aviso('warn', `<b>${T.sinCoste}</b> orden${T.sinCoste === 1 ? '' : 'es'} <b>sin precio de coste</b>: no entran en el beneficio.`) : ''}
+        ${bajas.length ? `<div style="font-size:12px;color:var(--muted);margin:10px 0 6px;">Margen por debajo del ${TD_MARGEN_BAJO} %</div>` + bajas.map(x => `<div class="dash-cli" onclick="openOcForm('${x.o.id}')" title="Abrir la orden"><span class="dash-rank" style="width:auto;padding:0 7px;">${esc(ocRef(x.o))}</span><div class="dash-cli-c"><div class="dash-cli-n"><b>${esc(ocClienteNombre(x.o) || x.o.transportistaNombre || '—')}</b><span style="color:${x.b < 0 ? 'var(--danger)' : 'inherit'};">${tdPct(x.m)}<small>${dashEur(x.b)}</small></span></div></div></div>`).join('') : (T.nCompl ? `<div class="dash-ok">Ninguna orden con margen por debajo del ${TD_MARGEN_BAJO} %.</div>` : '')}
+        ${!T.sinVenta && !T.sinCoste && !bajas.length && !T.nCompl ? '<div class="dash-vacio">Sin órdenes en este periodo.</div>' : ''}
+      </div>
+    </div>`;
+
+  // ---- Detalle
+  const MAX_FILAS = 300;
+  const filas = os.slice().sort((a, b) => tdFechaDe(b).localeCompare(tdFechaDe(a)) || b.numero - a.numero);
+  const cardTabla = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('file', 'Detalle de órdenes', `${os.length} orden${os.length === 1 ? '' : 'es'} del periodo; pulsa una para abrirla`)}
+      <div class="deca-card-body" style="padding:0;">
+        <div style="overflow-x:auto;"><table><thead><tr>${thSort('Orden', 'text')}${thSort('Fecha', 'date')}${thSort('Cliente', 'text')}${thSort('Transportista', 'text')}${thSort('Servicio', 'text')}${thSort('Venta', 'number')}${thSort('Coste', 'number')}${thSort('Beneficio', 'number')}${thSort('Margen', 'number')}</tr></thead><tbody>
+          ${filas.slice(0, MAX_FILAS).map(o => { const m = ocMargenPct(o), b = o.precioCliente != null && o.precio != null ? o.precioCliente - o.precio : null; return `
+            <tr style="cursor:pointer;" onclick="openOcForm('${o.id}')">
+              <td style="font-family:var(--mono);font-size:12.5px;" data-sort-value="${o.numero}">${esc(ocRef(o))}</td>
+              <td data-sort-value="${esc(tdFechaDe(o))}">${fmtDateDMY(tdFechaDe(o))}</td>
+              <td>${esc(ocClienteNombre(o) || '—')}</td>
+              <td style="color:var(--muted);">${esc(o.transportistaNombre || '—')}</td>
+              <td style="color:var(--muted);">${esc(o.servicio || '—')}</td>
+              <td data-sort-value="${o.precioCliente ?? ''}">${o.precioCliente != null ? eur2(o.precioCliente) : '—'}</td>
+              <td data-sort-value="${o.precio ?? ''}" style="color:var(--muted);">${o.precio != null ? eur2(o.precio) : '—'}</td>
+              <td data-sort-value="${b ?? ''}" style="font-weight:700;color:${b == null ? 'inherit' : b < 0 ? 'var(--danger)' : '#2D7048'};">${b != null ? eur2(b) : '—'}</td>
+              <td data-sort-value="${m ?? ''}" style="color:${m != null && m < TD_MARGEN_BAJO ? 'var(--danger)' : 'var(--muted)'};">${m != null ? tdPct(m) : '—'}</td>
+            </tr>`; }).join('') || `<tr><td colspan="9" style="color:var(--mutedFaint);text-align:center;padding:24px;">Sin órdenes en este periodo con estos filtros.</td></tr>`}
+        </tbody></table></div>
+        ${filas.length > MAX_FILAS ? `<div class="dash-nota" style="padding:10px 16px;">Se enseñan las ${MAX_FILAS} más recientes de ${filas.length}; afina el periodo o los filtros para ver el resto.</div>` : ''}
+      </div>
+    </div>`;
+
+  return banner + barra + kpis + kpis2 + `
+    <div class="dash-grid">
+      <div class="dash-main">${cardEvol}${cardTabla}</div>
+      <div class="dash-side">${cardRev}${cardCli}${cardTr}${cardSv}${cardRu}</div>
+    </div>`;
+}
+
 /* ============================= TRÁFICO · MAPA DE PUNTOS =============================
    Estaciones AS24 (convenio), parkings vigilados y lavaderos de camión de toda Europa, con sus precios (cada cambio queda en el
    histórico) y sus notas. El mapa es Leaflet con mapas libres de OpenStreetMap (callejero) y Esri (satélite); las direcciones se
@@ -16603,6 +16908,7 @@ const TRAFICO_SECTIONS = [
   { id: 'deca', label: 'DeCA', desc: 'Documento electrónico de control administrativo del transporte.' },
   { id: 'direcciones', label: 'Direcciones', desc: 'Agenda de naves, muelles y direcciones de carga y descarga.' },
   { id: 'mapa', label: 'Mapa', desc: 'Estaciones AS24, parkings vigilados y lavaderos de camión de toda Europa, con sus precios y notas.' },
+  { id: 'dashboard', label: 'Dashboard', desc: 'Ventas, beneficio y estadísticas de las órdenes de carga, y el rendimiento de los autónomos. Muestra márgenes y costes: se da aparte; no va con el resto.' },
   { id: 'configuracion', label: 'Configuración', desc: 'Datos generales de Transporte: cargador contractual, facturación y condiciones de las órdenes de carga. Se da aparte; no va con el resto.' },
 ];
 // El apartado abierto, siempre uno que la persona tenga permitido (si no, el primero que sí).
@@ -16678,6 +16984,7 @@ function tplTrafico(){
   if (sec === 'direcciones') return window.__administracionView === 'direccionForm' ? tplDireccionFormPage() : tplDireccionesPage();
   if (sec === 'colaboradores') return window.__colabView === 'rutaForm' ? tplColabRutaFormPage() : tplColaboradoresPage();
   if (sec === 'mapa') return tplMapaPage();
+  if (sec === 'dashboard') return tplTraficoDashboard();
   if (sec === 'ordenes') return window.__ocView === 'form' ? tplOcFormPage() : tplOrdenesCargaPage();
   if (sec === 'configuracion') return tplTraficoConfigPage();
   return tplTransportistasPage();
@@ -27608,8 +27915,8 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
     else if (last.tab === 'trafico') traficoEnterSection(traficoSection());
     if (moduleAllowedSections('comercial').some(s=>s.id===last.comercialSection)) window.__comercialSection = last.comercialSection;
     if (last.administracionView) window.__administracionView = last.administracionView;
-    if (['home','empresas','lista','detalle','dashboard','fichajes','liquidaciones'].includes(last.autonomosView)) {
-      window.__autonomosView = ['home', 'empresas'].includes(last.autonomosView) ? autonomosVistaInicial() : last.autonomosView;   // Empresas y la portada ya no existen
+    if (['home','empresas','dashboard','lista','detalle','fichajes','liquidaciones'].includes(last.autonomosView)) {
+      window.__autonomosView = ['home', 'empresas', 'dashboard'].includes(last.autonomosView) ? autonomosVistaInicial() : last.autonomosView;   // Empresas y la portada ya no existen
       if (last.autonomosDriverId && drivers.some(d=>d.id===last.autonomosDriverId)) window.__autonomosDriverId = last.autonomosDriverId;
       if (last.driversCompanyFilter && companies.some(c=>c.id===last.driversCompanyFilter)) window.__driversCompanyFilter = last.driversCompanyFilter;
     }
