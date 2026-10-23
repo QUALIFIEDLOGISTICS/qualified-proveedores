@@ -336,6 +336,16 @@
   .perm-item.off .perm-item-n{color:var(--muted);}
   .perm-item-n{font-size:13.5px;font-weight:700;color:var(--text);line-height:1.3;}
   .perm-item-d{font-size:12px;color:var(--mutedFaint);line-height:1.4;margin-top:2px;}
+  /* Permisos: módulo con apartados, en una fila plegable */
+  .pm{border:1.5px solid var(--border);border-radius:12px;background:var(--panel);margin-top:10px;overflow:hidden;} .pm:first-child{margin-top:0;}
+  .pm.on{border-color:color-mix(in srgb,var(--primary) 32%,var(--border));background:color-mix(in srgb,var(--primary) 4%,var(--panel));} .pm.off{border-style:dashed;background:transparent;}
+  .pm-h{display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer;user-select:none;} .pm-h:hover{background:color-mix(in srgb,var(--primary) 5%,transparent);}
+  .pm-chev{display:inline-flex;transition:transform .15s;color:var(--muted);flex:0 0 auto;} .pm.open .pm-chev{transform:rotate(90deg);}
+  .pm-t{min-width:150px;flex:0 0 auto;max-width:260px;} .pm-t b{display:block;font-size:14px;} .pm-t small{display:block;font-size:12px;color:var(--mutedFaint);line-height:1.35;margin-top:1px;}
+  .pm-chips{display:flex;gap:6px;flex-wrap:wrap;flex:1;min-width:0;} .pm-c{font-size:11.5px;font-weight:600;padding:2px 9px;border-radius:99px;background:color-mix(in srgb,var(--primary) 10%,var(--panel));color:var(--primary);white-space:nowrap;} .pm-c.mas{background:var(--panel2);color:var(--muted);} .pm-c.no{background:transparent;color:var(--mutedFaint);padding-left:0;font-weight:500;}
+  .pm-n{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;} .pm-sw{display:inline-flex;margin:0;}
+  .pm-b{display:none;padding:2px 14px 14px;border-top:1px solid var(--border);} .pm.open .pm-b{display:block;padding-top:12px;}
+  @media(max-width:700px){.pm-chips{display:none;} .pm-t{flex:1;}}
   .perm-ck{width:22px;height:22px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
   .perm-no{color:var(--mutedFaint);font-weight:700;flex-shrink:0;}
   .wcl-list{display:flex;flex-direction:column;gap:6px;max-height:46vh;overflow-y:auto;overflow-x:hidden;padding:2px;}
@@ -27866,6 +27876,45 @@ function permViewRowHtml(label, desc, on){
       ${on ? `<span class="perm-ck">${homeIcon(HOME_ICON_PATHS.check, 12, '#fff', 3)}</span>` : `<span class="perm-no">—</span>`}
     </div>`;
 }
+// Cada módulo con apartados (Transporte, Autónomos, Comercial…) sale como UNA fila plegable: se ve de un vistazo a qué apartados
+// tiene acceso y, si hace falta afinar, se despliega. Su interruptor da o quita todos los apartados de golpe.
+function permCorto(l){ const i = String(l).indexOf(' · '); return i > 0 ? String(l).slice(i + 3) : l; }
+function permToggleModulo(id){
+  const o = (window.__permOpen = window.__permOpen || {});
+  o[id] = !o[id];
+  const el = document.querySelector(`.pm[data-m="${id}"]`); if (el) el.classList.toggle('open', !!o[id]);
+}
+function permModuloHtml(t, sec, s, edit){
+  const open = !!(window.__permOpen || {})[t.id];
+  const items = sec.map(x => ({ x, on: sectionAllowedFor(s, t.id, x.id) }));
+  const activos = items.filter(i => i.on), nOn = activos.length;
+  const chips = activos.length ? activos.slice(0, 3).map(i => `<span class="pm-c">${esc(permCorto(i.x.label))}</span>`).join('') + (activos.length > 3 ? `<span class="pm-c mas">+${activos.length - 3}</span>` : '') : '<span class="pm-c no">Sin acceso</span>';
+  const fila = ({ x, on }) => edit ? `
+          <label class="perm-item ${on ? 'on' : 'off'}" style="cursor:${s.isAdmin ? 'default' : 'pointer'};">
+            <div style="min-width:0;"><div class="perm-item-n">${esc(x.label)}</div>${x.desc ? `<div class="perm-item-d">${esc(x.desc)}</div>` : ''}</div>
+            <input type="checkbox" class="switch" ${on ? 'checked' : ''} ${s.isAdmin ? 'disabled' : ''} onchange="adminDraftSection('${t.id}','${x.id}', this.checked)" />
+          </label>` : permViewRowHtml(x.label, x.desc || '', on);
+  return `
+    <div class="pm ${open ? 'open' : ''} ${nOn ? 'on' : 'off'}" data-m="${t.id}">
+      <div class="pm-h" onclick="permToggleModulo('${t.id}')">
+        <span class="pm-chev">${homeIcon(HOME_ICON_PATHS.arrow, 15, 'currentColor', 2.4)}</span>
+        <div class="pm-t"><b>${esc(permLabel(t))}</b><small>${esc(permDesc(t))}</small></div>
+        <div class="pm-chips">${chips}</div>
+        <span class="pm-n">${nOn} de ${items.length}</span>
+        ${edit ? `<label class="pm-sw" onclick="event.stopPropagation()" title="${nOn ? 'Quitar todos los apartados' : 'Dar todos los apartados'}"><input type="checkbox" class="switch" ${nOn ? 'checked' : ''} ${s.isAdmin ? 'disabled' : ''} onchange="adminDraftTab('${t.id}', this.checked)" /></label>` : (nOn ? `<span class="perm-ck">${homeIcon(HOME_ICON_PATHS.check, 12, '#fff', 3)}</span>` : '<span class="perm-no">—</span>')}
+      </div>
+      <div class="pm-b"><div class="perm-grid">${items.map(fila).join('')}</div></div>
+    </div>`;
+}
+function permGroupBodyHtml(g, s, edit){
+  const simples = g.items.filter(t => !moduleSectionList(t.id)), compuestos = g.items.filter(t => moduleSectionList(t.id));
+  const fila = t => edit ? `
+          <label class="perm-item ${permHasTab(s, t.id) ? 'on' : 'off'}" style="cursor:${s.isAdmin ? 'default' : 'pointer'};">
+            <div style="min-width:0;"><div class="perm-item-n">${esc(permLabel(t))}</div>${permDesc(t) ? `<div class="perm-item-d">${esc(permDesc(t))}</div>` : ''}</div>
+            <input type="checkbox" class="switch" ${permHasTab(s, t.id) ? 'checked' : ''} ${s.isAdmin ? 'disabled' : ''} onchange="adminDraftTab('${t.id}', this.checked)" />
+          </label>` : permViewRowHtml(permLabel(t), permDesc(t), permHasTab(s, t.id));
+  return (simples.length ? `<div class="perm-grid">${simples.map(fila).join('')}</div>` : '') + compuestos.map(t => permModuloHtml(t, moduleSectionList(t.id), s, edit)).join('');
+}
 function permGroupRowsHtml(g, s, rowFn){
   return g.items.map(t => {
     const sections = moduleSectionList(t.id);
@@ -27900,7 +27949,7 @@ function tplAdminViewCard(p){
       ${permModuleGroups().map(g => { const c = permGroupCount(g, s); return `
       <div class="card deca-card" style="--dc-accent:var(--primary);">
         ${decaCardHead(permGroupIcon(g), g.name, `${c.on} de ${c.total} con acceso`)}
-        <div class="deca-card-body"><div class="perm-grid">${permGroupRowsHtml(g, s, (label, desc, on) => permViewRowHtml(label, desc, on))}</div></div>
+        <div class="deca-card-body">${permGroupBodyHtml(g, s, false)}</div>
       </div>`; }).join('')}
     </div>`;
 }
@@ -27937,14 +27986,7 @@ function tplAdminEditForm(p){
       ${permModuleGroups().map(g => { const c = permGroupCount(g, d); return `
       <div class="card deca-card">
         ${decaCardHead(permGroupIcon(g), g.name, `${c.on} de ${c.total} con acceso`)}
-        <div class="deca-card-body"><div class="perm-grid">${permGroupRowsHtml(g, d, (label, desc, checked, mod, sec) => `
-          <label class="perm-item ${checked ? 'on' : 'off'}" style="cursor:${d.isAdmin ? 'default' : 'pointer'};">
-            <div style="min-width:0;">
-              <div class="perm-item-n">${esc(label)}</div>
-              ${desc ? `<div class="perm-item-d">${esc(desc)}</div>` : ''}
-            </div>
-            <input type="checkbox" class="switch" ${checked?'checked':''} ${d.isAdmin?'disabled':''} onchange="${sec ? `adminDraftSection('${mod}','${sec}', this.checked)` : `adminDraftTab('${mod}', this.checked)`}" />
-          </label>`)}</div></div>
+        <div class="deca-card-body">${permGroupBodyHtml(g, d, true)}</div>
       </div>`; }).join('')}
     </div>
     <div class="deca-actions">
