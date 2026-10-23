@@ -14947,12 +14947,22 @@ function tdAgrupar(os, claveFn, nombreFn){
   });
   return [...m.values()].map(g => ({ ...g, t: tdTotales(g.os) }));
 }
-function tdRutaDe(o){
-  const a = o.cargas && o.cargas[0], b = o.descargas && o.descargas[o.descargas.length - 1];
-  if (!a || !b || !a.pais || !b.pais) return '';
-  const cod = p => CONTACTO_PAIS_CODIGOS[String(p).trim()] || String(p).trim();
-  return `${cod(a.pais)} → ${cod(b.pais)}`;
+// Región de un punto de carga o descarga: país + las dos primeras cifras del código postal (ES08 = Barcelona, FR69 = Ródano…). Sin código postal, solo el país
+function tdRegionDe(p){
+  if (!p || !p.pais) return '';
+  const iso = CONTACTO_PAIS_CODIGOS[String(p.pais).trim()] || String(p.pais).trim();
+  const num = String(p.cp || '').replace(/\D/g, '');
+  return num.length >= 2 ? iso + num.slice(0, 2) : iso;
 }
+// Qué se agrupa en la tarjeta de regiones: la ruta (carga → descarga), solo dónde se carga o solo dónde se descarga
+function tdRutaDe(o){
+  const vista = tdS().regVista || 'ruta';
+  const a = tdRegionDe(o.cargas && o.cargas[0]), b = tdRegionDe(o.descargas && o.descargas[o.descargas.length - 1]);
+  if (vista === 'carga') return a;
+  if (vista === 'descarga') return b;
+  return a && b ? `${a} → ${b}` : '';
+}
+function tdRegVista(v){ tdS().regVista = v; renderTab(); }
 function tdFilaRank(i, nombre, importe, sub, barraHtml, onclick, title){
   return `<div class="dash-cli" ${onclick ? `onclick="${onclick}"` : 'style="cursor:default;"'} ${title ? `title="${esc(title)}"` : ''}>
     <span class="dash-rank">${i}</span>
@@ -15061,12 +15071,16 @@ function tplTraficoDashboard(){
       ${decaCardHead('list', 'Por servicio', 'De qué tipo de servicio viene la venta')}
       <div class="deca-card-body">${T.venta > 0 ? `<div class="dash-donut">${dashDonutSvg(partesSv, T.venta)}<div class="dash-donut-l">${partesSv.map(p => `<div><i style="background:${p.color}"></i><span>${esc(p.t)}</span><b>${dashEur(p.v)}</b><em>${p.g.t.margen == null ? '—' : tdPct(p.g.t.margen)}</em></div>`).join('')}</div></div><div class="dash-nota">A la derecha, el margen de cada servicio.</div>` : '<div class="dash-vacio">Sin ventas en este periodo.</div>'}</div>
     </div>`;
-  const porRu = tdAgrupar(os, tdRutaDe, tdRutaDe).sort((a, b) => b.t.n - a.t.n);
+  const porRu = tdAgrupar(os, tdRutaDe, tdRutaDe).sort((a, b) => b.t.n - a.t.n || b.t.venta - a.t.venta);
   const maxRu = Math.max(1, ...porRu.map(g => g.t.ventaCompl));
+  const regV = tdS().regVista || 'ruta';
+  const regSub = { ruta: 'Región de carga → región de descarga', carga: 'Dónde se carga más', descarga: 'Dónde se descarga más' }[regV];
+  const regSeg = `<div class="doc-seg">${[['ruta', 'Rutas'], ['carga', 'Cargas'], ['descarga', 'Descargas']].map(([v, t]) => `<button type="button" class="${regV === v ? 'on' : ''}" onclick="tdRegVista('${v}')">${t}</button>`).join('')}</div>`;
   const cardRu = `
     <div class="card deca-card dash-card">
-      ${decaCardHead('pin', 'Rutas más repetidas', 'País de la primera carga → país de la última descarga')}
-      <div class="deca-card-body">${porRu.length ? porRu.slice(0, 8).map((g, i) => tdFilaRank(i + 1, g.nombre, `${g.t.n} orden${g.t.n === 1 ? '' : 'es'}`, g.t.margen == null ? 'sin coste' : tdPct(g.t.margen), tdBarraMargen(g.t, maxRu), '', `Venta ${dashEur(g.t.venta)} · beneficio ${dashEur(g.t.benef)}`)).join('') : '<div class="dash-vacio">Las órdenes de este periodo no tienen país de carga y descarga.</div>'}</div>
+      ${decaCardHead('pin', 'Regiones', regSub, regSeg)}
+      <div class="deca-card-body">${porRu.length ? porRu.slice(0, 8).map((g, i) => tdFilaRank(i + 1, g.nombre, `${g.t.n} orden${g.t.n === 1 ? '' : 'es'}`, g.t.margen == null ? 'sin coste' : tdPct(g.t.margen), tdBarraMargen(g.t, maxRu), '', `Venta ${dashEur(g.t.venta)} · beneficio ${dashEur(g.t.benef)}`)).join('') + (porRu.length > 8 ? `<div class="dash-nota">y ${porRu.length - 8} más</div>` : '') : '<div class="dash-vacio">Las órdenes de este periodo no tienen país de carga y descarga.</div>'}
+        <div class="dash-nota">Región = país + las dos primeras cifras del código postal (ES08 = Barcelona).</div></div>
     </div>`;
 
   // ---- Detalle
