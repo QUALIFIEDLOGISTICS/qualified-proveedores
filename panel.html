@@ -14530,7 +14530,7 @@ function tplAutonomosSeg(){
   const act = v === 'fichajes' ? 'fichajes' : v === 'liquidaciones' ? 'liquidaciones' : 'lista';
   const items = [];
   if (autonomosPuede('fichajes')) items.push(['fichajes', 'Fichajes y seguimiento', 'openFichajesGrid()']);
-  if (autonomosPuede('liquidaciones')) items.push(['liquidaciones', 'Liquidaciones', "window.__autonomosView='liquidaciones'; renderTab()"]);
+  if (autonomosPuede('liquidaciones')) items.push(['liquidaciones', 'Liquidaciones', "window.__autonomosView='liquidaciones'; window.__liqManual=false; window.__liqAuto=false; renderTab()"]);
   if (autonomosPuede('conductores')) items.push(['lista', 'Conductores', 'openDriversList()']);
   if (items.length < 2) return '';
   return `<div class="doc-seg">${tabsOrdenar('autonomos', items.map(([id, l, fn]) => ({ id, l, fn }))).map(({ id, l, fn }) => tabsMov('autonomos', id, `<button type="button" class="${act === id ? 'on' : ''}" onclick="${fn}">${l}</button>`)).join('')}</div>`;
@@ -24901,7 +24901,8 @@ function fxCeldaHtml(d, f, e, r, c, hoy){
   const o = fxOrigenTxt(e);
   return `<td class="fx-td${finde ? ' fin' : ''}"><div class="fx-c fx-ro ${estado}" ${dat} title="${esc(fxFechaLarga(f))}">
       <b>${esc(e.timeIn)}${e.timeOut ? '–' + esc(e.timeOut) : ' · abierta'}</b>
-      <span>${h != null ? fmtHoursMin(h) : '—'}${e.km != null ? ' · ' + String(e.km).replace('.', ',') + ' km' : ''}</span>
+      <span>${h != null ? fmtHoursMin(h) : 'en curso'}</span>
+      ${e.km != null ? `<span>${String(e.km).replace('.', ',')} km</span>` : ''}
       <em>${e.autoClosed ? '<i class="fx-w">Cerrada sola</i>' : ''}${o ? `<i class="fx-o ${e.origen}">${o}</i>` : ''}${ajuste ? '<i class="fx-aj" title="Este día tiene un ajuste de cálculo">Ajuste</i>' : ''}${inc ? `<i class="fx-i">⚠ ${inc}</i>` : ''}</em></div></td>`;
 }
 /* ---- Resumen de la semana de cada conductor en la parrilla: medidor, ritmo, extra e incidencias ---- */
@@ -25338,8 +25339,29 @@ function driverLiqEstadoHtml(d, year, month){
   const est = liqEstadoDe(d.id, year, Number(month));
   return `<div class="card" style="margin-bottom:18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;"><span style="font-size:12.5px;color:var(--muted);font-weight:600;">Estado de la liquidación de ${MONTH_NAMES[Number(month)]} ${year}</span>${liqEstadoSelect(d.id, year, Number(month), est)}</div>`;
 }
+// El mes que se abre solo: el primero (el más antiguo) con fichajes o facturación que aún no tenga todas sus liquidaciones pagadas.
+// Cuando todo lo anterior está pagado, avanza al siguiente; si ya está todo pagado, se queda en el último mes con datos.
+function liqMesPendiente(){
+  const meses = new Map();   // 'aaaa-mm' → conductores con datos ese mes
+  const anota = (id, y, m) => { const k = `${y}-${String(m + 1).padStart(2, '0')}`; if (!meses.has(k)) meses.set(k, new Set()); meses.get(k).add(id); };
+  dailyEntries.forEach(f => { if (f.status === 'cerrada' && f.date) anota(f.driverId, Number(f.date.slice(0, 4)), Number(f.date.slice(5, 7)) - 1); });
+  weeklyEntries.forEach(e => anota(e.driverId, e.year, weekMonth(e.year, e.week)));
+  monthlyBillingEntries.forEach(e => anota(e.driverId, e.year, e.month));
+  const hoyMes = today().slice(0, 7);
+  const orden = [...meses.keys()].filter(k => k <= hoyMes).sort();
+  if (!orden.length) return null;
+  const sinPagar = k => { const [y, m] = k.split('-').map(Number); return [...meses.get(k)].some(id => liqEstadoDe(id, y, m - 1) !== 'pagada'); };
+  const k = orden.find(sinPagar) || orden[orden.length - 1];
+  const [y, m] = k.split('-').map(Number);
+  return { y, m: m - 1 };
+}
 function liqPeriodo(){
-  if (window.__liqAnio === undefined) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); window.__liqAnio = d.getFullYear(); window.__liqMes = d.getMonth(); }   // por defecto, el mes que acaba de cerrar
+  if (!window.__liqManual && window.__liqEstadosOk && !window.__liqAuto) {
+    window.__liqAuto = true;
+    const p = liqMesPendiente();
+    if (p) { window.__liqAnio = p.y; window.__liqMes = p.m; }
+  }
+  if (window.__liqAnio === undefined) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); window.__liqAnio = d.getFullYear(); window.__liqMes = d.getMonth(); }   // sin datos, el mes que acaba de cerrar
   return { y: window.__liqAnio, m: window.__liqMes };
 }
 function liqPlazaMes(d, year, month){
@@ -25397,8 +25419,8 @@ function tplLiquidaciones(){
         <button type="button" class="fx-nb" onclick="liqMes(-1)" title="Mes anterior">‹</button>
         <div class="fx-nt"><b>${mes} ${y}</b><small>${filas.length} autónomo${filas.length === 1 ? '' : 's'} con datos</small></div>
         <button type="button" class="fx-nb" onclick="liqMes(1)" title="Mes siguiente">›</button>
-        <select style="width:auto;" onchange="window.__liqMes=Number(this.value); renderTab();">${MONTH_NAMES.map((n, i) => `<option value="${i}" ${i === m ? 'selected' : ''}>${n.charAt(0).toUpperCase() + n.slice(1)}</option>`).join('')}</select>
-        <select style="width:auto;" onchange="window.__liqAnio=Number(this.value); renderTab();">${anios.map(a => `<option value="${a}" ${a === y ? 'selected' : ''}>${a}</option>`).join('')}</select>
+        <select style="width:auto;" onchange="window.__liqManual=true; window.__liqMes=Number(this.value); renderTab();">${MONTH_NAMES.map((n, i) => `<option value="${i}" ${i === m ? 'selected' : ''}>${n.charAt(0).toUpperCase() + n.slice(1)}</option>`).join('')}</select>
+        <select style="width:auto;" onchange="window.__liqManual=true; window.__liqAnio=Number(this.value); renderTab();">${anios.map(a => `<option value="${a}" ${a === y ? 'selected' : ''}>${a}</option>`).join('')}</select>
       </div>
       <div class="fx-fil" style="margin-left:auto;">
         <div class="deca-search" style="width:200px;"><input id="liq-q" placeholder="Buscar conductor…" value="${esc(window.__liqQ || '')}" oninput="liqBuscar(this.value)" autocomplete="off" /><span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span></div>
@@ -25435,7 +25457,7 @@ function tplLiquidaciones(){
     <div class="fx-hint" style="margin-top:6px;">Plaza: ingresos = €/día + extras + suplementos + importes manuales; descuentos = gasoil + peajes + otros; la indexación va aparte. Piso móvil: ingresos = facturación del mes; descuentos = su comisión. Pulsa una fila para abrir su liquidación.</div>`;
   return { barra, cuerpo };
 }
-function liqMes(n){ let y = window.__liqAnio, m = window.__liqMes + n; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } window.__liqAnio = y; window.__liqMes = m; renderTab(); }
+function liqMes(n){ window.__liqManual = true; let y = window.__liqAnio, m = window.__liqMes + n; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } window.__liqAnio = y; window.__liqMes = m; renderTab(); }
 function liqBuscar(v){
   window.__liqQ = v;
   const el = document.getElementById('liq-q'), pos = el ? el.selectionStart : null;
