@@ -25119,9 +25119,9 @@ function fxIncSemanaHtml(dias, cond){
   if (!l.length) return '';
   return `<div class="fx-incs"><div class="fx-sec">Incidencias de la semana <small>${l.length}</small></div>${l.map(x => fxIncFilaHtml(x)).join('')}</div>`;
 }
-function fxIncFilaHtml(x){
+function fxIncFilaHtml(x, sinNombre){
   const d = drivers.find(y => y.id === x.driverId);
-  return `<div class="fx-ir${x.resuelta ? ' res' : ''}" onclick="fxAbrir('${x.driverId}','${x.date}')"><b>${esc(d ? d.name : '—')}</b><span class="fx-id">${fmtDate(x.date)}</span><span class="fx-it">${esc(INCIDENT_TYPE_LABELS[x.type] || x.type)}</span>${incMetaTxt(x) ? `<span class="fx-ie">${esc(incMetaTxt(x))}</span>` : ''}<span class="fx-in">${esc(x.note || '')}${incQuien(x) ? ` <small style="color:var(--mutedFaint);">· ${esc(incQuien(x))}</small>` : ''}</span><button type="button" class="crm-x2" title="${x.resuelta ? 'Volver a abrirla' : 'Marcar como resuelta'}" onclick="event.stopPropagation(); incResolver('${x.id}')">${x.resuelta ? '↺' : '✓'}</button><button type="button" class="crm-x2" title="Quitar la incidencia" onclick="event.stopPropagation(); fxIncBorrar('${x.id}')">✕</button></div>`;
+  return `<div class="fx-ir${x.resuelta ? ' res' : ''}" onclick="fxAbrir('${x.driverId}','${x.date}')">${sinNombre ? '' : `<b>${esc(d ? d.name : '—')}</b>`}<span class="fx-id">${fmtDate(x.date)}</span><span class="fx-it">${esc(INCIDENT_TYPE_LABELS[x.type] || x.type)}</span>${incMetaTxt(x) ? `<span class="fx-ie">${esc(incMetaTxt(x))}</span>` : ''}<span class="fx-in">${esc(x.note || '')}${incQuien(x) ? ` <small style="color:var(--mutedFaint);">· ${esc(incQuien(x))}</small>` : ''}</span><button type="button" class="crm-x2" title="${x.resuelta ? 'Volver a abrirla' : 'Marcar como resuelta'}" onclick="event.stopPropagation(); incResolver('${x.id}')">${x.resuelta ? '↺' : '✓'}</button><button type="button" class="crm-x2" title="Quitar la incidencia" onclick="event.stopPropagation(); fxIncBorrar('${x.id}')">✕</button></div>`;
 }
 
 /* ---- Seguimiento: dónde va cada conductor esta semana frente a sus máximos, para decidir ---- */
@@ -25183,15 +25183,15 @@ function tplIncAbiertas(){
   return `<div class="fx-incs"><div class="fx-sec">Incidencias abiertas <small>${l.length}</small></div>${l.slice(0, 40).map(x => fxIncFilaHtml(x)).join('')}</div>`;
 }
 // Incidencia suelta (aunque ese día no haya fichaje): se elige conductor y fecha
-function fxIncidenciaNueva(){
-  const cond = fxConductores();
-  const lunes = fxLunes(), hoy = today(), f0 = hoy >= lunes && hoy <= fxSuma(lunes, 6) ? hoy : lunes;
+function fxIncidenciaNueva(preDriverId){
+  const cond = fxConductores(); const pre = preDriverId ? drivers.find(x => x.id === preDriverId) : null; if (pre && !cond.some(c => c.id === pre.id)) cond.push(pre);
+  const lunes = fxLunes(), hoy = today(), f0 = preDriverId ? hoy : (hoy >= lunes && hoy <= fxSuma(lunes, 6) ? hoy : lunes);
   document.getElementById('modal-slot').innerHTML = `
     <div class="modal-overlay" onclick="if(event.target===this) closeModal()">
       <div class="modal-box fx-modal" style="max-width:520px;" onkeydown="if(event.key==='Escape') closeModal()">
         <div class="fx-mh"><div><small>Transporte · Autónomos</small><h3>Nueva incidencia</h3></div><button class="close-x" onclick="closeModal()">✕</button></div>
         <div class="fx-g" style="grid-template-columns:1.4fr 1fr;">
-          <div class="field"><label>Conductor</label><select id="fn-d" onchange="fxNuevaResumen()"><option value="">Elige conductor…</option>${cond.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select></div>
+          <div class="field"><label>Conductor</label><select id="fn-d" onchange="fxNuevaResumen()"><option value="">Elige conductor…</option>${cond.map(d => `<option value="${d.id}" ${d.id === preDriverId ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></div>
           <div class="field"><label>Fecha</label><input id="fn-f" type="date" value="${f0}" onchange="fxNuevaResumen()" /></div>
         </div>
         <div class="fx-inf" style="grid-template-columns:1fr 1fr 1fr;"><select id="fn-t"><option value="averia">Avería</option><option value="km_error">Km de más por error</option><option value="otro">Otro</option></select><input id="fn-h" type="number" step="0.1" min="0" placeholder="Horas de parada" title="Cuántas horas ha estado parado (solo aviso)" /><input id="fn-k" type="number" step="0.1" min="0" placeholder="Km afectados" title="Km afectados (solo aviso)" /></div>
@@ -25202,6 +25202,7 @@ function fxIncidenciaNueva(){
         <div class="fx-acc"><span style="flex:1"></span><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="button" class="btn btn-primary" onclick="fxIncidenciaNuevaGuardar()">Guardar incidencia</button></div>
       </div>
     </div>`;
+  if (preDriverId) fxNuevaResumen();
 }
 // En la ventana de nueva incidencia: lo que lleva esa semana el conductor elegido, para decidir con datos
 function fxNuevaResumen(){
@@ -26088,6 +26089,19 @@ function tplDriverDetail(){
   const hoyD = today(), mesHoy = new Date().getMonth(), anioHoy = new Date().getFullYear();
   const cerradasSolas = dailyEntries.filter(f => f.driverId === d.id && f.autoClosed && f.date.startsWith(String(year)));
   const incPeriodo = dailyIncidents.filter(x => x.driverId === d.id && x.date.startsWith(String(year)) && (month === 'todos' || Number(x.date.slice(5, 7)) - 1 === Number(month)));
+  // Incidencias que apunta el equipo de este conductor (solo avisos): en la misma pestaña que los fichajes y las anotaciones
+  const incLista = dailyIncidents.filter(x => x.driverId === d.id && x.date.startsWith(String(year)) && (month === 'todos' || Number(x.date.slice(5, 7)) - 1 === Number(month))
+    && (weekFilter === 'todas' || getISOWeek(x.date).week === Number(weekFilter))).sort((a, b) => b.date.localeCompare(a.date));
+  const incAbiertas = incLista.filter(x => !x.resuelta).length;
+  const sInc = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;margin-top:22px;flex-wrap:wrap;">
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Incidencias</div>
+      ${incLista.length ? `<span class="fx-ch ${incAbiertas ? 'in' : ''}"><b>${incAbiertas}</b>abierta${incAbiertas === 1 ? '' : 's'}</span><span class="fx-ch"><b>${incLista.length}</b>en el periodo</span>` : ''}
+      <div style="font-size:11.5px;color:var(--mutedFaint);">— avisos que apunta el equipo (avería, parada…). No afectan a ningún cálculo.</div>
+      <div style="flex:1;"></div>
+      ${autonomosPuede('fichajes') ? `<button class="btn btn-ghost" onclick="fxIncidenciaNueva('${d.id}')">+ Incidencia</button>` : ''}
+    </div>
+    <div class="fx-incs" style="margin-top:0;">${incLista.length ? incLista.map(x => fxIncFilaHtml(x, true)).join('') : `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:18px;font-size:13px;">Sin incidencias en este periodo.</div>`}</div>`;
   const avisos = [];
   if (!rateHistory.some(r => r.driverId === d.id && r.validFrom <= hoyD)) avisos.push(['mal', 'No tiene ninguna tarifa vigente. Las jornadas se calculan a 0 hasta que pongas una.', 'tarifas', 'Poner tarifa']);
   if (driverIndexed && year === anioHoy && !indexationEntries.some(x => x.driverId === d.id && x.year === anioHoy && x.month === mesHoy)) avisos.push(['aviso', `Falta la indexación de ${MONTH_NAMES[mesHoy]}.`, 'tarifas', 'Poner indexación']);
@@ -26104,7 +26118,7 @@ function tplDriverDetail(){
   const tab = window.__driverTab || 'resumen';
   const sFichSel = month === 'todos' ? `<div class="card" style="color:var(--muted);text-align:center;padding:26px;margin-bottom:18px;">Elige un mes arriba para ver los fichajes diarios de ese mes.</div>` : sFich;
   const cuerpo = tab === 'tarifas' ? sHist + sAnio + sIdx
-    : tab === 'fichajes' ? sFiltro + sFichSel + sNotas
+    : tab === 'fichajes' ? sFiltro + sFichSel + sInc + sNotas
     : tab === 'liquidacion' ? sFiltro + driverLiqEstadoHtml(d, year, month) + sLiq
     : sFiltro + sKpis + sAvisos;
   return sCab + driverTabsBar([['resumen', 'Resumen'], ['tarifas', 'Tarifas e indexación'], ['fichajes', 'Fichajes'], ['liquidacion', 'Liquidación']], tab) + cuerpo;
