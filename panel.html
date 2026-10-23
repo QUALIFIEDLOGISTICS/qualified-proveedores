@@ -86,9 +86,12 @@
   .modal-title{margin:0;font-family:var(--display);font-size:19px;letter-spacing:.3px;text-transform:uppercase;}
   .close-x{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;}
   /* Alta de conductor */
-  .dr-modal{max-width:680px;}
-  .dr-sec{display:flex;align-items:center;gap:11px;margin:20px 0 12px;padding-top:16px;border-top:1px solid var(--border);}
-  .dr-sec:first-of-type{margin-top:6px;padding-top:0;border-top:0;}
+  .dr-page{max-width:1000px;margin:0 auto;}
+  .dr-card{margin-bottom:16px;padding:22px 24px;}
+  .dr-sec{display:flex;align-items:center;gap:11px;margin:0 0 16px;}
+  .dr-th{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;font-size:12.5px;color:var(--muted);}
+  .dr-bar{position:sticky;bottom:0;z-index:5;display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 4px;background:var(--bg);border-top:1px solid var(--border);}
+  .dr-bar .dr-err{flex:1;margin:0;}
   .dr-sec div{display:flex;flex-direction:column;line-height:1.25;}
   .dr-sec b{font-size:14px;font-family:var(--display);text-transform:uppercase;letter-spacing:.3px;}
   .dr-sec small{font-size:12px;color:var(--muted);margin-top:1px;}
@@ -3820,6 +3823,10 @@ function computeBreadcrumbSegments(){
       const d = drivers.find(x=>x.id===window.__autonomosDriverId);
       const base = [{label:'Autónomos', onclick:'backToAutonomosHome()'}];
       return [...base, {label:'Conductores', onclick:'backToDriversList()'}, {label: d ? d.name : '…', onclick:null}];
+    }
+    if (window.__autonomosView === 'conductorForm') {
+      const d = window.__drEditId ? drivers.find(x=>x.id===window.__drEditId) : null;
+      return [{label:'Autónomos', onclick:'backToAutonomosHome()'}, {label:'Conductores', onclick:'backToDriversList()'}, ...(d ? [{label:d.name, onclick:'drVolver()'}] : []), {label: d ? 'Editar' : 'Nuevo conductor', onclick:null}];
     }
     if (window.__autonomosView === 'lista') {
       if (companyFilter) {
@@ -12649,8 +12656,9 @@ function tplUnscheduled(){
 ========================================================= */
 let companies = [];
 async function loadCompanies(){
-  const { data } = await supabaseClient.from('contactos').select('id,nombre,archived').eq('es_autonomos', true).order('nombre');
-  companies = (data||[]).map(c => ({ id: c.id, name: c.nombre, archived: !!c.archived }));
+  // Proveedores de transporte (y empresas de autónomos de antes): de ahí se elige la empresa de cada conductor
+  const { data } = await supabaseClient.from('contactos').select('id,nombre,nif,archived,es_transportista,es_autonomos').or('es_transportista.eq.true,es_autonomos.eq.true').order('nombre');
+  companies = (data||[]).map(c => ({ id: c.id, name: c.nombre, nif: c.nif || '', archived: !!c.archived, transportista: !!c.es_transportista, autonomos: !!c.es_autonomos }));
 }
 let drivers = [];
 async function loadDrivers(){
@@ -14374,7 +14382,7 @@ function openRateModal(driverId, editId){
           <input id="rt-indexation" type="checkbox" ${src.hasIndexation!==false?'checked':''} style="width:auto;" />
           Lleva indexación mensual
         </label>
-        <div class="field"><label>Observaciones (opcional)</label><textarea id="rt-note" placeholder="Notas sobre esta tarifa…">${esc(editing?editing.note:'')}</textarea></div>
+        <div class="field"><label>Pactos / observaciones (opcional)</label><textarea id="rt-note" placeholder="Pactos y notas sobre esta tarifa…">${esc(editing?editing.note:'')}</textarea></div>
         <div id="rt-error" style="color:var(--danger);font-size:12.5px;margin-bottom:6px;"></div>
         <div style="display:flex;gap:10px;">
           ${editing ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="deleteRate('${editing.id}')">Eliminar</button>` : ''}
@@ -14449,7 +14457,7 @@ function tplAutonomosBanner(act){
   const b = AUT_BANNER[act] || AUT_BANNER.lista;
   const acciones = act === 'fichajes' ? `<button class="btn btn-primary deca-new-btn" onclick="fxIncidenciaNueva()"><span>+ Incidencia</span></button>`
     : act === 'liquidaciones' ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="liqExportar()" title="Descarga la tabla en Excel (CSV)">Exportar</button><button class="btn btn-primary deca-new-btn" onclick="liqImprimir()" title="Imprimir la tabla o guardarla como PDF"><span>Imprimir / PDF</span></button>`
-    : act === 'lista' ? `${driversLayoutToggleHtml()}<button class="btn btn-primary deca-new-btn" onclick="openDriverModal()"><span>+ Nuevo conductor</span></button>` : '';
+    : act === 'lista' ? `${driversLayoutToggleHtml()}<button class="btn btn-primary deca-new-btn" onclick="openDriverForm()"><span>+ Nuevo conductor</span></button>` : '';
   return `<div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS[b.icon], 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 280px;"><div class="deca-banner-title">${b.t}</div><div class="deca-banner-sub">${b.s}</div></div>
@@ -14462,6 +14470,7 @@ function tplAutonomos(){
   if (!autonomosPuede(v0 === 'dashboard' ? 'resumen' : v0 === 'fichajes' ? 'fichajes' : v0 === 'liquidaciones' ? 'liquidaciones' : 'conductores')) window.__autonomosView = autonomosVistaInicial();
   const v = window.__autonomosView;
   if (v === 'detalle' && window.__autonomosDriverId) return tplDriverDetail();
+  if (v === 'conductorForm') return tplDriverForm();
   const act = v === 'dashboard' ? 'dashboard' : v === 'fichajes' ? 'fichajes' : v === 'liquidaciones' ? 'liquidaciones' : 'lista';
   const vista = v === 'liquidaciones' ? tplLiquidaciones() : v === 'fichajes' ? tplFichajesGrid() : v === 'dashboard' ? { barra: '', cuerpo: tplAutonomosDashboardBody() } : tplDriversManage();
   const seg = tplAutonomosSeg(), barra = seg + (vista.barra || '');
@@ -14759,7 +14768,7 @@ function tplAutonomosDashboardBody(){
   const costeKm = totalKm ? totalCoste/totalKm : null;
   const costeHora = totalHoras ? totalCoste/totalHoras : null;
 
-  const companyOptions = companies.filter(co=>!co.archived).sort((a,b)=>a.name.localeCompare(b.name,'es'));
+  const companyOptions = companies.filter(co=>!co.archived && drivers.some(d=>d.companyId===co.id)).sort((a,b)=>a.name.localeCompare(b.name,'es'));
   const driverOptions = drivers.filter(d=>!filterCompany || d.companyId===filterCompany).sort((a,b)=>a.name.localeCompare(b.name,'es'));
 
   return `
@@ -16628,7 +16637,7 @@ function traficoIr(id){
   setTraficoSection(id);
 }
 function traficoIsSubpage(){
-  if (currentTab === 'autonomos') return window.__autonomosView === 'detalle';
+  if (currentTab === 'autonomos') return window.__autonomosView === 'detalle' || window.__autonomosView === 'conductorForm';
   return (traficoSection() === 'deca' && window.__traficoView === 'decaForm')
     || (traficoSection() === 'direcciones' && window.__administracionView === 'direccionForm')
     || (traficoSection() === 'colaboradores' && window.__colabView === 'rutaForm')
@@ -24881,7 +24890,7 @@ function tplLiquidaciones(){
   const estOn = !window.__liqEstadosErr;
   const { y, m, filas, sin, t, cuentas, porPagar } = liqDatos(), mes = MONTH_NAMES[m].charAt(0).toUpperCase() + MONTH_NAMES[m].slice(1);
   const anios = [...new Set([y, new Date().getFullYear(), new Date().getFullYear() - 1, ...weeklyEntries.map(e => e.year), ...monthlyBillingEntries.map(e => e.year)])].sort();
-  const empresas = companies.filter(c => !c.archived).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  const empresas = companies.filter(c => !c.archived && drivers.some(d => d.companyId === c.id)).sort((a, b) => a.name.localeCompare(b.name, 'es'));
   const barra = `
       <div class="fx-nav">
         <button type="button" class="fx-nb" onclick="liqMes(-1)" title="Mes anterior">‹</button>
@@ -24996,7 +25005,7 @@ function openCompanyDrivers(companyId){
 function tplDriversManage(){
   const companyFilter = window.__driversCompanyFilter ? companies.find(c=>c.id===window.__driversCompanyFilter) : null;
   const statusFilter = window.__driversStatusFilter || 'activos';
-  const companyOptions = companies.filter(co=>!co.archived || co.id===window.__driversCompanyFilter).sort((a,b)=>a.name.localeCompare(b.name,'es'));
+  const companyOptions = companies.filter(co=>(!co.archived && drivers.some(d=>d.companyId===co.id)) || co.id===window.__driversCompanyFilter).sort((a,b)=>a.name.localeCompare(b.name,'es'));
 
   const barra = `
       <div class="deca-search" style="width:270px;">
@@ -25142,7 +25151,7 @@ function driversListaHtml(rows){
               <td style="color:var(--muted);">${rate?(rate.hasIndexation!==false?'Sí':'No'):'—'}</td>
               <td>${statusDot}</td>
               <td style="white-space:nowrap;">
-                <button onclick="event.stopPropagation(); openDriverModal('${d.id}');" title="Editar" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
+                <button onclick="event.stopPropagation(); openDriverForm('${d.id}');" title="Editar" style="background:none;border:none;color:var(--muted);padding:4px;border-radius:6px;display:inline-flex;align-items:center;">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
                 <button onclick="event.stopPropagation(); openDriverDetail('${d.id}');" title="Ver ficha" style="background:none;border:none;color:var(--muted);font-size:14px;padding:2px 4px;">👁</button>
                 ${d.archived ? `<button onclick="event.stopPropagation(); unarchiveDriver('${d.id}');" title="Restaurar" style="background:none;border:none;color:var(--primary);font-size:14px;padding:2px 4px;">↩</button>` : ''}
               </td>
@@ -25216,7 +25225,7 @@ function driverDetailActionsHtml(d){
       <span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${navIdx+1}/${nav.ids.length}</span>
       <button onclick="driverNavGoto(1)" title="Conductor siguiente" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13px;">→</button>
     </div>` : ''}
-    <button class="btn btn-ghost" onclick="openDriverModal('${d.id}')">Editar conductor</button>
+    <button class="btn btn-ghost" onclick="openDriverForm('${d.id}')">Editar conductor</button>
     <div style="position:relative;">
       <button class="btn btn-ghost" onclick="event.stopPropagation(); window.__driverActionMenuOpen=!window.__driverActionMenuOpen; renderTab();">Acción ▾</button>
       ${window.__driverActionMenuOpen ? `
@@ -26058,7 +26067,32 @@ async function deleteCommissionRate(id){
 // Alta/edición/archivo de empresas se gestiona desde Contactos
 // (openContactoModal/archiveContacto/unarchiveContacto) — ver Administración.
 
-// Alta / edición de conductor: datos, modalidad y —al crearlo— su tarifa de partida y los pactos, todo en una sola ventana
+// Alta / edición de conductor, a página completa: datos, empresa (de Proveedores Transporte), modalidad, tarifas y pactos
+const DR_CAMPOS = ['dr-name', 'dr-dni', 'dr-company', 'dr-fleet', 'dr-plate', 'dr-modality', 'dr-t-from', 'dr-t-day', 'dr-t-km', 'dr-t-hour', 'dr-t-maxkm', 'dr-t-maxh', 'dr-m-from', 'dr-m-pct', 'dr-pactos'];
+// Lo escrito en el formulario se guarda como borrador antes de abrir una ventana (tarifa, comisión), para no perderlo al repintar la página
+function drDraftSave(){
+  if (window.__autonomosView !== 'conductorForm') return;
+  const d = {};
+  DR_CAMPOS.forEach(id => { const el = document.getElementById(id); if (el) d[id] = el.value; });
+  const ix = document.getElementById('dr-t-idx');
+  if (ix) d['dr-t-idx'] = ix.checked ? '1' : '';
+  window.__drDraft = d;
+}
+function openDriverForm(editId){
+  window.__drDraft = null;
+  window.__drEditId = editId || '';
+  window.__drVolver = window.__autonomosView === 'detalle' ? 'detalle' : 'lista';
+  window.__driverActionMenuOpen = false;
+  window.__autonomosView = 'conductorForm';
+  renderHeader(); renderTab(); window.scrollTo(0, 0);
+}
+function drVolver(){
+  const id = window.__drEditId;
+  window.__drDraft = null;
+  if (window.__drVolver === 'detalle' && id) { window.__autonomosView = 'detalle'; window.__autonomosDriverId = id; }
+  else window.__autonomosView = 'lista';
+  renderHeader(); renderTab(); window.scrollTo(0, 0);
+}
 function drModalidadSet(v){
   document.getElementById('dr-modality').value = v;
   document.querySelectorAll('.dr-mod').forEach(b => b.classList.toggle('on', b.dataset.m === v));
@@ -26066,80 +26100,136 @@ function drModalidadSet(v){
   if (pl) pl.style.display = v === 'plaza' ? '' : 'none';
   if (pm) pm.style.display = v === 'piso_movil' ? '' : 'none';
 }
-function openDriverModal(editId){
-  const editing = editId ? drivers.find(d=>d.id===editId) : null;
-  const mod = editing ? editing.modality : 'plaza';
-  const coList = companies.filter(c => !c.archived || (editing && editing.companyId === c.id));
-  const coOptions = (editing ? '' : `<option value="">— Elige la empresa —</option>`) + coList.map(c=>`<option value="${c.id}" ${editing&&editing.companyId===c.id?'selected':''}>${esc(c.name)}</option>`).join('');
+function drTarifaAbrir(tipo, id){
+  drDraftSave();
+  if (tipo === 'rate') openRateModal(window.__drEditId, id || undefined);
+  else openCommissionModal(window.__drEditId, id || undefined);
+}
+function drIrAIndexaciones(){
+  const id = window.__drEditId;
+  window.__driverTab = 'tarifas';
+  window.__drDraft = null;
+  openDriverDetail(id, true);
+}
+function tplDriverForm(){
+  const editId = window.__drEditId || '';
+  const editing = editId ? drivers.find(d => d.id === editId) : null;
+  if (editId && !editing) { window.__autonomosView = 'lista'; return tplAutonomos(); }
+  const dr = window.__drDraft || {};
+  const dv = (id, def) => dr[id] !== undefined ? dr[id] : def;
+  const mod = dv('dr-modality', editing ? editing.modality : 'plaza');
+  const selCo = dv('dr-company', editing ? editing.companyId : '');
+  const coList = companies.filter(c => (c.transportista && !c.archived) || c.id === selCo).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  const coOptions = `<option value="">— Elige el proveedor de transporte —</option>` + coList.map(c => `<option value="${c.id}" ${selCo === c.id ? 'selected' : ''}>${esc(c.name)}${c.nif ? ' · ' + esc(c.nif) : ''}</option>`).join('');
+  const puedeProv = sectionAllowedFor(PROFILE, 'trafico', 'transportistas');
   const sec = (n, titulo, sub) => `<div class="dr-sec"><span class="dr-n">${n}</span><div><b>${titulo}</b>${sub ? `<small>${sub}</small>` : ''}</div></div>`;
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box dr-modal">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-          <h3 class="modal-title">${editing?'Editar conductor':'Nuevo conductor'}</h3><button class="close-x" onclick="closeModal()">✕</button>
-        </div>
-        ${coList.length ? '' : `<div class="dr-aviso">Todavía no hay ninguna empresa de autónomos. Créala primero en Administración → Contactos, marcándola como <b>Autónomo</b>.</div>`}
 
+  // Tarifas: al crear, la de partida; al editar, el histórico con sus pactos
+  let cuerpoTarifas;
+  if (!editing) {
+    cuerpoTarifas = `
+      <div id="dr-t-plaza" style="display:${mod === 'plaza' ? '' : 'none'};">
+        <div class="dr-g dr-g4">
+          <div class="field"><label>Vigente desde</label><input id="dr-t-from" type="date" value="${esc(dv('dr-t-from', today()))}" /></div>
+          <div class="field"><label>€ por día</label><input id="dr-t-day" type="number" step="0.01" min="0" placeholder="0,00" value="${esc(dv('dr-t-day', ''))}" /></div>
+          <div class="field"><label>€ por km extra</label><input id="dr-t-km" type="number" step="0.01" min="0" placeholder="0,00" value="${esc(dv('dr-t-km', ''))}" /></div>
+          <div class="field"><label>€ por hora extra</label><input id="dr-t-hour" type="number" step="0.01" min="0" placeholder="0,00" value="${esc(dv('dr-t-hour', ''))}" /></div>
+          <div class="field"><label>Máx. km al día</label><input id="dr-t-maxkm" type="number" min="0" placeholder="Ej. 600" value="${esc(dv('dr-t-maxkm', ''))}" /></div>
+          <div class="field"><label>Máx. horas al día</label><input id="dr-t-maxh" type="number" step="0.5" min="0" placeholder="Ej. 9" value="${esc(dv('dr-t-maxh', ''))}" /></div>
+          <label class="dr-chk dr-w2"><input id="dr-t-idx" type="checkbox" ${dv('dr-t-idx', '1') ? 'checked' : ''} /> Lleva indexación mensual</label>
+        </div>
+        <div class="dr-hint">Lo que pase de los km o las horas máximas del día se paga a su precio extra. Si no sabes algún dato todavía, déjalo en blanco y ponlo luego en la ficha.</div>
+      </div>
+      <div id="dr-t-pm" style="display:${mod === 'piso_movil' ? '' : 'none'};">
+        <div class="dr-g">
+          <div class="field"><label>Vigente desde</label><input id="dr-m-from" type="date" value="${esc(dv('dr-m-from', today()))}" /></div>
+          <div class="field"><label>% de comisión</label><input id="dr-m-pct" type="number" step="0.01" min="0" max="100" placeholder="Ej. 8" value="${esc(dv('dr-m-pct', ''))}" /></div>
+        </div>
+        <div class="dr-hint">El % se aplica a lo que facture cada mes; la facturación se anota desde su ficha.</div>
+      </div>
+      <div class="field" style="margin-top:6px;"><label>Pactos y condiciones</label><textarea id="dr-pactos" rows="3" placeholder="Ej.: pago a 30 días · gasoil descontado de la liquidación · peajes por cuenta de la empresa · revisión de tarifa cada enero…">${esc(dv('dr-pactos', ''))}</textarea></div>
+      <div class="dr-hint">Lo acordado que no cabe en los números. Se guarda con la tarifa (verás el 📝 en el histórico); para guardarlo hace falta rellenar la tarifa.</div>`;
+  } else if (mod !== editing.modality) {
+    cuerpoTarifas = `<div class="dr-hint" style="font-size:13px;">Has cambiado la modalidad: guarda el cambio y después podrás configurar sus tarifas de ${mod === 'piso_movil' ? 'Piso Móvil (comisión)' : 'Plaza'} aquí mismo.</div>`;
+  } else if (editing.modality === 'piso_movil') {
+    const rs = mobileCommissionRates.filter(r => r.driverId === editId).sort((a, b) => b.validFrom.localeCompare(a.validFrom));
+    cuerpoTarifas = `
+      <div class="dr-th"><span>Cada comisión vale desde su fecha hasta que empieza la siguiente.</span><button type="button" class="btn btn-ghost" onclick="drTarifaAbrir('commission')">+ Nueva comisión desde una fecha</button></div>
+      <div class="card" style="padding:0;overflow-x:auto;margin:0;"><table><thead><tr>${thSort('Vigente desde', 'date')}${thSort('% Comisión', 'number')}${thSort('Pactos', 'text')}</tr></thead><tbody>
+        ${rs.map(r => `<tr style="cursor:pointer;" onclick="drTarifaAbrir('commission','${r.id}')">
+          <td data-sort-value="${esc(r.validFrom || '')}">${fmtDateY(r.validFrom)}</td>
+          <td data-sort-value="${r.commissionPercent}">${r.commissionPercent}%</td>
+          <td style="white-space:normal;color:var(--muted);">${esc(r.note || '—')}</td></tr>`).join('') || `<tr><td colspan="3" style="color:var(--mutedFaint);text-align:center;padding:16px;">Sin comisión registrada — se usará 0%. Añade la primera.</td></tr>`}
+      </tbody></table></div>`;
+  } else {
+    const rs = rateHistory.filter(r => r.driverId === editId).sort((a, b) => b.validFrom.localeCompare(a.validFrom));
+    cuerpoTarifas = `
+      <div class="dr-th"><span>Cada tarifa vale desde su fecha hasta que empieza la siguiente; las semanas ya pasadas no se recalculan.</span><button type="button" class="btn btn-ghost" onclick="drTarifaAbrir('rate')">+ Nueva tarifa desde una fecha</button></div>
+      <div class="card" style="padding:0;overflow-x:auto;margin:0;"><table><thead><tr>${thSort('Vigente desde', 'date')}${thSort('€/día', 'number')}${thSort('€/km extra', 'number')}${thSort('€/h extra', 'number')}${thSort('Máx km/día', 'number')}${thSort('Máx h/día', 'number')}${thSort('Indexación', 'text')}${thSort('Pactos', 'text')}</tr></thead><tbody>
+        ${rs.map(r => `<tr style="cursor:pointer;" onclick="drTarifaAbrir('rate','${r.id}')">
+          <td data-sort-value="${esc(r.validFrom || '')}">${fmtDateY(r.validFrom)}</td>
+          <td data-sort-value="${r.priceDay}">${eur2(r.priceDay)}</td>
+          <td data-sort-value="${r.priceKmExtra}">${eur2(r.priceKmExtra)}</td>
+          <td data-sort-value="${r.priceHourExtra}">${eur2(r.priceHourExtra)}</td>
+          <td>${r.maxKmDay}</td><td>${r.maxHoursDay}</td>
+          <td data-sort-value="${r.hasIndexation !== false ? 'Si' : 'No'}">${r.hasIndexation !== false ? 'Sí' : 'No'}</td>
+          <td style="white-space:normal;min-width:180px;color:var(--muted);">${esc(r.note || '—')}</td></tr>`).join('') || `<tr><td colspan="8" style="color:var(--mutedFaint);text-align:center;padding:16px;">Sin tarifas registradas. Añade la primera.</td></tr>`}
+      </tbody></table></div>
+      <div class="dr-hint" style="margin-top:10px;">Los % de indexación de cada mes se anotan en la ficha, pestaña <b>Tarifas e indexación</b>. <a href="#" onclick="event.preventDefault(); drIrAIndexaciones();">Ir a la ficha →</a></div>`;
+  }
+
+  return `
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.user, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 280px;"><div class="deca-banner-title">${editing ? 'Editar conductor' : 'Nuevo conductor'}</div><div class="deca-banner-sub">${editing ? esc(editing.name) : 'Sus datos, el proveedor de transporte al que pertenece, la modalidad y la tarifa pactada.'}</div></div>
+    </div>
+    <div class="dr-page">
+      <div class="card dr-card">
         ${sec(1, 'Datos del conductor', 'Quién es y con qué camión trabaja')}
         <div class="dr-g">
-          <div class="field dr-w2"><label>Nombre completo *</label><input id="dr-name" value="${esc(editing?editing.name:'')}" placeholder="Nombre y apellidos" /></div>
-          <div class="field"><label>DNI / NIE</label><input id="dr-dni" value="${esc(editing?editing.dni:'')}" placeholder="12345678A" /></div>
-          <div class="field dr-w3"><label>Empresa *</label><select id="dr-company">${coOptions}</select></div>
-          <div class="field"><label>Nº de flota</label><input id="dr-fleet" value="${esc(editing?editing.fleetNumber:'')}" placeholder="Ej. 214" /></div>
-          <div class="field dr-w2"><label>Matrícula del camión</label><input id="dr-plate" placeholder="1234-ABC" value="${esc(editing?editing.truckPlate:'')}" style="text-transform:uppercase;" /></div>
-        </div>
-
-        ${sec(2, 'Modalidad', 'Cómo trabaja y cómo se le liquida')}
-        <input type="hidden" id="dr-modality" value="${mod}" />
-        <div class="dr-mods">
-          <button type="button" class="dr-mod ${mod==='plaza'?'on':''}" data-m="plaza" onclick="drModalidadSet('plaza')"><b>Plaza</b><span>Cobra por día trabajado, con km y horas extra. Se liquida semana a semana.</span></button>
-          <button type="button" class="dr-mod ${mod==='piso_movil'?'on':''}" data-m="piso_movil" onclick="drModalidadSet('piso_movil')"><b>Piso Móvil</b><span>Factura cada mes y se le descuenta una comisión.</span></button>
-        </div>
-
-        ${editing ? `<div class="dr-hint">Las tarifas, pactos e indexaciones de ${esc(editing.name)} se cambian desde su ficha (pestaña <b>${editing.modality==='piso_movil'?'Comisión':'Tarifas e indexación'}</b>), con el histórico de fechas.</div>` : `
-        ${sec(3, 'Tarifa de partida', 'Lo que tenéis pactado; después se podrán añadir nuevas tarifas desde una fecha')}
-        <div id="dr-t-plaza" style="display:${mod==='plaza'?'':'none'};">
-          <div class="dr-g dr-g4">
-            <div class="field"><label>Vigente desde</label><input id="dr-t-from" type="date" value="${today()}" /></div>
-            <div class="field"><label>€ por día</label><input id="dr-t-day" type="number" step="0.01" min="0" placeholder="0,00" /></div>
-            <div class="field"><label>€ por km extra</label><input id="dr-t-km" type="number" step="0.01" min="0" placeholder="0,00" /></div>
-            <div class="field"><label>€ por hora extra</label><input id="dr-t-hour" type="number" step="0.01" min="0" placeholder="0,00" /></div>
-            <div class="field"><label>Máx. km al día</label><input id="dr-t-maxkm" type="number" min="0" placeholder="Ej. 600" /></div>
-            <div class="field"><label>Máx. horas al día</label><input id="dr-t-maxh" type="number" step="0.5" min="0" placeholder="Ej. 9" /></div>
-            <label class="dr-chk dr-w2"><input id="dr-t-idx" type="checkbox" checked /> Lleva indexación mensual</label>
-          </div>
-          <div class="dr-hint">Lo que pase de los km o las horas máximas del día se paga a su precio extra. Si no sabes algún dato todavía, déjalo en blanco y ponlo luego en la ficha.</div>
-        </div>
-        <div id="dr-t-pm" style="display:${mod==='piso_movil'?'':'none'};">
-          <div class="dr-g">
-            <div class="field"><label>Vigente desde</label><input id="dr-m-from" type="date" value="${today()}" /></div>
-            <div class="field"><label>% de comisión</label><input id="dr-m-pct" type="number" step="0.01" min="0" max="100" placeholder="Ej. 8" /></div>
-          </div>
-          <div class="dr-hint">El % se aplica a lo que facture cada mes; la facturación se anota desde su ficha.</div>
-        </div>
-
-        ${sec(4, 'Pactos y condiciones', 'Lo acordado que no cabe en los números')}
-        <div class="field"><textarea id="dr-pactos" rows="3" placeholder="Ej.: pago a 30 días · gasoil descontado de la liquidación · peajes por cuenta de la empresa · revisión de tarifa cada enero…"></textarea></div>
-        <div class="dr-hint">Se guarda con la tarifa (verás el 📝 en el histórico). Para guardarlo hace falta rellenar la tarifa de arriba.</div>`}
-
-        <div id="dr-error" class="dr-err"></div>
-        <div style="display:flex;gap:10px;margin-top:6px;">
-          <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
-          <button class="btn btn-primary" style="flex:2;justify-content:center;" onclick="submitDriver('${editId||''}')" ${coList.length?'':'disabled'}>${editing?'Guardar cambios':'Crear conductor'}</button>
+          <div class="field dr-w2"><label>Nombre completo *</label><input id="dr-name" value="${esc(dv('dr-name', editing ? editing.name : ''))}" placeholder="Nombre y apellidos" /></div>
+          <div class="field"><label>DNI / NIE</label><input id="dr-dni" value="${esc(dv('dr-dni', editing ? editing.dni : ''))}" placeholder="12345678A" /></div>
+          <div class="field"><label>Nº de flota</label><input id="dr-fleet" value="${esc(dv('dr-fleet', editing ? editing.fleetNumber : ''))}" placeholder="Ej. 214" /></div>
+          <div class="field"><label>Matrícula del camión</label><input id="dr-plate" placeholder="1234-ABC" value="${esc(dv('dr-plate', editing ? editing.truckPlate : ''))}" style="text-transform:uppercase;" /></div>
         </div>
       </div>
+
+      <div class="card dr-card">
+        ${sec(2, 'Proveedor de transporte', 'La empresa para la que trabaja; se coge de Proveedores Transporte')}
+        <div class="field" style="max-width:560px;"><label>Empresa *</label><select id="dr-company">${coOptions}</select></div>
+        <div class="dr-hint">${coList.length ? 'Solo salen los contactos marcados como <b>transportista</b>.' : '<b style="color:var(--danger);">Todavía no hay ningún proveedor de transporte.</b>'} Si la empresa no está, tiene que crearse antes${puedeProv ? ` en <a href="#" onclick="event.preventDefault(); setTab('trafico').then(() => setTraficoSection('transportistas'));">Proveedores Transporte</a>` : ' en Proveedores Transporte'}.</div>
+      </div>
+
+      <div class="card dr-card">
+        ${sec(3, 'Modalidad', 'Cómo trabaja y cómo se le liquida')}
+        <input type="hidden" id="dr-modality" value="${mod}" />
+        <div class="dr-mods">
+          <button type="button" class="dr-mod ${mod === 'plaza' ? 'on' : ''}" data-m="plaza" onclick="drModalidadSet('plaza')"><b>Plaza</b><span>Cobra por día trabajado, con km y horas extra. Se liquida semana a semana.</span></button>
+          <button type="button" class="dr-mod ${mod === 'piso_movil' ? 'on' : ''}" data-m="piso_movil" onclick="drModalidadSet('piso_movil')"><b>Piso Móvil</b><span>Factura cada mes y se le descuenta una comisión.</span></button>
+        </div>
+      </div>
+
+      <div class="card dr-card">
+        ${sec(4, editing ? 'Tarifas y pactos' : 'Tarifa de partida y pactos', editing ? 'Lo pactado con este conductor, con su histórico por fechas' : 'Lo que tenéis pactado; después se podrán añadir nuevas tarifas desde una fecha')}
+        ${cuerpoTarifas}
+      </div>
+
+      <div class="dr-bar">
+        <div id="dr-error" class="dr-err"></div>
+        <button class="btn btn-ghost" onclick="drVolver()">Cancelar</button>
+        <button class="btn btn-primary" onclick="submitDriver('${editId}')">${editing ? 'Guardar cambios' : 'Crear conductor'}</button>
+      </div>
     </div>`;
-  setTimeout(() => { const i = document.getElementById('dr-name'); if (i && !editing) i.focus(); }, 30);
 }
 async function submitDriver(editId){
   const val = id => { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; };
   const num = id => val(id) === '' ? null : Number(val(id));
   const errEl = document.getElementById('dr-error');
-  const fail = m => { errEl.textContent = m; };
+  const fail = m => { errEl.textContent = m; errEl.scrollIntoView({ block: 'center', behavior: 'smooth' }); };
   const name = val('dr-name');
   if (!name) return fail('Escribe el nombre del conductor.');
   const companyId = val('dr-company');
-  if (!companyId) return fail('Elige la empresa del conductor.');
+  if (!companyId) return fail('Elige el proveedor de transporte del conductor.');
   const dni = val('dr-dni').toUpperCase();
   if (dni) {
     const dup = drivers.find(x => x.id !== editId && (x.dni || '').trim().toUpperCase() === dni);
@@ -26152,9 +26242,11 @@ async function submitDriver(editId){
   if (editId) {
     const { error } = await supabaseClient.from('drivers').update(dbData).eq('id', editId);
     if (error) return fail('No se pudo guardar.');
-    const idx = drivers.findIndex(d=>d.id===editId);
+    const idx = drivers.findIndex(d => d.id === editId);
     drivers[idx] = { ...drivers[idx], ...data };
-    closeModal(); renderTab(); return;
+    appToast('Cambios guardados.');
+    drVolver();
+    return;
   }
 
   // Tarifa de partida (opcional): se valida antes de crear nada
@@ -26198,9 +26290,10 @@ async function submitDriver(editId){
     if (ins.error || !ins.data) aviso = ' La comisión no se pudo guardar: añádela desde su ficha.';
     else mobileCommissionRates.push({ id: ins.data.id, driverId: row.id, ...tarifa });
   } else {
-    aviso = modality === 'plaza' ? ' Recuerda añadir su tarifa desde la ficha.' : ' Recuerda añadir su comisión desde la ficha.';
+    aviso = modality === 'plaza' ? ' Recuerda añadir su tarifa.' : ' Recuerda añadir su comisión.';
   }
-  closeModal(); renderTab();
+  window.__drDraft = null;
+  openDriverDetail(row.id);
   appToast(`Conductor creado.${aviso}`);
 }
 function confirmArchiveDriver(id){
