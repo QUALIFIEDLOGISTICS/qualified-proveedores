@@ -887,6 +887,11 @@
   .fx-inf{display:grid;grid-template-columns:1.1fr .8fr .8fr 1.6fr auto;gap:8px;align-items:center;}
   @media(max-width:600px){.fx-inf{grid-template-columns:1fr 1fr;}}
   .fx-hint{font-size:11.5px;color:var(--mutedFaint);margin-top:8px;line-height:1.4;}
+  /* ficha del conductor: avisos de la pestaña Resumen */
+  .drv-av{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 14px;border-radius:10px;margin-bottom:8px;font-size:13px;background:var(--panel2);border-left:4px solid var(--border);}
+  .drv-av.mal{background:color-mix(in srgb,var(--danger) 8%,var(--panel));border-left-color:var(--danger);}
+  .drv-av.aviso{background:color-mix(in srgb,#E0A100 10%,var(--panel));border-left-color:#E0A100;}
+  .drv-av.info{background:color-mix(in srgb,var(--primary) 6%,var(--panel));border-left-color:var(--primary);}
   .crm-clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:13px;line-height:1.4;}
   .crm-b.ok{border-color:color-mix(in srgb,var(--success) 50%,var(--border));color:var(--success);}
   .crm-pc{display:flex;flex-direction:column;gap:6px;}
@@ -24974,7 +24979,7 @@ function driverNavGoto(offset){
   const idx = nav.ids.indexOf(window.__autonomosDriverId);
   if (idx === -1) return;
   const newIdx = (idx + offset + nav.ids.length) % nav.ids.length;
-  openDriverDetail(nav.ids[newIdx]);
+  openDriverDetail(nav.ids[newIdx], true);   // al pasar de un conductor a otro se queda en la misma pestaña
 }
 // Cabecera compartida entre la ficha de conductor Plaza y la de Piso Móvil:
 // flechitas para moverse por la lista filtrada actual (igual que en la
@@ -24998,8 +25003,14 @@ function driverDetailActionsHtml(d){
         </div>` : ''}
     </div>`;
 }
-function openDriverDetail(id){
+// Pestañas de la ficha de un conductor (las comparten la ficha de Plaza y la de Piso móvil)
+function driverTabsBar(tabs, activa){
+  return `<div style="display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin:6px 0 20px;">${tabs.map(([id, l]) => moduleTabBtnHtml(`setDriverTab('${id}')`, l, id === activa)).join('')}</div>`;
+}
+function setDriverTab(id){ window.__driverTab = id; renderTab(); window.scrollTo({ top: 0 }); }
+function openDriverDetail(id, mantenerPestana){
   window.__driverActionMenuOpen = false;
+  if (!mantenerPestana) window.__driverTab = 'resumen';
   currentTab='autonomos'; window.__autonomosView='detalle'; window.__autonomosDriverId=id;
   // Se entra viendo el último periodo con datos registrados — fichajes
   // diarios para conductores Plaza, facturación mensual para Piso Móvil —
@@ -25109,7 +25120,8 @@ function tplDriverDetail(){
   }, 0) : 0;
   const totalNeto = totalIngreso - totalGastos + indexAmount;
 
-  return `
+  const mesIdx = window.__driverTab === 'tarifas' ? 'todos' : month;
+  const sCab = `
     <div class="card" style="margin-bottom:18px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:14px;">
         <div style="display:flex;align-items:center;gap:14px;">
@@ -25154,6 +25166,8 @@ function tplDriverDetail(){
       </div>`; })()}
     </div>
 
+`;
+  const sHist = `
     <div class="card" style="margin-bottom:22px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
         <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Histórico de tarifas</div>
@@ -25177,6 +25191,8 @@ function tplDriverDetail(){
       </div>
     </div>
 
+`;
+  const sFiltro = `
     <div class="card" style="margin-bottom:22px;">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <label style="font-size:12.5px;color:var(--muted);font-weight:600;">📅 Ver:</label>
@@ -25198,13 +25214,15 @@ function tplDriverDetail(){
       </div>
     </div>
 
+`;
+  const sIdx = `
     ${driverIndexed ? `
     <div class="card" style="margin-bottom:22px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-        <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Indexación mensual — ${month==='todos' ? year : MONTH_NAMES[month].charAt(0).toUpperCase()+MONTH_NAMES[month].slice(1)+' '+year}</div>
-        ${month==='todos' && !readOnly ? `<button class="btn btn-primary" onclick="saveAllIndexPercents('${d.id}', ${year})">💾 Guardar</button>` : ''}
+        <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Indexación mensual — ${mesIdx==='todos' ? year : MONTH_NAMES[mesIdx].charAt(0).toUpperCase()+MONTH_NAMES[mesIdx].slice(1)+' '+year}</div>
+        ${mesIdx==='todos' && !readOnly ? `<button class="btn btn-primary" onclick="saveAllIndexPercents('${d.id}', ${year})">💾 Guardar</button>` : ''}
       </div>
-      ${month==='todos' ? `
+      ${mesIdx==='todos' ? `
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;">
         ${MONTH_NAMES.map((mn,i) => {
           const existing = indexationEntries.find(x=>x.driverId===d.id && x.year===year && x.month===i);
@@ -25223,20 +25241,22 @@ function tplDriverDetail(){
       ${readOnly ? '' : `<div style="font-size:11px;color:var(--mutedFaint);margin-top:8px;">Los 12 meses ya están aquí — escribe el % que corresponda a cada uno y pulsa Guardar (déjalo en blanco si ese mes no lleva indexación). O elige un mes arriba en el filtro para editar solo ese.</div>`}
       ` : readOnly ? `
       <div style="display:flex;align-items:center;gap:10px;">
-        <span style="font-size:13px;color:var(--muted);">Indexación de ${MONTH_NAMES[month]} ${year}:</span>
-        <span style="font-family:var(--display);font-size:15px;">${(()=>{ const ex=indexationEntries.find(x=>x.driverId===d.id&&x.year===year&&x.month===Number(month)); return ex?ex.percent+'%':'—'; })()}</span>
+        <span style="font-size:13px;color:var(--muted);">Indexación de ${MONTH_NAMES[mesIdx]} ${year}:</span>
+        <span style="font-family:var(--display);font-size:15px;">${(()=>{ const ex=indexationEntries.find(x=>x.driverId===d.id&&x.year===year&&x.month===Number(mesIdx)); return ex?ex.percent+'%':'—'; })()}</span>
       </div>
       ` : `
       <div style="display:flex;align-items:center;gap:10px;">
-        <span style="font-size:13px;color:var(--muted);">Indexación de ${MONTH_NAMES[month]} ${year}:</span>
-        <input type="number" step="0.01" id="idx-single-input" value="${(()=>{ const ex=indexationEntries.find(x=>x.driverId===d.id&&x.year===year&&x.month===Number(month)); return ex?ex.percent:''; })()}" placeholder="0" style="width:100px;text-align:right;" />
+        <span style="font-size:13px;color:var(--muted);">Indexación de ${MONTH_NAMES[mesIdx]} ${year}:</span>
+        <input type="number" step="0.01" id="idx-single-input" value="${(()=>{ const ex=indexationEntries.find(x=>x.driverId===d.id&&x.year===year&&x.month===Number(mesIdx)); return ex?ex.percent:''; })()}" placeholder="0" style="width:100px;text-align:right;" />
         <span style="color:var(--mutedFaint);">%</span>
-        <button class="btn btn-primary" onclick="saveSingleIndexPercent('${d.id}', ${year}, ${month})">💾 Guardar</button>
+        <button class="btn btn-primary" onclick="saveSingleIndexPercent('${d.id}', ${year}, ${mesIdx})">💾 Guardar</button>
       </div>
       `}
     </div>
     ` : ''}
 
+`;
+  const sFich = `
     ${month==='todos' ? '' : `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;margin-top:22px;flex-wrap:wrap;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Fichajes diarios de ${MONTH_NAMES[month].charAt(0).toUpperCase()+MONTH_NAMES[month].slice(1)+' '+year}</div>
@@ -25288,6 +25308,8 @@ function tplDriverDetail(){
     </div>
     `}
 
+`;
+  const sLiq = `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Tabla resumen liquidación de ${month==='todos' ? year : MONTH_NAMES[month].charAt(0).toUpperCase()+MONTH_NAMES[month].slice(1)+' '+year}</div>
 <div style="flex:1;"></div>      <button class="btn btn-ghost" onclick="printResumenLiquidacion('${d.id}')" title="Imprimir esta tabla o guardarla como PDF para facturar">${homeIcon(HOME_ICON_PATHS.file, 16, 'currentColor', 1.8)}<span>Imprimir / PDF</span></button>
@@ -25407,10 +25429,36 @@ function tplDriverDetail(){
       </table>
     </div>
 
+`;
+  const sNotas = `
     ${tplAnotacionesSection(d.id, driverNotes.filter(n=>n.driverId===d.id && n.date.startsWith(String(year))
         && (month==='todos' || Number(n.date.slice(5,7))-1===Number(month))
         && (weekFilter==='todas' || getISOWeek(n.date).week===Number(weekFilter))
       ), readOnly)}`;
+  // Avisos del periodo: lo que conviene mirar de este conductor
+  const hoyD = today(), mesHoy = new Date().getMonth(), anioHoy = new Date().getFullYear();
+  const cerradasSolas = dailyEntries.filter(f => f.driverId === d.id && f.autoClosed && f.date.startsWith(String(year)));
+  const incPeriodo = dailyIncidents.filter(x => x.driverId === d.id && x.date.startsWith(String(year)) && (month === 'todos' || Number(x.date.slice(5, 7)) - 1 === Number(month)));
+  const avisos = [];
+  if (!rateHistory.some(r => r.driverId === d.id && r.validFrom <= hoyD)) avisos.push(['mal', 'No tiene ninguna tarifa vigente. Las jornadas se calculan a 0 hasta que pongas una.', 'tarifas', 'Poner tarifa']);
+  if (driverIndexed && year === anioHoy && !indexationEntries.some(x => x.driverId === d.id && x.year === anioHoy && x.month === mesHoy)) avisos.push(['aviso', `Falta la indexación de ${MONTH_NAMES[mesHoy]}.`, 'tarifas', 'Poner indexación']);
+  if (cerradasSolas.length) avisos.push(['mal', `${cerradasSolas.length} jornada${cerradasSolas.length === 1 ? '' : 's'} cerrada${cerradasSolas.length === 1 ? '' : 's'} sola${cerradasSolas.length === 1 ? '' : 's'} en ${year}: revisa la hora de salida y los km antes de pagar.`, 'fichajes', 'Revisar']);
+  if (incPeriodo.length) avisos.push(['info', `${incPeriodo.length} incidencia${incPeriodo.length === 1 ? '' : 's'} en el periodo elegido.`, 'fichajes', 'Ver']);
+  const sAvisos = `<div class="card" style="margin-bottom:22px;"><div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:10px;">Qué mirar</div>
+    ${avisos.length ? avisos.map(([cls, txt, tb, bt]) => `<div class="drv-av ${cls}"><span>${esc(txt)}</span><button type="button" class="btn btn-ghost" onclick="setDriverTab('${tb}')">${bt}</button></div>`).join('') : '<div style="font-size:13px;color:var(--mutedFaint);">Todo en orden: sin jornadas cerradas solas ni avisos pendientes.</div>'}</div>`;
+  const sKpis = `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;">
+      ${kpi('Jornadas', totalDias, null, true)}${kpi('Km recorridos', totalKm.toLocaleString('es-ES'), null, true)}${kpi('Horas trabajadas', fmtHoursMin(totalHoras), null, true)}
+      ${kpi('Ingresos', eur2(totalIngreso), null, true)}${kpi('Descuentos', totalGastos ? '−' + eur2(totalGastos) : '—', null, true)}${driverIndexed ? kpi('Indexación', indexAmount ? eurSigned(indexAmount) : '—', null, true) : ''}${kpi('Neto', eur2(totalNeto), null, true)}${kpi('€/Km', totalKm ? eur2((totalIngreso + indexAmount) / totalKm) : '—', null, true)}</div>`;
+  const sAnio = `<div class="card" style="margin-bottom:18px;"><div style="display:flex;align-items:center;gap:10px;"><label style="font-size:12.5px;color:var(--muted);font-weight:600;">Año</label>
+      <select onchange="window.__autonomosYear=Number(this.value); renderTab();" style="width:100px;">${years.map(y => `<option value="${y}" ${y === year ? 'selected' : ''}>${y}</option>`).join('')}</select>
+      <span style="font-size:12px;color:var(--mutedFaint);">La indexación se apunta mes a mes del año elegido; la tarifa vale desde su fecha.</span></div></div>`;
+  const tab = window.__driverTab || 'resumen';
+  const sFichSel = month === 'todos' ? `<div class="card" style="color:var(--muted);text-align:center;padding:26px;margin-bottom:18px;">Elige un mes arriba para ver los fichajes diarios de ese mes.</div>` : sFich;
+  const cuerpo = tab === 'tarifas' ? sHist + sAnio + sIdx
+    : tab === 'fichajes' ? sFiltro + sFichSel + sNotas
+    : tab === 'liquidacion' ? sFiltro + sLiq
+    : sFiltro + sKpis + sAvisos;
+  return sCab + driverTabsBar([['resumen', 'Resumen'], ['tarifas', 'Tarifas e indexación'], ['fichajes', 'Fichajes'], ['liquidacion', 'Liquidación']], tab) + cuerpo;
 }
 // Imprime (o guarda como PDF desde el diálogo de impresión) la tabla resumen de liquidación tal como se ve en pantalla:
 // mismo periodo, mismas filas y mismos totales, con cabecera de conductor/empresa/periodo, en A4 apaisado y sin colores de pantalla.
@@ -25553,7 +25601,7 @@ function tplPisoMovilDetail(d){
   const avgEurPerKm = totalKm ? totalBilling / totalKm : null;
   const avgEurPerKmNeto = totalKm ? totalToPay / totalKm : null;
 
-  return `
+  const sCab = `
     <div class="card" style="margin-bottom:18px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:14px;">
         <div style="display:flex;align-items:center;gap:14px;">
@@ -25586,6 +25634,8 @@ function tplPisoMovilDetail(d){
       </div>
     </div>
 
+`;
+  const sHist = `
     <div class="card" style="margin-bottom:22px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
         <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Histórico de comisión</div>
@@ -25604,6 +25654,8 @@ function tplPisoMovilDetail(d){
       </div>
     </div>
 
+`;
+  const sFiltro = `
     <div class="card" style="margin-bottom:22px;">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <label style="font-size:12.5px;color:var(--muted);font-weight:600;">📅 Ver:</label>
@@ -25621,6 +25673,8 @@ function tplPisoMovilDetail(d){
       </div>
     </div>
 
+`;
+  const sKpis = `
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
       ${kpi('Facturación', eur2(totalBilling), null, true)}
       ${kpi('Comisión', totalCommission ? '−'+eur2(totalCommission) : '—', null, true)}
@@ -25630,6 +25684,8 @@ function tplPisoMovilDetail(d){
       ${kpi('€/Km Neto', avgEurPerKmNeto!=null ? eur2(avgEurPerKmNeto) : '—', null, true)}
     </div>
 
+`;
+  const sTabla = `
     <div class="card" style="padding:0;overflow-x:auto;margin-bottom:22px;">
       <table><thead><tr>${thSort('Mes','number')}${thSort('Facturación','number')}${thSort('Km','number')}${thSort('€/Km Fact.','number','title="Facturación ÷ Km."')}${thSort('% Comisión','number')}${thSort('Comisión','number')}${thSort('Total a cobrar','number')}${thSort('€/Km Neto','number','title="(Facturación − Comisión) ÷ Km."')}<th></th></tr></thead><tbody>
         ${rows.map(({e,commissionPercent,commission,total,eurPerKm,eurPerKmNeto}) => `
@@ -25647,9 +25703,14 @@ function tplPisoMovilDetail(d){
       </tbody></table>
     </div>
 
+`;
+  const sNotas = `
     ${tplAnotacionesSection(d.id, driverNotes.filter(n=>n.driverId===d.id && n.date.startsWith(String(year))
         && (month==='todos' || Number(n.date.slice(5,7))-1===Number(month))
       ), readOnly)}`;
+  const tabPM = ['facturacion', 'comision'].includes(window.__driverTab) ? window.__driverTab : 'facturacion';
+  return sCab + driverTabsBar([['facturacion', 'Facturación mensual'], ['comision', 'Comisión']], tabPM)
+    + (tabPM === 'comision' ? sHist : sFiltro + sKpis + sTabla + sNotas);
 }
 function openBillingModal(driverId, editId){
   const editing = editId ? monthlyBillingEntries.find(e=>e.id===editId) : null;
