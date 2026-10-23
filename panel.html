@@ -903,6 +903,8 @@
   .liq-mod.pm{background:color-mix(in srgb,#8A4A35 11%,var(--panel));color:#8A4A35;}
   .liq-sin{font-size:12.5px;color:var(--muted);padding:10px 14px;border:1px dashed var(--border);border-radius:10px;line-height:1.5;}
   .liq-sin b{color:var(--text);}
+  .liq-es,.liq-es-t{--c:#8A93A0;display:inline-block;border:1px solid color-mix(in srgb,var(--c) 40%,var(--border));background:color-mix(in srgb,var(--c) 12%,var(--panel));color:var(--c);border-radius:99px;padding:4px 12px;font:700 12px/1.2 inherit;cursor:pointer;width:auto;min-width:112px;}
+  .liq-es-t{cursor:default;}
   .crm-clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:13px;line-height:1.4;}
   .crm-b.ok{border-color:color-mix(in srgb,var(--success) 50%,var(--border));color:var(--success);}
   .crm-pc{display:flex;flex-direction:column;gap:6px;}
@@ -24690,6 +24692,39 @@ async function fxIncidenciaNuevaGuardar(){
 /* ============ Autónomos · Liquidaciones: todos los autónomos (Plaza y piso móvil) de un mes en una sola tabla ============
    Los importes salen de las mismas cuentas que la ficha de cada conductor (misma tarifa, indexación, gastos y suplementos),
    así lo que se ve aquí coincide con su pestaña «Liquidación». */
+/* ---- Estado de la liquidación de cada conductor y mes: pendiente → revisada → facturada → pagada ---- */
+const LIQ_ESTADOS = { pendiente: ['Pendiente', '#8A93A0'], revisada: ['Revisada', '#2F6FED'], facturada: ['Facturada', '#9B51E0'], pagada: ['Pagada', '#1F9D55'] };
+async function liqEstadosCargar(){
+  const { data, error } = await supabaseClient.from('autonomos_liquidaciones').select('*');
+  window.__liqEstadosErr = error ? (/relation|does not exist|schema cache/i.test(error.message || '') ? 'falta' : (error.message || 'error')) : '';
+  window.__liqEstados = new Map((data || []).map(r => [`${r.driver_id}|${r.year}|${r.month}`, r.estado]));
+  window.__liqEstadosOk = true;
+}
+const liqEstadoDe = (driverId, y, m) => (window.__liqEstados && window.__liqEstados.get(`${driverId}|${y}|${m}`)) || 'pendiente';
+async function liqEstadoSet(driverId, y, m, estado){
+  const { error } = await supabaseClient.from('autonomos_liquidaciones').upsert({ driver_id: driverId, year: y, month: m, estado, updated_by: currentUserEmail(), updated_at: new Date().toISOString() }, { onConflict: 'driver_id,year,month' });
+  if (error) { appToast('No se pudo cambiar el estado: ' + (/relation|does not exist|schema cache/i.test(error.message || '') ? 'falta ejecutar el SQL de los estados de liquidación en Supabase (autonomos-liquidaciones-estado.sql).' : (error.message || 'error')), 'error'); return false; }
+  window.__liqEstados.set(`${driverId}|${y}|${m}`, estado);
+  return true;
+}
+async function liqEstadoCambio(driverId, y, m, estado){ if (await liqEstadoSet(driverId, y, m, estado)) renderTab(); else renderTab(); }
+// Marca de golpe todas las filas que se ven
+async function liqEstadoMasivo(estado){
+  if (!estado) return;
+  const { y, m, filas } = liqDatos();
+  if (!filas.length) return;
+  if (!(await appConfirm({ title: 'Cambiar el estado', message: `Se marcan como «${LIQ_ESTADOS[estado][0]}» las ${filas.length} liquidaciones que se ven de ${MONTH_NAMES[m]} de ${y}.`, confirmLabel: 'Cambiar', cancelLabel: 'Cancelar', tone: 'warn', icon: 'warn' }))) { renderTab(); return; }
+  for (const f of filas) { if (!(await liqEstadoSet(f.d.id, y, m, estado))) break; }
+  renderTab();
+}
+const liqEstadoSelect = (driverId, y, m, est) => `<select class="liq-es" style="--c:${LIQ_ESTADOS[est][1]}" onclick="event.stopPropagation()" onchange="liqEstadoCambio('${driverId}', ${y}, ${m}, this.value)" title="Estado de la liquidación">${Object.keys(LIQ_ESTADOS).map(k => `<option value="${k}" ${k === est ? 'selected' : ''}>${LIQ_ESTADOS[k][0]}</option>`).join('')}</select>`;
+// En la ficha del conductor, en la pestaña de liquidación, cuando hay un mes elegido
+function driverLiqEstadoHtml(d, year, month){
+  if (month === 'todos' || window.__liqEstadosErr) return '';
+  if (!window.__liqEstadosOk) { liqEstadosCargar().then(() => renderTab()); return ''; }
+  const est = liqEstadoDe(d.id, year, Number(month));
+  return `<div class="card" style="margin-bottom:18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;"><span style="font-size:12.5px;color:var(--muted);font-weight:600;">Estado de la liquidación de ${MONTH_NAMES[Number(month)]} ${year}</span>${d.archived ? `<span class="liq-es-t" style="--c:${LIQ_ESTADOS[est][1]}">${LIQ_ESTADOS[est][0]}</span>` : liqEstadoSelect(d.id, year, Number(month), est)}</div>`;
+}
 function liqPeriodo(){
   if (window.__liqAnio === undefined) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); window.__liqAnio = d.getFullYear(); window.__liqMes = d.getMonth(); }   // por defecto, el mes que acaba de cerrar
   return { y: window.__liqAnio, m: window.__liqMes };
@@ -24722,19 +24757,26 @@ function liqPisoMes(d, year, month){
 function liqDatos(){
   const { y, m } = liqPeriodo();
   const q = (window.__liqQ || '').toLowerCase().trim(), emp = window.__liqEmpresa || '', mod = window.__liqModalidad || '';
-  const filas = [], sin = [];
+  const todas = [], sin = [];
   drivers.filter(d => (!emp || d.companyId === emp) && (!mod || (mod === 'piso_movil') === (d.modality === 'piso_movil')) && (!q || d.name.toLowerCase().includes(q))).forEach(d => {
     const r = d.modality === 'piso_movil' ? liqPisoMes(d, y, m) : liqPlazaMes(d, y, m);
-    if (r) filas.push({ d, co: companies.find(c => c.id === d.companyId), piso: d.modality === 'piso_movil', ...r });
+    if (r) todas.push({ d, co: companies.find(c => c.id === d.companyId), piso: d.modality === 'piso_movil', ...r });
     else if (!d.archived) sin.push(d);
   });
+  todas.forEach(f => { f.estado = liqEstadoDe(f.d.id, y, m); });
+  const cuentas = { '': todas.length }; Object.keys(LIQ_ESTADOS).forEach(k => { cuentas[k] = todas.filter(f => f.estado === k).length; });
+  const porPagar = todas.filter(f => f.estado !== 'pagada').reduce((s, f) => s + f.neto, 0);
+  const est = window.__liqEstado || '';
+  const filas = est ? todas.filter(f => f.estado === est) : todas;
   filas.sort((a, b) => a.d.name.localeCompare(b.d.name, 'es'));
   const t = filas.reduce((s, f) => ({ dias: s.dias + (f.dias || 0), km: s.km + f.km, horas: s.horas + (f.horas || 0), ingreso: s.ingreso + f.ingreso, descuentos: s.descuentos + f.descuentos, idx: s.idx + f.idx, neto: s.neto + f.neto }), { dias: 0, km: 0, horas: 0, ingreso: 0, descuentos: 0, idx: 0, neto: 0 });
-  return { y, m, filas, sin, t };
+  return { y, m, filas, sin, t, cuentas, porPagar };
 }
 const liqEurKm = f => f.km ? (f.ingreso + f.idx) / f.km : null;
 function tplLiquidaciones(){
-  const { y, m, filas, sin, t } = liqDatos(), mes = MONTH_NAMES[m].charAt(0).toUpperCase() + MONTH_NAMES[m].slice(1);
+  if (!window.__liqEstadosOk) { liqEstadosCargar().then(() => { if (currentTab === 'autonomos' && window.__autonomosView === 'liquidaciones') renderTab(); }); return '<div class="crm-vacio" style="padding:40px;text-align:center;color:var(--muted);">Cargando las liquidaciones…</div>'; }
+  const estOn = !window.__liqEstadosErr;
+  const { y, m, filas, sin, t, cuentas, porPagar } = liqDatos(), mes = MONTH_NAMES[m].charAt(0).toUpperCase() + MONTH_NAMES[m].slice(1);
   const anios = [...new Set([y, new Date().getFullYear(), new Date().getFullYear() - 1, ...weeklyEntries.map(e => e.year), ...monthlyBillingEntries.map(e => e.year)])].sort();
   const empresas = companies.filter(c => !c.archived).sort((a, b) => a.name.localeCompare(b.name, 'es'));
   return `<div class="fx-bar">
@@ -24754,10 +24796,15 @@ function tplLiquidaciones(){
       </div>
     </div>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
-      ${kpi('Ingresos', eur2(t.ingreso), null, true)}${kpi('Descuentos', t.descuentos ? '−' + eur2(t.descuentos) : '—', null, true)}${kpi('Indexación', t.idx ? eurSigned(t.idx) : '—', null, true)}${kpi('Neto a pagar', eur2(t.neto), null, true)}${kpi('Km', t.km.toLocaleString('es-ES', { maximumFractionDigits: 0 }), null, true)}${kpi('€/Km', t.km ? eur2((t.ingreso + t.idx) / t.km) : '—', null, true)}
+      ${kpi('Ingresos', eur2(t.ingreso), null, true)}${kpi('Descuentos', t.descuentos ? '−' + eur2(t.descuentos) : '—', null, true)}${kpi('Indexación', t.idx ? eurSigned(t.idx) : '—', null, true)}${kpi('Neto a pagar', eur2(t.neto), null, true)}${estOn ? kpi('Pendiente de pagar', eur2(porPagar), null, true) : ''}${kpi('Km', t.km.toLocaleString('es-ES', { maximumFractionDigits: 0 }), null, true)}${kpi('€/Km', t.km ? eur2((t.ingreso + t.idx) / t.km) : '—', null, true)}
     </div>
+    ${estOn ? `<div class="crm-fchips" style="align-items:center;">
+      ${[['', 'Todas', '']].concat(Object.keys(LIQ_ESTADOS).map(k => [k, LIQ_ESTADOS[k][0], LIQ_ESTADOS[k][1]])).map(([k, l, c]) => `<button type="button" class="crm-fc${(window.__liqEstado || '') === k ? ' on' : ''}"${c ? ` style="--c:${c}"` : ''} onclick="window.__liqEstado='${k}'; renderTab();">${c ? '<i></i>' : ''}${l}<em>${cuentas[k]}</em></button>`).join('')}
+      <span style="flex:1"></span>
+      <select style="width:auto;min-width:200px;" onchange="liqEstadoMasivo(this.value); this.value='';" title="Cambia el estado de todas las filas que se ven"><option value="">Marcar las que se ven como…</option>${Object.keys(LIQ_ESTADOS).map(k => `<option value="${k}">${LIQ_ESTADOS[k][0]}</option>`).join('')}</select>
+    </div>` : `<div class="liq-sin" style="margin-bottom:14px;">Para marcar cada liquidación como revisada, facturada o pagada falta ejecutar en Supabase el SQL <b>autonomos-liquidaciones-estado.sql</b>.</div>`}
     ${filas.length ? `<div class="card" style="padding:0;overflow-x:auto;margin-bottom:14px;"><table class="liq-t">
-      <thead><tr>${thSort('Conductor', 'text')}${thSort('Empresa', 'text')}${thSort('Modalidad', 'text')}${thSort('Jornadas', 'number', 'style="text-align:right;"')}${thSort('Km', 'number', 'style="text-align:right;"')}${thSort('Horas', 'number', 'style="text-align:right;"')}${thSort('Ingresos', 'number', 'style="text-align:right;"')}${thSort('Descuentos', 'number', 'style="text-align:right;"')}${thSort('Indexación', 'number', 'style="text-align:right;"')}${thSort('Neto', 'number', 'style="text-align:right;"')}${thSort('€/Km', 'number', 'style="text-align:right;"')}</tr></thead>
+      <thead><tr>${thSort('Conductor', 'text')}${thSort('Empresa', 'text')}${thSort('Modalidad', 'text')}${thSort('Jornadas', 'number', 'style="text-align:right;"')}${thSort('Km', 'number', 'style="text-align:right;"')}${thSort('Horas', 'number', 'style="text-align:right;"')}${thSort('Ingresos', 'number', 'style="text-align:right;"')}${thSort('Descuentos', 'number', 'style="text-align:right;"')}${thSort('Indexación', 'number', 'style="text-align:right;"')}${thSort('Neto', 'number', 'style="text-align:right;"')}${thSort('€/Km', 'number', 'style="text-align:right;"')}${estOn ? thSort('Estado', 'number') : ''}</tr></thead>
       <tbody>${filas.map(f => `<tr style="cursor:pointer;" onclick="liqAbrir('${f.d.id}')" title="Abrir su liquidación">
         <td data-sort-value="${esc(f.d.name)}"><b>${esc(f.d.name)}</b>${f.d.archived ? ' <span class="badge" style="background:var(--mutedFaint);">Inactivo</span>' : ''}</td>
         <td data-sort-value="${esc(f.co ? f.co.name : '')}" style="color:var(--muted);">${esc(f.co ? f.co.name : '—')}</td>
@@ -24769,8 +24816,8 @@ function tplLiquidaciones(){
         <td class="liq-n" style="color:${f.descuentos ? 'var(--danger)' : 'var(--mutedFaint)'};" data-sort-value="${f.descuentos}">${f.descuentos ? '−' + eur2(f.descuentos) : '—'}</td>
         <td class="liq-n" style="color:${f.idx > 0 ? 'var(--success)' : f.idx < 0 ? 'var(--danger)' : 'var(--mutedFaint)'};" data-sort-value="${f.idx}">${f.idx ? eurSigned(f.idx) : '—'}</td>
         <td class="liq-n liq-neto" data-sort-value="${f.neto}">${eur2(f.neto)}</td>
-        <td class="liq-n" style="color:var(--muted);" data-sort-value="${liqEurKm(f) == null ? -1 : liqEurKm(f)}">${liqEurKm(f) == null ? '—' : eur2(liqEurKm(f))}</td></tr>`).join('')}</tbody>
-      <tfoot><tr><td colspan="3">Total · ${filas.length} autónomo${filas.length === 1 ? '' : 's'}</td><td class="liq-n">${t.dias || '—'}</td><td class="liq-n">${t.km.toLocaleString('es-ES', { maximumFractionDigits: 1 })}</td><td class="liq-n">${t.horas ? fmtHoursMin(t.horas) : '—'}</td><td class="liq-n">${eur2(t.ingreso)}</td><td class="liq-n">${t.descuentos ? '−' + eur2(t.descuentos) : '—'}</td><td class="liq-n">${t.idx ? eurSigned(t.idx) : '—'}</td><td class="liq-n liq-neto">${eur2(t.neto)}</td><td class="liq-n">${t.km ? eur2((t.ingreso + t.idx) / t.km) : '—'}</td></tr></tfoot>
+        <td class="liq-n" style="color:var(--muted);" data-sort-value="${liqEurKm(f) == null ? -1 : liqEurKm(f)}">${liqEurKm(f) == null ? '—' : eur2(liqEurKm(f))}</td>${estOn ? `<td data-sort-value="${Object.keys(LIQ_ESTADOS).indexOf(f.estado)}">${f.d.archived ? `<span class="liq-es-t" style="--c:${LIQ_ESTADOS[f.estado][1]}">${LIQ_ESTADOS[f.estado][0]}</span>` : liqEstadoSelect(f.d.id, y, m, f.estado)}</td>` : ''}</tr>`).join('')}</tbody>
+      <tfoot><tr><td colspan="3">Total · ${filas.length} autónomo${filas.length === 1 ? '' : 's'}</td><td class="liq-n">${t.dias || '—'}</td><td class="liq-n">${t.km.toLocaleString('es-ES', { maximumFractionDigits: 1 })}</td><td class="liq-n">${t.horas ? fmtHoursMin(t.horas) : '—'}</td><td class="liq-n">${eur2(t.ingreso)}</td><td class="liq-n">${t.descuentos ? '−' + eur2(t.descuentos) : '—'}</td><td class="liq-n">${t.idx ? eurSigned(t.idx) : '—'}</td><td class="liq-n liq-neto">${eur2(t.neto)}</td><td class="liq-n">${t.km ? eur2((t.ingreso + t.idx) / t.km) : '—'}</td>${estOn ? '<td></td>' : ''}</tr></tfoot>
     </table></div>` : `<div class="card" style="text-align:center;color:var(--mutedFaint);padding:36px;margin-bottom:14px;">Ningún autónomo tiene datos en ${mes} de ${y}.</div>`}
     ${sin.length ? `<div class="liq-sin"><b>Sin datos este mes (${sin.length}):</b> ${sin.map(d => esc(d.name)).join(' · ')}</div>` : ''}
     <div class="fx-hint" style="margin-top:6px;">Plaza: ingresos = €/día + extras + suplementos + importes manuales; descuentos = gasoil + peajes + otros; la indexación va aparte. Piso móvil: ingresos = facturación del mes; descuentos = su comisión. Pulsa una fila para abrir su liquidación.</div>`;
@@ -24796,9 +24843,9 @@ function liqExportar(){
   if (!filas.length) { appToast('No hay nada que exportar este mes.', 'info'); return; }
   const num = v => v == null ? '' : String(Math.round(v * 100) / 100).replace('.', ',');
   const cel = x => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"';
-  const cab = ['Conductor', 'Empresa', 'Modalidad', 'Jornadas', 'Km', 'Horas', 'Ingresos', 'Descuentos', 'Indexación', 'Neto', '€/Km'];
-  const fs = filas.map(f => [f.d.name, f.co ? f.co.name : '', f.piso ? 'Piso móvil' : 'Plaza', f.dias == null ? '' : f.dias, num(f.km), f.horas == null ? '' : num(f.horas), num(f.ingreso), num(f.descuentos), num(f.idx), num(f.neto), liqEurKm(f) == null ? '' : num(liqEurKm(f))]);
-  fs.push(['TOTAL', '', '', t.dias || '', num(t.km), t.horas ? num(t.horas) : '', num(t.ingreso), num(t.descuentos), num(t.idx), num(t.neto), t.km ? num((t.ingreso + t.idx) / t.km) : '']);
+  const cab = ['Conductor', 'Empresa', 'Modalidad', 'Jornadas', 'Km', 'Horas', 'Ingresos', 'Descuentos', 'Indexación', 'Neto', '€/Km', 'Estado'];
+  const fs = filas.map(f => [f.d.name, f.co ? f.co.name : '', f.piso ? 'Piso móvil' : 'Plaza', f.dias == null ? '' : f.dias, num(f.km), f.horas == null ? '' : num(f.horas), num(f.ingreso), num(f.descuentos), num(f.idx), num(f.neto), liqEurKm(f) == null ? '' : num(liqEurKm(f)), LIQ_ESTADOS[f.estado][0]]);
+  fs.push(['TOTAL', '', '', t.dias || '', num(t.km), t.horas ? num(t.horas) : '', num(t.ingreso), num(t.descuentos), num(t.idx), num(t.neto), t.km ? num((t.ingreso + t.idx) / t.km) : '', '']);
   const csv = '﻿' + [cab, ...fs].map(r => r.map(cel).join(';')).join('\r\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
@@ -24821,9 +24868,9 @@ function liqImprimir(){
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Liquidaciones ${esc(mes)} ${y}</title><style>${css}</style></head><body>
     <div class="head"><h1>Liquidación de autónomos</h1><div class="gen">Generado el ${esc(fmtDateDMY(today()))}</div></div>
     <div class="meta"><div><b>Periodo</b>${esc(mes)} ${y}</div><div><b>Autónomos</b>${filas.length}</div><div><b>Neto total</b>${e2(t.neto)}</div></div>
-    <table><thead><tr><th>Conductor</th><th>Empresa</th><th>Modalidad</th><th class="n">Jornadas</th><th class="n">Km</th><th class="n">Horas</th><th class="n">Ingresos</th><th class="n">Descuentos</th><th class="n">Indexación</th><th class="n">Neto</th><th class="n">€/Km</th></tr></thead><tbody>
-    ${filas.map(f => `<tr><td><b>${esc(f.d.name)}</b></td><td>${esc(f.co ? f.co.name : '')}</td><td>${f.piso ? 'Piso móvil' : 'Plaza'}</td><td class="n">${f.dias == null ? '—' : f.dias}</td><td class="n">${n(f.km)}</td><td class="n">${f.horas == null ? '—' : fmtHoursMin(f.horas)}</td><td class="n">${e2(f.ingreso)}</td><td class="n">${f.descuentos ? '−' + e2(f.descuentos) : '—'}</td><td class="n">${f.idx ? eurSigned(f.idx) : '—'}</td><td class="n neto">${e2(f.neto)}</td><td class="n">${liqEurKm(f) == null ? '—' : e2(liqEurKm(f))}</td></tr>`).join('')}
-    </tbody><tfoot><tr><td colspan="3">Total</td><td class="n">${t.dias || '—'}</td><td class="n">${n(t.km)}</td><td class="n">${t.horas ? fmtHoursMin(t.horas) : '—'}</td><td class="n">${e2(t.ingreso)}</td><td class="n">${t.descuentos ? '−' + e2(t.descuentos) : '—'}</td><td class="n">${t.idx ? eurSigned(t.idx) : '—'}</td><td class="n neto">${e2(t.neto)}</td><td class="n">${t.km ? e2((t.ingreso + t.idx) / t.km) : '—'}</td></tr></tfoot></table>
+    <table><thead><tr><th>Conductor</th><th>Empresa</th><th>Modalidad</th><th class="n">Jornadas</th><th class="n">Km</th><th class="n">Horas</th><th class="n">Ingresos</th><th class="n">Descuentos</th><th class="n">Indexación</th><th class="n">Neto</th><th class="n">€/Km</th><th>Estado</th></tr></thead><tbody>
+    ${filas.map(f => `<tr><td><b>${esc(f.d.name)}</b></td><td>${esc(f.co ? f.co.name : '')}</td><td>${f.piso ? 'Piso móvil' : 'Plaza'}</td><td class="n">${f.dias == null ? '—' : f.dias}</td><td class="n">${n(f.km)}</td><td class="n">${f.horas == null ? '—' : fmtHoursMin(f.horas)}</td><td class="n">${e2(f.ingreso)}</td><td class="n">${f.descuentos ? '−' + e2(f.descuentos) : '—'}</td><td class="n">${f.idx ? eurSigned(f.idx) : '—'}</td><td class="n neto">${e2(f.neto)}</td><td class="n">${liqEurKm(f) == null ? '—' : e2(liqEurKm(f))}</td><td>${LIQ_ESTADOS[f.estado][0]}</td></tr>`).join('')}
+    </tbody><tfoot><tr><td colspan="3">Total</td><td class="n">${t.dias || '—'}</td><td class="n">${n(t.km)}</td><td class="n">${t.horas ? fmtHoursMin(t.horas) : '—'}</td><td class="n">${e2(t.ingreso)}</td><td class="n">${t.descuentos ? '−' + e2(t.descuentos) : '—'}</td><td class="n">${t.idx ? eurSigned(t.idx) : '—'}</td><td class="n neto">${e2(t.neto)}</td><td class="n">${t.km ? e2((t.ingreso + t.idx) / t.km) : '—'}</td><td></td></tr></tfoot></table>
     <div class="foot">Importes en euros. Neto = Ingresos − Descuentos + Indexación. En piso móvil, ingresos = facturación del mes y descuentos = comisión.</div></body></html>`;
   const f = document.createElement('iframe');
   f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
@@ -25613,7 +25660,7 @@ function tplDriverDetail(){
   const sFichSel = month === 'todos' ? `<div class="card" style="color:var(--muted);text-align:center;padding:26px;margin-bottom:18px;">Elige un mes arriba para ver los fichajes diarios de ese mes.</div>` : sFich;
   const cuerpo = tab === 'tarifas' ? sHist + sAnio + sIdx
     : tab === 'fichajes' ? sFiltro + sFichSel + sNotas
-    : tab === 'liquidacion' ? sFiltro + sLiq
+    : tab === 'liquidacion' ? sFiltro + driverLiqEstadoHtml(d, year, month) + sLiq
     : sFiltro + sKpis + sAvisos;
   return sCab + driverTabsBar([['resumen', 'Resumen'], ['tarifas', 'Tarifas e indexación'], ['fichajes', 'Fichajes'], ['liquidacion', 'Liquidación']], tab) + cuerpo;
 }
@@ -25867,7 +25914,7 @@ function tplPisoMovilDetail(d){
       ), readOnly)}`;
   const tabPM = ['facturacion', 'comision'].includes(window.__driverTab) ? window.__driverTab : 'facturacion';
   return sCab + driverTabsBar([['facturacion', 'Facturación mensual'], ['comision', 'Comisión']], tabPM)
-    + (tabPM === 'comision' ? sHist : sFiltro + sKpis + sTabla + sNotas);
+    + (tabPM === 'comision' ? sHist : sFiltro + driverLiqEstadoHtml(d, year, month) + sKpis + sTabla + sNotas);
 }
 function openBillingModal(driverId, editId){
   const editing = editId ? monthlyBillingEntries.find(e=>e.id===editId) : null;
