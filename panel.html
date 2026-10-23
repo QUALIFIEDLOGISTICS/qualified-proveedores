@@ -905,6 +905,13 @@
   .liq-sin b{color:var(--text);}
   .liq-es,.liq-es-t{--c:#8A93A0;display:inline-block;border:1px solid color-mix(in srgb,var(--c) 40%,var(--border));background:color-mix(in srgb,var(--c) 12%,var(--panel));color:var(--c);border-radius:99px;padding:4px 12px;font:700 12px/1.2 inherit;cursor:pointer;width:auto;min-width:112px;}
   .liq-es-t{cursor:default;}
+  /* pestañas que se pueden mover arrastrando */
+  .tab-mov{display:inline-flex;cursor:grab;position:relative;}
+  .tab-mov:active{cursor:grabbing;}
+  .tab-mov.tab-drag{opacity:.4;}
+  .tab-mov.tab-ol::before,.tab-mov.tab-or::after{content:'';position:absolute;top:6px;bottom:6px;width:3px;border-radius:2px;background:var(--primary);z-index:2;}
+  .tab-mov.tab-ol::before{left:-2px;}
+  .tab-mov.tab-or::after{right:-2px;}
   .crm-clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:13px;line-height:1.4;}
   .crm-b.ok{border-color:color-mix(in srgb,var(--success) 50%,var(--border));color:var(--success);}
   .crm-pc{display:flex;flex-direction:column;gap:6px;}
@@ -2984,6 +2991,51 @@ function colsProgramar(){ if (!colsTimer) colsTimer = setTimeout(colsBarrer, 30)
     document.querySelectorAll('th.col-drag, th.col-over').forEach(h => h.classList.remove('col-drag', 'col-over'));
   });
 })();
+/* ---- Mover las pestañas de la barra de cada módulo arrastrándolas ----
+   Las pestañas de Transporte, Comercial, Almacén, el CRM y Autónomos se pueden ordenar a gusto. El orden se guarda en este
+   navegador, por barra, y las pestañas nuevas que aparezcan van al final. Configuración se queda siempre a la derecha. */
+const TABS_LS = 'qualified.tabs.v1';
+function tabsLeer(){ try { return JSON.parse(localStorage.getItem(TABS_LS) || '{}') || {}; } catch (e) { return {}; } }
+function tabsGuardar(k, ids){ try { const o = tabsLeer(); o[k] = ids; localStorage.setItem(TABS_LS, JSON.stringify(o)); } catch (e) { /* sin almacenamiento: no pasa nada */ } }
+function tabsOrdenar(key, items){
+  const g = tabsLeer()[key];
+  if (!g || !g.length) return items;
+  const pos = id => { const i = g.indexOf(id); return i < 0 ? 1e6 : i; };
+  return items.map((x, i) => [x, i]).sort((a, b) => pos(a[0].id) - pos(b[0].id) || a[1] - b[1]).map(p => p[0]);
+}
+const tabsMov = (key, id, html) => `<span class="tab-mov" draggable="true" data-tabmov="${esc(key)}" data-id="${esc(id)}" title="Arrastra para cambiar el orden de las pestañas">${html}</span>`;
+(function tabsIniciar(){
+  let origen = null;
+  const lado = (ev, el) => { const r = el.getBoundingClientRect(); return ev.clientX < r.left + r.width / 2 ? 'l' : 'r'; };
+  const limpiar = () => document.querySelectorAll('.tab-mov.tab-drag, .tab-mov.tab-ol, .tab-mov.tab-or').forEach(e => e.classList.remove('tab-drag', 'tab-ol', 'tab-or'));
+  document.addEventListener('dragstart', ev => {
+    const t = ev.target && ev.target.closest ? ev.target.closest('.tab-mov') : null;
+    if (!t) return;
+    origen = t; t.classList.add('tab-drag');
+    try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', 'pestaña'); } catch (e) { /* sin dataTransfer */ }
+  });
+  document.addEventListener('dragover', ev => {
+    const t = ev.target && ev.target.closest ? ev.target.closest('.tab-mov') : null;
+    if (!origen || !t || t.dataset.tabmov !== origen.dataset.tabmov || t.parentElement !== origen.parentElement) return;
+    ev.preventDefault();
+    document.querySelectorAll('.tab-mov.tab-ol, .tab-mov.tab-or').forEach(e => { if (e !== t) e.classList.remove('tab-ol', 'tab-or'); });
+    if (t === origen) { t.classList.remove('tab-ol', 'tab-or'); return; }
+    const l = lado(ev, t); t.classList.toggle('tab-ol', l === 'l'); t.classList.toggle('tab-or', l === 'r');
+  });
+  document.addEventListener('drop', ev => {
+    const t = ev.target && ev.target.closest ? ev.target.closest('.tab-mov') : null;
+    if (!origen || !t || t === origen || t.dataset.tabmov !== origen.dataset.tabmov || t.parentElement !== origen.parentElement) return;
+    ev.preventDefault();
+    const key = origen.dataset.tabmov, ids = [...t.parentElement.querySelectorAll(`.tab-mov[data-tabmov="${key}"]`)].map(e => e.dataset.id);
+    const de = ids.indexOf(origen.dataset.id); ids.splice(de, 1);
+    let a = ids.indexOf(t.dataset.id); if (lado(ev, t) === 'r') a++;
+    ids.splice(a, 0, origen.dataset.id);
+    tabsGuardar(key, ids);
+    limpiar(); origen = null;
+    renderTab();
+  });
+  document.addEventListener('dragend', () => { origen = null; limpiar(); });
+})();
 // dd/mm/aaaa — para el listado del DeCA, donde se pidió este formato exacto.
 function fmtDateDMY(d){
   if (!d) return '—';
@@ -3296,7 +3348,7 @@ function sectionAllowedFor(s, mod, sec){
   const own = s.allowedTabs.filter(t => t.startsWith(mod + ':'));
   return !own.length || own.includes(mod + ':' + sec);
 }
-function moduleAllowedSections(mod){ return moduleSectionList(mod).filter(x => sectionAllowedFor(PROFILE, mod, x.id)); }
+function moduleAllowedSections(mod){ return tabsOrdenar(mod, moduleSectionList(mod).filter(x => sectionAllowedFor(PROFILE, mod, x.id))); }
 // Deja apuntados uno a uno los apartados de los módulos que los tienen, para
 // que marcar/desmarcar un apartado parta siempre de una lista completa.
 function permExpandTabs(tabs){
@@ -3810,7 +3862,7 @@ const ALMACEN_CONFIG_TAB = 'almacenconfig';
 function isAlmacenTab(id){ return id === ALMACEN_CONFIG_TAB || ALMACEN_SECTIONS.some(s => s.id === id); }
 function almacenVisibleSections(){
   const allowed = visibleTabs().map(t => t.id);
-  return ALMACEN_SECTIONS.filter(s => allowed.includes(s.id));
+  return tabsOrdenar('almacen', ALMACEN_SECTIONS.filter(s => allowed.includes(s.id)));
 }
 // La primera sección que la persona puede ver (Clientes si la tiene; si solo
 // tiene Configuración, se entra directo ahí).
@@ -3834,7 +3886,7 @@ function tplAlmacenBar(){
   return `
     <div style="display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
       <div style="display:flex;gap:2px;flex-wrap:wrap;">
-        ${sections.map(s => tabBtn(s.id, s.label)).join('')}
+        ${sections.map(s => tabsMov('almacen', s.id, tabBtn(s.id, s.label))).join('')}
       </div>
       <div style="margin-left:auto;display:flex;align-items:flex-end;gap:16px;">
         ${inConfig ? '' : `
@@ -14358,7 +14410,7 @@ function tplAutonomosBar(){
   if (autonomosPuede('conductores')) items.push(['lista', 'Conductores', 'openDriversList()']);
   if (autonomosPuede('resumen')) items.push(['dashboard', 'Resumen', 'openAutonomosDashboard()']);
   if (items.length < 2) return '';
-  return `<div class="doc-seg" style="margin-bottom:18px;">${items.map(([id, l, fn]) => `<button type="button" class="${act === id ? 'on' : ''}" onclick="${fn}">${l}</button>`).join('')}</div>`;
+  return `<div class="doc-seg" style="margin-bottom:18px;">${tabsOrdenar('autonomos', items.map(([id, l, fn]) => ({ id, l, fn }))).map(({ id, l, fn }) => tabsMov('autonomos', id, `<button type="button" class="${act === id ? 'on' : ''}" onclick="${fn}">${l}</button>`)).join('')}</div>`;
 }
 function tplAutonomos(){
   const v0 = window.__autonomosView;
@@ -16499,8 +16551,8 @@ function tplTraficoBar(){
   return `
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
       <div style="display:flex;gap:2px;flex-wrap:wrap;">
-        ${moduleAllowedSections('trafico').filter(s => s.id !== 'configuracion').map(s => moduleTabBtnHtml(`traficoIr('${s.id}')`, s.label, s.id === sec)).join('')}
-        ${puedeAutonomos() ? moduleTabBtnHtml("setTab('autonomos')", 'Autónomos', enAut) : ''}
+        ${tabsOrdenar('trafico', [...moduleAllowedSections('trafico').filter(s => s.id !== 'configuracion').map(s => ({ id: s.id, btn: moduleTabBtnHtml(`traficoIr('${s.id}')`, s.label, s.id === sec) })),
+          ...(puedeAutonomos() ? [{ id: 'autonomos', btn: moduleTabBtnHtml("setTab('autonomos')", 'Autónomos', enAut) }] : [])]).map(x => tabsMov('trafico', x.id, x.btn)).join('')}
       </div>
       ${sectionAllowedFor(PROFILE, 'trafico', 'configuracion') ? `<div>${moduleTabBtnHtml("traficoIr('configuracion')", 'Configuración', sec === 'configuracion')}</div>` : ''}
     </div>`;
@@ -17784,7 +17836,7 @@ function tplComercialBar(){
   return `
     <div style="display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
       <div style="display:flex;gap:2px;flex-wrap:wrap;">
-        ${moduleAllowedSections('comercial').map(s => moduleTabBtnHtml(`setComercialSection('${s.id}')`, s.label, s.id === sec, s.id === 'crm' ? '<span class="crm-n" id="crm-tab-n" style="display:none;"></span>' : '')).join('')}
+        ${moduleAllowedSections('comercial').map(s => tabsMov('comercial', s.id, moduleTabBtnHtml(`setComercialSection('${s.id}')`, s.label, s.id === sec, s.id === 'crm' ? '<span class="crm-n" id="crm-tab-n" style="display:none;"></span>' : ''))).join('')}
       </div>
     </div>`;
 }
@@ -17918,10 +17970,10 @@ function crmCargar(){
 /* ---- Pantalla ---- */
 function tplCrmPage(){
   const S = crmS();
-  const tab = (v, t) => `<button type="button" class="${S.vista === v ? 'on' : ''}" onclick="crmVista('${v}')">${t}${v === 'hoy' ? '<span id="crm-hoy-n" class="crm-n"></span>' : ''}</button>`;
+  const tab = (v, t) => ({ id: v, html: tabsMov('crm', v, `<button type="button" data-v="${v}" class="${S.vista === v ? 'on' : ''}" onclick="crmVista('${v}')">${t}${v === 'hoy' ? '<span id="crm-hoy-n" class="crm-n"></span>' : ''}</button>`) });
   return `<div id="crm-root" class="crm">
     <div class="crm-head">
-      <div class="doc-seg crm-tabs">${tab('hoy', 'Hoy')}${tab('tablero', 'Tablero')}${tab('lista', 'Cotizaciones')}${tab('prospectos', 'Prospectos')}${tab('informes', 'Informes')}${tab('documentos', 'Documentos')}</div>
+      <div class="doc-seg crm-tabs">${tabsOrdenar('crm', [tab('hoy', 'Hoy'), tab('tablero', 'Tablero'), tab('lista', 'Cotizaciones'), tab('prospectos', 'Prospectos'), tab('informes', 'Informes'), tab('documentos', 'Documentos')]).map(x => x.html).join('')}</div>
       <div class="crm-head-r">
         <div class="crm-serv" id="crm-serv">${crmServHtml()}</div>
         <button type="button" class="btn btn-primary" onclick="crmNueva()">+ Nueva cotización</button>
@@ -17940,7 +17992,7 @@ function crmVista(v){
   const S = crmS();
   S.vista = v;
   try { localStorage.setItem('qualified.crm.vista', v); } catch (e) { /* sin almacenamiento */ }
-  document.querySelectorAll('.crm-tabs button').forEach((b, i) => b.classList.toggle('on', ['hoy', 'tablero', 'lista', 'prospectos', 'informes', 'documentos'][i] === v));
+  document.querySelectorAll('.crm-tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   crmPinta();
 }
 async function crmHidratar(){
