@@ -1561,6 +1561,10 @@
   .cg-menu button{display:block;width:100%;text-align:left;border:none;background:none;padding:8px 11px;border-radius:7px;font-size:13px;cursor:pointer;color:var(--text);font-family:var(--body);}
   .cg-menu button:hover{background:var(--panel2);}
   .cg-menu button.danger{color:var(--danger);}
+  .alb-mn-b{display:inline-flex;align-items:center;justify-content:center;width:30px;height:28px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--muted);cursor:pointer;} .alb-mn-b:hover{color:var(--text);border-color:var(--primary);}
+  .alb-menu{position:fixed;z-index:1200;min-width:190px;padding:5px;border:1px solid var(--border);border-radius:12px;background:var(--panel);box-shadow:0 14px 34px -12px rgba(20,35,60,.35);}
+  .alb-menu button{display:flex;align-items:center;gap:10px;width:100%;padding:8px 11px;border:none;border-radius:8px;background:none;font:inherit;font-size:13.5px;color:var(--text);cursor:pointer;text-align:left;} .alb-menu button:hover{background:var(--panel2);} .alb-menu button.peligro{color:var(--danger);} .alb-menu button.peligro:hover{background:color-mix(in srgb,var(--danger) 10%,var(--panel));}
+  .alb-mn-sep{height:1px;margin:5px 4px;background:var(--border);}
   .sga-borr{display:inline-block;font-size:10.5px;font-weight:800;letter-spacing:.6px;padding:3px 9px;border-radius:999px;background:color-mix(in srgb,#C98A2E 20%,var(--panel));color:#8A5C14;border:1px solid color-mix(in srgb,#C98A2E 45%,transparent);}
   .cg-sinart{display:inline-block;margin-left:6px;font-size:10.5px;font-weight:700;letter-spacing:.2px;padding:2px 8px;border-radius:999px;background:color-mix(in srgb,#C98A2E 18%,var(--panel));color:#8A5C14;vertical-align:1px;}
   .cg-donde code{font-family:var(--mono);font-size:11.5px;background:var(--panel2);border-radius:5px;padding:1px 6px;}
@@ -5329,6 +5333,49 @@ function stockClienteRowHtml(c, ps){
       </div>` : ''}
     </div>`;
 }
+/* ---- Acciones de cada albarán en las listas de Recepciones y Expediciones ----
+   Se ve una sola acción a la vista (Confirmar si es un borrador; si no, Albarán) y lo demás va en un menú «⋯»,
+   con «Anular» separado y en rojo para que no se pulse sin querer. */
+function sgaAlbEstadoHtml(a){
+  if (a.estado === 'anulado') return chipHtml('Anulada', 'var(--danger)', a.anuladoMotivo ? 'Motivo: ' + a.anuladoMotivo : '');
+  if (a.estado === 'confirmado' && a.borrador) return '<span class="sga-borr" title="Albarán impreso o preparado, pendiente de confirmar la expedición real">BORRADOR</span>';
+  return a.estado === 'confirmado' ? chipHtml('Confirmada', 'var(--success)') : chipHtml('Borrador', 'var(--muted)');
+}
+function sgaAlbMenuItems(a){
+  const puede = sgaPuedeEditarStock(), conf = a.estado === 'confirmado';
+  const it = [];
+  if (conf && a.tipo === 'salida' && a.borrador) it.push(['Imprimir albarán', 'file', `sgaAlbaranImprimir('${a.id}')`]);
+  if (conf && (a.tipo === 'salida' || a.tipo === 'entrada') && puede) it.push(['Editar', 'edit', `${a.tipo === 'salida' ? 'sgaSalidaEditar' : 'sgaEntradaEditar'}('${a.id}')`]);
+  if (conf && a.tipo !== 'regularizacion' && puede) it.push(['Anular albarán', 'trash', `sgaAnularAbrir('${a.id}')`, true]);
+  return it;
+}
+function sgaAlbAccionesHtml(a){
+  const puede = sgaPuedeEditarStock(), conf = a.estado === 'confirmado';
+  const prim = conf && a.tipo === 'salida' && a.borrador && puede
+    ? `<button class="btn btn-primary" style="padding:4px 12px;font-size:12px;" onclick="sgaSalidaEditar('${a.id}', true)" title="Poner la fecha real de expedición y confirmarla">Confirmar</button>`
+    : conf && a.tipo === 'salida' ? `<button class="btn btn-ghost" style="padding:4px 12px;font-size:12px;" onclick="sgaAlbaranImprimir('${a.id}')" title="Imprimir el albarán o guardarlo en PDF">Albarán</button>` : '';
+  const items = sgaAlbMenuItems(a);
+  return `<div style="display:flex;gap:6px;justify-content:flex-end;align-items:center;">${prim}${items.length ? `<button type="button" class="alb-mn-b" onclick="sgaAlbMenu(event, '${a.id}')" title="Más acciones" aria-label="Más acciones"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>` : ''}</div>`;
+}
+function sgaAlbMenuCerrar(){ const m = document.getElementById('alb-menu'); if (m) m.remove(); }
+function sgaAlbMenu(ev, id){
+  ev.stopPropagation();
+  const abierto = document.getElementById('alb-menu');
+  sgaAlbMenuCerrar();
+  if (abierto && abierto.dataset.id === id) return;
+  const a = sgaAlbaranes.find(x => x.id === id); if (!a) return;
+  const items = sgaAlbMenuItems(a); if (!items.length) return;
+  const m = document.createElement('div');
+  m.id = 'alb-menu'; m.className = 'alb-menu'; m.dataset.id = id;
+  m.innerHTML = items.map(([t, ico, fn, peligro], i) => `${peligro && i ? '<div class="alb-mn-sep"></div>' : ''}<button type="button" class="${peligro ? 'peligro' : ''}" onclick="sgaAlbMenuCerrar(); ${fn}">${homeIcon(HOME_ICON_PATHS[ico], 15, 'currentColor', 1.9)}<span>${t}</span></button>`).join('');
+  document.body.appendChild(m);
+  const r = ev.currentTarget.getBoundingClientRect();
+  m.style.top = (r.bottom + 6 + m.offsetHeight > innerHeight ? Math.max(8, r.top - 6 - m.offsetHeight) : r.bottom + 6) + 'px';
+  m.style.left = Math.max(8, Math.min(r.right - m.offsetWidth, innerWidth - m.offsetWidth - 8)) + 'px';
+}
+document.addEventListener('click', e => { if (!e.target.closest || !e.target.closest('#alb-menu')) sgaAlbMenuCerrar(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') sgaAlbMenuCerrar(); });
+window.addEventListener('scroll', sgaAlbMenuCerrar, true);
 function stockBodyHtml(){
   if (stockSeg() === 'catalogo') return stockCatalogoBodyHtml();
   if (stockSeg() === 'resumen') return stockResumenBodyHtml();
@@ -5353,9 +5400,8 @@ function stockBodyHtml(){
           <td class="sga-merc" data-sort-value="${esc(sgaMercanciaResumen(a))}"${sgaLineasAlb(a).length ? ` data-tip="${esc(sgaMercanciaDetalle(a))}"` : ''}>${sgaMercanciaResumen(a) ? esc(sgaMercanciaResumen(a)) : '<span style="color:var(--mutedFaint);">—</span>'}</td>
           <td data-sort-value="${esc(a.modalidad)}">${a.tipo === 'regularizacion' ? 'Regularización' : a.tipo === 'apertura' ? 'Stock inicial' : esc(SGA_MODALIDADES[a.modalidad] || a.modalidad)}</td>
           <td class="tf-precio" data-sort-value="${Math.abs(sgaMovsAlbaran[a.id] || 0)}">${sgaMovsAlbaran[a.id] == null ? '—' : a.tipo === 'regularizacion' ? (sgaMovsAlbaran[a.id] > 0 ? '+' : '') + sgaMovsAlbaran[a.id] : Math.abs(sgaMovsAlbaran[a.id])}</td>
-          <td data-sort-value="${esc(a.estado)}"${a.estado === 'anulado' ? ` title="${esc(a.anuladoMotivo)}" style="color:var(--danger);"` : ''}>${a.estado === 'confirmado' && a.borrador ? '<span class="sga-borr" title="Albarán impreso o preparado, pendiente de confirmar la expedición real">BORRADOR</span>' : a.estado === 'confirmado' ? 'Confirmada' : a.estado === 'anulado' ? 'Anulada' : 'Borrador'}</td>
-          <td style="text-align:right;white-space:nowrap;">${a.estado === 'confirmado' && a.tipo === 'salida' && a.borrador && sgaPuedeEditarStock() ? `<button class="btn btn-primary" style="padding:4px 10px;font-size:12px;" onclick="sgaSalidaEditar('${a.id}', true)" title="Poner la fecha real de expedición y confirmarla">Confirmar</button>` : ''} ${a.estado === 'confirmado' && a.tipo === 'salida' ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="sgaAlbaranImprimir
-('${a.id}')" title="Imprimir el albarán o guardarlo en PDF">Albarán</button>` : ''} ${a.estado === 'confirmado' && (a.tipo === 'salida' || a.tipo === 'entrada') && sgaPuedeEditarStock() ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="${a.tipo === 'salida' ? 'sgaSalidaEditar' : 'sgaEntradaEditar'}('${a.id}')" title="Cambiar esta ${a.tipo}: al guardar se recalcula todo">Editar</button>` : ''} ${a.estado === 'confirmado' && a.tipo !== 'regularizacion' && sgaPuedeEditarStock() ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:var(--danger);" onclick="sgaAnularAbrir('${a.id}')">Anular</button>` : ''}</td>
+          <td data-sort-value="${esc(a.estado)}">${sgaAlbEstadoHtml(a)}</td>
+          <td style="text-align:right;white-space:nowrap;">${sgaAlbAccionesHtml(a)}</td>
         </tr>`; }).join('')}</tbody></table></div>`;
   }
   const porCliente = {};
