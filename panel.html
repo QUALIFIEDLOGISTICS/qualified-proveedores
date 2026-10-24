@@ -20563,6 +20563,7 @@ function openAlmacenajeProductoForm(editId, keepNav){
   window.__apFormId = editId || null;
   window.__apFormDirty = false;
   renderTab();
+  almacenajeCobroActualizar();
   window.scrollTo(0, 0);
   if (!editId) setTimeout(() => { const el = document.getElementById('ap-nombre'); if (el) el.focus(); }, 0);
 }
@@ -20602,24 +20603,35 @@ function almacenajeCategoriaCambio(){
   const guardada = window.__apFormId ? (almacenajeProducto(window.__apFormId) || {}).unidad : '';
   if (sel) sel.innerHTML = almacenajeUnidadOpcionesHtml(cat, sel.value, guardada);
 }
-// Al elegir «Se cobra al…», se sugiere la unidad de cobro que le corresponde (se puede cambiar después, y solo si es una de las de su actividad).
-function almacenajeDisparadorCambio(){
-  const d = ALMACENAJE_DISPARADORES[document.getElementById('ap-disparador').value];
-  const sel = document.getElementById('ap-unidad');
-  if (d && d.unidad && sel && [...sel.options].some(o => o.value === d.unidad)) sel.value = d.unidad;
+// «Se cobra al…» ya no se elige: sale de la actividad, la unidad y (solo en Movimiento) de si es en la recepción o en la expedición.
+function almacenajeDisparadorDe(cat, unidad, direccion){
+  if (cat === 'almacenaje') return unidad === 'mes' ? 'stock_mes' : 'stock_dia';
+  if (cat === 'extra') return 'manual';
+  const albaran = unidad === 'albaran', sale = direccion === 'expedicion';
+  return sale ? (albaran ? 'carga' : 'salida') : (albaran ? 'descarga' : 'entrada');
+}
+// Enseña u oculta «Se cobra en» y explica con una frase cómo se cobrará el producto
+function almacenajeCobroActualizar(){
+  const cat = (document.getElementById('ap-categoria') || {}).value, uni = (document.getElementById('ap-unidad') || {}).value;
+  const w = document.getElementById('ap-dir-w'), h = document.getElementById('ap-auto');
+  if (w) w.style.display = cat === 'movimiento' ? '' : 'none';
+  if (!h) return;
+  const dir = (document.getElementById('ap-direccion') || {}).value;
+  h.textContent = cat === 'almacenaje' ? (uni === 'mes' ? 'Se cobra solo cada mes, con los metros cuadrados que ocupa el cliente.' : 'Se cobra solo cada día, con el stock que haya en el almacén.')
+    : cat === 'extra' ? 'Lo apunta el operario a mano en el albarán, con la cantidad que toque.'
+    : `Se cobra solo en cada ${dir === 'expedicion' ? 'expedición' : 'recepción'}${uni === 'albaran' ? ', una vez por albarán' : uni === 'bulto' ? ', por cada bulto' : ', por cada palet o unidad'}.`;
 }
 async function submitAlmacenajeProducto(editId){
   const nombre = (document.getElementById('ap-nombre').value || '').trim();
   const categoria = document.getElementById('ap-categoria').value;
   const unidad = document.getElementById('ap-unidad').value;
-  const disparador = document.getElementById('ap-disparador').value;
+  const disparador = almacenajeDisparadorDe(categoria, unidad, (document.getElementById('ap-direccion') || {}).value);   // se deduce: ya no se elige
   const familia = document.getElementById('ap-familia').value;
   // El subtipo ya no se escribe: el nombre lleva todo. Un producto que todavía lo tiene (hasta pasar su subtipo al nombre) lo conserva tal cual.
   const previo = editId ? almacenajeProducto(editId) : null;
   const subtipoValor = previo && previo.usaSubtipo ? (previo.subtipoValor || '') : '';
   const usaSubtipo = !!subtipoValor;
   if (!nombre) { appToast('Ponle un nombre al producto.'); return; }
-  if (!disparador) { appToast('Indica cuándo se cobra este producto («Se cobra al…»).'); return; }
   // Dos productos no pueden llamarse igual y tener el mismo subtipo (saldrían idénticos al elegirlos en una tarifa).
   const clave = (n, s) => `${n} ${s || ''}`.replace(/[ ]+/g, ' ').trim().toLowerCase();   // compara el nombre completo
   const repetido = almacenajeProductos.find(p => p.id !== editId && clave(p.nombre, p.subtipoValor) === clave(nombre, subtipoValor));
@@ -20725,7 +20737,7 @@ function tplAlmacenajeProductosPage(){
         <b>${esc(almacenajeCategoriaLabel(cat))}</b><span>${ps.length} producto${ps.length === 1 ? '' : 's'}</span><i>▾</i>
       </button>
       ${cerrada ? '' : `<div style="overflow-x:auto;border-top:1px solid var(--border);"><table class="tf-table">
-        <thead><tr>${thSort('Nombre','text')}${hayLegacy ? thSort('Subtipo','text') : ''}${thSort('Unidad','text')}${thSort('Se cobra al…','text')}${thSort('Familia','text')}${thSort('Estado','text')}<th></th></tr></thead>
+        <thead><tr>${thSort('Nombre','text')}${hayLegacy ? thSort('Subtipo','text') : ''}${thSort('Unidad','text')}${thSort('Se cobra','text')}${thSort('Familia','text')}${thSort('Estado','text')}<th></th></tr></thead>
         <tbody>${ps.map(p => apFilaProductoHtml(p, hayLegacy)).join('')}</tbody>
       </table></div>`}
     </div>`;
@@ -20780,30 +20792,31 @@ function tplAlmacenajeProductoFormPage(){
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
             <div class="field" style="flex:1;min-width:200px;margin-bottom:0;">
               <label>Tipo de actividad</label>
-              <select id="ap-categoria" onchange="almacenajeCategoriaCambio()">${Object.keys(ALMACENAJE_CATEGORIAS).map(cat => `<option value="${cat}" ${p.categoria===cat?'selected':''}>${esc(ALMACENAJE_CATEGORIAS[cat])}</option>`).join('')}</select>
+              <select id="ap-categoria" onchange="almacenajeCategoriaCambio(); almacenajeCobroActualizar();">${Object.keys(ALMACENAJE_CATEGORIAS).map(cat => `<option value="${cat}" ${p.categoria===cat?'selected':''}>${esc(ALMACENAJE_CATEGORIAS[cat])}</option>`).join('')}</select>
             </div>
             <div class="field" style="flex:1;min-width:200px;margin-bottom:0;">
               <label>Unidad de cobro</label>
-              <select id="ap-unidad">${almacenajeUnidadOpcionesHtml(p.categoria || Object.keys(ALMACENAJE_CATEGORIAS)[0], p.unidad, p.unidad)}</select>
+              <select id="ap-unidad" onchange="almacenajeCobroActualizar()">${almacenajeUnidadOpcionesHtml(p.categoria || Object.keys(ALMACENAJE_CATEGORIAS)[0], p.unidad, p.unidad)}</select>
             </div>
           </div>
-          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;">
-            <div class="field" style="flex:2;min-width:240px;margin-bottom:0;">
-              <label>Se cobra al… <span class="dc-req">*</span></label>
-              <select id="ap-disparador" onchange="almacenajeDisparadorCambio()">
-                <option value="">Elige cuándo se cobra</option>
-                ${Object.keys(ALMACENAJE_DISPARADORES).map(k => `<option value="${k}" ${p.disparador===k?'selected':''}>${esc(ALMACENAJE_DISPARADORES[k].label)}</option>`).join('')}
-              </select>
-            </div>
-            <div class="field" style="flex:1;min-width:180px;margin-bottom:0;">
-              <label>Familia de carga</label>
-              <select id="ap-familia">
-                <option value="">— Ninguna —</option>
-                ${Object.keys(ALMACENAJE_FAMILIAS).map(k => `<option value="${k}" ${p.familia===k?'selected':''}>${esc(ALMACENAJE_FAMILIAS[k])}</option>`).join('')}
+          <div id="ap-dir-w" style="${(p.categoria || 'almacenaje') === 'movimiento' ? '' : 'display:none;'}margin-top:14px;">
+            <div class="field" style="margin-bottom:0;max-width:340px;">
+              <label>Se cobra en</label>
+              <select id="ap-direccion" onchange="almacenajeCobroActualizar()">
+                <option value="recepcion" ${['salida', 'carga'].includes(p.disparador) ? '' : 'selected'}>Recepción (cuando entra mercancía)</option>
+                <option value="expedicion" ${['salida', 'carga'].includes(p.disparador) ? 'selected' : ''}>Expedición (cuando sale mercancía)</option>
               </select>
             </div>
           </div>
-          <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">Es lo que permite al SGA cobrarlo solo. «Familia» agrupa los tipos de carga que se cobran igual al entrar o salir: un Palet Europeo, Americano o Medio Palet cuentan como «Palet», y las bobinas de cualquier diámetro como «Bobina».</div>
+          <div id="ap-auto" style="font-size:12.5px;color:var(--muted);margin-top:10px;"></div>
+          <div class="field" style="margin:14px 0 0;max-width:340px;">
+            <label>Familia de carga</label>
+            <select id="ap-familia">
+              <option value="">— Ninguna —</option>
+              ${Object.keys(ALMACENAJE_FAMILIAS).map(k => `<option value="${k}" ${p.familia===k?'selected':''}>${esc(ALMACENAJE_FAMILIAS[k])}</option>`).join('')}
+            </select>
+            <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">Une lo que se guarda con lo que se cobra al moverlo: un Palet Europeo, Americano o Medio Palet son «Palet», y las bobinas de cualquier diámetro son «Bobina». Se sustituirá por algo más claro.</div>
+          </div>
         </div>
       </div>
     </div>
