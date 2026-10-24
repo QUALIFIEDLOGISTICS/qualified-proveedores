@@ -5740,6 +5740,68 @@ function catFiltrosHtml(){
     `<button type="button" class="${catFiltro() === k ? 'on' : ''}" data-k="${k}" onclick="window.__catFiltro='${k}'; refreshStockBody();">${t}<span class="cl-n">${n[k]}</span></button>`).join('');
 }
 function catRefrescarFiltros(){ const f = document.getElementById('cat-filtros'); if (f) f.innerHTML = catFiltrosHtml(); }
+// Clientes de pieza única (cada palet es distinto): el inventario se ve palet a palet, no por artículo.
+// Por defecto se detecta solo (varios artículos y ninguno con más de un palet); se puede cambiar a mano arriba.
+function catModoPalets(cid){
+  if (!cid) return false;
+  const m = (window.__catModo || {})[cid];
+  if (m) return m === 'palets';
+  const arts = sgaArticulosDe(cid, true).filter(a => !a.archived).concat(catArticulosVirtuales(cid));
+  return arts.length >= 4 && arts.every(a => (a.virtual ? a._partidas : sgaPartidas.filter(p => p.articuloId === a.id)).filter(p => p.actual > 0).length <= 1);
+}
+function catElegirModo(m){ const o = (window.__catModo = window.__catModo || {}); o[catClienteSel()] = m; renderTab(); }
+function catModoHtml(){
+  const cid = catClienteSel();
+  if (!cid) return '';
+  const pal = catModoPalets(cid);
+  return `<div class="doc-seg" id="cat-modo" title="Cómo se ve el inventario de este cliente"><button type="button" class="${pal ? '' : 'on'}" onclick="catElegirModo('articulos')">Por artículo</button><button type="button" class="${pal ? 'on' : ''}" onclick="catElegirModo('palets')">Palet a palet</button></div>${pal && sgaPuedeEditarStock() ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catEditarTodo()" title="Abrir una pantalla completa para editar el catálogo">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>` : ''}`;
+}
+// «hoy», «12 días», «7 meses», «1 año y 3 meses»
+function catTiempoTxt(f){
+  const d = Math.floor((new Date(today() + 'T00:00:00') - new Date(f + 'T00:00:00')) / 86400000);
+  if (!(d >= 0)) return '';
+  if (d < 1) return 'hoy';
+  if (d < 31) return `${d} día${d === 1 ? '' : 's'}`;
+  const m = Math.floor(d / 30.44);
+  if (m < 12) return `${m} mes${m === 1 ? '' : 'es'}`;
+  const y = Math.floor(m / 12), r = m % 12;
+  return `${y} año${y === 1 ? '' : 's'}${r ? ` y ${r} mes${r === 1 ? '' : 'es'}` : ''}`;
+}
+// Una fila por palet: dónde está, desde cuándo y su estado, sin tener que abrir cada artículo
+function catPaletsHtml(lista, cols, vacio){
+  const vac = '<span style="color:var(--mutedFaint);">—</span>';
+  const filas = [];
+  lista.forEach(a => { const ps = catPartidasArticulo(a); if (ps.length) ps.forEach(p => filas.push({ a, p })); else filas.push({ a, p: null }); });
+  filas.sort((x, y) => (x.p ? 0 : 1) - (y.p ? 0 : 1) || (x.p && y.p ? x.p.fechaEntrada.localeCompare(y.p.fechaEntrada) : 0) || x.a.nombre.localeCompare(y.a.nombre, 'es'));
+  const num = v => (v == null ? '' : String(v).replace('.', ','));
+  const celdaNum = v => `<td style="text-align:right;white-space:nowrap;" data-sort-value="${esc(v)}">${v === '' ? vac : esc(v)}</td>`;
+  const cabecera = [thSort('Artículo', 'text'), thSort('Código', 'text'), thSort('Almacén', 'text'), thSort('Sitio', 'text'), thSort('Entrada', 'date'),
+    cols.tipo ? thSort('Tipo de carga', 'text') : '', cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : '', cols.peso ? thSort('Peso', 'number', 'style="text-align:right;"') : '', cols.medidas ? thSort('Medidas', 'text') : '',
+    ...cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')), thSort('Estado', 'text')].join('');
+  const fila = ({ a, p }) => {
+    const prod = a.productoId ? almacenajeProducto(a.productoId) : null, prodTxt = prod ? almacenajeProductoTexto(prod) : '';
+    return `
+    <tr class="cg-row">
+      <td class="cg-prod" data-sort-value="${esc(a.nombre)}"><span class="cg-nom">${esc(a.nombre)}</span>${a.virtual ? ' <span class="cg-sinart" title="Esta mercancía no tiene artículo en el catálogo">Sin artículo</span>' : ''}${cols.referencia && a.referencia ? `<div class="cg-ref">${esc(a.referencia)}</div>` : ''}</td>
+      <td style="font-family:var(--mono);font-size:12px;" data-sort-value="${esc(p ? p.codigo : '')}">${p && p.codigo ? esc(p.codigo) : vac}</td>
+      <td data-sort-value="${esc(p ? whNombre(p.warehouseId) : '')}">${p ? esc(whNombre(p.warehouseId)) : vac}</td>
+      <td data-sort-value="${esc(p ? sgaSitioTxt(p) : '')}">${p ? esc(sgaSitioTxt(p)) : vac}</td>
+      <td style="white-space:nowrap;" data-sort-value="${esc(p ? p.fechaEntrada : '')}">${p ? `${fmtDateDMY(p.fechaEntrada)}<div class="cg-ref">${esc(catTiempoTxt(p.fechaEntrada) === 'hoy' ? 'hoy' : catTiempoTxt(p.fechaEntrada) ? 'hace ' + catTiempoTxt(p.fechaEntrada) : '')}</div>` : vac}</td>
+      ${cols.tipo ? `<td data-sort-value="${esc(prodTxt)}">${prodTxt ? `<span class="cg-chip" title="${esc(prodTxt)}">${esc(prodTxt.replace(/\s*·\s*sin subtipo definido/i, ''))}</span>` : vac}</td>` : ''}
+      ${cols.ml ? celdaNum(num(a.metrosLineales)) : ''}${cols.peso ? celdaNum(num(a.peso)) : ''}
+      ${cols.medidas ? `<td class="cg-trunc" data-sort-value="${esc(a.medidas)}">${a.medidas ? esc(a.medidas) : vac}</td>` : ''}
+      ${cols.x.map(f => { const v = a.atributos ? a.atributos[f.id] : null; return `<td class="cg-trunc" data-sort-value="${esc(v == null ? '' : v)}">${v != null && v !== '' ? esc(sgaCampoMostrar(f, v)) : vac}</td>`; }).join('')}
+      <td class="cg-stock" data-sort-value="${p ? 1 : 0}">${p ? `<span class="cg-st ok"><i></i>En almacén${p.actual > 1 ? ` · ${p.actual} palets` : ''}</span>` : '<span class="cg-st no"><i></i>Sin stock</span>'}</td>
+    </tr>`;
+  };
+  return `
+    <div class="card cg-compacta" style="padding:0;">
+      <div class="tc-hist-box" style="max-height:660px;min-height:0;border:none;border-radius:10px;">
+        <table class="tf-table cg-tabla"><thead><tr>${cabecera}</tr></thead><tbody>${filas.map(fila).join('')}</tbody></table>
+      </div>
+      ${vacio}
+    </div>`;
+}
 function stockCatalogoBodyHtml(){
   if (window.__stockView !== 'catedit') window.__catEditAll = false;   // si se salió de la pantalla de edición sin pasar por «Listo», no se queda a medias
   const cid = catClienteSel();
@@ -5759,6 +5821,7 @@ function stockCatalogoBodyHtml(){
   // «Editar» va en la primera casilla de la barra gris de la tabla (a la izquierda), no en la cabecera de la página
   const conBotonEditar = h => (!h || !puede || window.__catEditAll) ? h : h.replace(/^(<th[^>]*>)([\s\S]*)<\/th>$/, (m, ini, cont) => `${ini}<div class="cg-th-flex"><span>${cont}</span><button type="button" class="cg-th-ed" onclick="event.stopPropagation(); catEditarTodo();" title="Abrir una pantalla completa para editar todo el catálogo">${homeIcon(HOME_ICON_PATHS.edit, 13, 'currentColor', 2)}<span>Editar</span></button></div></th>`);
   const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${q ? 'Ningún artículo coincide con la búsqueda.' : filtro === 'stock' ? 'Ningún artículo tiene stock ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : cid ? 'Este cliente todavía no tiene artículos. Pulsa «Editar» (arriba a la derecha) para crear el primero o pegar varios desde Excel.' : 'Todavía no hay artículos. Elige un cliente y pulsa «Editar» para crear el primero.'}</div>` : '';
+  if (!window.__catEditAll && catModoPalets(cid)) return catPaletsHtml(lista, cols, vacio);
   return `
     ${cid ? '' : `<div class="card" style="padding:11px 16px;margin-bottom:12px;font-size:13.5px;color:var(--text);border-left:4px solid var(--primary);">Estás viendo los artículos de <b>todos los clientes</b>. Para <b>crear</b> uno, elige primero el cliente en el desplegable de arriba.</div>`}
     <div class="card${window.__catEditAll ? '' : ' cg-compacta'}" style="padding:0;">
@@ -6592,6 +6655,7 @@ function tplStock(){
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
       <div class="doc-seg" id="cat-filtros">${catFiltrosHtml()}</div>
+      ${catModoHtml()}
       ` : seg === 'resumen' ? `
       <select id="rm-cliente" onchange="sgaResumenElegir()" style="min-width:230px;"><option value="">Elige el cliente…</option>${sgaClientesAlmacenLista().map(c => `<option value="${c.id}" ${c.id === sgaResumenEstado().clienteId ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
       <input id="rm-mes" type="month" value="${esc(sgaResumenEstado().periodo)}" onchange="sgaResumenElegir()" style="width:170px;" />
