@@ -6548,9 +6548,10 @@ function sgaTarifaEn(clienteId, productoId, fecha){
 function sgaProductoAlbaran(modalidad, disparador){
   const ps = almacenajeProductos.filter(p => !p.archived && p.disparador === (disparador || 'descarga'));
   const n = s => String(s || '').toLowerCase();
-  if (modalidad === 'contenedor_20') return ps.find(p => /contenedor/.test(n(p.nombre)) && /20/.test(n(p.subtipoValor)));
-  if (modalidad === 'contenedor_40') return ps.find(p => /contenedor/.test(n(p.nombre)) && /40/.test(n(p.subtipoValor)));
-  if (modalidad === 'trailer') return ps.find(p => /tr[aá]iler/.test(n(p.nombre)));
+  const completo = p => n(p.nombre + ' ' + (p.subtipoValor || ''));   // sirve igual con el nombre fusionado («Descarga Contenedor 20' Paletizado») que con el antiguo nombre + subtipo
+  if (modalidad === 'contenedor_20') return ps.find(p => /contenedor/.test(completo(p)) && /20/.test(completo(p)));
+  if (modalidad === 'contenedor_40') return ps.find(p => /contenedor/.test(completo(p)) && /40/.test(completo(p)));
+  if (modalidad === 'trailer') return ps.find(p => /tr[aá]iler/.test(completo(p)));
   return null;
 }
 const sgaR2 = n => Math.round(n * 100) / 100;
@@ -20595,14 +20596,16 @@ async function submitAlmacenajeProducto(editId){
   const unidad = document.getElementById('ap-unidad').value;
   const disparador = document.getElementById('ap-disparador').value;
   const familia = document.getElementById('ap-familia').value;
-  const subtipoValor = (document.getElementById('ap-subtipolabel').value || '').trim();
-  const usaSubtipo = !!subtipoValor; // lleva subtipo si se ha escrito
+  // El subtipo ya no se escribe: el nombre lleva todo. Un producto que todavía lo tiene (hasta pasar su subtipo al nombre) lo conserva tal cual.
+  const previo = editId ? almacenajeProducto(editId) : null;
+  const subtipoValor = previo && previo.usaSubtipo ? (previo.subtipoValor || '') : '';
+  const usaSubtipo = !!subtipoValor;
   if (!nombre) { appToast('Ponle un nombre al producto.'); return; }
   if (!disparador) { appToast('Indica cuándo se cobra este producto («Se cobra al…»).'); return; }
   // Dos productos no pueden llamarse igual y tener el mismo subtipo (saldrían idénticos al elegirlos en una tarifa).
-  const clave = (n, s) => `${n.trim().toLowerCase()}|${(s || '').trim().toLowerCase()}`;
+  const clave = (n, s) => `${n} ${s || ''}`.replace(/[ ]+/g, ' ').trim().toLowerCase();   // compara el nombre completo
   const repetido = almacenajeProductos.find(p => p.id !== editId && clave(p.nombre, p.subtipoValor) === clave(nombre, subtipoValor));
-  if (repetido) { appToast(`Ya existe «${almacenajeProductoTexto(repetido)}»${repetido.archived ? ' (archivado)' : ''}. Cambia el nombre o el subtipo para distinguirlos.`); return; }
+  if (repetido) { appToast(`Ya existe «${almacenajeProductoTexto(repetido)}»${repetido.archived ? ' (archivado)' : ''}. Cambia el nombre para distinguirlos.`); return; }
   const editing = editId ? almacenajeProducto(editId) : null;
   // El subtipo del producto es su valor fijo; también se guarda como etiqueta para los textos que la usan.
   const row = { nombre, categoria, unidad, usa_subtipo: usaSubtipo, subtipo_label: usaSubtipo ? subtipoValor : null, subtipo_valor: usaSubtipo ? subtipoValor : null, disparador, familia: familia || null };
@@ -20673,11 +20676,11 @@ function apToggleGrupo(cat){
   window.__apCerradas[cat] = !window.__apCerradas[cat];
   renderTab();
 }
-function apFilaProductoHtml(p){
+function apFilaProductoHtml(p, conSubtipo){
   return `
           <tr style="${p.archived?'opacity:0.6;':''}">
             <td data-sort-value="${esc(p.nombre)}"><b>${esc(p.nombre)}</b></td>
-            <td style="color:var(--muted);" data-sort-value="${esc(p.subtipoValor || p.subtipoLabel)}">${p.usaSubtipo ? (p.subtipoValor ? esc(p.subtipoValor) : '<span style="color:var(--mutedFaint);" title="Sin subtipo definido: en las tarifas se escribe a mano">Sin definir</span>') : '—'}</td>
+            ${conSubtipo ? `<td style="color:var(--muted);" data-sort-value="${esc(p.subtipoValor || p.subtipoLabel)}">${p.usaSubtipo ? (p.subtipoValor ? esc(p.subtipoValor) : '<span style="color:var(--mutedFaint);" title="Sin subtipo definido: en las tarifas se escribe a mano">Sin definir</span>') : '—'}</td>` : ''}
             <td data-sort-value="${esc(ALMACENAJE_UNIDAD_LABELS[p.unidad]||'')}">${esc(ALMACENAJE_UNIDAD_LABELS[p.unidad]||'—')}</td>
             <td data-sort-value="${esc(p.disparador||'')}">${p.disparador && ALMACENAJE_DISPARADORES[p.disparador] ? esc(ALMACENAJE_DISPARADORES[p.disparador].corto) : '<span style="color:var(--danger);">Sin definir</span>'}</td>
             <td data-sort-value="${esc(p.familia||'')}" style="color:var(--muted);">${p.familia && ALMACENAJE_FAMILIAS[p.familia] ? esc(ALMACENAJE_FAMILIAS[p.familia]) : '—'}</td>
@@ -20690,6 +20693,7 @@ function apFilaProductoHtml(p){
 }
 function tplAlmacenajeProductosPage(){
   const list = almacenajeProductosOrdenados();
+  const hayLegacy = list.some(p => p.usaSubtipo && p.subtipoValor);   // la columna Subtipo solo sale mientras algún producto lo conserve
   const activos = list.filter(p => !p.archived).length;
   const orden = ['movimiento', 'almacenaje', 'extra'];
   const cats = [...new Set([...orden.filter(c => list.some(p => p.categoria === c)), ...list.map(p => p.categoria)])];
@@ -20703,8 +20707,8 @@ function tplAlmacenajeProductosPage(){
         <b>${esc(almacenajeCategoriaLabel(cat))}</b><span>${ps.length} producto${ps.length === 1 ? '' : 's'}</span><i>▾</i>
       </button>
       ${cerrada ? '' : `<div style="overflow-x:auto;border-top:1px solid var(--border);"><table class="tf-table">
-        <thead><tr>${thSort('Nombre','text')}${thSort('Subtipo','text')}${thSort('Unidad','text')}${thSort('Se cobra al…','text')}${thSort('Familia','text')}${thSort('Estado','text')}<th></th></tr></thead>
-        <tbody>${ps.map(apFilaProductoHtml).join('')}</tbody>
+        <thead><tr>${thSort('Nombre','text')}${hayLegacy ? thSort('Subtipo','text') : ''}${thSort('Unidad','text')}${thSort('Se cobra al…','text')}${thSort('Familia','text')}${thSort('Estado','text')}<th></th></tr></thead>
+        <tbody>${ps.map(p => apFilaProductoHtml(p, hayLegacy)).join('')}</tbody>
       </table></div>`}
     </div>`;
   }).join('');
@@ -20752,11 +20756,8 @@ function tplAlmacenajeProductoFormPage(){
       <div class="card deca-card">
         ${decaCardHead('tag', 'Datos del producto', 'Cómo se llama y cómo se cobra')}
         <div class="deca-card-body">
-          <div class="field"><label>Nombre ${req}</label>${decaInputIcon('tag', `<input id="ap-nombre" maxlength="60" placeholder="Ej. Retractilado" value="${esc(p.nombre||'')}" />`)}</div>
-          <div class="field">
-            <label>Subtipo <span style="color:var(--mutedFaint);">(opcional)</span></label>
-            ${decaInputIcon('list', `<input id="ap-subtipolabel" maxlength="40" placeholder="Ej. Europeo" value="${esc(p.subtipoValor||'')}" />`)}
-            <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">Si lo escribes, se rellena solo (y bloqueado) al elegir este producto en una tarifa. Para dos variantes (p. ej. Palet Europeo y Palet Americano), crea un producto por cada una.</div>
+          <div class="field"><label>Nombre ${req}</label>${decaInputIcon('tag', `<input id="ap-nombre" maxlength="60" placeholder="Ej. Palet Europeo, Entrada Bobina, Retractilado de palet" value="${esc(p.nombre||'')}" />`)}
+            <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">Escribe el nombre completo, tal como lo verá quien trabaje con él. Cada variante es un producto distinto (p. ej. «Palet Europeo» y «Palet Americano»).${p.usaSubtipo && p.subtipoValor ? ` <b>Ahora lleva el subtipo «${esc(p.subtipoValor)}»</b>: se pasará al nombre en la próxima actualización.` : ''}</div>
           </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
             <div class="field" style="flex:1;min-width:200px;margin-bottom:0;">
