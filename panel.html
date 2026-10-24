@@ -1483,6 +1483,17 @@
   .cfg-chip{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.2px;padding:2px 9px;border-radius:999px;white-space:nowrap;}
   .ap-grp-h{display:flex;align-items:center;gap:10px;width:100%;padding:12px 16px;border:none;background:none;cursor:pointer;font-family:var(--body);text-align:left;color:var(--text);}
   .ap-grp-h b{font-size:14px;} .ap-grp-h span{font-size:12px;color:var(--muted);} .ap-grp-h i{margin-left:auto;font-style:normal;color:var(--muted);transition:transform .15s;} .ap-grp.cerrada .ap-grp-h i{transform:rotate(-90deg);}
+  /* Productos de almacén: formulario por pasos y lista */
+  .ap-acts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:8px;} @media(max-width:640px){.ap-acts{grid-template-columns:1fr;}}
+  .ap-act{display:flex;flex-direction:column;align-items:flex-start;gap:3px;text-align:left;padding:13px 14px;border:1.5px solid var(--border);border-radius:12px;background:var(--panel);cursor:pointer;font-family:inherit;color:var(--text);transition:border-color .12s,background .12s,box-shadow .12s;}
+  .ap-act:hover{border-color:color-mix(in srgb,var(--c) 55%,var(--border));}
+  .ap-act.on{border-color:var(--c);background:color-mix(in srgb,var(--c) 9%,var(--panel));box-shadow:0 0 0 1px var(--c);}
+  .ap-ai{width:36px;height:36px;border-radius:10px;background:color-mix(in srgb,var(--c) 14%,var(--panel));color:var(--c);display:inline-flex;align-items:center;justify-content:center;margin-bottom:4px;} .ap-act.on .ap-ai{background:var(--c);color:#fff;}
+  .ap-act b{font-size:14.5px;font-family:var(--display);} .ap-act small{font-size:12px;color:var(--muted);line-height:1.4;}
+  .ap-res{display:flex;align-items:center;gap:10px;margin-top:6px;padding:11px 14px;border-radius:10px;background:color-mix(in srgb,#3F8F5F 12%,var(--panel));color:#2D7048;font-size:13px;font-weight:600;line-height:1.4;}
+  .ap-ri{width:20px;height:20px;border-radius:50%;background:#3F8F5F;color:#fff;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;}
+  .ap-gi{width:30px;height:30px;border-radius:9px;background:var(--c);color:#fff;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;}
+  .ap-grp{border-left:0 !important;} .ap-grp-h small{font-size:12px;color:var(--mutedFaint);font-weight:400;margin-right:auto;}
   .dr-dup{border:1px solid #C98A2E;border-left-width:4px;background:color-mix(in srgb,#C98A2E 12%,var(--panel));border-radius:10px;padding:9px 13px;margin-bottom:12px;font-size:13px;line-height:1.45;}
   .dr-dup b{display:block;margin-bottom:2px;} .dr-dup small{display:block;margin-top:3px;color:var(--muted);}
   /* Pantalla «Editar catálogo»: rejilla tipo Excel, una columna por dato y todas las casillas editables */
@@ -20640,11 +20651,12 @@ async function submitAlmacenajeProducto(editId){
   const previo = editId ? almacenajeProducto(editId) : null;
   const subtipoValor = previo && previo.usaSubtipo ? (previo.subtipoValor || '') : '';
   const usaSubtipo = !!subtipoValor;
-  if (!nombre) { appToast('Ponle un nombre al producto.'); return; }
+  apError('');
+  if (!nombre) { apError('Ponle un nombre al producto.', 'ap-nombre'); return; }
   // Dos productos no pueden llamarse igual y tener el mismo subtipo (saldrían idénticos al elegirlos en una tarifa).
   const clave = (n, s) => `${n} ${s || ''}`.replace(/[ ]+/g, ' ').trim().toLowerCase();   // compara el nombre completo
   const repetido = almacenajeProductos.find(p => p.id !== editId && clave(p.nombre, p.subtipoValor) === clave(nombre, subtipoValor));
-  if (repetido) { appToast(`Ya existe «${almacenajeProductoTexto(repetido)}»${repetido.archived ? ' (archivado)' : ''}. Cambia el nombre para distinguirlos.`); return; }
+  if (repetido) { apError(`Ya existe «${almacenajeProductoTexto(repetido)}»${repetido.archived ? ' (archivado)' : ''}. Cambia el nombre para distinguirlos.`, 'ap-nombre'); return; }
   const editing = editId ? almacenajeProducto(editId) : null;
   // El subtipo del producto es su valor fijo; también se guarda como etiqueta para los textos que la usan.
   // Solo los productos de stock por días llevan enlace de entrada y salida; el resto no
@@ -20717,131 +20729,174 @@ async function eliminarAlmacenajeProducto(id){
 function apToggleGrupo(cat){
   window.__apCerradas = window.__apCerradas || {};
   window.__apCerradas[cat] = !window.__apCerradas[cat];
-  renderTab();
+  const el = document.getElementById('ap-lista'); if (el) el.innerHTML = apListaHtml(); else renderTab();
 }
-function apFilaProductoHtml(p, conSubtipo){
+const AP_EJEMPLOS = { almacenaje: 'Ej. Palet Europeo, Bobina D.20', movimiento: "Ej. Entrada Palet, Descarga Contenedor 20' Paletizado", extra: 'Ej. Retractilado de palet, Hora operario' };
+const AP_ACTIVIDADES = {
+  almacenaje: { icono: 'home', titulo: 'Almacenaje', texto: 'Lo que se guarda: se cobra cada día mientras haya stock' },
+  movimiento: { icono: 'truck', titulo: 'Movimiento', texto: 'Las entradas y salidas de mercancía' },
+  extra: { icono: 'settings', titulo: 'Extra', texto: 'Servicios sueltos que apunta el operario' },
+};
+// Cómo se cobra un producto, con palabras (lo que ve quien no conoce el SGA)
+function almacenajeCobroFrase(p){
+  const cuenta = { movimiento: 'por palet o unidad', bulto: 'por bulto', albaran: 'una vez por albarán', hora: 'por hora', dia: 'por día', mes: 'por m² ocupado' }[p.unidad] || '';
+  if (p.categoria === 'almacenaje') {
+    if (p.unidad === 'mes') return 'Cada mes, por m² ocupado';
+    const e = almacenajeProducto(p.cobroEntrada), s = almacenajeProducto(p.cobroSalida);
+    return 'Cada día, con el stock que haya' + (e || s ? ` · Al entrar: ${e ? e.nombre : '—'} · Al salir: ${s ? s.nombre : '—'}` : '');
+  }
+  if (p.categoria === 'extra') return `Lo apunta el operario · ${cuenta}`;
+  const sale = ['salida', 'carga'].includes(p.disparador);
+  return `En cada ${sale ? 'expedición' : 'recepción'} · ${cuenta}`;
+}
+function apFilaProductoHtml(p){
   return `
-          <tr style="${p.archived?'opacity:0.6;':''}">
+          <tr style="cursor:pointer;${p.archived ? 'opacity:.6;' : ''}" onclick="openAlmacenajeProductoForm('${p.id}')">
             <td data-sort-value="${esc(p.nombre)}"><b>${esc(p.nombre)}</b></td>
-            ${conSubtipo ? `<td style="color:var(--muted);" data-sort-value="${esc(p.subtipoValor || p.subtipoLabel)}">${p.usaSubtipo ? (p.subtipoValor ? esc(p.subtipoValor) : '<span style="color:var(--mutedFaint);" title="Sin subtipo definido: en las tarifas se escribe a mano">Sin definir</span>') : '—'}</td>` : ''}
-            <td data-sort-value="${esc(ALMACENAJE_UNIDAD_LABELS[p.unidad]||'')}">${esc(ALMACENAJE_UNIDAD_LABELS[p.unidad]||'—')}</td>
-            <td data-sort-value="${esc(p.disparador||'')}">${p.disparador && ALMACENAJE_DISPARADORES[p.disparador] ? esc(ALMACENAJE_DISPARADORES[p.disparador].corto) : '<span style="color:var(--danger);">Sin definir</span>'}</td>
-            <td data-sort-value="${esc((p.cobroEntrada || '') + (p.cobroSalida || ''))}" style="color:var(--muted);font-size:12.5px;">${(() => { const e = almacenajeProducto(p.cobroEntrada), s = almacenajeProducto(p.cobroSalida); return e || s ? `${e ? 'Entra: ' + esc(e.nombre) : ''}${e && s ? '<br>' : ''}${s ? 'Sale: ' + esc(s.nombre) : ''}` : '—'; })()}</td>
-            <td data-sort-value="${p.archived?'Archivado':'Activo'}">${p.archived ? '<span style="color:var(--mutedFaint);">Archivado</span>' : '<span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--success);"></span>Activo</span>'}</td>
+            <td style="color:var(--muted);" data-sort-value="${esc(almacenajeCobroFrase(p))}">${esc(almacenajeCobroFrase(p))}</td>
+            <td data-sort-value="${p.archived ? 'Archivado' : 'Activo'}">${p.archived ? '<span style="color:var(--mutedFaint);">Archivado</span>' : '<span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--success);"></span>Activo</span>'}</td>
             <td style="white-space:nowrap;text-align:right;">
-              <button class="deca-act" onclick="openAlmacenajeProductoForm('${p.id}')" title="Editar">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
-              ${p.archived ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="setAlmacenajeProductoArchived('${p.id}', false)" title="Volver a activarlo">Activar</button>` : ''}<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:var(--danger);" onclick="eliminarAlmacenajeProducto('${p.id}')" title="Eliminar el producto (solo si nada lo usa)">Eliminar</button>
+              ${p.archived ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="event.stopPropagation(); setAlmacenajeProductoArchived('${p.id}', false)" title="Volver a activarlo">Activar</button>` : ''}
+              <button class="deca-act" onclick="event.stopPropagation(); openAlmacenajeProductoForm('${p.id}')" title="Editar">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
             </td>
           </tr>`;
 }
-function tplAlmacenajeProductosPage(){
-  const list = almacenajeProductosOrdenados();
-  const hayLegacy = list.some(p => p.usaSubtipo && p.subtipoValor);   // la columna Subtipo solo sale mientras algún producto lo conserve
-  const activos = list.filter(p => !p.archived).length;
-  const orden = ['almacenaje', 'movimiento', 'extra'];
-  const cats = [...new Set([...orden.filter(c => list.some(p => p.categoria === c)), ...list.map(p => p.categoria)])];
-  const grupos = cats.map(cat => {
+function apFiltro(){ return ['almacenaje', 'movimiento', 'extra', 'archivados'].includes(window.__apFiltro) ? window.__apFiltro : 'todos'; }
+function apFiltrar(f){ window.__apFiltro = f; renderTab(); }
+function apBuscar(v){ window.__apQ = v; const el = document.getElementById('ap-lista'); if (el) el.innerHTML = apListaHtml(); }
+function apListaHtml(){
+  const f = apFiltro(), q = (window.__apQ || '').trim().toLowerCase();
+  let list = almacenajeProductosOrdenados();
+  if (q) list = list.filter(p => (p.nombre + ' ' + almacenajeCobroFrase(p)).toLowerCase().includes(q));
+  list = f === 'archivados' ? list.filter(p => p.archived) : f === 'todos' ? list : list.filter(p => p.categoria === f && !p.archived);
+  if (!list.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q || f !== 'todos' ? 'Ningún producto coincide con la búsqueda o el filtro.' : 'Todavía no hay ningún producto creado.'}</div>`;
+  const cats = ['almacenaje', 'movimiento', 'extra'].filter(c => list.some(p => p.categoria === c)).concat([...new Set(list.map(p => p.categoria))].filter(c => !['almacenaje', 'movimiento', 'extra'].includes(c)));
+  return cats.map(cat => {
     const ps = list.filter(p => p.categoria === cat);
     const cerrada = !!(window.__apCerradas && window.__apCerradas[cat]);
     const color = ALMACENAJE_CATEGORIA_COLORS[cat] || 'var(--muted)';
+    const info = AP_ACTIVIDADES[cat] || { icono: 'tag', texto: '' };
     return `
-    <div class="card ap-grp${cerrada ? ' cerrada' : ''}" style="padding:0;margin-bottom:14px;overflow:hidden;border-left:4px solid ${color};">
+    <div class="card ap-grp${cerrada ? ' cerrada' : ''}" style="padding:0;margin-bottom:14px;overflow:hidden;--c:${color};">
       <button type="button" class="ap-grp-h" onclick="apToggleGrupo('${cat}')">
-        <b>${esc(almacenajeCategoriaLabel(cat))}</b><span>${ps.length} producto${ps.length === 1 ? '' : 's'}</span><i>▾</i>
+        <span class="ap-gi">${homeIcon(HOME_ICON_PATHS[info.icono], 17, 'currentColor', 1.9)}</span>
+        <b>${esc(almacenajeCategoriaLabel(cat))}</b><small>${esc(info.texto)}</small><span>${ps.length} producto${ps.length === 1 ? '' : 's'}</span><i>▾</i>
       </button>
       ${cerrada ? '' : `<div style="overflow-x:auto;border-top:1px solid var(--border);"><table class="tf-table">
-        <thead><tr>${thSort('Nombre','text')}${hayLegacy ? thSort('Subtipo','text') : ''}${thSort('Unidad','text')}${thSort('Se cobra','text')}${thSort('Al moverlo cobra','text')}${thSort('Estado','text')}<th></th></tr></thead>
-        <tbody>${ps.map(p => apFilaProductoHtml(p, hayLegacy)).join('')}</tbody>
+        <thead><tr>${thSort('Nombre', 'text')}${thSort('Cómo se cobra', 'text')}${thSort('Estado', 'text')}<th></th></tr></thead>
+        <tbody>${ps.map(apFilaProductoHtml).join('')}</tbody>
       </table></div>`}
     </div>`;
   }).join('');
+}
+function tplAlmacenajeProductosPage(){
+  const todos = almacenajeProductosOrdenados();
+  const activos = todos.filter(p => !p.archived).length;
+  const n = c => todos.filter(p => c === 'archivados' ? p.archived : p.categoria === c && !p.archived).length;
+  const f = apFiltro();
+  const chip = (id, t, cnt) => `<button type="button" class="${f === id ? 'on' : ''}" onclick="apFiltrar('${id}')">${t}${cnt != null ? ` <small>${cnt}</small>` : ''}</button>`;
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.tag, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 280px;">
         <div class="deca-banner-title">Productos</div>
-        <div class="deca-banner-sub">Los conceptos que se pueden tarifar en Almacenaje, agrupados por actividad. Añade uno nuevo sin tocar código.</div>
+        <div class="deca-banner-sub">Lo que se puede cobrar a un cliente en Almacén. El precio de cada uno se pone en la tarifa del cliente.</div>
       </div>
       <div class="deca-banner-actions">
         <div class="deca-stat"><b>${activos}</b><span>Activos</span></div>
-        ${list.length - activos ? `<div class="deca-stat"><b>${list.length - activos}</b><span>Archivados</span></div>` : ''}
         <button class="btn btn-primary deca-new-btn" onclick="openAlmacenajeProductoForm()">${homeIcon(HOME_ICON_PATHS.tag, 17, 'currentColor', 1.8)}<span>Nuevo producto</span></button>
       </div>
     </div>
-    ${list.length ? grupos : `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Todavía no hay ningún producto creado.</div>`}
+    <div class="card deca-toolbar">
+      <div class="deca-search" style="flex:1 1 240px;">
+        <input id="ap-q" placeholder="Buscar un producto…" value="${esc(window.__apQ || '')}" oninput="apBuscar(this.value)" autocomplete="off" />
+        <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
+      </div>
+      <div class="doc-seg">${chip('todos', 'Todos', null)}${chip('almacenaje', 'Almacenaje', n('almacenaje'))}${chip('movimiento', 'Movimiento', n('movimiento'))}${chip('extra', 'Extra', n('extra'))}${todos.some(p => p.archived) ? chip('archivados', 'Archivados', n('archivados')) : ''}</div>
+    </div>
+    <div id="ap-lista">${apListaHtml()}</div>
     </div>`;
+}
+// Elegir la actividad (tarjeta): cambia las unidades posibles, lo que se pregunta después y la frase de abajo
+function apElegirActividad(cat){
+  document.getElementById('ap-categoria').value = cat;
+  document.querySelectorAll('.ap-act').forEach(b => b.classList.toggle('on', b.dataset.c === cat));
+  const nom = document.getElementById('ap-nombre'); if (nom) nom.placeholder = AP_EJEMPLOS[cat] || '';
+  almacenajeCategoriaCambio(); almacenajeCobroActualizar();
+  window.__apFormDirty = true;
+}
+function apElegirDireccion(d){
+  document.getElementById('ap-direccion').value = d;
+  document.querySelectorAll('#ap-dir-seg button').forEach(b => b.classList.toggle('on', b.dataset.d === d));
+  almacenajeCobroActualizar();
+  window.__apFormDirty = true;
+}
+function apError(msg, campo){
+  const e = document.getElementById('ap-error'); if (e) e.textContent = msg;
+  const c = campo && document.getElementById(campo); if (c) { c.focus(); c.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
 }
 function tplAlmacenajeProductoFormPage(){
   const editId = window.__apFormId;
   const editing = editId ? almacenajeProducto(editId) : null;
   const p = editing || {};
-  const req = '<span class="dc-req">*</span>';
+  const cat = p.categoria || 'almacenaje';
+  const dir = ['salida', 'carga'].includes(p.disparador) ? 'expedicion' : 'recepcion';
+  const sec = (n, t, s) => `<div class="dr-sec"><span class="dr-n">${n}</span><div><b>${t}</b>${s ? `<small>${s}</small>` : ''}</div></div>`;
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.tag, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
         <div class="deca-banner-title">${editing ? esc(editing.nombre) : 'Nuevo producto'}</div>
-        <div class="deca-banner-sub">Un concepto tarifable en Almacenaje (p. ej. Palet, M², Retractilado…).</div>
+        <div class="deca-banner-sub">${editing ? 'Cambia lo que necesites y guarda.' : 'En dos pasos: qué es y cómo se cobra.'}</div>
       </div>
       ${editing ? (() => {
         const ids = window.__apNavIds || [];
         const idx = ids.indexOf(editing.id);
         const arrow = (offset, title, ch) => `<button onclick="almacenajeProductoNavGoto(${offset})" title="${title}" style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 11px;cursor:pointer;color:var(--muted);font-size:13px;">${ch}</button>`;
-        return `<div class="deca-banner-actions">
-          ${idx > -1 && ids.length > 1 ? `<div style="display:flex;align-items:center;gap:4px;">${arrow(-1, 'Producto anterior', '←')}<span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${idx + 1}/${ids.length}</span>${arrow(1, 'Producto siguiente', '→')}</div>` : ''}
-          ${editing.archived ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="setAlmacenajeProductoArchived('${editing.id}', false)">Activar</button>` : ''}<button class="btn btn-ghost" style="background:var(--panel);color:var(--danger);" onclick="eliminarAlmacenajeProducto('${editing.id}')">Eliminar</button>
-        </div>`;
+        return idx > -1 && ids.length > 1 ? `<div class="deca-banner-actions"><div style="display:flex;align-items:center;gap:4px;">${arrow(-1, 'Producto anterior', '←')}<span style="min-width:42px;text-align:center;font-size:12.5px;color:var(--muted);">${idx + 1}/${ids.length}</span>${arrow(1, 'Producto siguiente', '→')}</div></div>` : '';
       })() : ''}
     </div>
-    <div class="deca-form" oninput="window.__apFormDirty=true;" onchange="window.__apFormDirty=true;" style="max-width:640px;--dc-accent:var(--primary);">
-      <div class="card deca-card">
-        ${decaCardHead('tag', 'Datos del producto', 'Cómo se llama y cómo se cobra')}
-        <div class="deca-card-body">
-          <div class="field"><label>Nombre ${req}</label>${decaInputIcon('tag', `<input id="ap-nombre" maxlength="60" placeholder="Ej. Palet Europeo, Entrada Bobina, Retractilado de palet" value="${esc(p.nombre||'')}" />`)}
-            <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">Escribe el nombre completo, tal como lo verá quien trabaje con él. Cada variante es un producto distinto (p. ej. «Palet Europeo» y «Palet Americano»).${p.usaSubtipo && p.subtipoValor ? ` <b>Ahora lleva el subtipo «${esc(p.subtipoValor)}»</b>: se pasará al nombre en la próxima actualización.` : ''}</div>
+    <div class="dr-page" style="max-width:780px;margin:0;" oninput="window.__apFormDirty=true;" onchange="window.__apFormDirty=true;">
+      <div class="card dr-card">
+        ${sec(1, '¿Qué es?', 'Cómo se llama y de qué tipo es')}
+        <div class="field">
+          <label>Nombre completo <span class="dc-req">*</span></label>
+          <input id="ap-nombre" maxlength="60" placeholder="${esc(AP_EJEMPLOS[cat])}" value="${esc(p.nombre || '')}" />
+          <div class="dr-hint">Escríbelo tal como lo verá el equipo en las tarifas y los albaranes. Cada variante es un producto distinto (p. ej. «Palet Europeo» y «Palet Americano»).${p.usaSubtipo && p.subtipoValor ? ` <b>Ahora lleva el subtipo «${esc(p.subtipoValor)}»</b>: se pasará al nombre en la próxima actualización.` : ''}</div>
+        </div>
+        <input type="hidden" id="ap-categoria" value="${cat}" />
+        <label style="font-size:12.5px;color:var(--muted);font-weight:600;">Tipo de producto</label>
+        <div class="ap-acts">${Object.keys(AP_ACTIVIDADES).map(c => { const a = AP_ACTIVIDADES[c]; return `<button type="button" class="ap-act${c === cat ? ' on' : ''}" data-c="${c}" style="--c:${ALMACENAJE_CATEGORIA_COLORS[c]};" onclick="apElegirActividad('${c}')"><span class="ap-ai">${homeIcon(HOME_ICON_PATHS[a.icono], 20, 'currentColor', 1.9)}</span><b>${a.titulo}</b><small>${a.texto}</small></button>`; }).join('')}</div>
+      </div>
+      <div class="card dr-card">
+        ${sec(2, '¿Cómo se cobra?', 'Se deduce de lo que elijas; aquí solo afinas')}
+        <div class="dr-g" style="grid-template-columns:1fr 1fr;">
+          <div class="field" id="ap-unidad-w" style="margin-bottom:12px;">
+            <label>Se cuenta por</label>
+            <select id="ap-unidad" onchange="almacenajeCobroActualizar()">${almacenajeUnidadOpcionesHtml(cat, p.unidad, p.unidad)}</select>
           </div>
-          <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <div class="field" style="flex:1;min-width:200px;margin-bottom:0;">
-              <label>Tipo de actividad</label>
-              <select id="ap-categoria" onchange="almacenajeCategoriaCambio(); almacenajeCobroActualizar();">${Object.keys(ALMACENAJE_CATEGORIAS).map(cat => `<option value="${cat}" ${p.categoria===cat?'selected':''}>${esc(ALMACENAJE_CATEGORIAS[cat])}</option>`).join('')}</select>
-            </div>
-            <div class="field" id="ap-unidad-w" style="flex:1;min-width:200px;margin-bottom:0;">
-              <label>Unidad de cobro</label>
-              <select id="ap-unidad" onchange="almacenajeCobroActualizar()">${almacenajeUnidadOpcionesHtml(p.categoria || Object.keys(ALMACENAJE_CATEGORIAS)[0], p.unidad, p.unidad)}</select>
-            </div>
-          </div>
-          <div id="ap-dir-w" style="${(p.categoria || 'almacenaje') === 'movimiento' ? '' : 'display:none;'}margin-top:14px;">
-            <div class="field" style="margin-bottom:0;max-width:340px;">
-              <label>Se cobra en</label>
-              <select id="ap-direccion" onchange="almacenajeCobroActualizar()">
-                <option value="recepcion" ${['salida', 'carga'].includes(p.disparador) ? '' : 'selected'}>Recepción (cuando entra mercancía)</option>
-                <option value="expedicion" ${['salida', 'carga'].includes(p.disparador) ? 'selected' : ''}>Expedición (cuando sale mercancía)</option>
-              </select>
-            </div>
-          </div>
-          <div id="ap-auto" style="font-size:12.5px;color:var(--muted);margin-top:10px;"></div>
-          <div id="ap-enlaces-w" style="${(p.categoria || 'almacenaje') === 'almacenaje' && p.unidad !== 'mes' ? '' : 'display:none;'}margin-top:14px;">
-            <div style="display:flex;gap:12px;flex-wrap:wrap;">
-              <div class="field" style="flex:1;min-width:220px;margin-bottom:0;">
-                <label>Al entrar se cobra</label>
-                <select id="ap-cobro-entrada">${almacenajeEnlaceOpcionesHtml('entrada', p.cobroEntrada)}</select>
-              </div>
-              <div class="field" style="flex:1;min-width:220px;margin-bottom:0;">
-                <label>Al salir se cobra</label>
-                <select id="ap-cobro-salida">${almacenajeEnlaceOpcionesHtml('salida', p.cobroSalida)}</select>
-              </div>
-            </div>
-            <div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">Qué producto de movimiento se cobra al cliente cuando entra o sale este producto (p. ej. un Palet Europeo cobra «Entrada Palet» y «Salida Palet»).</div>
+          <div class="field" id="ap-dir-w" style="${cat === 'movimiento' ? '' : 'display:none;'}margin-bottom:12px;">
+            <label>Se cobra en</label>
+            <input type="hidden" id="ap-direccion" value="${dir}" />
+            <div class="doc-seg" id="ap-dir-seg"><button type="button" data-d="recepcion" class="${dir === 'recepcion' ? 'on' : ''}" onclick="apElegirDireccion('recepcion')">Recepción</button><button type="button" data-d="expedicion" class="${dir === 'expedicion' ? 'on' : ''}" onclick="apElegirDireccion('expedicion')">Expedición</button></div>
           </div>
         </div>
+        <div id="ap-enlaces-w" style="${cat === 'almacenaje' && p.unidad !== 'mes' ? '' : 'display:none;'}">
+          <div class="dr-g" style="grid-template-columns:1fr 1fr;">
+            <div class="field"><label>Al entrar se cobra</label><select id="ap-cobro-entrada">${almacenajeEnlaceOpcionesHtml('entrada', p.cobroEntrada)}</select></div>
+            <div class="field"><label>Al salir se cobra</label><select id="ap-cobro-salida">${almacenajeEnlaceOpcionesHtml('salida', p.cobroSalida)}</select></div>
+          </div>
+          <div class="dr-hint" style="margin-top:-4px;">El producto de movimiento que se cobra al cliente cuando este producto entra o sale (p. ej. un Palet Europeo cobra «Entrada Palet» y «Salida Palet»).</div>
+        </div>
+        <div class="ap-res"><span class="ap-ri">${homeIcon(HOME_ICON_PATHS.check, 14, 'currentColor', 3)}</span><span id="ap-auto"></span></div>
       </div>
-    </div>
-    <div class="deca-actions" style="max-width:640px;">
-      <div class="deca-actions-row">
-        <button class="btn btn-ghost deca-cancel" onclick="backToAlmacenajeProductos()">Cancelar</button>
-        <button class="btn btn-primary deca-submit" onclick="submitAlmacenajeProducto(${editing ? `'${editing.id}'` : 'null'})">Guardar</button>
+      <div id="ap-error" class="dr-err"></div>
+      <div class="dr-bar" style="max-width:780px;">
+        ${editing ? `<div style="display:flex;gap:8px;margin-right:auto;">${editing.archived ? `<button class="btn btn-ghost" onclick="setAlmacenajeProductoArchived('${editing.id}', false)">Activar</button>` : `<button class="btn btn-ghost" onclick="setAlmacenajeProductoArchived('${editing.id}', true)" title="Deja de ofrecerse en tarifas nuevas; las que ya lo usan siguen igual">Archivar</button>`}<button class="btn btn-ghost" style="color:var(--danger);" onclick="eliminarAlmacenajeProducto('${editing.id}')" title="Solo se puede si nada lo usa">Eliminar</button></div>` : ''}
+        <button class="btn btn-ghost" onclick="backToAlmacenajeProductos()">Cancelar</button>
+        <button class="btn btn-primary" onclick="submitAlmacenajeProducto(${editing ? `'${editing.id}'` : 'null'})">${editing ? 'Guardar cambios' : 'Crear producto'}</button>
       </div>
     </div>
     </div>`;
