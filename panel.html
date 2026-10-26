@@ -9012,7 +9012,10 @@ function sgaResumenImprimir(){
 }
 
 /* ---- SGA · Albarán de expedición imprimible, anular albaranes y regularizar stock ---- */
-function sgaDirWh(w){ return w ? [w.calle1, w.calle2, [w.cp, w.ciudad].filter(Boolean).join(' '), w.provincia].filter(Boolean).join(', ') : ''; }
+// Dirección ordenada, una cosa por línea: calle 1, calle 2, CP y ciudad, provincia y país
+function sgaDirLineas(o){ return [o.calle1, o.calle2, [o.codigoPostal, o.ciudad].filter(Boolean).join(' '), o.provincia, o.pais].map(s => String(s || '').trim()).filter(Boolean); }
+const sgaDirHtml = ls => ls.map(l => `<div>${esc(l)}</div>`).join('');
+function sgaDirWh(w){ return w ? sgaDirLineas(w).join(', ') : ''; }
 function sgaNumAlbaran(a){ return a.numeroTexto || String(a.numero); }
 // Albarán de expedición: «Ship from», cliente, destinatario, productos con modelo, medidas, cajas y peso; para imprimir o guardar en PDF.
 // Impresión sin la fecha, la hora ni la dirección web que el navegador pone en los márgenes de la hoja: la página se imprime sin margen
@@ -9103,7 +9106,10 @@ async function sgaAlbaranImprimir(id){
   extraCols.forEach(c => { colDef[c.clave] = { th: c.nombre, td: l => `<td>${esc(l.extra[c.k])}</td>` }; });
   const colOrden = colList.filter(k => colDef[k]);
   const filas = lineas.length ? lineas.map(l => `<tr>${colOrden.map(k => colDef[k].td(l)).join('')}</tr>`).join('') : `<tr><td colspan="${colOrden.length}">Sin líneas.</td></tr>`;
-  const dirAlm = w && sgaDirWh(w) ? esc(sgaDirWh(w)) : '';
+  const dirAlm = w ? sgaDirHtml(sgaDirLineas(w)) : '';
+  // destinatario: su dirección ordenada si está en Direcciones; si no, la que se guardó con la expedición, partida en líneas
+  const dd = esSal ? sgaDireccionPorNombre(a.destinatario) : null;
+  const dirDest = sgaDirHtml(dd ? sgaDirLineas(dd) : String(a.destinatarioDireccion || '').split(/\s*,\s*/).filter(Boolean));
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Albarán ${esc(sgaNumAlbaran(a))}</title><style>${css}${SGA_ALB_BN_CSS}${sgaPgCss(10)}</style></head><body>${sgaPgHtml(`<div class="hoja">
     <div class="cab">
       <div class="l"><img src="${logoPropio}" alt="Qualified Logistics" /></div>
@@ -9112,9 +9118,9 @@ async function sgaAlbaranImprimir(id){
     </div>
     <div class="tipo"><h1>ALBARÁN DE ${esSal ? 'EXPEDICIÓN' : 'RECEPCIÓN'}</h1><div>Fecha: <b>${esc(fmtDateDMY(a.fecha))}</b></div></div>
     <div class="cajas">
-      <div class="caja"><b>Origen · Ship from</b><div class="v">QUALIFIED LOGISTICS</div><div class="s">${esc(w ? w.name : '')}${dirAlm ? '<br>' + dirAlm : ''}</div></div>
+      <div class="caja"><b>Origen · Ship from</b><div class="v">QUALIFIED LOGISTICS</div><div class="s">${w && w.name ? `<div>${esc(w.name)}</div>` : ''}${dirAlm}</div></div>
       <div class="caja"><b>Cliente</b><div class="v">${esc(clienteNombre)}</div><div class="s">${cliente && cliente.nif ? 'NIF ' + esc(cliente.nif) : ''}${a.referencia ? (cliente && cliente.nif ? '<br>' : '') + 'Ref.: ' + esc(a.referencia) : ''}</div></div>
-      <div class="caja"><b>${esSal ? 'Destinatario · Para' : 'Procedencia'}</b><div class="v">${esc(a.destinatario) || '—'}</div><div class="s">${esc(a.destinatarioDireccion)}</div></div>
+      <div class="caja"><b>${esSal ? 'Destinatario · Para' : 'Procedencia'}</b><div class="v">${esc(a.destinatario) || '—'}</div><div class="s">${dirDest}</div></div>
       <div class="caja"><b>Transportista</b><div class="v">${esc(a.transportista) || '—'}</div>
         <div class="mats"><div class="mat"><span>Matrícula tractora</span>${mat.tractora ? `<b>${esc(mat.tractora)}</b>` : "<i></i>"}</div><div class="mat"><span>Matrícula remolque</span>${mat.remolque ? `<b>${esc(mat.remolque)}</b>` : "<i></i>"}</div></div></div>
     </div>
