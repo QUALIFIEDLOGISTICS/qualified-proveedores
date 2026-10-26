@@ -4863,7 +4863,9 @@ function sgaCamposAlbaranCliente(clienteId){
 // Columnas del albarán de un cliente, en su orden: todas las elige el cliente en su ficha SGA (campos.__albaran_cols).
 // Mientras no lo haya decidido, valen las de siempre (las tres de serie, los datos extra que tuviera marcados y Cajas y Peso).
 const SGA_ALB_COLS = { '@codigo': 'Código de artículo', '@descripcion': 'Descripción', '@medidas': 'Medidas', '@cajas': 'Cajas', '@peso': 'Peso' };
-function sgaAlbColumnaNombre(k){ return SGA_ALB_COLS[k] || ((sgaCampos.find(f => f.clave === k) || {}).nombre || k); }
+function sgaAlbColumnaNombre(k){
+  if (k === '@cajas') { const el = document.getElementById('sgac-bultos'); return (el ? el.checked : sgaClienteConBultos(window.__sgacFor)) ? 'Cajas' : 'Palets'; }   // sin bultos por palet, la cantidad son palets
+  return SGA_ALB_COLS[k] || ((sgaCampos.find(f => f.clave === k) || {}).nombre || k); }
 function sgaAlbColumnasCliente(clienteId){
   const cc = sgaClienteCfg(clienteId).campos || {};
   const validos = new Set([...Object.keys(SGA_ALB_COLS), ...sgaCamposPropios().filter(sgaCampoAlbaranElegible).map(f => f.clave)]);
@@ -5097,6 +5099,7 @@ function sgacTile(grupo, valor){
   const cb = document.getElementById(grupo === 'codigos' ? 'sgac-codigos' : 'sgac-bultos');
   if (cb) cb.checked = !!valor;
   document.querySelectorAll(`.sgac-sg[data-g="${grupo}"] button, .sgac-h[data-g="${grupo}"] span`).forEach(t => t.classList.toggle('on', (t.dataset.v === '1') === !!valor));
+  if (grupo === 'bultos') { const al = document.getElementById('sgac-alb'); if (al) al.innerHTML = sgacAlbaranHtml(); }
 }
 // Letras del albarán por defecto: las 3 primeras letras del nombre del cliente (igual que al confirmar la expedición).
 function sgaPrefijoPorDefecto(c){
@@ -9020,6 +9023,7 @@ async function sgaAlbaranImprimir(id){
   const a = sgaAlbaranes.find(x => x.id === id);
   if (!a) return;
   const cliente = contactos.find(c => c.id === a.clienteId) || {};
+  const conBultos = sgaClienteConBultos(a.clienteId);   // palets con varias cajas: se cuentan cajas; si no, la cantidad son palets
   const mv = await supabaseClient.from('sga_movimientos').select('partida_id,cantidad,bultos').eq('albaran_id', id).eq('tipo', a.tipo === 'salida' ? 'salida' : 'entrada');
   const movs = mv.data || [];
   const pr = movs.length ? await supabaseClient.from('sga_partidas').select('id,producto_id,referencia,descripcion,lote,articulo_id,codigo,atributos').in('id', movs.map(m => m.partida_id)) : { data: [] };
@@ -9031,7 +9035,7 @@ async function sgaAlbaranImprimir(id){
     const p = partidas[m.partida_id] || {};
     const art = sgaArticulos.find(x => x.id === p.articulo_id);
     const mod = Math.abs(Number(m.cantidad));
-    const cajas = m.bultos != null ? Math.abs(Number(m.bultos)) : mod;
+    const cajas = conBultos && m.bultos != null ? Math.abs(Number(m.bultos)) : mod;   // sin bultos por palet, la cantidad son los palets
     return { producto: p.descripcion || sgaProdTxt(p.producto_id), modelo: p.referencia || '', medidas: art ? art.medidas : '', codigo: p.codigo || '', cajas, peso: art && art.peso != null ? sgaR2(art.peso * mod) : null,
       extra: camposAlb.map(f => sgaCampoMostrar(sgaCampoDef(f), (art && art.atributos && art.atributos[f.clave] != null && art.atributos[f.clave] !== '') ? art.atributos[f.clave] : (f.ambito === 'articulo' ? null : (SGA_CAMPOS_COLUMNA.includes(f.clave) ? p[f.clave] : (p.atributos || {})[f.clave])))) };
   });
@@ -9086,7 +9090,7 @@ async function sgaAlbaranImprimir(id){
   `;
   // columnas que ha elegido el cliente en su ficha SGA, en su orden
   const colDef = Object.assign({}, { '@codigo': { th: 'Código de artículo', td: l => `<td><b>${esc(l.producto)}</b>${l.codigo ? `<div style="font-size:10.5px;color:#444;">Código: ${esc(l.codigo)}</div>` : ''}</td>` }, '@descripcion': { th: 'Descripción', td: l => `<td>${esc(l.modelo) || '—'}</td>` }, '@medidas': { th: 'Medidas', td: l => `<td style="white-space:pre-line;">${esc(l.medidas) || '—'}</td>` },
-    '@cajas': { th: 'Cajas', r: true, td: l => `<td class="r"><b>${sgaNumTxt(l.cajas)}</b></td>`, tot: sgaNumTxt(totCajas) }, '@peso': { th: sgaPesoLabel(false), r: true, td: l => `<td class="r">${l.peso != null ? sgaNumTxt(l.peso) + ' kg' : '—'}</td>`, tot: totPeso ? sgaNumTxt(totPeso) + ' kg' : '—' } });
+    '@cajas': { th: conBultos ? 'Cajas' : 'Palets', r: true, td: l => `<td class="r"><b>${sgaNumTxt(l.cajas)}</b></td>`, tot: sgaNumTxt(totCajas) }, '@peso': { th: sgaPesoLabel(false), r: true, td: l => `<td class="r">${l.peso != null ? sgaNumTxt(l.peso) + ' kg' : '—'}</td>`, tot: totPeso ? sgaNumTxt(totPeso) + ' kg' : '—' } });
   extraCols.forEach(c => { colDef[c.clave] = { th: c.nombre, td: l => `<td>${esc(l.extra[c.k])}</td>` }; });
   const colOrden = colList.filter(k => colDef[k]);
   const filas = lineas.length ? lineas.map(l => `<tr>${colOrden.map(k => colDef[k].td(l)).join('')}</tr>`).join('') : `<tr><td colspan="${colOrden.length}">Sin líneas.</td></tr>`;
