@@ -15455,24 +15455,34 @@ function mapaPuntoDeFila(r){
 function mapaPrecioDeFila(r){
   return { id: r.id, puntoId: r.punto_id, concepto: r.concepto, unidad: r.unidad || '', importe: Number(r.importe), moneda: r.moneda || 'EUR', desde: r.vigente_desde, nota: r.nota || '', createdBy: r.created_by || '', createdAt: r.created_at };
 }
-function mapaCargar(){
+// Supabase devuelve como mucho 1000 filas por consulta: se pide por tramos hasta traerlo todo (si no, los últimos puntos no salían)
+async function mapaTodas(tabla, ordenar){
+  const out = [], paso = 1000;
+  for (let desde = 0; ; desde += paso) {
+    const { data, error } = await ordenar(supabaseClient.from(tabla).select('*')).range(desde, desde + paso - 1);
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < paso) break;
+  }
+  return out;
+}
+function mapaCargar(silencioso){
   const S = mapaS();
   if (S.promesa) return S.promesa;
   S.promesa = (async () => {
     S.error = '';
     try {
       const [p, pr] = await Promise.all([
-        supabaseClient.from('transporte_puntos').select('*').order('nombre', { ascending: true }),
-        supabaseClient.from('transporte_puntos_precios').select('*').order('vigente_desde', { ascending: false }).order('created_at', { ascending: false }),
+        mapaTodas('transporte_puntos', q => q.order('nombre', { ascending: true }).order('id', { ascending: true })),
+        mapaTodas('transporte_puntos_precios', q => q.order('vigente_desde', { ascending: false }).order('created_at', { ascending: false }).order('id', { ascending: true })),
       ]);
-      if (p.error) throw p.error;
-      if (pr.error) throw pr.error;
-      S.puntos = (p.data || []).map(mapaPuntoDeFila);
-      S.precios = (pr.data || []).map(mapaPrecioDeFila);
+      S.puntos = p.map(mapaPuntoDeFila);
+      S.precios = pr.map(mapaPrecioDeFila);
+      S.cargadoAt = Date.now();
       S.cargado = true;
     } catch (e) {
       const m = (e && e.message) || 'error desconocido';
-      S.error = /relation|does not exist|schema cache/i.test(m) ? 'Falta ejecutar el SQL «trafico-mapa-puntos.sql» en Supabase.' : 'No se pudieron cargar los puntos: ' + m;
+      if (!(silencioso && S.cargado)) S.error = /relation|does not exist|schema cache/i.test(m) ? 'Falta ejecutar el SQL «trafico-mapa-puntos.sql» en Supabase.' : 'No se pudieron cargar los puntos: ' + m;   // si solo falla el refresco, se sigue con lo que ya había
     }
     S.promesa = null;
   })();
@@ -15571,6 +15581,7 @@ async function mapaHidratar(){
   if (S.map && !document.body.contains(S.map.getContainer())) mapaDestruir();
   try { await mapaLibs(); } catch (e) { mapaMensaje('No se pudo cargar el mapa (revisa la conexión a internet): ' + e.message); return; }
   if (!S.cargado) await mapaCargar();
+  else if (Date.now() - (S.cargadoAt || 0) > 20000) await mapaCargar(true);   // los puntos que añaden los compañeros no llegan solos: se vuelven a pedir al abrir el mapa
   if (tok !== S.tok || !document.getElementById('mapa-root')) return;
   if (S.error) { mapaMensaje(S.error); return; }
   if (S.vista === 'mapa') mapaIniciarMapa();
@@ -18641,7 +18652,6 @@ function crmCargar(){
         supabaseClient.from('crm_prospectos').select('*').order('nombre', { ascending: true }),
         supabaseClient.from('crm_oportunidades').select('*').order('created_at', { ascending: false }),
       ]);
-      if (p.error) throw p.error;
       if (o.error) throw o.error;
       S.prospectos = (p.data || []).map(crmProspectoDeFila);
       S.opps = (o.data || []).map(crmOppDeFila);
