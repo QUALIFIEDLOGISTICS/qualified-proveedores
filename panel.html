@@ -1555,6 +1555,7 @@
   .cg-donde span{color:var(--mutedFaint);margin-left:6px;}
   .cg-chip{display:inline-block;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:999px;background:color-mix(in srgb,var(--primary) 11%,var(--panel));color:var(--primary);vertical-align:middle;}
   .cg-st{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;white-space:nowrap;}
+  table.tf-table tfoot tr.cg-tot td{position:sticky;bottom:0;z-index:2;background:var(--primary);color:#fff;font-weight:700;font-size:13.5px;padding:12px 12px;border:0;white-space:nowrap;text-align:right;} table.tf-table tfoot tr.cg-tot td:first-child{text-align:left;letter-spacing:.8px;font-weight:800;} table.tf-table tfoot tr.cg-tot td b{font-size:16px;} table.tf-table tfoot tr.cg-tot td small{font-size:11px;font-weight:600;opacity:.8;}
   .cat-tot{display:flex;align-items:center;gap:30px;flex-wrap:wrap;margin-top:12px;padding:12px 18px;} .cat-tot-t{font-size:11px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted);margin-right:6px;}
   .cat-tot-i{display:flex;flex-direction:column;line-height:1.15;} .cat-tot-i small{font-size:10.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);font-weight:700;} .cat-tot-i b{font-size:19px;font-variant-numeric:tabular-nums;} .cat-tot-i span{font-size:11.5px;color:var(--mutedFaint);}
   .pl-cod{display:inline-block;font-family:var(--mono);font-size:12.5px;font-weight:700;letter-spacing:.3px;padding:3px 9px;border-radius:7px;background:color-mix(in srgb,var(--primary) 10%,var(--panel));color:var(--primary);border:1px solid color-mix(in srgb,var(--primary) 22%,var(--border));white-space:nowrap;}
@@ -5876,6 +5877,12 @@ function catFiltrosHtml(){
     `<button type="button" class="${catFiltro() === k ? 'on' : ''}" data-k="${k}" onclick="window.__catFiltro='${k}'; refreshStockBody();">${t}<span class="cl-n">${n[k]}</span></button>`).join('');
 }
 function catRefrescarFiltros(){ const f = document.getElementById('cat-filtros'); if (f) f.innerHTML = catFiltrosHtml(); }
+// Fila de totales: continúa la tabla (mismas columnas), con color fuerte y pegada abajo. Suma palets, bultos (si el cliente los cuenta) y kilos
+function catSumas(filas){
+  return filas.reduce((s, f) => ({ pal: s.pal + f.pal, bul: s.bul + f.bul, kg: s.kg + (f.pesoU != null ? f.pesoU * f.pal : 0), sinPeso: s.sinPeso + (f.pesoU == null ? f.pal : 0), conPeso: s.conPeso + (f.pesoU != null ? f.pal : 0) }), { pal: 0, bul: 0, kg: 0, sinPeso: 0, conPeso: 0 });
+}
+function catCeldaPalets(t, conBultos){ return `<b>${sgaNumTxt(t.pal)}</b> palet${t.pal === 1 ? '' : 's'}${conBultos ? `<small> · ${sgaNumTxt(Math.round(t.bul * 100) / 100)} bultos</small>` : ''}`; }
+function catCeldaKilos(t){ return t.conPeso ? `<b>${sgaNumTxt(Math.round(t.kg * 10) / 10)}</b> kg${t.sinPeso ? `<small> · sin peso: ${sgaNumTxt(t.sinPeso)}</small>` : ''}` : ''; }
 // Totales para comprobar de un vistazo que todo cuadra: palets, bultos (si el cliente los cuenta) y kilos (con el peso por palet del artículo)
 function catTotalesHtml(filas, conBultos, titulo){
   const t = filas.reduce((s, f) => ({ pal: s.pal + f.pal, bul: s.bul + f.bul, kg: s.kg + (f.pesoU != null ? f.pesoU * f.pal : 0), sinPeso: s.sinPeso + (f.pesoU == null ? f.pal : 0), conPeso: s.conPeso + (f.pesoU != null ? f.pal : 0) }), { pal: 0, bul: 0, kg: 0, sinPeso: 0, conPeso: 0 });
@@ -5993,15 +6000,18 @@ function catPaletsHtml(cid, cols, filtro, q){
     </tr>`;
   };
   const vacio = !filas.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${q ? 'Ningún palet coincide con la búsqueda.' : filtro === 'stock' ? 'No hay palets en el almacén ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : 'Este cliente todavía no tiene mercancía registrada.'}</div>` : '';
+  // fila de totales, continuación de la tabla: suma de palets (y bultos) en Estado y de kilos en Peso
+  const tTot = catSumas(conPalet.map(f => ({ pal: f.p.actual, bul: f.p.bultos != null ? sgaBultosSalida(f.p, f.p.actual) : f.p.actual, pesoU: f.a.peso != null ? Number(f.a.peso) : null })));
+  const ordenTot = [...(conCodigo ? ['cod'] : []), 'art', 'ubic', ...(manual ? [] : ['ent']), ...(cols.tipo ? ['tipo'] : []), ...(cols.ml ? ['ml'] : []), ...(cols.peso ? ['peso'] : []), ...(cols.medidas ? ['med'] : []), ...cols.x.map(() => 'x'), 'estado'];
+  const tfoot = tTot.pal ? `<tfoot><tr class="cg-tot">${ordenTot.map((k, i) => `<td>${k === 'peso' ? catCeldaKilos(tTot) : k === 'estado' ? catCeldaPalets(tTot, !!cols.bultos) : i === 0 ? 'TOTAL' : ''}</td>`).join('')}</tr></tfoot>` : '';
   return `
     ${kpis}
     <div class="card cg-compacta" style="padding:0;">
       <div class="tc-hist-box" style="max-height:660px;min-height:0;border:none;border-radius:10px;">
-        <table class="tf-table cg-tabla"><thead><tr>${cabecera}</tr></thead><tbody>${filas.map(fila).join('')}</tbody></table>
+        <table class="tf-table cg-tabla"><thead><tr>${cabecera}</tr></thead><tbody>${filas.map(fila).join('')}</tbody>${tfoot}</table>
       </div>
       ${vacio}
-    </div>
-    ${catTotalesHtml(conPalet.map(f => ({ pal: f.p.actual, bul: f.p.bultos != null ? sgaBultosSalida(f.p, f.p.actual) : f.p.actual, pesoU: f.a.peso != null ? Number(f.a.peso) : null })), !!cols.bultos, 'Total de lo que se ve')}`;
+    </div>`;
 }
 function stockCatalogoBodyHtml(){
   if (window.__stockView !== 'catedit') window.__catEditAll = false;   // si se salió de la pantalla de edición sin pasar por «Listo», no se queda a medias
@@ -6031,11 +6041,16 @@ function stockCatalogoBodyHtml(){
             ${lista.map(a => catFilaHtml(a, cols, conCliente)).join('')}
           </tbody>
           ${window.__catEditAll && !window.__catLocked && puede && cid ? `<tfoot><tr class="cg-add"><td colspan="${1 + (cols.referencia ? 1 : 0) + (cols.tipo ? 1 : 0) + (cols.bultos ? 1 : 0) + (cols.ml ? 1 : 0) + (cols.peso ? 1 : 0) + (cols.medidas ? 1 : 0) + cols.x.length + 1}" onclick="catAnadirFila()" tabindex="0" onkeydown="if(event.key==='Enter'){ catAnadirFila(); }">＋ Añadir artículo</td></tr></tfoot>` : ''}
+          ${!window.__catEditAll && lista.length ? (() => {
+            const t = catSumas(catFilasTotalesArticulos(lista));
+            if (!t.pal) return '';
+            const orden = [...(conCliente ? ['cli'] : []), 'cod', ...(cols.tipo ? ['tipo'] : []), ...(cols.bultos ? ['bul'] : []), ...(cols.ml ? ['ml'] : []), ...(cols.peso ? ['peso'] : []), ...(cols.medidas ? ['med'] : []), ...cols.x.map(() => 'x'), 'stock'];
+            return `<tfoot><tr class="cg-tot">${orden.map((k, i) => `<td>${k === 'peso' ? catCeldaKilos(t) : k === 'stock' ? catCeldaPalets(t, !!cols.bultos) : i === 0 ? 'TOTAL · ' + lista.length + ' artículo' + (lista.length === 1 ? '' : 's') : ''}</td>`).join('')}</tr></tfoot>`;
+          })() : ''}
         </table>
       </div>
       ${vacio}
     </div>
-    ${catTotalesHtml(catFilasTotalesArticulos(lista), !!cols.bultos, 'Total de lo que se ve')}
 `;
 }
 function catTecla(ev, el){
