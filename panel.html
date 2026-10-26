@@ -1511,6 +1511,8 @@
   .ap-acts.sgc-tipos{grid-template-columns:repeat(5,minmax(0,1fr));} @media(max-width:900px){.ap-acts.sgc-tipos{grid-template-columns:repeat(2,minmax(0,1fr));}}
   .sgc-tipos .ap-act{padding:11px 12px;} .sgc-tipos .ap-act small{font-size:11.5px;}
   .sgac-alb-n{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-right:9px;border-radius:50%;background:var(--panel2);color:var(--muted);font-size:11px;font-weight:700;}
+  .liq-est{width:auto;min-width:118px;padding:5px 10px;font-weight:700;font-size:12.5px;color:var(--c);border-color:color-mix(in srgb,var(--c) 45%,var(--border));background:color-mix(in srgb,var(--c) 10%,var(--panel));}
+  .liq-in{padding:5px 9px;font-size:12.5px;}
   .sgc-sws{display:flex;flex-direction:column;gap:14px;}
   .sgc-sw{display:flex;align-items:flex-start;gap:12px;font-size:13.5px;cursor:pointer;} .sgc-sw input{margin-top:2px;flex:0 0 auto;} .sgc-sw small{display:block;font-size:12px;color:var(--muted);margin-top:1px;}
   .doc-seg button small{margin-left:4px;font-size:11px;font-weight:700;opacity:.7;}
@@ -5342,7 +5344,7 @@ function sgaSitioTxt(p){
   const z = sgaZonaDe(p.zonaId), u = sgaUbicDe(p.ubicacionId);
   return z ? sgaZonaNombre(z) + (u ? ' · ' + u.codigo : '') : '—';
 }
-function stockSeg(){ return ['catalogo', 'entradas', 'salidas', 'operativas', 'resumen'].includes(window.__stockSeg) ? window.__stockSeg : 'catalogo'; }   // «Stock» se fusionó con el catálogo
+function stockSeg(){ return ['catalogo', 'entradas', 'salidas', 'operativas', 'resumen', 'liquidaciones'].includes(window.__stockSeg) ? window.__stockSeg : 'catalogo'; }   // «Stock» se fusionó con el catálogo
 
 /* ---- Pantalla principal: stock por cliente y recepciones ---- */
 function whNombre(id){ const w = allWarehouses.find(x => x.id === id); return w ? w.name : '—'; }
@@ -5446,6 +5448,7 @@ window.addEventListener('scroll', sgaAlbMenuCerrar, true);
 function stockBodyHtml(){
   if (stockSeg() === 'catalogo') return stockCatalogoBodyHtml();
   if (stockSeg() === 'resumen') return stockResumenBodyHtml();
+  if (stockSeg() === 'liquidaciones') return sgaLiqBodyHtml();
   if (stockSeg() === 'operativas') return stockOperativasBodyHtml();
   const q = (window.__stockSearch || '').trim().toLowerCase();
   const wid = window.__stockAlm || '';
@@ -6411,8 +6414,8 @@ function sgaDashFiltro(){
   refreshStockBody();   // las cifras se recalculan con los datos ya cargados
 }
 function sgaDashRefrescar(){ sgaDashEstado().datos = null; refreshStockBody(); }
-async function sgaDashCargar(){
-  const st = sgaDashEstado();
+async function sgaDashCargar(stArg){
+  const st = stArg || sgaDashEstado();
   if (st.cargando) return;
   st.cargando = true;
   const per = st.periodo, ant = dashPeriodoAnterior(per), desde = ant + '-01';
@@ -6442,8 +6445,8 @@ async function sgaDashCargar(){
   refreshStockBody();
 }
 // Resumen de cada cliente del SGA para un mes (con los filtros de cliente y almacén aplicados)
-function dashCalcularPeriodo(periodo){
-  const st = sgaDashEstado(), D = st.datos, wid = st.wid;
+function dashCalcularPeriodo(periodo, stArg){
+  const st = stArg || sgaDashEstado(), D = st.datos, wid = st.wid;
   const ini = periodo + '-01', fin = `${periodo}-${String(sgaDiasDelMes(periodo)).padStart(2, '0')}`;
   const clientes = sgaClientesAlmacenLista().filter(c => !st.clienteId || c.id === st.clienteId);
   return clientes.map(c => {
@@ -6737,6 +6740,7 @@ function stockEmpElegir(id, seg){
 }
 // Al pasar al Resumen mensual se abre el del cliente que se estaba mirando (si hay uno)
 function stockSegSync(seg){
+  if (seg === 'liquidaciones') { const L = sgaLiqEstado(); L.datos = null; L.estados = null; return; }   // al abrirlas se vuelve a calcular con lo último registrado
   if (seg !== 'resumen') return;
   const sel = catClienteSel(), rm = sgaResumenEstado();
   if (sel && rm.clienteId !== sel && sgaClientesAlmacenLista().some(c => c.id === sel)) { rm.clienteId = sel; rm.datos = null; sgaResumenCargar(); }
@@ -6777,7 +6781,7 @@ function tplStock(){
       ${acc('#C0721A', 'salida', 'Nueva expedición', 'Sacar mercancía y emitir albarán', 'sgaSalidaAbrir()', 'Sacar mercancía del almacén y generar el albarán')}
       ${acc('#2F7F86', 'regul', 'Regularizar', 'Ajustar el stock a lo contado', 'sgaRegulAbrir()', 'Ajustar el stock a lo que hay de verdad')}
     </div>
-    <div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('operativas', 'Operativas')}${segBtn('resumen', 'Resumen mensual')}</div>
+    <div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('operativas', 'Operativas')}${segBtn('resumen', 'Resumen mensual')}${segBtn('liquidaciones', 'Liquidaciones')}</div>
     <div class="card deca-toolbar">
       ${seg === 'catalogo' ? `
       <select id="cat-cliente" onchange="catElegirCliente(this.value)" style="width:auto;flex:0 0 210px;min-width:0;"><option value="">Todos los clientes</option>${contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es')).map(c => `<option value="${c.id}" ${c.id === catClienteSel() ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
@@ -6787,6 +6791,7 @@ function tplStock(){
       </div>
       <div class="doc-seg" id="cat-filtros">${catFiltrosHtml()}</div>
       ${catModoHtml()}
+      ` : seg === 'liquidaciones' ? `${sgaLiqToolbarHtml()}
       ` : seg === 'resumen' ? `
       <select id="rm-cliente" onchange="sgaResumenElegir()" style="min-width:230px;"><option value="">Elige el cliente…</option>${sgaClientesAlmacenLista().map(c => `<option value="${c.id}" ${c.id === sgaResumenEstado().clienteId ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
       <input id="rm-mes" type="month" value="${esc(sgaResumenEstado().periodo)}" onchange="sgaResumenElegir()" style="width:170px;" />
@@ -6796,7 +6801,7 @@ function tplStock(){
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
       ${seg === 'entradas' || seg === 'salidas' || seg === 'operativas' ? stockEmpresaSelectHtml(seg) + stockEstadoSelectHtml(seg) : ''}${seg === 'operativas' && sgaPuedeEditarStock() ? '<button class="btn btn-primary" style="margin-left:auto;" onclick="sgaOperativaAbrir()">+ Nueva operativa</button>' : ''}`}
-      ${seg === 'resumen' || seg === 'operativas' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
+      ${seg === 'resumen' || seg === 'liquidaciones' || seg === 'operativas' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
     </div>
     <div id="stock-body">${stockBodyHtml()}</div>
     </div>`;
@@ -8739,6 +8744,134 @@ function sgaResumenHtml(d, paraImprimir){
         ? cardCobro + cardDias
         : `<div class="rm-grid"><div class="rm-main">${cardDias}</div><aside class="rm-side">${cardCobro}${nota}</aside></div>`}
     </div>`;
+}
+/* ---- Liquidaciones: el mes de todos los clientes con movimiento o almacenaje, para ir liquidando ----
+   La lista y los importes se calculan solos con lo mismo que el Resumen mensual. Lo único que se guarda es cómo va cada
+   liquidación (pendiente, revisada o facturada), el nº de factura y una nota (tabla sga_liquidaciones). */
+function sgaLiqEstado(){ return (window.__liq = window.__liq || { periodo: today().slice(0, 7), clienteId: '', wid: '', datos: null, cargando: false, estados: null, cargandoE: false, errorE: '', q: '', filtro: '' }); }
+const SGA_LIQ_ESTADOS = { pendiente: ['Pendiente', '#B26B00'], revisada: ['Revisada', '#2F7F86'], facturada: ['Facturada', '#3F8F5F'] };
+function sgaLiqPeriodo(p){
+  const L = sgaLiqEstado();
+  L.periodo = /^\d{4}-\d{2}$/.test(p) ? p : today().slice(0, 7);
+  L.datos = null; L.estados = null;
+  renderTab();
+}
+function sgaLiqMes(delta){
+  const [y, m] = sgaLiqEstado().periodo.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  sgaLiqPeriodo(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+}
+function sgaLiqRefrescar(){ const L = sgaLiqEstado(); L.datos = null; L.estados = null; refreshStockBody(); }
+async function sgaLiqEstadosCargar(){
+  const L = sgaLiqEstado();
+  if (L.cargandoE) return;
+  L.cargandoE = true;
+  const per = L.periodo;
+  const { data, error } = await supabaseClient.from('sga_liquidaciones').select('*').eq('periodo', per);
+  L.cargandoE = false;
+  if (per !== L.periodo) return;
+  L.estados = {}; L.errorE = '';
+  if (error) L.errorE = /relation|does not exist|schema cache/i.test(error.message || '') ? 'Falta ejecutar el SQL «sga-liquidaciones.sql» en Supabase para poder marcar el estado y la factura.' : 'No se pudo cargar el estado de las liquidaciones: ' + error.message;
+  else (data || []).forEach(x => { L.estados[x.cliente_id] = x; });
+  refreshStockBody();
+}
+// Clientes que salen en el mes: con recepciones, expediciones, operativas, stock, m² contratados o algo que cobrar
+function sgaLiqFilas(){
+  const L = sgaLiqEstado();
+  const fin = `${L.periodo}-${String(sgaDiasDelMes(L.periodo)).padStart(2, '0')}`;
+  return dashCalcularPeriodo(L.periodo, L)
+    .filter(x => { const act = sgaClienteCfg(x.c.id).activoDesde; return !act || fin >= act; })   // un mes anterior a su activación no cuenta
+    .filter(x => x.total > 0 || x.recs.length || x.exps.length || x.r.operativas.length || x.r.final.mod > 0 || x.r.inicial.mod > 0 || x.fijo > 0);
+}
+function sgaLiqBodyHtml(){
+  const L = sgaLiqEstado();
+  if (!L.datos) { if (!L.cargando) sgaDashCargar(L); return '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Calculando las liquidaciones del mes…</div>'; }
+  if (L.estados === null) { sgaLiqEstadosCargar(); return '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Cargando…</div>'; }
+  const todas = sgaLiqFilas();
+  const nombreDe = x => (x.c.nombreComercial || '').trim() || x.c.nombre;
+  const est = x => (L.estados[x.c.id] || {}).estado || 'pendiente';
+  const q = mapaNorm(L.q).trim();
+  const lista = todas.filter(x => (!L.filtro || est(x) === L.filtro) && (!q || mapaNorm(nombreDe(x) + ' ' + ((L.estados[x.c.id] || {}).factura || '')).includes(q)))
+    .sort((a, b) => nombreDe(a).localeCompare(nombreDe(b), 'es'));
+  const suma = fn => sgaR2(todas.reduce((s, x) => s + fn(x), 0));
+  const nFact = todas.filter(x => est(x) === 'facturada').length;
+  const kpi = (t, v, sub, cls) => `<div class="rm-kpi ${cls || ''}"><small>${t}</small><b>${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
+  const enCurso = L.periodo === today().slice(0, 7);
+  const kpis = `<div class="rm-kpis" style="margin-bottom:14px;">
+      ${kpi('Clientes del mes', todas.length, 'con movimiento o almacenaje')}
+      ${kpi('Facturadas', `${nFact} de ${todas.length}`, nFact === todas.length && todas.length ? '¡mes completo!' : '')}
+      ${kpi('Pendiente de facturar', dashEur(suma(x => est(x) === 'facturada' ? 0 : x.total)), `${todas.length - nFact} cliente${todas.length - nFact === 1 ? '' : 's'}`)}
+      ${kpi('Total del mes', dashEur(suma(x => x.total)), 'sin IVA', 'tot')}
+    </div>`;
+  const aviso = (L.errorE ? `<div class="card" style="border-left:4px solid var(--danger);padding:11px 16px;margin-bottom:12px;font-size:13px;">${esc(L.errorE)}</div>` : '')
+    + (enCurso ? '<div class="card" style="padding:10px 16px;margin-bottom:12px;font-size:12.5px;color:var(--muted);">Mes en curso: los importes son una previsión (incluyen el almacenaje de los días que faltan con el stock de hoy). Se cierran cuando acaba el mes.</div>' : '');
+  if (!todas.length) return aviso + '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Ningún cliente tiene movimientos ni almacenaje en este mes.</div>';
+  const puede = sgaPuedeEditarStock() && !L.errorE;
+  const eurC = n => n ? dashEur(n) : '<span style="color:var(--mutedFaint);">—</span>';
+  const fila = x => {
+    const e = L.estados[x.c.id] || {}, es = est(x), [txt, col] = SGA_LIQ_ESTADOS[es];
+    const cambio = es === 'facturada' && e.importe != null && Math.abs(Number(e.importe) - x.total) > 0.005;
+    return `
+      <tr>
+        <td data-sort-value="${esc(nombreDe(x))}"><b>${esc(nombreDe(x))}</b></td>
+        <td class="tf-precio" data-sort-value="${x.recs.length}">${x.recs.length || '—'}</td>
+        <td class="tf-precio" data-sort-value="${x.exps.length}">${x.exps.length || '—'}</td>
+        <td class="tf-precio" data-sort-value="${x.r.final.mod}">${x.r.final.mod || '—'}</td>
+        <td class="tf-precio" data-sort-value="${x.conceptos.mov}">${eurC(x.conceptos.mov)}</td>
+        <td class="tf-precio" data-sort-value="${sgaR2(x.conceptos.alm + x.fijo)}">${eurC(sgaR2(x.conceptos.alm + x.fijo))}</td>
+        <td class="tf-precio" data-sort-value="${sgaR2(x.conceptos.oper + x.conceptos.serv)}">${eurC(sgaR2(x.conceptos.oper + x.conceptos.serv))}</td>
+        <td class="tf-precio" data-sort-value="${x.total}"><b>${dashEur(x.total)}</b>${cambio ? `<div style="font-size:11px;font-weight:600;color:var(--danger);" title="El importe cambió después de marcarla como facturada">Se facturó ${dashEur(Number(e.importe))}</div>` : ''}</td>
+        <td data-sort-value="${es}">${puede
+          ? `<select class="liq-est" style="--c:${col};" onchange="sgaLiqGuardar('${x.c.id}', 'estado', this.value)">${Object.keys(SGA_LIQ_ESTADOS).map(k => `<option value="${k}" ${k === es ? 'selected' : ''}>${SGA_LIQ_ESTADOS[k][0]}</option>`).join('')}</select>`
+          : chipHtml(txt, col)}</td>
+        <td data-sort-value="${esc(e.factura || '')}">${puede ? `<input class="liq-in" style="width:120px;" maxlength="40" placeholder="Nº factura" value="${esc(e.factura || '')}" onchange="sgaLiqGuardar('${x.c.id}', 'factura', this.value)" />` : esc(e.factura || '—')}</td>
+        <td data-sort-value="${esc(e.nota || '')}">${puede ? `<input class="liq-in" style="width:170px;" maxlength="200" placeholder="Nota" value="${esc(e.nota || '')}" onchange="sgaLiqGuardar('${x.c.id}', 'nota', this.value)" />` : esc(e.nota || '—')}</td>
+        <td style="text-align:right;white-space:nowrap;"><button class="btn btn-ghost" style="padding:4px 12px;font-size:12px;" onclick="sgaLiqVerResumen('${x.c.id}')" title="Abrir el resumen del mes de este cliente (desglose día a día e impresión)">Resumen</button></td>
+      </tr>`;
+  };
+  return aviso + kpis + (lista.length ? `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
+      <thead><tr>${thSort('Cliente', 'text')}${thSort('Recep.', 'number', 'style="text-align:right;"')}${thSort('Exped.', 'number', 'style="text-align:right;"')}${thSort('Palets', 'number', 'style="text-align:right;"')}${thSort('Movimientos', 'number', 'style="text-align:right;"')}${thSort('Almacenaje', 'number', 'style="text-align:right;"')}${thSort('Extras', 'number', 'style="text-align:right;"')}${thSort('Total', 'number', 'style="text-align:right;"')}${thSort('Estado', 'text')}${thSort('Factura', 'text')}${thSort('Nota', 'text')}<th></th></tr></thead>
+      <tbody>${lista.map(fila).join('')}</tbody></table></div>
+    <div style="font-size:12px;color:var(--mutedFaint);margin-top:10px;">Almacenaje incluye los m² contratados. Extras suma operativas y servicios. Los importes salen de las tarifas de cada cliente, igual que en el Resumen mensual.</div>`
+    : '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Ninguna liquidación coincide con la búsqueda o el filtro.</div>');
+}
+async function sgaLiqGuardar(clienteId, campo, valor){
+  const L = sgaLiqEstado();
+  const prev = L.estados[clienteId] || { estado: 'pendiente', factura: '', nota: '', importe: null };
+  const nuevo = { cliente_id: clienteId, periodo: L.periodo, estado: prev.estado || 'pendiente', factura: prev.factura || null, nota: prev.nota || null, importe: prev.importe == null ? null : prev.importe, updated_by: currentUserEmail(), updated_at: new Date().toISOString() };
+  const v = String(valor || '').trim();
+  if (campo === 'estado') {
+    nuevo.estado = valor;
+    if (valor === 'facturada') { const x = sgaLiqFilas().find(f => f.c.id === clienteId); nuevo.importe = x ? x.total : null; } else nuevo.importe = null;   // se anota lo facturado, para avisar si luego cambia
+  } else nuevo[campo] = v || null;
+  const { error } = await supabaseClient.from('sga_liquidaciones').upsert(nuevo);
+  if (error) { appToast('No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test(error.message || '') ? 'falta ejecutar el SQL «sga-liquidaciones.sql» en Supabase.' : error.message), 'error'); refreshStockBody(); return; }
+  L.estados[clienteId] = nuevo;
+  if (campo === 'estado') refreshStockBody();
+}
+function sgaLiqVerResumen(clienteId){
+  const L = sgaLiqEstado(), rm = sgaResumenEstado();
+  rm.clienteId = clienteId; rm.periodo = L.periodo; rm.datos = null;
+  window.__catSel = clienteId; try { localStorage.setItem('qualified.sga.catCliente', clienteId); } catch (e) { /* sin almacenamiento: no pasa nada */ }
+  window.__stockSeg = 'resumen';
+  renderTab();
+  sgaResumenCargar();
+}
+function sgaLiqToolbarHtml(){
+  const L = sgaLiqEstado();
+  const fil = (v, t) => `<button type="button" class="${L.filtro === v ? 'on' : ''}" onclick="sgaLiqEstado().filtro='${v}'; refreshStockBody(); document.querySelectorAll('#liq-fil button').forEach(b => b.classList.toggle('on', b.dataset.v === '${v}'));" data-v="${v}">${t}</button>`;
+  return `
+      <div style="display:flex;align-items:center;gap:4px;">
+        <button type="button" class="alb-mn-b" style="width:34px;height:34px;" onclick="sgaLiqMes(-1)" title="Mes anterior" aria-label="Mes anterior">‹</button>
+        <input id="liq-mes" type="month" value="${esc(L.periodo)}" onchange="sgaLiqPeriodo(this.value)" style="width:170px;" />
+        <button type="button" class="alb-mn-b" style="width:34px;height:34px;" onclick="sgaLiqMes(1)" title="Mes siguiente" aria-label="Mes siguiente">›</button>
+      </div>
+      <div class="deca-search" style="flex:1 1 200px;">
+        <input id="liq-q" placeholder="Buscar cliente o nº de factura…" value="${esc(L.q)}" oninput="sgaLiqEstado().q=this.value; refreshStockBody();" autocomplete="off" />
+        <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
+      </div>
+      <div class="doc-seg" id="liq-fil">${fil('', 'Todas')}${fil('pendiente', 'Pendientes')}${fil('revisada', 'Revisadas')}${fil('facturada', 'Facturadas')}</div>
+      <button class="btn btn-ghost" onclick="sgaLiqRefrescar()" title="Volver a calcular con lo último que se haya registrado">${homeIcon(HOME_ICON_PATHS.clock, 16, 'currentColor', 1.8)}<span>Actualizar</span></button>`;
 }
 function stockResumenBodyHtml(){
   const rm = sgaResumenEstado();
