@@ -7216,6 +7216,9 @@ function sgaClientesAlmacenLista(){
 }
 function sgaCamposActivos(cfg){ return sgaCamposEntrada().filter(f => (cfg.campos[f.id] || 'no') !== 'no'); }
 function sgaEntradaWh(){ const el = document.getElementById('se-almacen'); return el && el.value ? el.value : currentWarehouseId; }
+// Stock inicial nuevo de un cliente con varios almacenes: el almacén se elige en cada línea, no arriba (puede tener cosas en distintos sitios)
+function sgaEntradaPorLinea(){ return !!window.__seInicial && !window.__seEdit && sgaAlmacenesCliente(sgaEntradaClienteId()).length > 1; }
+function sgaEntradaWhLinea(i){ const el = document.getElementById(`se-${i}-alm`); return el && el.value ? el.value : sgaEntradaWh(); }
 // Almacenes que tiene activados un cliente (los de su ficha): solo en esos se le puede hacer recepción.
 function sgaAlmacenesCliente(clienteId){
   const c = contactos.find(x => x.id === clienteId);
@@ -7247,8 +7250,8 @@ function sgaProdOptionsHtml(clienteId, sel){
   const elegido = sel || (prods.length === 1 ? prods[0].id : '');
   return `<option value=""${elegido ? '' : ' selected'}>Elige el tipo…</option>${prods.map(p => `<option value="${p.id}" ${p.id === elegido ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}`;
 }
-function sgaZonaOptionsHtml(sel){
-  const zs = sgaZonasActivas();
+function sgaZonaOptionsHtml(sel, wid){
+  const zs = sgaZonasActivas(wid);
   return `<option value="">${zs.length ? 'Elige zona…' : 'Sin zonas creadas'}</option>${zs.map(z => `<option value="${z.id}" ${z.id === sel ? 'selected' : ''}>${esc(sgaZonaNombre(z))}${z.tipo === 'estanteria' ? ' (estantería)' : ''}</option>`).join('')}`;
 }
 function sgaUbicOptionsHtml(zonaId, sel, excluirI){
@@ -7283,16 +7286,20 @@ function sgaEntradaFilaHtml(i, cfg, pre){
     const num = f.id === 'peso' || f.id === 'unidades';
     return cell(`<input id="se-${i}-${f.id}" ${num ? 'inputmode="decimal"' : ''} maxlength="80" placeholder="${ph}" value="${esc(pre[f.id] || '')}" />`, num ? 100 : 130);
   };
+  const porLinea = sgaEntradaPorLinea();
+  const wsC = sgaAlmacenesCliente(clienteId);
+  const wl = porLinea ? (wsC.some(w => w.id === pre.alm) ? pre.alm : (wsC.some(w => w.id === currentWarehouseId) ? currentWarehouseId : wsC[0].id)) : undefined;
   return `
     <tr class="se-row" data-i="${i}"${pre.pid ? ` data-pid="${pre.pid}" data-cons="${pre.cons || 0}"` : ''}>
       <td style="padding:5px 4px;color:var(--mutedFaint);font-size:12px;text-align:right;width:26px;">${i + 1}</td>
+      ${porLinea ? cell(`<select id="se-${i}-alm" onchange="sgaEntradaLineaAlmCambio(${i})">${sgaAlmacenOptionsHtml(clienteId, wl)}</select>`, 150) : ''}
       ${conArt ? cell(`<select id="se-${i}-art" onchange="sgaEntradaArticuloCambio(${i})">${sgaArticuloOptionsHtml(clienteId, pre.art || '')}</select>`, 230) : ''}
       ${sgaEntradaConTipo(clienteId) ? cell(`<select id="se-${i}-prod">${sgaProdOptionsHtml(clienteId, pre.prod || '')}</select>`, 190) : ''}
       ${cfg.codigosUnicos
         ? cell(`<input id="se-${i}-codigo" maxlength="60" placeholder="${esc(sgaUdCodigo(clienteId))}" value="${esc(pre.codigo || '')}" />`, 150)
         : cell(`<input id="se-${i}-cant" inputmode="numeric" maxlength="6" placeholder="Nº de ${esc(sgaUnidadCfg(clienteId).p)}" oninput="sgaEntradaBultosAuto(${i})" value="${esc(pre.cant || '')}" />`, 90)}
       ${conArt && sgaClienteConBultos(clienteId) ? cell(`<input id="se-${i}-bultos" inputmode="decimal" maxlength="8" placeholder="Bultos" oninput="this.dataset.manual='1'" value="${esc(pre.bultos || '')}" />`, 90) : ''}
-      ${cell(`<select id="se-${i}-zona" onchange="sgaEntradaZonaCambio(${i})">${sgaZonaOptionsHtml(pre.zona || '')}</select>`, 170)}
+      ${cell(`<select id="se-${i}-zona" onchange="sgaEntradaZonaCambio(${i})">${sgaZonaOptionsHtml(pre.zona || '', wl)}</select>`, 170)}
       ${cell(`<select id="se-${i}-ubic" onchange="sgaEntradaUbicCambio()">${sgaUbicOptionsHtml(pre.zona || "", pre.ubic || "", i)}</select>`, 120)}
       ${campos.map(campoInput).join('')}
       <td style="padding:5px 0 5px 4px;">${pre.cons > 0 ? `<span title="Ya han salido ${pre.cons} ${sgaUd(clienteId, pre.cons)} de esta línea: no se puede quitar ni dejar con menos" style="color:var(--mutedFaint);font-size:12px;white-space:nowrap;">salieron ${pre.cons}</span>` : ''}<button type="button"${pre.cons > 0 ? ' disabled style="display:none;"' : ''} onclick="sgaEntradaQuitarFila(${i})" title="Quitar la línea" style="background:none;border:none;color:var(--mutedFaint);font-size:15px;">✕</button></td>
@@ -7332,9 +7339,10 @@ function sgaEntradaLineasHtml(cfg, pre){
   window.__stockN = 0;
   return `
     <div style="overflow-x:auto;">
-    <table class="qr-table" style="width:100%;min-width:${620 + campos.length * 120 + (conArt ? 320 : 0)}px;">
+    <table class="qr-table" style="width:100%;min-width:${620 + campos.length * 120 + (conArt ? 320 : 0) + (sgaEntradaPorLinea() ? 150 : 0)}px;">
       <thead><tr>
         <th style="padding:6px 4px;text-align:right;">#</th>
+        ${sgaEntradaPorLinea() ? '<th style="padding:6px 4px;">Almacén</th>' : ''}
         ${conArt ? '<th style="padding:6px 4px;">Artículo</th>' : ''}
         ${sgaEntradaConTipo(sgaEntradaClienteId()) ? '<th style="padding:6px 4px;">Tipo de carga</th>' : ''}
         <th style="padding:6px 4px;">${cfg.codigosUnicos ? 'Código' : sgaCap(sgaUnidadCfg(sgaEntradaClienteId()).p)}</th>
@@ -7357,7 +7365,7 @@ function sgaEntradaAddFila(pre){
   const last = rows[rows.length - 1];
   if (!pre && last) {
     const j = last.dataset.i;
-    pre = { prod: (document.getElementById(`se-${j}-prod`) || {}).value || '', zona: document.getElementById(`se-${j}-zona`).value };
+    pre = { prod: (document.getElementById(`se-${j}-prod`) || {}).value || '', zona: document.getElementById(`se-${j}-zona`).value, alm: (document.getElementById(`se-${j}-alm`) || {}).value || '' };
   }
   const i = window.__stockN++;
   document.getElementById('se-rows').insertAdjacentHTML('beforeend', sgaEntradaFilaHtml(i, cfg, pre));
@@ -7388,9 +7396,17 @@ function sgaEntradaAlmacenCambio(){
   document.querySelectorAll('.se-row').forEach(tr => {
     const i = tr.dataset.i;
     const z = document.getElementById(`se-${i}-zona`), u = document.getElementById(`se-${i}-ubic`);
-    if (z) z.innerHTML = sgaZonaOptionsHtml('');
+    if (z) z.innerHTML = sgaZonaOptionsHtml('', sgaEntradaWhLinea(i));
     if (u) u.innerHTML = '<option value="">—</option>';
   });
+  window.__stockDirty = true;
+  sgaEntradaRefrescar();
+}
+// Almacén de una línea (stock inicial): sus zonas y ubicaciones son las de ese almacén
+function sgaEntradaLineaAlmCambio(i){
+  const z = document.getElementById(`se-${i}-zona`), u = document.getElementById(`se-${i}-ubic`);
+  if (z) z.innerHTML = sgaZonaOptionsHtml('', sgaEntradaWhLinea(i));
+  if (u) u.innerHTML = '<option value="">—</option>';
   window.__stockDirty = true;
   sgaEntradaRefrescar();
 }
@@ -7471,6 +7487,8 @@ function sgaEntradaClienteCambio(){
   const cfg = sgaClienteCfg(clienteId);
   const alm = document.getElementById('se-almacen');
   if (alm) alm.innerHTML = sgaAlmacenOptionsHtml(clienteId, alm.value);   // solo los almacenes de este cliente
+  const almWrap = document.getElementById('se-alm-wrap');
+  if (almWrap) almWrap.style.display = sgaEntradaPorLinea() ? 'none' : '';   // stock inicial con varios almacenes: se elige en cada línea
   sgaModalidadesRefrescar('entrada', clienteId);                          // y solo cómo llega según su tarifa
   const cont = document.getElementById('se-lineas');
   cont.innerHTML = clienteId ? sgaEntradaLineasHtml(cfg) : '<div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div>';
@@ -7565,7 +7583,7 @@ function sgaEntradaLeer(){
   const val = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
   const lineas = [...document.querySelectorAll('.se-row')].map(tr => {
     const i = tr.dataset.i;
-    const l = { i: Number(i), pid: tr.dataset.pid || '', cons: Number(tr.dataset.cons || 0), productoId: val(`se-${i}-prod`), zonaId: val(`se-${i}-zona`), ubicacionId: val(`se-${i}-ubic`), codigo: val(`se-${i}-codigo`), cantidadTxt: val(`se-${i}-cant`), articuloId: val(`se-${i}-art`), bultosTxt: val(`se-${i}-bultos`) };
+    const l = { i: Number(i), pid: tr.dataset.pid || '', cons: Number(tr.dataset.cons || 0), productoId: val(`se-${i}-prod`), almacenId: val(`se-${i}-alm`), zonaId: val(`se-${i}-zona`), ubicacionId: val(`se-${i}-ubic`), codigo: val(`se-${i}-codigo`), cantidadTxt: val(`se-${i}-cant`), articuloId: val(`se-${i}-art`), bultosTxt: val(`se-${i}-bultos`) };
     sgaCamposEntrada().forEach(f => { l[f.id] = val(`se-${i}-${f.id}`); });
     return l;
   });
@@ -7789,7 +7807,7 @@ function tplStockEntradaPage(){
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
             <div class="field" style="flex:2;min-width:240px;"><label>Cliente <span class="dc-req">*</span></label>
               <select id="se-cliente" onchange="sgaEntradaClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos en el SGA'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
-            <div class="field" style="flex:1;min-width:190px;"><label>Almacén <span class="dc-req">*</span></label><select id="se-almacen" onchange="sgaEntradaAlmacenCambio()">${sgaAlmacenOptionsHtml('', '')}</select></div>
+            <div class="field" id="se-alm-wrap" style="flex:1;min-width:190px;"><label>Almacén <span class="dc-req">*</span></label><select id="se-almacen" onchange="sgaEntradaAlmacenCambio()">${sgaAlmacenOptionsHtml('', '')}</select></div>
             <div class="field" style="flex:1;min-width:150px;"><label>${ini ? 'Fecha de recepción original' : 'Fecha de recepción'} <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="se-fecha" type="date" value="${today()}" />`)}</div>
             <div class="field" style="flex:1;min-width:180px;"><label>${ini ? 'Referencia' : 'Referencia / nº de albarán'} <span class="dc-req">*</span></label>${decaInputIcon('file', `<input id="se-ref" maxlength="20" placeholder="Obligatorio (máx. 20 caracteres)" ${ini ? 'value="STOCK INICIAL"' : ''} />`)}</div>
           </div>
@@ -7847,7 +7865,7 @@ async function sgaEntradaConfirmar(){
   if (!d.fecha) errores.push('Indica la fecha de recepción.');
   if (!d.referencia) errores.push('Escribe la referencia o el nº de albarán de la recepción.');
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
-  const hayZonas = sgaZonasActivas().length > 0;
+  const porLinea = !window.__seEdit && sgaEntradaPorLinea();   // stock inicial con varios almacenes: uno por línea
   const partidas = [];
   const editando = window.__seEdit || null;
   const propios = new Set(editando ? editando.partidas.map(p => p.id) : []);   // las partidas de esta misma recepción no cuentan como «ya existentes»
@@ -7872,7 +7890,9 @@ async function sgaEntradaConfirmar(){
       if (!isFinite(cantidad) || cantidad < 1 || String(cantidad) !== l.cantidadTxt) { errores.push(`${f}: indica cuántos ${sgaUnidadCfg(d.clienteId).p} (un número entero).`); return; }
       if (l.cons && cantidad < l.cons) { errores.push(`${f}: ya han salido ${l.cons} ${sgaUd(d.clienteId, l.cons)} de esta línea, no puede quedar con menos.`); return; }
     }
-    if (hayZonas && !l.zonaId) { errores.push(`${f}: elige la zona.`); return; }
+    if (porLinea && !l.almacenId) { errores.push(`${f}: elige el almacén.`); return; }
+    const whL = porLinea ? l.almacenId : sgaEntradaWh();
+    if (sgaZonasActivas(whL).length > 0 && !l.zonaId) { errores.push(`${f}: elige la zona.`); return; }
     const z = sgaZonaDe(l.zonaId);
     if (z && z.tipo === 'estanteria' && !l.ubicacionId) { errores.push(`${f}: elige la ubicación (la zona es de estantería).`); return; }
     if (l.ubicacionId) {
@@ -7891,7 +7911,7 @@ async function sgaEntradaConfirmar(){
     const art = sgaArticulos.find(x => x.id === l.articuloId);
     const bTxt = sgaNumero(l.bultosTxt);
     const bultos = isFinite(bTxt) && bTxt > 0 ? bTxt : (art && sgaClienteConBultos(d.clienteId) ? Math.round(cantidad * art.bultos * 100) / 100 : null);
-    partidas.push({ id: l.pid || '', producto_id: l.productoId || null, zona_id: l.zonaId || '', ubicacion_id: l.ubicacionId || '', referencia: art ? art.referencia : (l.referencia || ''), descripcion: art ? art.nombre : (l.descripcion || ''), lote: l.lote || '', codigo: cfg.codigosUnicos ? l.codigo : '', cantidad, atributos, articulo_id: art ? art.id : '', bultos });
+    partidas.push({ _i: l.i, id: l.pid || '', warehouse_id: whL, producto_id: l.productoId || null, zona_id: l.zonaId || '', ubicacion_id: l.ubicacionId || '', referencia: art ? art.referencia : (l.referencia || ''), descripcion: art ? art.nombre : (l.descripcion || ''), lote: l.lote || '', codigo: cfg.codigosUnicos ? l.codigo : '', cantidad, atributos, articulo_id: art ? art.id : '', bultos });
   });
   const servicios = [];
   d.servicios.forEach((s, n) => {
@@ -7910,12 +7930,28 @@ async function sgaEntradaConfirmar(){
     partidas, servicios: inicial ? [] : servicios, cobros: !inicial && calc.activo ? calc.cobros : [],
   };
   const editE = window.__seEdit;
-  const { data, error } = editE
-    ? await supabaseClient.rpc('sga_editar_entrada', { p_id: editE.id, p: payload })
-    : await supabaseClient.rpc('sga_confirmar_entrada', { p: payload });
+  // Stock inicial con varios almacenes: un alta (y un albarán de apertura) por almacén
+  const grupos = porLinea ? [...new Set(partidas.map(p => p.warehouse_id))].map(w => ({ wid: w, ps: partidas.filter(p => p.warehouse_id === w) })) : [{ wid: payload.albaran.warehouse_id, ps: partidas }];
+  const guardados = [];
+  let data = null, error = null;
+  for (const g of grupos) {
+    const pl = { ...payload, albaran: { ...payload.albaran, warehouse_id: g.wid }, partidas: g.ps.map(({ _i, ...r }) => r) };
+    ({ data, error } = editE
+      ? await supabaseClient.rpc('sga_editar_entrada', { p_id: editE.id, p: pl })
+      : await supabaseClient.rpc('sga_confirmar_entrada', { p: pl }));
+    if (error) break;
+    guardados.push({ id: data, wid: g.wid, ps: g.ps });
+  }
   if (error) {
     const m = error.message || 'error desconocido.';
-    errEl.textContent = 'No se pudo guardar: ' + (/sga_partidas_codigo_unico|duplicate key/i.test(m) ? 'hay un código de palet repetido para este cliente.' : /function .*sga_editar_entrada/i.test(m) ? 'falta ejecutar el SQL de «editar recepción» en Supabase.' : /function .*sga_confirmar_entrada|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL de «confirmar recepción» en Supabase.' : /Solo se pueden editar entradas\.$/i.test(m) ? 'para editar un stock inicial falta ejecutar el SQL «sga-editar-entrada-apertura.sql» en Supabase.' : m);
+    let yaGuardado = '';
+    if (guardados.length) {   // lo de los almacenes que sí se guardaron sale del formulario, para no duplicarlo al reintentar
+      await loadSgaStock();
+      guardados.forEach(g => g.ps.forEach(p => { const tr = document.querySelector(`.se-row[data-i="${p._i}"]`); if (tr) tr.remove(); }));
+      sgaEntradaRefrescar();
+      yaGuardado = `Ya se guardó el stock de ${guardados.map(g => whNombre(g.wid)).join(', ')} (sus líneas se han quitado de aquí). Falta lo de los demás almacenes. `;
+    }
+    errEl.textContent = yaGuardado + 'No se pudo guardar: ' + (/sga_partidas_codigo_unico|duplicate key/i.test(m) ? 'hay un código de palet repetido para este cliente.' : /function .*sga_editar_entrada/i.test(m) ? 'falta ejecutar el SQL de «editar recepción» en Supabase.' : /function .*sga_confirmar_entrada|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL de «confirmar recepción» en Supabase.' : /Solo se pueden editar entradas\.$/i.test(m) ? 'para editar un stock inicial falta ejecutar el SQL «sga-editar-entrada-apertura.sql» en Supabase.' : m);
     if (btn) btn.disabled = false;
     return;
   }
@@ -7937,8 +7973,11 @@ async function sgaEntradaConfirmar(){
     return;
   }
   if (inicial) {
-    await logContactoHistorial(d.clienteId, `SGA · ha cargado el stock inicial: ${total} palet${total !== 1 ? 's' : ''}, con fecha de recepción ${fmtDateDMY(d.fecha)}.`);
-    await logAlbaranHistorial(data, `Stock inicial registrado: ${total} palet${total !== 1 ? 's' : ''} con fecha ${fmtDateDMY(d.fecha)}`);
+    await logContactoHistorial(d.clienteId, `SGA · ha cargado el stock inicial: ${total} palet${total !== 1 ? 's' : ''}, con fecha de recepción ${fmtDateDMY(d.fecha)}${guardados.length > 1 ? ' (en ' + guardados.map(g => whNombre(g.wid)).join(' y ') + ')' : ''}.`);
+    for (const g of guardados) {
+      const t = g.ps.reduce((s, p) => s + p.cantidad, 0);
+      await logAlbaranHistorial(g.id, `Stock inicial registrado: ${t} palet${t !== 1 ? 's' : ''} con fecha ${fmtDateDMY(d.fecha)}${guardados.length > 1 ? ' en ' + whNombre(g.wid) : ''}`);
+    }
     appToast(`Stock inicial registrado: ${sgaUdN(d.clienteId, total)}.`, 'ok');
     window.__stockSeg = 'entradas';
     stockVolver();
