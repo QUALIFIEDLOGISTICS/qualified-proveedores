@@ -5625,7 +5625,8 @@ function catStockArticulo(a){
   const ps = catPartidasArticulo(a);
   const mod = ps.reduce((s, p) => s + p.actual, 0);
   const bul = Math.round(ps.reduce((s, p) => s + (p.bultos != null ? sgaBultosSalida(p, p.actual) : p.actual), 0) * 100) / 100;
-  return { mod, bul, almacenes: [...new Set(ps.map(p => whNombre(p.warehouseId)))].join(', ') };
+  const porAlm = {}; ps.forEach(p => { const n = whNombre(p.warehouseId); porAlm[n] = (porAlm[n] || 0) + p.actual; });
+  return { mod, bul, almacenes: [...new Set(ps.map(p => whNombre(p.warehouseId)))].join(', '), porAlm: Object.keys(porAlm).length > 1 ? Object.keys(porAlm).sort((x, y) => x.localeCompare(y, 'es')).map(n => ({ n, mod: porAlm[n] })) : [] };
 }
 // Mercancía que está en el almacén pero no tiene artículo en el catálogo (clientes sin catálogo o recepciones antiguas): se ve
 // igualmente en la tabla, agrupada por producto y referencia, para que el catálogo y el stock sean una sola pantalla.
@@ -5935,7 +5936,7 @@ function catFilaHtml(a, cols, conCliente){
       ${cols.medidas ? (edit ? `<td>${catCeldaInput(a, 'medidas', a.medidas, 'style="min-width:170px;"')}</td>` : `<td class="cg-trunc" data-sort-value="${esc(a.medidas)}">${a.medidas ? esc(a.medidas) : vacio}</td>`) : ''}
       ${cols.x.map(campoX).join('')}
       <td class="cg-stock" data-sort-value="${st.mod}" ${st.almacenes ? `title="${esc(st.almacenes)}"` : ''}>${st.mod
-        ? `<span class="cg-st ok"><i></i><b>${st.mod}</b> ${sgaUd(a.clienteId, st.mod)}</span>${cols.bultos && (a.bultos !== 1 || st.bul !== st.mod) ? `<div class="cg-ref">${sgaNumTxt(st.bul)} bultos</div>` : ''}`
+        ? `<span class="cg-st ok"><i></i><b>${st.mod}</b> ${sgaUd(a.clienteId, st.mod)}</span>${st.porAlm.length ? `<div class="cg-ref">${st.porAlm.map(x => `${esc(x.n)}: <b>${x.mod}</b>`).join(' · ')}</div>` : ''}${cols.bultos && (a.bultos !== 1 || st.bul !== st.mod) ? `<div class="cg-ref">${sgaNumTxt(st.bul)} bultos</div>` : ''}`
         : '<span class="cg-st no"><i></i>Sin stock</span>'}</td>
     </tr>`;
 }
@@ -7223,8 +7224,8 @@ function sgaCamposActivos(cfg){ return sgaCamposEntrada().filter(f => (cfg.campo
 function sgaEntradaWh(){ const el = document.getElementById('se-almacen'); return el && el.value ? el.value : currentWarehouseId; }
 // Stock inicial nuevo de un cliente con varios almacenes: el almacén se elige en cada línea, no arriba (puede tener cosas en distintos sitios)
 function sgaEntradaPorLinea(){
-  if (!window.__seInicial) return false;
-  const e = window.__seEdit;   // al editar, también si sus líneas ya están repartidas en varios almacenes
+  const e = window.__seEdit;   // al editar (stock inicial o recepción), también si sus líneas ya están repartidas en varios almacenes
+  if (!window.__seInicial && !e) return false;
   return sgaAlmacenesCliente(sgaEntradaClienteId()).length > 1 || !!(e && new Set(e.partidas.map(p => p.warehouseId)).size > 1);
 }
 function sgaEntradaWhLinea(i){ const el = document.getElementById(`se-${i}-alm`); return el && el.value ? el.value : sgaEntradaWh(); }
@@ -7644,6 +7645,7 @@ function sgaEntradaRefrescar(){
   const tt = document.getElementById('se-tfoot'); if (tt) tt.innerHTML = sgaEntradaTotalesHtml(d);
 }
 function sgaEntradaAbrir(inicial, clienteId){
+  window.__seEdit = null;
   window.__seInicial = inicial === true;   // «stock inicial»: mercancía que ya está en el almacén (cliente que venía de Excel), sin cobros de recepción
   window.__stockView = 'entrada';
   window.__stockDirty = false;
