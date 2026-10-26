@@ -4528,16 +4528,64 @@ async function sgaCampoMaterializar(f, cambios){
    estanterías tienen ubicaciones (un hueco por palet, con su código: pasillo-columna-nivel). */
 let sgaZonas = [];
 let sgaUbicaciones = [];
+/* ---- m² contratados por cliente, con histórico ----
+   Cada cambio es una fila nueva con su fecha «desde» (tabla sga_m2_contrato). Para cada mes, la liquidación usa los m² escritos a mano
+   ese mes (si los hay) y, si no, los vigentes a fin de mes según este histórico. */
+let sgaM2Historial = [];
+function sgaM2ContratoDeFila(r){ return { id: r.id, clienteId: r.cliente_id, m2: Number(r.m2), desde: r.vigente_desde, nota: r.nota || '', por: r.created_by || '', creadoEn: r.created_at || '' }; }
+function sgaM2Ordenar(){ sgaM2Historial.sort((a, b) => String(b.desde).localeCompare(String(a.desde)) || String(b.creadoEn).localeCompare(String(a.creadoEn))); }
+// Los m² vigentes de un cliente en una fecha (el último cambio hecho hasta ese día)
+function sgaM2Contrato(clienteId, fecha){ return sgaM2Historial.find(x => x.clienteId === clienteId && x.desde <= fecha) || null; }
+function sgaM2CardHtml(clienteId){
+  const hist = sgaM2Historial.filter(x => x.clienteId === clienteId);
+  const act = sgaM2Contrato(clienteId, today());
+  const quien = e => esc(String(e || '').split('@')[0].replace(/[._-]+/g, ' ')) || '—';
+  return `
+    <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+      ${act ? `<span style="font-family:var(--display);font-size:24px;font-weight:700;">${esc(sgaNumTxt(act.m2))} m²</span><span style="color:var(--muted);font-size:13px;">vigentes desde el ${esc(fmtDateDMY(act.desde))}</span>`
+            : '<span style="color:var(--mutedFaint);font-size:13px;">Todavía no hay m² definidos para este cliente.</span>'}
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+      <div class="field" style="width:140px;margin-bottom:0;"><label>m² contratados</label><input id="sgac-m2-n" inputmode="decimal" maxlength="9" placeholder="Ej. 250" style="text-align:right;" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaM2ContratoGuardar(); }" /></div>
+      <div class="field" style="width:170px;margin-bottom:0;"><label>Desde el día</label><input id="sgac-m2-d" type="date" value="${today()}" /></div>
+      <div class="field" style="flex:1;min-width:180px;margin-bottom:0;"><label>Nota <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></label><input id="sgac-m2-nota" maxlength="120" placeholder="Ej. Amplía una nave" /></div>
+      <button type="button" class="btn btn-primary" onclick="sgaM2ContratoGuardar()">Guardar cambio</button>
+    </div>
+    <div id="sgac-m2-error" style="color:var(--danger);font-size:12.5px;margin-top:8px;"></div>
+    <div class="sgac-h" style="margin-top:8px;">Se usan en las liquidaciones de cada mes (los vigentes a fin de mes), salvo que escribas otros a mano en esa liquidación. Cada cambio queda en el histórico. Para cobrarlos, el cliente necesita su tarifa de «M²».</div>
+    ${hist.length ? `<div class="sgac-tit" style="margin-top:14px;">Histórico</div>
+      <table class="tf-table" style="margin-top:6px;"><thead><tr><th>Desde</th><th style="text-align:right;">m²</th><th>Nota</th><th>Registrado</th></tr></thead>
+      <tbody>${hist.map((x, i) => `<tr${i === 0 ? ' style="font-weight:700;"' : ''}><td style="white-space:nowrap;">${esc(fmtDateDMY(x.desde))}</td><td class="tf-precio">${esc(sgaNumTxt(x.m2))}</td><td>${esc(x.nota) || '<span style="color:var(--mutedFaint);">—</span>'}</td><td style="color:var(--muted);font-size:12.5px;">${quien(x.por)}${x.creadoEn ? ' · ' + esc(fmtDateDMY(String(x.creadoEn).slice(0, 10))) : ''}</td></tr>`).join('')}</tbody></table>` : ''}`;
+}
+async function sgaM2ContratoGuardar(){
+  const id = window.__sgaClienteFormId;
+  const err = document.getElementById('sgac-m2-error');
+  if (!id || !err) return;
+  err.textContent = '';
+  const n = Number(String((document.getElementById('sgac-m2-n') || {}).value || '').replace(',', '.'));
+  const desde = (document.getElementById('sgac-m2-d') || {}).value || '';
+  const nota = ((document.getElementById('sgac-m2-nota') || {}).value || '').trim();
+  if (!(String((document.getElementById('sgac-m2-n') || {}).value || '').trim() !== '' && isFinite(n) && n >= 0)) { err.textContent = 'Escribe los m² como un número.'; return; }
+  if (!desde) { err.textContent = 'Indica desde qué día valen.'; return; }
+  const { data, error } = await supabaseClient.from('sga_m2_contrato').insert({ cliente_id: id, m2: n, vigente_desde: desde, nota: nota || null, created_by: currentUserEmail() }).select().single();
+  if (error || !data) { err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test((error && error.message) || '') ? 'falta ejecutar el SQL «sga-m2-contrato.sql» en Supabase.' : ((error && error.message) || 'error desconocido.')); return; }
+  sgaM2Historial.push(sgaM2ContratoDeFila(data)); sgaM2Ordenar();
+  const el = document.getElementById('sgac-m2'); if (el) el.innerHTML = sgaM2CardHtml(id);
+  await logContactoHistorial(id, `SGA · m² contratados: ${sgaNumTxt(n)} m² desde el ${fmtDateDMY(desde)}${nota ? ' (' + nota + ')' : ''}.`);
+  appToast(`m² guardados: ${sgaNumTxt(n)} m² desde el ${fmtDateDMY(desde)}.`, 'ok');
+}
 async function loadSgaConfig(){
-  const [z, u, cl, ar, cp] = await Promise.all([
+  const [z, u, cl, ar, cp, m2c] = await Promise.all([
     supabaseClient.from('sga_zonas').select('*').order('orden', { ascending: true }).order('nombre', { ascending: true }),
     supabaseClient.from('sga_ubicaciones').select('*').order('codigo', { ascending: true }),
     supabaseClient.from('sga_clientes').select('*'),
     supabaseClient.from('sga_articulos').select('*').order('nombre', { ascending: true }),
     supabaseClient.from('sga_campos').select('*').order('orden', { ascending: true }).order('created_at', { ascending: true }),
+    supabaseClient.from('sga_m2_contrato').select('*'),
   ]);
   sgaCampos = sgaCamposCompletar((cp && cp.data || []).map(r => ({ id: r.id, clave: r.clave, nombre: r.nombre, tipo: r.tipo, unidad: r.unidad || '', opciones: Array.isArray(r.opciones) ? r.opciones : [], ambito: r.ambito, enAlbaran: !!r.en_albaran, enStock: r.en_stock !== false, orden: r.orden || 0, archived: !!r.archived })));
   sgaArticulos = (ar.data || []).map(sgaArticuloDeFila);
+  sgaM2Historial = (m2c && !m2c.error ? m2c.data || [] : []).map(sgaM2ContratoDeFila); sgaM2Ordenar();   // si falta el SQL «sga-m2-contrato.sql» simplemente no hay histórico
   sgaClientes = {};
   (cl.data || []).forEach(r => { sgaClientes[r.cliente_id] = { activoDesde: r.activo_desde || '', codigosUnicos: !!r.codigos_unicos, campos: Object.assign({ referencia: 'opcional', descripcion: 'opcional', lote: 'no', peso: 'no', unidades: 'no', proveedor: 'no', serie: 'no', medidas: 'no' }, r.campos || {}), observaciones: r.observaciones || '', prefijo: r.prefijo || '' }; });
   Object.keys(sgaClientes).forEach(id => { const cc = sgaClientes[id].campos; if (cc.finalidad === undefined && sgaArticulos.some(a => a.clienteId === id && sgaFinalidad(a))) cc.finalidad = 'opcional'; });
@@ -5225,6 +5273,10 @@ function tplSgaClientePage(c){
       <div class="card deca-card">
         ${decaCardHead('list', 'Datos de la mercancía', 'Los datos que pide este cliente')}
         <div class="deca-card-body" id="sgac-campos">${sgacCamposHtml()}</div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('grid', 'Superficie contratada', 'Los m² por defecto de este cliente, con su histórico')}
+        <div class="deca-card-body" id="sgac-m2">${sgaM2CardHtml(c.id)}</div>
       </div>
       <div class="card deca-card">
         ${decaCardHead('file', 'Albaranes', 'Cómo se numeran y qué datos llevan')}
@@ -8778,14 +8830,16 @@ function sgaResumenCalcular(d){
     if (max > 0 && tMes && (tMes.base || 'dia') === 'mes_max') stockLineas.push({ productoId: p.id, precio: tMes.precio, cantidad: max, importe: sgaR2(max * tMes.precio), origen: 'stock', detalle: `máximo del mes: ${max}` });
   });
   const totStock = sgaR2(stockLineas.reduce((s, l) => s + l.importe, 0));
-  // m² del mes: el guardado para este mes o, si no hay, el del último mes anterior
+  // m² del mes: los escritos a mano ese mes; si no, los vigentes a fin de mes en el histórico del cliente; y si tampoco, los del último mes anterior
   const guardado = d.m2.find(x => x.periodo === d.periodo);
   const previo = d.m2.filter(x => x.periodo < d.periodo)[0];
-  const m2 = guardado ? guardado.m2 : (previo ? previo.m2 : null);
+  const contrato = sgaM2Contrato(d.clienteId, `${d.periodo}-${String(dias).padStart(2, '0')}`);
+  const m2 = guardado ? guardado.m2 : (contrato ? contrato.m2 : (previo ? previo.m2 : null));
+  const m2Origen = guardado ? 'mes' : contrato ? 'contrato' : previo ? 'anterior' : '';
   const prodM2 = almacenajeProductos.find(p => !p.archived && p.disparador === 'stock_mes' && almacenajeTarifas.some(t => t.clienteId === d.clienteId && t.tipo === p.id));
   const finMes = `${d.periodo}-${String(dias).padStart(2, '0')}`;
   const tM2 = prodM2 ? sgaTarifaEn(d.clienteId, prodM2.id, finMes) : null;
-  return { cfg, usaBultos, filas, inicial, final: { mod: actualMod, bul: actualBul }, conceptos: [...Object.values(conceptos), ...stockLineas], hayReg: filas.some(x => x.regMod), mesActual, proyectar, almPrevisto: sgaR2(almPrevisto), totMov, totServ, totOper, totOperMes: sgaR2(filas.reduce((s, x) => s + (x.oper || 0), 0)), operativas: d.operativas || [], totStock, m2, m2Guardado: !!guardado, prodM2, tM2, finMes };
+  return { cfg, usaBultos, filas, inicial, final: { mod: actualMod, bul: actualBul }, conceptos: [...Object.values(conceptos), ...stockLineas], hayReg: filas.some(x => x.regMod), mesActual, proyectar, almPrevisto: sgaR2(almPrevisto), totMov, totServ, totOper, totOperMes: sgaR2(filas.reduce((s, x) => s + (x.oper || 0), 0)), operativas: d.operativas || [], totStock, m2, m2Guardado: !!guardado, m2Origen, m2Desde: contrato ? contrato.desde : '', prodM2, tM2, finMes };
 }
 function sgaResumenHtml(d, paraImprimir){
   const r = sgaResumenCalcular(d);
@@ -8829,7 +8883,7 @@ function sgaResumenHtml(d, paraImprimir){
     const cant = paraImprimir
       ? (r.m2 != null ? `${sgaNumTxt(r.m2)} m²` : '—')
       : `<input id="rm-m2" inputmode="decimal" maxlength="8" value="${r.m2 != null ? esc(String(r.m2).replace('.', ',')) : ''}" placeholder="m²" onchange="sgaResumenGuardarM2()" style="width:86px;text-align:right;" title="m² contratados este mes" /> m²`;
-    const aviso = !paraImprimir && !r.m2Guardado && r.m2 != null ? ' <small style="color:var(--mutedFaint);">· los del mes anterior: pulsa fuera para confirmarlos</small>' : '';
+    const aviso = paraImprimir || r.m2 == null ? '' : r.m2Origen === 'contrato' ? ` <small style="color:var(--mutedFaint);">· los m² del cliente (desde el ${esc(fmtDateDMY(r.m2Desde))}): si este mes son otros, escríbelos</small>` : r.m2Origen === 'anterior' ? ' <small style="color:var(--mutedFaint);">· los del mes anterior: pulsa fuera para confirmarlos</small>' : '';
     lineas.push({ g: 'almacenaje', o: 9, importe: r.m2 != null ? fijo : 0, html: `<tr><td>${esc(sgaProdTxt(r.prodM2.id))} <small style="color:var(--muted);">· superficie</small>${aviso}</td><td class="r" style="white-space:nowrap;">${cant}</td><td class="r">${esc(eurPrecio(r.tM2.precio))}</td><td class="r">${r.m2 != null ? eur(fijo) : '—'}</td></tr>` });
   }
   const GRUPOS_COBRO = [['movimiento', 'Movimientos · recepciones y expediciones'], ['almacenaje', 'Almacenaje'], ['operativa', 'Operativas'], ['extra', 'Extras']];
