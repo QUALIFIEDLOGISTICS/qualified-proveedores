@@ -5433,7 +5433,6 @@ function sgaAlbMenuItems(a){
   const puede = sgaPuedeEditarStock(), conf = a.estado === 'confirmado';
   const it = [];
   if (conf && a.tipo === 'salida' && a.borrador) it.push(['Imprimir albarán', 'file', `sgaAlbaranImprimir('${a.id}')`]);
-  if (conf && a.tipo === 'salida') it.push([sgaDecaDeExpedicion(a.id) ? 'Ver DeCA' : 'Generar DeCA', 'file', `sgaDecaDesdeExpedicion('${a.id}')`]);
   if (conf && a.tipo === 'salida') it.push(['Etiqueta de envío', 'tag', `sgaEtiquetaAbrir('${a.id}')`]);
   if (conf && (a.tipo === 'salida' || a.tipo === 'entrada') && puede) it.push(['Editar', 'edit', `${a.tipo === 'salida' ? 'sgaSalidaEditar' : 'sgaEntradaEditar'}('${a.id}')`]);
   if (conf && a.tipo !== 'regularizacion' && puede) it.push(['Anular albarán', 'trash', `sgaAnularAbrir('${a.id}')`, true]);
@@ -8097,6 +8096,7 @@ function sgaNumeroSalidaPrevisto(clienteId, fecha){
 }
 function sgaSalidaRefrescar(){
   const d = sgaSalidaLeer();
+  sgaSalidaDecaRefrescar();
   const numEl = document.getElementById('sl-num');
   if (numEl) numEl.value = sgaNumeroSalidaPrevisto(d.clienteId, d.fecha);
   const el = document.getElementById('sl-resumen');
@@ -8163,6 +8163,10 @@ function tplStockSalidaPage(){
         <div class="deca-card-body"><div id="sl-stock"><div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div></div></div>
       </div>
       <div class="card deca-card">
+        ${decaCardHead('shield', 'DeCA', 'Opcional · se vincula a esta expedición y su QR sale en el albarán')}
+        <div class="deca-card-body">${sgaSalidaDecaHtml()}</div>
+      </div>
+      <div class="card deca-card">
         ${decaCardHead('clock', 'Servicios', 'Horas y extras de esta expedición (opcional)', `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="sgaServicioAdd()">+ Servicio</button>`)}
         <div class="deca-card-body"><div id="se-servicios"></div></div>
       </div>
@@ -8208,6 +8212,17 @@ async function sgaSalidaConfirmar(comoBorrador){
     if (!s.productoId && !s.cantidadTxt) return;
     if (!s.productoId || !(sgaNumero(s.cantidadTxt) > 0)) errores.push(`Servicio ${n + 1}: elige el servicio y una cantidad mayor que 0.`);
   });
+  // DeCA: solo al confirmar (un borrador todavía no sale); se comprueba antes de guardar para no dejar la expedición sin su DeCA
+  const conDeca = !comoBorrador && !!(document.getElementById('sl-deca-on') && document.getElementById('sl-deca-on').checked);
+  const decaPeso = ((document.getElementById('sl-deca-peso') || {}).value || '').trim(), decaNif = ((document.getElementById('sl-deca-nif') || {}).value || '').trim();
+  if (conDeca) {
+    const tc = sgaTransportistaContacto(d.transportista), mt = sgaMatriculaSplit(d.matricula);
+    if (!d.transportista) errores.push('DeCA: escribe el transportista.');
+    else if (!(tc && tc.nif) && !decaNif) errores.push('DeCA: escribe el NIF del transportista (no está en Contactos).');
+    if (!mt.tractora) errores.push('DeCA: escribe la matrícula tractora.');
+    if (!d.destinatario) errores.push('DeCA: elige el destinatario.');
+    if (!(Number(decaPeso.replace(',', '.')) > 0)) errores.push('DeCA: indica el peso de la mercancía.');
+  }
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const servicios = d.servicios.filter(s => s.productoId).map(s => ({ producto_id: s.productoId, cantidad: sgaNumero(s.cantidadTxt), nota: s.nota }));
   const fifo = sgaSalidaFifo(d.clienteId, d.items);
@@ -8234,6 +8249,13 @@ async function sgaSalidaConfirmar(comoBorrador){
   await loadSgaStock();
   const total = sale.reduce((s, x) => s + x.n, 0);
   const numAlb = (sgaAlbaranes.find(x => x.id === albId) || {}).numeroTexto || '';
+  const albDeca = albId || (edit && edit.id);
+  if (conDeca && albDeca) {
+    try {
+      const doc = await sgaCrearDecaExpedicion(albDeca, d, sale, decaPeso, decaNif);
+      appToast(doc.sinVincular ? `DeCA ${doc.codigo} creado, pero sin vincular a la expedición: falta ejecutar el SQL «deca-expedicion.sql» en Supabase.` : `DeCA ${doc.codigo} creado y vinculado a la expedición.`, doc.sinVincular ? 'error' : 'ok');
+    } catch (err) { appToast('La expedición se ha guardado, pero el DeCA no se pudo crear: ' + (err && err.message ? err.message : 'error desconocido.') + ' Ábrela con «Editar» para reintentarlo.', 'error'); }
+  }
   if (edit) {
     window.__slEdit = null;   // el stock ya está recargado de la base de datos
     const eraBorrador = !!edit.albaran.borrador;
@@ -9207,52 +9229,107 @@ async function sgaEtiquetaImprimir(id){
   try { localStorage.setItem('qualified.sga.etqPos', String(((pos - 1 + n) % 4) + 1)); } catch (e) { /* sin almacenamiento: no pasa nada */ }
   setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 3000); }, 250);
 }
-/* ---- DeCA desde una expedición ----
-   Desde el menú «⋯» de una expedición se abre el formulario de DeCA ya rellenado y, al crearlo, queda vinculado a esa expedición
-   (deca_documents.albaran_id). El cargador contractual es siempre Qualified; lo demás sale de la expedición y se puede corregir. */
+/* ---- DeCA dentro de la expedición ----
+   Como en la orden de carga: en el formulario hay un interruptor «Generar también el DeCA». Al confirmar la expedición se crea el DeCA
+   (cargador contractual: siempre Qualified), queda vinculado a ella y su QR sale impreso en el albarán. */
 function sgaDecaDeExpedicion(albaranId){ return decaDocuments.find(d => d.albaranId === albaranId) || null; }
-async function sgaDecaDesdeExpedicion(id){
-  const a = sgaAlbaranes.find(x => x.id === id);
-  if (!a) return;
-  const ya = sgaDecaDeExpedicion(id);
-  if (ya) { openDecaViewModal(ya.id); return; }   // ya tiene su DeCA: se abre
-  if (!(PROFILE.isAdmin || PROFILE.allowedTabs.includes('trafico'))) { appToast('Para generar un DeCA necesitas acceso a Transporte.', 'error'); return; }
-  // lo que sale: palet a palet, con lo que se sabe de cada artículo
-  const lineas = [];
-  try {
-    const mv = await supabaseClient.from('sga_movimientos').select('partida_id,cantidad').eq('albaran_id', id).eq('tipo', 'salida');
-    const movs = mv.data || [];
-    const pr = movs.length ? await supabaseClient.from('sga_partidas').select('id,producto_id,descripcion,articulo_id').in('id', movs.map(m => m.partida_id)) : { data: [] };
-    const partidas = {}; (pr.data || []).forEach(p => { partidas[p.id] = p; });
-    movs.forEach(m => {
-      const p = partidas[m.partida_id] || {}, art = sgaArticulos.find(x => x.id === p.articulo_id);
-      lineas.push({ nombre: p.descripcion || sgaProdTxt(p.producto_id), n: Math.abs(Number(m.cantidad)), peso: art && art.peso != null ? Number(art.peso) : null });
-    });
-  } catch (e) { /* sin líneas: se rellena a mano */ }
-  const pesoConocido = lineas.filter(l => l.peso != null);
-  const peso = pesoConocido.length ? Math.round(pesoConocido.reduce((s, l) => s + l.peso * l.n, 0)) : 0;
-  const nombres = [...new Set(lineas.map(l => String(l.nombre || '').trim()).filter(Boolean))];
-  // cargador: siempre Qualified
+// Peso de lo que sale: peso por palet del artículo × palets que salen (los artículos sin peso no suman)
+function sgaSalidaPesoCalculado(items){
+  let kg = 0, hay = false;
+  items.forEach(x => {
+    if (!(x.n > 0) || !isFinite(x.n)) return;
+    const art = sgaArticulos.find(a => a.id === x.p.articuloId);
+    if (art && art.peso != null) { kg += Number(art.peso) * x.n; hay = true; }
+  });
+  return hay ? Math.round(kg) : 0;
+}
+function sgaTransportistaContacto(nombre){
+  const t = String(nombre || '').trim().toLowerCase();
+  return t ? contactos.find(c => !c.archived && c.esTransportista && [c.nombre, c.nombreComercial].some(s => String(s || '').trim().toLowerCase() === t)) || null : null;
+}
+function sgaSalidaDecaHtml(){
+  const edit = window.__slEdit;
+  const ya = edit ? sgaDecaDeExpedicion(edit.id) : null;
+  if (ya) return `<div style="font-size:13.5px;">Esta expedición ya tiene su DeCA: <button type="button" class="deca-code-pill" style="cursor:pointer;border:none;" onclick="openDecaViewModal('${ya.id}')">${esc(ya.codigo || 'DeCA')}</button> <span style="color:var(--muted);font-size:12.5px;">· su QR sale en el albarán.</span></div>`;
+  if (!(PROFILE.isAdmin || PROFILE.allowedTabs.includes('trafico'))) return '<div style="font-size:13px;color:var(--muted);">Para generar el DeCA hace falta acceso a Transporte.</div>';
+  return `<label style="display:flex;align-items:flex-start;gap:10px;font-size:13.5px;cursor:pointer;"><input type="checkbox" class="switch" id="sl-deca-on" onchange="sgaSalidaDecaToggle()" style="margin-top:2px;" />
+      <span><b>Generar también el DeCA</b><br><span style="font-size:12px;color:var(--muted);">Se crea al confirmar la expedición con sus datos (el cargador contractual es Qualified) y su QR sale impreso en el albarán. No hace falta en transportes internacionales.</span></span></label>
+    <div id="sl-deca-campos" style="display:none;margin-top:14px;">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:200px;max-width:260px;margin-bottom:0;"><label>Peso de la mercancía <span class="dc-req">*</span></label>${decaInputIcon('weight', `<input id="sl-deca-peso" inputmode="decimal" maxlength="30" placeholder="Ej. 12.500" oninput="this.dataset.manual='1'" />`, 'kg')}
+          <div id="sl-deca-peso-ayuda" style="font-size:11.5px;color:var(--mutedFaint);margin-top:4px;"></div></div>
+        <div class="field" style="flex:1;min-width:200px;max-width:260px;margin-bottom:0;"><label>NIF del transportista <span class="dc-req">*</span></label>${decaInputIcon('idcard', `<input id="sl-deca-nif" maxlength="20" placeholder="Ej. B12345678" oninput="this.dataset.manual='1'" />`)}
+          <div id="sl-deca-nif-ayuda" style="font-size:11.5px;color:var(--mutedFaint);margin-top:4px;"></div></div>
+      </div>
+      <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">También hace falta la matrícula tractora y el destinatario.</div>
+    </div>`;
+}
+function sgaSalidaDecaToggle(){
+  const on = (document.getElementById('sl-deca-on') || {}).checked;
+  const box = document.getElementById('sl-deca-campos');
+  if (box) box.style.display = on ? '' : 'none';
+  sgaSalidaDecaRefrescar();
+}
+// Mientras no se hayan escrito a mano, el peso sale de los palets marcados y el NIF del transportista, de Contactos
+function sgaSalidaDecaRefrescar(){
+  const on = document.getElementById('sl-deca-on');
+  if (!on || !on.checked) return;
+  const d = sgaSalidaLeer();
+  const peso = document.getElementById('sl-deca-peso'), nif = document.getElementById('sl-deca-nif');
+  const calc = sgaSalidaPesoCalculado(d.items);
+  if (peso && peso.dataset.manual !== '1') peso.value = calc ? String(calc) : '';
+  const ayudaP = document.getElementById('sl-deca-peso-ayuda');
+  if (ayudaP) ayudaP.textContent = calc ? `Calculado con el peso por palet de los artículos: ${sgaNumTxt(calc)} kg.` : 'Ningún artículo de lo que sale tiene peso: escríbelo.';
+  const tc = sgaTransportistaContacto(d.transportista);
+  if (nif && nif.dataset.manual !== '1') nif.value = tc ? tc.nif : '';
+  const ayudaN = document.getElementById('sl-deca-nif-ayuda');
+  if (ayudaN) ayudaN.textContent = tc ? 'Del transportista dado de alta en Contactos.' : (d.transportista ? 'Este transportista no está en Contactos: escribe su NIF.' : 'Escribe el transportista arriba.');
+}
+// Crea el DeCA de una expedición (mismos pasos que el formulario del DeCA: PDF con QR, alta con su número y PDF definitivo)
+async function sgaCrearDecaExpedicion(albaranId, d, sale, pesoTxt, nifTxt){
   const emp = ocCfgEmpresa();
-  // transportista: si está dado de alta en Contactos se traen su NIF y su domicilio
-  const tn = String(a.transportista || '').trim().toLowerCase();
-  const tc = tn ? contactos.find(c => !c.archived && c.esTransportista && [c.nombre, c.nombreComercial].some(s => String(s || '').trim().toLowerCase() === tn)) : null;
-  const mat = sgaMatriculaSplit(a.matricula);
-  const w = allWarehouses.find(x => x.id === a.warehouseId);
-  const dd = sgaDireccionPorNombre(a.destinatario);
-  const draft = {
-    cargadorNombre: emp.nombre || 'QUALIFIED', cargadorNif: emp.cif || '', cargadorDomicilio: [emp.direccion, [emp.cp, emp.poblacion].filter(Boolean).join(' '), emp.provincia].filter(Boolean).join(', ').slice(0, 250),
-    transportistaNombre: tc ? tc.nombre : (a.transportista || ''), transportistaNif: tc ? tc.nif : '', transportistaDomicilio: tc ? cargadorDireccionCompleta(tc).slice(0, 250) : '',
-    matriculaTractora: mat.tractora, matriculaRemolque: mat.remolque,
-    origen: w ? decaDireccionText(Object.assign({}, w, { nombre: w.name ? 'Qualified · ' + w.name : 'Qualified' })) : '',
-    destino: dd ? decaDireccionText(dd) : [a.destinatario, a.destinatarioDireccion].filter(Boolean).join(', ').slice(0, 150),
-    mercanciaNaturaleza: nombres.join(', ').slice(0, 200), mercanciaPeso: peso ? String(peso) : '',
-    fechaTransporte: a.fecha, observaciones: 'Albarán ' + sgaNumAlbaran(a),
+  const tc = sgaTransportistaContacto(d.transportista);
+  const mat = sgaMatriculaSplit(d.matricula);
+  const w = allWarehouses.find(x => x.id === sgaSalidaWh());
+  const dd = sgaDireccionPorNombre(d.destinatario);
+  const nombres = [...new Set(sale.map(x => String(x.p.descripcion || sgaProdTxt(x.p.productoId) || '').trim()).filter(Boolean))];
+  const peso = String(pesoTxt || '').replace(/\s*kg\.?$/i, '').trim();
+  const fields = {
+    cargadorNombre: emp.nombre, cargadorNif: emp.cif, cargadorDomicilio: `${emp.direccion}, ${emp.cp} ${emp.poblacion}, ${emp.provincia}, ${emp.pais}`.slice(0, 250),
+    transportistaNombre: tc ? tc.nombre : d.transportista, transportistaNif: tc ? (tc.nif || nifTxt) : nifTxt, transportistaDomicilio: tc ? cargadorDireccionCompleta(tc).slice(0, 250) : '',
+    origen: w ? decaDireccionText(Object.assign({}, w, { nombre: w.name ? 'Qualified · ' + w.name : 'Qualified' })) : '', origenesExtra: [],
+    destino: dd ? decaDireccionText(dd) : [d.destinatario].filter(Boolean).join(', ').slice(0, 150), destinosExtra: [],
+    mercanciaNaturaleza: nombres.join(', ').slice(0, 200), mercanciaPeso: peso ? peso + ' kg' : '',
+    fechaTransporte: d.fecha, matriculaTractora: mat.tractora, matriculaRemolque: mat.remolque, relevos: [],
+    observaciones: 'Albarán ' + ((sgaAlbaranes.find(x => x.id === albaranId) || {}).numeroTexto || ''),
+    creacionFecha: today(), creacionHora: new Date().toTimeString().slice(0, 8),
   };
-  await setTab('trafico');
-  window.__decaFormDraft = draft;
-  openDecaForm(null, id);
-  window.__decaFormDraft = null;   // solo para esta apertura
+  const faltan = ['transportistaNombre', 'transportistaNif', 'origen', 'destino', 'mercanciaNaturaleza', 'mercanciaPeso', 'matriculaTractora'].filter(k => !fields[k]);
+  if (faltan.length) throw new Error('faltan datos para el DeCA (' + faltan.join(', ') + ').');
+  const storagePath = `deca/${nextId()}.pdf`;
+  const { url } = await buildAndUploadDecaPdf({ ...fields, codigo: '' }, storagePath, null);
+  const dbPayload = {
+    cargador_nombre: fields.cargadorNombre, cargador_nif: fields.cargadorNif, cargador_domicilio: fields.cargadorDomicilio || null,
+    transportista_nombre: fields.transportistaNombre, transportista_nif: fields.transportistaNif, transportista_domicilio: fields.transportistaDomicilio || null,
+    origen: fields.origen, origenes_extra: [], destino: fields.destino, destinos_extra: [],
+    mercancia_naturaleza: fields.mercanciaNaturaleza, mercancia_peso: fields.mercanciaPeso, fecha_transporte: fields.fechaTransporte,
+    matricula_tractora: fields.matriculaTractora, matricula_remolque: fields.matriculaRemolque || null, observaciones: fields.observaciones,
+    relevos: null, creacion_fecha: fields.creacionFecha, creacion_hora: fields.creacionHora, albaran_id: albaranId,
+    pdf_storage_path: storagePath, pdf_url: url, updated_at: new Date().toISOString(),
+  };
+  let ins = await supabaseClient.from('deca_documents').insert(dbPayload).select().single();
+  let vinculado = true;
+  if (ins.error && /albaran_id/i.test(ins.error.message || '')) {   // falta ejecutar el SQL de DeCA ↔ expedición: se crea igualmente, sin vincular
+    delete dbPayload.albaran_id; vinculado = false;
+    ins = await supabaseClient.from('deca_documents').insert(dbPayload).select().single();
+  }
+  const { data, error } = ins;
+  if (error || !data) throw (error || new Error('sin datos'));
+  if (data.codigo) await buildAndUploadDecaPdf({ ...fields, codigo: data.codigo }, storagePath, url);
+  const doc = { id: data.id, codigo: data.codigo || '', ...fields, pdfStoragePath: storagePath, pdfUrl: url, albaranId: vinculado ? albaranId : '' };
+  decaDocuments.unshift(doc);
+  doc.sinVincular = !vinculado;
+  return doc;
 }
 // Los albaranes se imprimen en blanco y negro (también los logotipos), sin rellenos oscuros que gasten tinta
 const SGA_ALB_BN_CSS = `
@@ -9319,6 +9396,7 @@ async function sgaAlbaranImprimir(id){
     .mats{display:flex;gap:16px;margin-top:9px;} .mat{flex:1;min-width:0;} .mat.nom b{font-family:inherit;font-size:13px;letter-spacing:0;} .mat span{display:block;font-size:8.5px;text-transform:uppercase;letter-spacing:1px;color:var(--gr);}
     .mat b,.mat i{display:block;height:19px;line-height:19px;font-style:normal;} .mat b{font-family:Consolas,"Courier New",monospace;font-size:13px;letter-spacing:.5px;}
     .caja-w{grid-column:1 / -1;min-height:0;}
+    .qr{display:flex;flex-direction:column;align-items:center;gap:1px;} .cab .r .qr img{max-height:none;max-width:none;width:21mm;height:21mm;object-fit:fill;image-rendering:pixelated;} .qr small{font-size:8px;font-weight:700;letter-spacing:1px;}
     .centro{flex:1;margin-top:14px;}
     table{width:100%;border-collapse:collapse;}
     th{background:var(--az2);color:var(--az);border-bottom:2px solid var(--az);text-align:left;font-size:9.5px;text-transform:uppercase;letter-spacing:.6px;padding:7px 8px;}
@@ -9340,6 +9418,10 @@ async function sgaAlbaranImprimir(id){
   const colOrden = colList.filter(k => colDef[k]);
   const filas = lineas.length ? lineas.map(l => `<tr>${colOrden.map(k => colDef[k].td(l)).join('')}</tr>`).join('') : `<tr><td colspan="${colOrden.length}">Sin líneas.</td></tr>`;
   const dirAlm = w ? sgaDirHtml(sgaDirLineas(w)) : '';
+  // si la expedición tiene DeCA, su QR sale en el albarán (el mismo que lleva el PDF del DeCA)
+  const decaDoc = a.tipo === 'salida' ? sgaDecaDeExpedicion(a.id) : null;
+  let decaQr = '';
+  try { if (decaDoc && decaDoc.pdfUrl) decaQr = `<div class="qr"><img src="${qrDataUrl(decaDoc.pdfUrl, 6, 1)}" alt="DeCA" /><small>DeCA ${esc(decaDoc.codigo || '')}</small></div>`; } catch (e) { decaQr = ''; }
   // destinatario: su dirección ordenada si está en Direcciones; si no, la que se guardó con la expedición, partida en líneas
   const dd = esSal ? sgaDireccionPorNombre(a.destinatario) : null;
   const telDest = dd && dd.telefono ? `<div style="margin-top:3px;">Tel. ${esc(phoneFormat(dd.telefono))}</div>` : '';   // el teléfono de la dirección de destino (Direcciones)
@@ -9351,7 +9433,7 @@ async function sgaAlbaranImprimir(id){
     <div class="cab">
       <div class="l"><img src="${logoPropio}" alt="Qualified Logistics" /></div>
       <div class="c"><div class="t">ALBARÁN</div><div class="n">${esc(sgaNumAlbaran(a))}</div></div>
-      <div class="r"></div>
+      <div class="r">${decaQr}</div>
     </div>
     <div class="tipo"><h1>ALBARÁN DE ${esSal ? 'EXPEDICIÓN' : 'RECEPCIÓN'}</h1><div>${a.referencia ? `Ref.: <b>${esc(a.referencia)}</b> &nbsp;·&nbsp; ` : ''}Fecha: <b>${esc(fmtDateDMY(a.fecha))}</b></div></div>
     <div class="cajas">
