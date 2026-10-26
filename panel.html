@@ -13073,6 +13073,7 @@ function tplContactoDetailPage(){
   // Contacto existente: cabecera fija (identidad) + pestañas según su tipo.
   // Desde Clientes o Comercial la ficha va a lo suyo: sin Acción (archivar) ni datos generales editables.
   const restrictedModule = nav && (nav.label === 'Clientes' || nav.label === 'Comercial');
+  const sinAccion = nav && nav.label === 'Comercial';   // desde Clientes (Almacén) sí se puede archivar, restaurar y, si nunca ha tenido movimiento, eliminar
   const tabs = contactoDetailTabs(editing, nav);
   const activeTab = tabs.some(t => t.id === window.__contactoDetailTab) ? window.__contactoDetailTab : 'general';
   const editMode = !!window.__contactoDetailEditMode;
@@ -13090,12 +13091,13 @@ function tplContactoDetailPage(){
   };
   const gb = 'background:var(--panel);';
   const actionsHtml = `
-    ${restrictedModule ? '' : `
+    ${sinAccion ? '' : `
     <div style="position:relative;">
       <button class="btn btn-ghost" style="${gb}" onclick="event.stopPropagation(); window.__contactoActionMenuOpen=!window.__contactoActionMenuOpen; renderTab();">Acción ▾</button>
       ${window.__contactoActionMenuOpen ? `
         <div onclick="event.stopPropagation();" style="position:absolute;top:100%;right:0;margin-top:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px;box-shadow:0 10px 28px rgba(0,0,0,0.14);z-index:30;min-width:150px;">
           <button class="btn btn-ghost" style="width:100%;justify-content:flex-start;white-space:nowrap;color:${editing.archived?'var(--success)':'var(--danger)'};" onclick="window.__contactoActionMenuOpen=false; ${editing.archived?`unarchiveContacto('${editing.id}')`:`archiveContacto('${editing.id}')`}">${editing.archived?'Restaurar':'Archivar'}</button>
+          ${editing.archived ? `<button class="btn btn-ghost" style="width:100%;justify-content:flex-start;white-space:nowrap;color:var(--danger);" onclick="window.__contactoActionMenuOpen=false; confirmDeleteContacto('${editing.id}')">Eliminar…</button>` : ''}
         </div>` : ''}
     </div>`}
     ${navIdx>-1 && nav.ids.length>1 ? `
@@ -13220,20 +13222,31 @@ function contactoHasWarehouseHistory(id){
 function contactoHasAnyDrivers(id){
   return drivers.some(d=>d.companyId===id);
 }
+// ¿Ha tenido este cliente movimientos o stock en el SGA? Se mira en la base de datos (no en lo cargado en pantalla): albaranes, palets (también
+// los ya agotados), cobros, operativas, m² y liquidaciones. Con cualquiera de ellos, el cliente no se puede eliminar nunca, solo archivar.
+async function contactoTieneHistorialSga(id){
+  const tablas = ['sga_albaranes', 'sga_partidas', 'sga_cobros', 'sga_operativas_realizadas', 'sga_m2', 'sga_m2_contrato', 'sga_liquidaciones'];
+  const res = await Promise.all(tablas.map(t => supabaseClient.from(t).select('cliente_id', { count: 'exact', head: true }).eq('cliente_id', id).then(r => r, () => ({ error: true }))));
+  return res.some(r => !r.error && (r.count || 0) > 0);
+}
 async function archiveContacto(id){
   const c = contactos.find(x=>x.id===id);
+  const avisar = m => { const e = document.getElementById('ct-error'); if (e) e.textContent = m; else appToast(m, 'error'); };
   const activeCount = drivers.filter(d=>d.companyId===id && !d.archived).length;
   if (activeCount) {
-    const errEl = document.getElementById('ct-error');
-    if (errEl) errEl.textContent = `No se puede archivar: tiene ${activeCount} conductor${activeCount!==1?'es':''} activo${activeCount!==1?'s':''}. ${activeCount!==1?'Archívalos o muévelos':'Archívalo o muévelo'} de empresa antes.`;
+    avisar(`No se puede archivar: tiene ${activeCount} conductor${activeCount!==1?'es':''} activo${activeCount!==1?'s':''}. ${activeCount!==1?'Archívalos o muévelos':'Archívalo o muévelo'} de empresa antes.`);
     return;
   }
+  // Con mercancía en el almacén no se archiva: dejaría de verse en el inventario y las expediciones
+  const stock = sgaPartidas.filter(p => p.clienteId === id && p.actual > 0).reduce((s, p) => s + p.actual, 0);
+  if (stock > 0) { avisar(`No se puede archivar: todavía tiene ${sgaUdN(id, stock)} en el almacén. Saca la mercancía con una expedición o regulariza el stock a cero antes.`); return; }
   const { data, error } = await supabaseClient.from('contactos').update({ archived: true }).eq('id', id).select();
-  if (error || !data || !data.length) { const errEl=document.getElementById('ct-error'); if(errEl) errEl.textContent='No se pudo archivar: '+(error&&error.message?error.message:'sin permiso.'); return; }
+  if (error || !data || !data.length) { avisar('No se pudo archivar: '+(error&&error.message?error.message:'sin permiso.')); return; }
   if (c) c.archived = true;
   await logContactoHistorial(id, 'Archivado.');
   await Promise.all([loadClients(), loadCompanies()]);
   openContactoModal(id);
+  appToast('Cliente archivado. Si lo necesitas de nuevo, restáuralo desde «Archivados».', 'ok');
 }
 async function unarchiveContacto(id){
   const { data, error } = await supabaseClient.from('contactos').update({ archived: false }).eq('id', id).select();
@@ -13244,27 +13257,28 @@ async function unarchiveContacto(id){
   await Promise.all([loadClients(), loadCompanies()]);
   openContactoModal(id);
 }
-function confirmDeleteContacto(id){
-  if (contactoHasWarehouseHistory(id) || contactoHasAnyDrivers(id)) {
+async function confirmDeleteContacto(id){
+  const c = contactos.find(x => x.id === id);
+  if (!c) return;
+  const bloqueado = contactoHasWarehouseHistory(id) || contactoHasAnyDrivers(id) || await contactoTieneHistorialSga(id);
+  if (bloqueado) {
     document.getElementById('modal-slot').innerHTML = `
       <div class="modal-overlay">
-        <div class="modal-box" style="max-width:360px;">
+        <div class="modal-box" style="max-width:380px;">
           <h3 class="modal-title" style="margin-bottom:10px;">No se puede eliminar</h3>
           <div style="font-size:13.5px;color:var(--muted);margin-bottom:20px;">
-            Este contacto tiene mercancía, citas, movimientos o conductores asociados en el histórico. Para conservar la trazabilidad no se puede eliminar de forma permanente — puedes dejarlo archivado.
+            «${esc((c.nombreComercial || '').trim() || c.nombre)}» tiene mercancía, albaranes, cobros, operativas, citas, movimientos o conductores en el histórico, o ha tenido stock alguna vez. Para conservar la trazabilidad <b>no se puede eliminar nunca</b>: déjalo archivado.
           </div>
           <button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="closeModal()">Entendido</button>
         </div>
       </div>`;
     return;
   }
-  const c = contactos.find(x=>x.id===id);
-  if (!c) return;
   document.getElementById('modal-slot').innerHTML = `
     <div class="modal-overlay">
-      <div class="modal-box" style="max-width:360px;">
+      <div class="modal-box" style="max-width:380px;">
         <h3 class="modal-title" style="margin-bottom:10px;">Eliminar definitivamente</h3>
-        <div style="font-size:13.5px;color:var(--muted);margin-bottom:20px;">¿Seguro que quieres eliminar a ${esc(c.nombre)}? Esta acción no se puede deshacer.</div>
+        <div style="font-size:13.5px;color:var(--muted);margin-bottom:20px;">¿Seguro que quieres eliminar a ${esc(c.nombre)}? No tiene ningún movimiento ni ha tenido stock. Esta acción no se puede deshacer.</div>
         <div style="display:flex;gap:10px;">
           <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal()">Cancelar</button>
           <button class="btn btn-primary" style="flex:1;justify-content:center;background:var(--danger);" onclick="deleteContacto('${id}')">Sí, eliminar</button>
@@ -13273,10 +13287,14 @@ function confirmDeleteContacto(id){
     </div>`;
 }
 async function deleteContacto(id){
-  await supabaseClient.from('contactos').delete().eq('id', id);
+  // última comprobación justo antes de borrar, por si algo se ha movido mientras se leía el aviso
+  if (await contactoTieneHistorialSga(id)) { closeModal(); appToast('No se puede eliminar: tiene movimientos o ha tenido stock.', 'error'); return; }
+  const { error } = await supabaseClient.from('contactos').delete().eq('id', id);
+  if (error) { closeModal(); appToast('No se pudo eliminar: ' + (/histórico|historial|foreign key|violates|referenced|nunca/i.test(error.message || '') ? 'tiene datos asociados en el histórico. Déjalo archivado.' : (error.message || 'error desconocido.')), 'error'); return; }
   contactos = contactos.filter(x=>x.id!==id);
   await Promise.all([loadClients(), loadCompanies()]);
   closeModal(); closeContactoDetail();
+  appToast('Cliente eliminado.', 'ok');
 }
 
 
