@@ -9067,17 +9067,19 @@ async function sgaEtiquetaAbrir(id){
     </div>`;
 }
 function sgaEtiquetaHtml(ctx, i, n){
-  const { a, w, dd, dirDest, tel, logo, qr } = ctx;
+  const { a, w, dd, dirDest, tel, logo, unidades } = ctx;
+  const u = unidades.length ? unidades[(i - 1) % unidades.length] : null;   // el palet de esta etiqueta: con varias líneas, van en el orden de la expedición
+  const datosU = u ? [u.medidas ? `<span><small>MEDIDAS</small> ${esc(u.medidas)}</span>` : '', u.peso != null ? `<span><small>PESO / UNIDAD</small> ${esc(sgaNumTxt(u.peso))} kg</span>` : '', u.cajas != null ? `<span><small>CAJAS / PALET</small> ${esc(sgaNumTxt(u.cajas))}</span>` : '', u.codigo ? `<span><small>PALET</small> ${esc(u.codigo)}</span>` : ''].filter(Boolean).join('') : '';
   const dir = ls => ls.map((l, k) => `<div class="${k === ls.length - 1 ? 'et-cp' : 'et-l'}">${esc(l)}</div>`).join('');
   const rem = w ? sgaDirLineas(w).join(', ') : '';
   return `<div class="cel"><div class="et">
     <div class="et-top"><img src="${logo}" alt="Qualified Logistics" /><div class="et-alb"><small>ALBARÁN</small><b>${esc(sgaNumAlbaran(a))}</b><span>${esc(fmtDateDMY(a.fecha))}</span></div></div>
     <div class="et-dest"><small>DESTINO</small><div class="et-n">${esc(a.destinatario) || '—'}</div>${dir(dirDest)}${tel ? `<div class="et-tel">Tel. ${esc(tel)}</div>` : ''}</div>
+    ${u ? `<div class="et-cont"><small>CONTENIDO</small><div class="et-prod">${esc(u.nombre)}</div>${u.modelo ? `<div class="et-mod">${esc(u.modelo)}</div>` : ''}${datosU ? `<div class="et-datos">${datosU}</div>` : ''}</div>` : ''}
     <div class="et-rem"><small>REMITENTE</small><div><b>QUALIFIED LOGISTICS</b>${w && w.name ? ' · ' + esc(w.name) : ''}</div>${rem ? `<div>${esc(rem)}</div>` : ''}</div>
     <div class="et-pie">
       <div class="et-bulto"><small>BULTO</small><b>${i} / ${n}</b></div>
       <div class="et-ref">${a.referencia ? `<div><small>REF.</small> ${esc(a.referencia)}</div>` : ''}${a.transportista ? `<div><small>TRANSPORTE</small> ${esc(a.transportista)}</div>` : ''}</div>
-      ${qr ? `<img class="et-qr" src="${qr}" alt="" />` : ''}
     </div>
   </div></div>`;
 }
@@ -9094,9 +9096,22 @@ async function sgaEtiquetaImprimir(id){
     const partes = String(a.destinatarioDireccion || '').split(/\s*,\s*/).filter(Boolean), k = partes.findIndex(p => /^\d{4,6}\b/.test(p));
     return k < 0 ? partes : [...partes.slice(0, k), partes.slice(k).join(', ')];
   })();
-  let qr = '';
-  try { if (typeof qrcode === 'function') { const q = qrcode(0, 'M'); q.addData(sgaNumAlbaran(a)); q.make(); qr = q.createDataURL(4, 0); } } catch (e) { qr = ''; }
-  const ctx = { a, w, dd, dirDest, tel: dd && dd.telefono ? phoneFormat(dd.telefono) : '', logo: new URL('logo-full.png', location.href).href, qr };
+  // los palets de la expedición, uno por uno y en su orden, con lo que se sabe de su artículo (descripción, medidas, peso por unidad…)
+  const unidades = [];
+  try {
+    const conBultos = sgaClienteConBultos(a.clienteId);
+    const mv = await supabaseClient.from('sga_movimientos').select('partida_id,cantidad,bultos').eq('albaran_id', id).eq('tipo', 'salida');
+    const movs = mv.data || [];
+    const pr = movs.length ? await supabaseClient.from('sga_partidas').select('id,producto_id,referencia,descripcion,articulo_id,codigo').in('id', movs.map(m => m.partida_id)) : { data: [] };
+    const partidas = {}; (pr.data || []).forEach(p => { partidas[p.id] = p; });
+    movs.forEach(m => {
+      const p = partidas[m.partida_id] || {}, art = sgaArticulos.find(x => x.id === p.articulo_id);
+      const pal = Math.max(1, Math.round(Math.abs(Number(m.cantidad)))), bul = m.bultos != null ? Math.abs(Number(m.bultos)) : null;
+      for (let k = 0; k < pal; k++) unidades.push({ nombre: p.descripcion || sgaProdTxt(p.producto_id), modelo: p.referencia || '', medidas: art ? art.medidas : '', peso: art && art.peso != null ? art.peso : null,
+        cajas: conBultos && bul != null ? sgaR2(bul / pal) : null, codigo: sgaClienteCfg(a.clienteId).codigosUnicos ? (p.codigo || '') : '' });
+    });
+  } catch (e) { /* sin datos del palet: la etiqueta sale sin el bloque de contenido */ }
+  const ctx = { a, w, dd, dirDest, tel: dd && dd.telefono ? phoneFormat(dd.telefono) : '', logo: new URL('logo-full.png', location.href).href, unidades };
   // las etiquetas se reparten en los huecos de la hoja a partir del elegido; si no caben, siguen en otra hoja
   const hojas = Math.ceil((pos - 1 + n) / 4);
   const paginas = Array.from({ length: hojas }, (_, h) => `<div class="hoja">${[0, 1, 2, 3].map(c => {
@@ -9116,14 +9131,16 @@ async function sgaEtiquetaImprimir(id){
     .et-top img{height:11mm;filter:grayscale(1);}
     .et-alb{text-align:right;display:flex;flex-direction:column;line-height:1.15;} .et-alb b{font-size:15px;} .et-alb span{font-size:10px;}
     .et-dest{flex:1;border:2px solid #000;border-radius:3px;padding:3.5mm 4mm;display:flex;flex-direction:column;gap:1mm;}
-    .et-n{font-size:20px;font-weight:800;line-height:1.15;margin-bottom:1mm;}
+    .et-n{font-size:19px;font-weight:800;line-height:1.15;margin-bottom:1mm;}
     .et-l{font-size:14px;line-height:1.3;} .et-cp{font-size:15px;font-weight:700;line-height:1.3;margin-top:.5mm;}
     .et-tel{font-size:14px;font-weight:700;margin-top:2mm;}
+    .et-cont{border:1px solid #000;border-radius:3px;padding:2.5mm 4mm;} .et-cont small{display:inline;margin-right:2px;}
+    .et-prod{font-size:14px;font-weight:800;line-height:1.2;margin-top:.8mm;} .et-mod{font-size:11.5px;margin-top:.5mm;}
+    .et-datos{display:flex;flex-wrap:wrap;gap:.8mm 5mm;font-size:11.5px;font-weight:600;margin-top:1.5mm;}
     .et-rem{font-size:10.5px;line-height:1.35;} .et-rem small{display:block;margin-bottom:.5mm;}
     .et-pie{display:flex;align-items:center;gap:4mm;border-top:2px solid #000;padding-top:3mm;}
     .et-bulto{display:flex;flex-direction:column;line-height:1.1;} .et-bulto b{font-size:24px;}
-    .et-ref{flex:1;font-size:10.5px;line-height:1.4;min-width:0;overflow-wrap:anywhere;} .et-ref small{margin-right:2px;}
-    .et-qr{width:17mm;height:17mm;image-rendering:pixelated;}`;
+    .et-ref{flex:1;font-size:10.5px;line-height:1.4;min-width:0;overflow-wrap:anywhere;} .et-ref small{margin-right:2px;}`;
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Etiquetas ${esc(sgaNumAlbaran(a))}</title><style>${css}</style></head><body>${paginas}</body></html>`;
   closeModal();
   const f = document.createElement('iframe');
