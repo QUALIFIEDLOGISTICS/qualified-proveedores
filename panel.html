@@ -4031,6 +4031,7 @@ const ALMACEN_SECTIONS = [
   { id: 'almacendash', label: 'Dashboard' },
   { id: 'clientes', label: 'Clientes' },
   { id: 'stock', label: 'Control Stock SGA' },
+  { id: 'operativas', label: 'Operativas' },   // dentro del mismo permiso y la misma pantalla que Control Stock SGA (ver almacenIrOperativas)
   { id: 'documentos', label: 'Documentos' },
   { id: 'citas', label: 'Franjas horarias' },
 ];
@@ -4041,12 +4042,12 @@ const ALMACEN_CONFIG_TAB = 'almacenconfig';
 function isAlmacenTab(id){ return id === ALMACEN_CONFIG_TAB || ALMACEN_SECTIONS.some(s => s.id === id); }
 function almacenVisibleSections(){
   const allowed = visibleTabs().map(t => t.id);
-  return tabsOrdenar('almacen', ALMACEN_SECTIONS.filter(s => allowed.includes(s.id)));
+  return tabsOrdenar('almacen', ALMACEN_SECTIONS.filter(s => allowed.includes(s.id) || (s.id === 'operativas' && allowed.includes('stock'))));
 }
 // La primera sección que la persona puede ver (Clientes si la tiene; si solo
 // tiene Configuración, se entra directo ahí).
 function almacenDefaultSection(){
-  const s = almacenVisibleSections()[0];
+  const s = almacenVisibleSections().find(x => x.id !== 'operativas');   // «Operativas» no es una pestaña propia: vive dentro de Control Stock SGA
   if (s) return s.id;
   return (PROFILE.isAdmin || PROFILE.allowedTabs.includes(ALMACEN_CONFIG_TAB)) ? ALMACEN_CONFIG_TAB : null;
 }
@@ -4055,10 +4056,16 @@ function almacenDefaultSection(){
 function moduleTabBtnHtml(onclick, label, on, extra){
   return `<button onclick="${onclick}" style="background:none;border:none;border-bottom:3px solid ${on?'var(--primary)':'transparent'};margin-bottom:-1px;padding:11px 16px;font-size:14px;font-weight:${on?700:500};color:${on?'var(--primary)':'var(--muted)'};cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:7px;">${esc(label)}${extra || ''}</button>`;
 }
+// «Operativas» es una pestaña de la barra de Almacén, pero usa los mismos datos y el mismo permiso que Control Stock SGA
+function almacenIrOperativas(){ window.__stockSeg = 'operativas'; setTab('stock'); }
+function almacenIrStock(){ if (window.__stockSeg === 'operativas') window.__stockSeg = 'catalogo'; setTab('stock'); }
 function tplAlmacenBar(){
   const sections = almacenVisibleSections();
   const inConfig = currentTab === ALMACEN_CONFIG_TAB || currentTab === 'clientes' || currentTab === 'stock' || currentTab === 'almacendash';
-  const tabBtn = (id, label) => moduleTabBtnHtml(`setTab('${id}')`, label, id === currentTab);
+  const enOp = currentTab === 'stock' && window.__stockSeg === 'operativas';
+  const tabBtn = (id, label) => id === 'operativas' ? moduleTabBtnHtml('almacenIrOperativas()', label, enOp)
+    : id === 'stock' ? moduleTabBtnHtml('almacenIrStock()', label, currentTab === 'stock' && !enOp)
+    : moduleTabBtnHtml(`setTab('${id}')`, label, id === currentTab);
   const verConfig = PROFILE.isAdmin || PROFILE.allowedTabs.includes(ALMACEN_CONFIG_TAB);
   // Las secciones van a la izquierda; a la derecha del todo, el selector de almacén (donde hace falta) y Configuración.
   // Así las pestañas no se mueven al entrar en Configuración.
@@ -7110,16 +7117,16 @@ function tplStock(){
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 280px;">
-        <div class="deca-banner-title">Control Stock SGA</div>
-        <div class="deca-banner-sub">El catálogo de artículos, el stock de cada cliente en el almacén donde lo tiene, y sus recepciones y expediciones.</div>
+        <div class="deca-banner-title">${seg === 'operativas' ? 'Operativas' : 'Control Stock SGA'}</div>
+        <div class="deca-banner-sub">${seg === 'operativas' ? 'Trabajos y servicios extra de cada cliente (horas de operario, etiquetado…): se anotan aquí y pasan a su liquidación del mes.' : 'El catálogo de artículos, el stock de cada cliente en el almacén donde lo tiene, y sus recepciones y expediciones.'}</div>
       </div>
     </div>
-    <div class="sga-acc-grid">
+    ${seg === 'operativas' ? '' : `<div class="sga-acc-grid">
       ${acc('#1B3A6B', 'entrada', 'Nueva recepción', 'Recibir mercancía de un cliente', 'sgaEntradaAbrir()', 'Registrar la mercancía que llega al almacén')}
       ${acc('#C0721A', 'salida', 'Nueva expedición', 'Sacar mercancía y emitir albarán', 'sgaSalidaAbrir()', 'Sacar mercancía del almacén y generar el albarán')}
       ${acc('#2F7F86', 'regul', 'Regularizar', 'Ajustar el stock a lo contado', 'sgaRegulAbrir()', 'Ajustar el stock a lo que hay de verdad')}
-    </div>
-    <div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('operativas', 'Operativas')}${segBtn('liquidaciones', 'Liquidaciones')}</div>
+    </div>`}
+    ${seg === 'operativas' ? '' : `<div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('liquidaciones', 'Liquidaciones')}</div>`}
     <div class="card deca-toolbar">
       ${seg === 'catalogo' ? `
       <select id="cat-cliente" onchange="catElegirCliente(this.value)" style="width:auto;flex:0 0 210px;min-width:0;"><option value="">Todos los clientes</option>${contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es')).map(c => `<option value="${c.id}" ${c.id === catClienteSel() ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
