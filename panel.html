@@ -8185,6 +8185,7 @@ function sgaSalidaStockHtml(clienteId){
   return `
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;padding:12px 14px;border:1px dashed var(--border);border-radius:12px;margin-bottom:14px;">
       ${manual ? '' : `<div class="field" style="flex:1;min-width:190px;margin-bottom:0;"><label>Pedir por cantidad</label><select id="sl-q-tipo" onchange="sgaSalidaTipoCambio()">${tipos.map(t => `<option value="${t}">${esc(sgaProdTxt(t))}</option>`).join('')}</select></div>
+      ${conDesc ? '<div class="field" style="flex:1;min-width:170px;margin-bottom:0;"><label>Código de artículo</label><select id="sl-q-art" onchange="sgaSalidaArtCambio()"></select></div>' : ''}
       <div class="field" style="flex:1;min-width:150px;margin-bottom:0;"><label>Descripción</label><select id="sl-q-ref"></select></div>
       <div class="field" style="width:110px;margin-bottom:0;"><label>Cantidad</label><input id="sl-q-cant" inputmode="numeric" maxlength="6" placeholder="Nº" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaSalidaRepartir(); }" /></div>`}
       ${manual ? '<div style="flex:1;min-width:200px;font-size:13px;color:var(--muted);"><b>Sin orden de entrada</b> · el stock sale junto, agrupado por artículo: indica abajo cuántos ' + sgaUnidadCfg(clienteId).p + ' salen de cada uno.</div>' : `<button type="button" class="btn btn-ghost" onclick="sgaSalidaRepartir()" title="${modo === 'lifo' ? 'Reparte la cantidad entre las partidas más recientes' : 'Reparte la cantidad entre las partidas más antiguas'}">Repartir (${modo === 'lifo' ? 'más reciente' : 'más antiguo'} primero)</button>`}
@@ -8210,12 +8211,29 @@ function sgaSalidaStockHtml(clienteId){
     </table></div>
     <div id="sl-total" style="margin-top:10px;font-size:13px;color:var(--muted);"></div>`;
 }
+// Pedir por cantidad: tipo de carga → código de artículo → descripción; cada filtro acota la lista del siguiente
 function sgaSalidaTipoCambio(){
   const t = document.getElementById('sl-q-tipo');
+  const a = document.getElementById('sl-q-art');
+  if (!t) return;
+  if (a) {
+    const arts = [...new Set(sgaStockCliente(sgaSalidaClienteId(), sgaSalidaWh()).filter(p => p.productoId === t.value).map(p => p.descripcion))].sort((x, y) => x.localeCompare(y, 'es'));
+    a.innerHTML = `<option value="">Cualquiera</option>${arts.filter(Boolean).map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}${arts.includes('') && arts.length > 1 ? '<option value="__sin">Sin código de artículo</option>' : ''}`;
+  }
+  sgaSalidaArtCambio();
+}
+function sgaSalidaArtCambio(){
+  const t = document.getElementById('sl-q-tipo');
+  const a = document.getElementById('sl-q-art');
   const r = document.getElementById('sl-q-ref');
   if (!t || !r) return;
-  const refs = [...new Set(sgaStockCliente(sgaSalidaClienteId(), sgaSalidaWh()).filter(p => p.productoId === t.value).map(p => p.referencia))].sort();
+  const refs = [...new Set(sgaSalidaCandidatos(sgaSalidaClienteId(), t.value, a ? a.value : '', '').map(p => p.referencia))].sort((x, y) => x.localeCompare(y, 'es'));
   r.innerHTML = `<option value="">Cualquiera</option>${refs.filter(Boolean).map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}${refs.includes('') && refs.length > 1 ? '<option value="__sin">Sin referencia</option>' : ''}`;
+}
+function sgaSalidaCandidatos(clienteId, tipo, art, ref){
+  return sgaStockCliente(clienteId, sgaSalidaWh()).filter(p => p.productoId === tipo
+    && (art === '' || (art === '__sin' ? !p.descripcion : p.descripcion === art))
+    && (ref === '' || (ref === '__sin' ? !p.referencia : p.referencia === ref)));
 }
 // Almacenes donde el cliente tiene stock: si es uno, se elige solo; si son varios, se escoge de cuál sale la mercancía.
 function sgaSalidaClienteCambio(){
@@ -8281,7 +8299,8 @@ function sgaSalidaRepartir(){
   const ref = document.getElementById('sl-q-ref').value;
   const quiere = parseInt(document.getElementById('sl-q-cant').value, 10);
   if (!(quiere > 0)) { appToast('Escribe cuántos salen.', 'error'); return; }
-  const cand = sgaStockCliente(clienteId, sgaSalidaWh()).filter(p => p.productoId === tipo && (ref === '' || (ref === '__sin' ? !p.referencia : p.referencia === ref)));
+  const artEl = document.getElementById('sl-q-art');
+  const cand = sgaSalidaCandidatos(clienteId, tipo, artEl ? artEl.value : '', ref);
   if (sgaClienteSalida(clienteId) === 'lifo') cand.reverse();   // LIFO: primero lo más reciente
   const hay = cand.reduce((s, p) => s + p.actual, 0);
   if (quiere > hay) { appToast(`Solo hay ${hay} de eso en el almacén.`, 'error'); return; }
@@ -8313,7 +8332,7 @@ function sgaSalidaFifo(clienteId, items){
   const saltados = new Set(), avisos = [];
   if (modo === 'manual') return { saltados, avisos };
   const grupos = {};
-  sgaStockCliente(clienteId, sgaSalidaWh()).forEach(p => { (grupos[p.productoId + '|' + p.referencia] = grupos[p.productoId + '|' + p.referencia] || []).push(p); });
+  sgaStockCliente(clienteId, sgaSalidaWh()).forEach(p => { (grupos[p.productoId + '|' + p.descripcion + '|' + p.referencia] = grupos[p.productoId + '|' + p.descripcion + '|' + p.referencia] || []).push(p); });
   Object.keys(grupos).forEach(k => {
     const lista = modo === 'lifo' ? grupos[k].slice().reverse() : grupos[k];   // el primero de la lista es el que toca sacar antes
     let incompleta = false, viola = false;
