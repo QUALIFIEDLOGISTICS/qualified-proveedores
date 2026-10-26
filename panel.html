@@ -5344,6 +5344,9 @@ function sgaLineaTxt(l){ return `${l.reg && l.cantidad > 0 ? '+' : ''}${sgaNumTx
 function sgaMercanciaResumen(a){
   const ls = sgaLineasAlb(a);
   if (!ls.length) return '';
+  // Con artículos distintos se pone «Varios» solo; con uno (o el mismo en varias líneas), como siempre
+  const distintos = new Set(ls.map(l => l.nombre)).size;
+  if (distintos > 1) return `Varios · ${distintos} artículos`;
   return sgaLineaTxt(ls[0]) + (ls.length > 1 ? ` +${ls.length - 1} más` : '');
 }
 function sgaMercanciaDetalle(a){
@@ -5435,7 +5438,7 @@ function sgaAlbMenuItems(a){
   const it = [];
   if (conf && a.tipo === 'salida' && a.borrador) it.push(['Imprimir albarán', 'file', `sgaAlbaranImprimir('${a.id}')`]);
   if (conf && a.tipo === 'salida') it.push(['Etiqueta de envío', 'tag', `sgaEtiquetaAbrir('${a.id}')`]);
-  if (conf && (a.tipo === 'salida' || a.tipo === 'entrada') && puede) it.push(['Editar', 'edit', `${a.tipo === 'salida' ? 'sgaSalidaEditar' : 'sgaEntradaEditar'}('${a.id}')`]);
+  if (conf && (a.tipo === 'salida' || a.tipo === 'entrada' || a.tipo === 'apertura') && puede) it.push(['Editar', 'edit', `${a.tipo === 'salida' ? 'sgaSalidaEditar' : 'sgaEntradaEditar'}('${a.id}')`]);
   if (conf && a.tipo !== 'regularizacion' && puede) it.push(['Anular albarán', 'trash', `sgaAnularAbrir('${a.id}')`, true]);
   return it;
 }
@@ -7386,16 +7389,17 @@ function sgaEntradaAbrir(inicial, clienteId){
    de más ni borrarla. */
 async function sgaEntradaEditar(id, keepNav){
   const a = sgaAlbaranes.find(x => x.id === id);
-  if (!a || a.tipo !== 'entrada' || a.estado !== 'confirmado') return;
+  if (!a || (a.tipo !== 'entrada' && a.tipo !== 'apertura') || a.estado !== 'confirmado') return;
   if (!keepNav) {   // las recepciones que se ven ahora en la lista (con el filtro y el orden que tenga), para pasar de una a otra con las flechas
     window.__seNavIds = [...document.querySelectorAll('#stock-body tbody tr[data-alb]')].map(r => r.dataset.alb)
-      .filter(x => { const al = sgaAlbaranes.find(y => y.id === x); return al && al.tipo === 'entrada' && al.estado === 'confirmado'; });
+      .filter(x => { const al = sgaAlbaranes.find(y => y.id === x); return al && (al.tipo === 'entrada' || al.tipo === 'apertura') && al.estado === 'confirmado'; });
   }
   const [p, s] = await Promise.all([
     supabaseClient.from('sga_partidas').select('*').eq('albaran_entrada_id', id).order('created_at', { ascending: true }),
     supabaseClient.from('sga_servicios').select('producto_id,cantidad,nota').eq('albaran_id', id),
   ]);
   if (p.error || !(p.data || []).length) { appToast('No se pudo abrir la recepción' + (p.error ? ': ' + p.error.message : '.'), 'error'); return; }
+  window.__seInicial = a.tipo === 'apertura';   // un stock inicial se edita con su misma pantalla (sin transportista, servicios ni cobros)
   window.__seEdit = { id, albaran: a, partidas: p.data.map(sgaPartidaDeFila), servicios: s.data || [] };
   window.__stockView = 'entrada';
   window.__stockDirty = false;
@@ -7517,7 +7521,7 @@ async function albHistorialCargar(id){
   if (el && el.dataset.id === id) el.innerHTML = albHistorialCuerpoHtml(id, lista);
 }
 function tplStockEntradaPage(){
-  const ini = !!window.__seInicial && !window.__seEdit;   // stock inicial: lo que ya hay en el almacén de un cliente que llevabas en Excel
+  const ini = !!window.__seInicial;   // stock inicial: lo que ya hay en el almacén de un cliente que llevabas en Excel
   const clientes = sgaClientesAlmacenLista();
   const wh = currentWh() || {};
   const hayZonas = sgaZonasActivas().length > 0;
@@ -7527,7 +7531,7 @@ function tplStockEntradaPage(){
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
-        <div class="deca-banner-title">${window.__seEdit ? 'Editar recepción ' + esc(sgaNumAlbaran(window.__seEdit.albaran)) : ini ? 'Stock inicial' : 'Nueva recepción'}</div>
+        <div class="deca-banner-title">${window.__seEdit ? (ini ? 'Editar stock inicial ' : 'Editar recepción ') + esc(sgaNumAlbaran(window.__seEdit.albaran)) : ini ? 'Stock inicial' : 'Nueva recepción'}</div>
         <div class="deca-banner-sub">${window.__seEdit ? 'Cambia lo que necesites: al guardar se recalculan el stock y lo que se cobra. De una línea de la que ya ha salido mercancía no se pueden quitar palets de más.' : ini ? 'Alta de la mercancía que un cliente ya tiene en el almacén (viene de Excel).' : 'La mercancía que llega a un cliente; eliges en cuál de sus almacenes se queda.'}</div>
       </div>
       ${window.__seEdit && (window.__seNavIds || []).length > 1 && (window.__seNavIds || []).includes(window.__seEdit.id) ? (() => {
@@ -7663,7 +7667,7 @@ async function sgaEntradaConfirmar(){
   const calc = sgaCalcularEntrada({ clienteId: d.clienteId, fecha: d.fecha, modalidad: d.modalidad, partidas: partidas.map(p => ({ productoId: p.producto_id, cantidad: p.cantidad, bultos: p.bultos != null ? p.bultos : p.cantidad })), servicios: servicios.map(s => ({ productoId: s.producto_id, cantidad: s.cantidad })) });
   const btn = document.querySelector('.se-save');
   if (btn) btn.disabled = true;
-  const inicial = !!window.__seInicial && !window.__seEdit;   // stock inicial: se guarda como «apertura», sin servicios ni cobros
+  const inicial = !!window.__seInicial;   // stock inicial: se guarda como «apertura», sin servicios ni cobros
   const payload = {
     albaran: { created_by: currentUserEmail(), tipo: inicial ? 'apertura' : 'entrada', cliente_id: d.clienteId, warehouse_id: sgaEntradaWh(), fecha: d.fecha, referencia: d.referencia, modalidad: d.modalidad, transportista: d.transportista, matricula: d.matricula, observaciones: d.observaciones },
     partidas, servicios: inicial ? [] : servicios, cobros: !inicial && calc.activo ? calc.cobros : [],
@@ -7674,7 +7678,7 @@ async function sgaEntradaConfirmar(){
     : await supabaseClient.rpc('sga_confirmar_entrada', { p: payload });
   if (error) {
     const m = error.message || 'error desconocido.';
-    errEl.textContent = 'No se pudo guardar: ' + (/sga_partidas_codigo_unico|duplicate key/i.test(m) ? 'hay un código de palet repetido para este cliente.' : /function .*sga_editar_entrada/i.test(m) ? 'falta ejecutar el SQL de «editar recepción» en Supabase.' : /function .*sga_confirmar_entrada|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL de «confirmar recepción» en Supabase.' : m);
+    errEl.textContent = 'No se pudo guardar: ' + (/sga_partidas_codigo_unico|duplicate key/i.test(m) ? 'hay un código de palet repetido para este cliente.' : /function .*sga_editar_entrada/i.test(m) ? 'falta ejecutar el SQL de «editar recepción» en Supabase.' : /function .*sga_confirmar_entrada|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL de «confirmar recepción» en Supabase.' : /Solo se pueden editar entradas\.$/i.test(m) ? 'para editar un stock inicial falta ejecutar el SQL «sga-editar-entrada-apertura.sql» en Supabase.' : m);
     if (btn) btn.disabled = false;
     return;
   }
