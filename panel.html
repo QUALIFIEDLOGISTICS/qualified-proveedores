@@ -1554,6 +1554,8 @@
   .cg-donde span{color:var(--mutedFaint);margin-left:6px;}
   .cg-chip{display:inline-block;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:999px;background:color-mix(in srgb,var(--primary) 11%,var(--panel));color:var(--primary);vertical-align:middle;}
   .cg-st{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;white-space:nowrap;}
+  .pl-cod{display:inline-block;font-family:var(--mono);font-size:12.5px;font-weight:700;letter-spacing:.3px;padding:3px 9px;border-radius:7px;background:color-mix(in srgb,var(--primary) 10%,var(--panel));color:var(--primary);border:1px solid color-mix(in srgb,var(--primary) 22%,var(--border));white-space:nowrap;}
+  .pl-ub{display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px;} .pl-ub svg{color:var(--muted);flex:0 0 auto;}
   .cg-st i{width:8px;height:8px;border-radius:50%;display:inline-block;}
   .cg-st.ok{color:var(--success);}.cg-st.ok i{background:var(--success);}
   .cg-st.no{color:var(--mutedFaint);font-weight:500;}.cg-st.no i{background:var(--border);}
@@ -5856,11 +5858,13 @@ function catFiltrosHtml(){
 }
 function catRefrescarFiltros(){ const f = document.getElementById('cat-filtros'); if (f) f.innerHTML = catFiltrosHtml(); }
 // Clientes de pieza única (cada palet es distinto): el inventario se ve palet a palet, no por artículo.
-// Por defecto se detecta solo (varios artículos y ninguno con más de un palet); se puede cambiar a mano arriba.
+// Por defecto se detecta solo (el cliente da un código propio a cada palet, o tiene varios artículos y ninguno con más de un palet);
+// se puede cambiar a mano arriba.
 function catModoPalets(cid){
   if (!cid) return false;
   const m = (window.__catModo || {})[cid];
   if (m) return m === 'palets';
+  if (sgaClienteCfg(cid).codigosUnicos) return true;
   const arts = sgaArticulosDe(cid, true).filter(a => !a.archived).concat(catArticulosVirtuales(cid));
   return arts.length >= 4 && arts.every(a => (a.virtual ? a._partidas : sgaPartidas.filter(p => p.articuloId === a.id)).filter(p => p.actual > 0).length <= 1);
 }
@@ -5872,8 +5876,9 @@ function catModoHtml(){
   return `<div class="doc-seg" id="cat-modo" title="Cómo se ve el inventario de este cliente"><button type="button" class="${pal ? '' : 'on'}" onclick="catElegirModo('articulos')">Por artículo</button><button type="button" class="${pal ? 'on' : ''}" onclick="catElegirModo('palets')">Palet a palet</button></div>${pal && sgaPuedeEditarStock() ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catEditarTodo()" title="Abrir una pantalla completa para editar el catálogo">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>` : ''}`;
 }
 // «hoy», «12 días», «7 meses», «1 año y 3 meses»
+function catDiasDesde(f){ return Math.floor((new Date(today() + 'T00:00:00') - new Date(f + 'T00:00:00')) / 86400000); }
 function catTiempoTxt(f){
-  const d = Math.floor((new Date(today() + 'T00:00:00') - new Date(f + 'T00:00:00')) / 86400000);
+  const d = catDiasDesde(f);
   if (!(d >= 0)) return '';
   if (d < 1) return 'hoy';
   if (d < 31) return `${d} día${d === 1 ? '' : 's'}`;
@@ -5882,34 +5887,68 @@ function catTiempoTxt(f){
   const y = Math.floor(m / 12), r = m % 12;
   return `${y} año${y === 1 ? '' : 's'}${r ? ` y ${r} mes${r === 1 ? '' : 'es'}` : ''}`;
 }
-// Una fila por palet: dónde está, desde cuándo y su estado, sin tener que abrir cada artículo
-function catPaletsHtml(lista, cols, vacio){
-  const vac = '<span style="color:var(--mutedFaint);">—</span>';
+// Las filas del inventario palet a palet: un palet por fila (y, si un artículo ya no tiene stock, una fila suya sin palet)
+function catFilasPalets(cid, filtro, q){
+  let arts = sgaArticulosDe(cid, true).filter(a => !a.archived).concat(catArticulosVirtuales(cid));
+  if (filtro === 'stock') arts = arts.filter(a => catStockArticulo(a).mod > 0);
+  if (filtro === 'sin') arts = arts.filter(a => catStockArticulo(a).mod === 0);
   const filas = [];
-  lista.forEach(a => { const ps = catPartidasArticulo(a); if (ps.length) ps.forEach(p => filas.push({ a, p })); else filas.push({ a, p: null }); });
-  filas.sort((x, y) => (x.p ? 0 : 1) - (y.p ? 0 : 1) || (x.p && y.p ? x.p.fechaEntrada.localeCompare(y.p.fechaEntrada) : 0) || x.a.nombre.localeCompare(y.a.nombre, 'es'));
+  arts.forEach(a => { const ps = catPartidasArticulo(a); if (ps.length) ps.forEach(p => filas.push({ a, p })); else filas.push({ a, p: null }); });
+  const campos = sgaCamposPropios().map(sgaCampoDef);
+  const texto = ({ a, p }) => [sgaArticuloTxt(a), a.referencia, a.medidas, p && p.codigo, p && p.lote, p && p.referencia, p && p.descripcion, p && whNombre(p.warehouseId), p && sgaSitioTxt(p), p && sgaProdTxt(p.productoId),
+    ...Object.values(a.atributos || {}), ...campos.map(f => (p ? sgaValorCampo(f, p) : null))].filter(v => v != null).join(' ');
+  const out = q ? filas.filter(f => mapaNorm(texto(f)).includes(q)) : filas;
+  return out.sort((x, y) => (x.p ? 0 : 1) - (y.p ? 0 : 1) || (x.p && y.p ? x.p.fechaEntrada.localeCompare(y.p.fechaEntrada) : 0) || x.a.nombre.localeCompare(y.a.nombre, 'es'));
+}
+// Etiqueta de antigüedad: verde hasta 3 meses, ámbar hasta un año, roja a partir de ahí
+function catEdadChip(f){
+  const d = catDiasDesde(f), t = catTiempoTxt(f);
+  if (!(d >= 0)) return '';
+  const col = d <= 90 ? '#3F8F5F' : d <= 365 ? '#B26B00' : '#C1443D';
+  return `<span class="cfg-chip" style="color:${col};background:color-mix(in srgb, ${col} 13%, var(--panel));" title="Lleva ${esc(t)} en el almacén">${t === 'hoy' ? 'hoy' : 'hace ' + esc(t)}</span>`;
+}
+function catPaletsHtml(cid, cols, filtro, q){
+  const vac = '<span style="color:var(--mutedFaint);">—</span>';
+  const filas = catFilasPalets(cid, filtro, q);
+  const conPalet = filas.filter(f => f.p);
+  // Resumen del cliente: de un vistazo, cuántos palets hay, dónde, cuál lleva más y cuánto ha entrado hace poco
+  const totalPalets = conPalet.reduce((s, f) => s + f.p.actual, 0);
+  const porAlm = {};
+  conPalet.forEach(f => { const n = whNombre(f.p.warehouseId); porAlm[n] = (porAlm[n] || 0) + f.p.actual; });
+  const viejo = conPalet[0];
+  const recientes = conPalet.filter(f => catDiasDesde(f.p.fechaEntrada) <= 30).reduce((s, f) => s + f.p.actual, 0);
+  const kpi = (t, v, sub, cls) => `<div class="rm-kpi ${cls || ''}"><small>${t}</small><b>${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
+  const almTxt = Object.keys(porAlm).sort((a, b) => a.localeCompare(b, 'es')).map(n => `${esc(n)} <b>${porAlm[n]}</b>`).join(' · ');
+  const kpis = `<div class="rm-kpis" style="margin-bottom:14px;">
+      ${kpi('En el almacén', totalPalets, `palet${totalPalets === 1 ? '' : 's'}${Object.keys(porAlm).length > 1 ? '' : ''}`, 'tot')}
+      ${kpi('Dónde están', Object.keys(porAlm).length || '—', almTxt || 'ningún palet')}
+      ${kpi('El que más lleva', viejo ? catTiempoTxt(viejo.p.fechaEntrada) || 'hoy' : '—', viejo ? `${esc(viejo.a.nombre)}${viejo.p.codigo ? ' · ' + esc(viejo.p.codigo) : ''}` : '')}
+      ${kpi('Entrados en 30 días', recientes, recientes === 1 ? 'palet' : 'palets')}
+    </div>`;
   const num = v => (v == null ? '' : String(v).replace('.', ','));
   const celdaNum = v => `<td style="text-align:right;white-space:nowrap;" data-sort-value="${esc(v)}">${v === '' ? vac : esc(v)}</td>`;
-  const cabecera = [thSort('Artículo', 'text'), thSort('Código', 'text'), thSort('Almacén', 'text'), thSort('Sitio', 'text'), thSort('Entrada', 'date'),
+  const cabecera = [thSort('Palet', 'text'), thSort('Artículo', 'text'), thSort('Ubicación', 'text'), thSort('Entrada', 'date'),
     cols.tipo ? thSort('Tipo de carga', 'text') : '', cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : '', cols.peso ? thSort('Peso', 'number', 'style="text-align:right;"') : '', cols.medidas ? thSort('Medidas', 'text') : '',
     ...cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')), thSort('Estado', 'text')].join('');
   const fila = ({ a, p }) => {
     const prod = a.productoId ? almacenajeProducto(a.productoId) : null, prodTxt = prod ? almacenajeProductoTexto(prod) : '';
+    const sitio = p ? sgaSitioTxt(p) : '—';
     return `
     <tr class="cg-row">
+      <td data-sort-value="${esc(p ? p.codigo : '')}">${p && p.codigo ? `<span class="pl-cod">${esc(p.codigo)}</span>` : vac}</td>
       <td class="cg-prod" data-sort-value="${esc(a.nombre)}"><span class="cg-nom">${esc(a.nombre)}</span>${a.virtual ? ' <span class="cg-sinart" title="Esta mercancía no tiene artículo en el catálogo">Sin artículo</span>' : ''}${cols.referencia && a.referencia ? `<div class="cg-ref">${esc(a.referencia)}</div>` : ''}</td>
-      <td style="font-family:var(--mono);font-size:12px;" data-sort-value="${esc(p ? p.codigo : '')}">${p && p.codigo ? esc(p.codigo) : vac}</td>
-      <td data-sort-value="${esc(p ? whNombre(p.warehouseId) : '')}">${p ? esc(whNombre(p.warehouseId)) : vac}</td>
-      <td data-sort-value="${esc(p ? sgaSitioTxt(p) : '')}">${p ? esc(sgaSitioTxt(p)) : vac}</td>
-      <td style="white-space:nowrap;" data-sort-value="${esc(p ? p.fechaEntrada : '')}">${p ? `${fmtDateDMY(p.fechaEntrada)}<div class="cg-ref">${esc(catTiempoTxt(p.fechaEntrada) === 'hoy' ? 'hoy' : catTiempoTxt(p.fechaEntrada) ? 'hace ' + catTiempoTxt(p.fechaEntrada) : '')}</div>` : vac}</td>
+      <td data-sort-value="${esc(p ? whNombre(p.warehouseId) + ' ' + sitio : '')}">${p ? `<div class="pl-ub">${sitio !== '—' ? homeIcon(HOME_ICON_PATHS.pin, 14, 'currentColor', 2) + '<span>' + esc(sitio) + '</span>' : '<span style="color:var(--mutedFaint);">Sin ubicar</span>'}</div><div class="cg-ref">${esc(whNombre(p.warehouseId))}</div>` : vac}</td>
+      <td style="white-space:nowrap;" data-sort-value="${esc(p ? p.fechaEntrada : '')}">${p ? `${fmtDateDMY(p.fechaEntrada)}<div style="margin-top:3px;">${catEdadChip(p.fechaEntrada)}</div>` : vac}</td>
       ${cols.tipo ? `<td data-sort-value="${esc(prodTxt)}">${prodTxt ? `<span class="cg-chip" title="${esc(prodTxt)}">${esc(prodTxt.replace(/\s*·\s*sin subtipo definido/i, ''))}</span>` : vac}</td>` : ''}
       ${cols.ml ? celdaNum(num(a.metrosLineales)) : ''}${cols.peso ? celdaNum(num(a.peso)) : ''}
       ${cols.medidas ? `<td class="cg-trunc" data-sort-value="${esc(a.medidas)}">${a.medidas ? esc(a.medidas) : vac}</td>` : ''}
-      ${cols.x.map(f => { const v = a.atributos ? a.atributos[f.id] : null; return `<td class="cg-trunc" data-sort-value="${esc(v == null ? '' : v)}">${v != null && v !== '' ? esc(sgaCampoMostrar(f, v)) : vac}</td>`; }).join('')}
+      ${cols.x.map(f => { const v = p ? sgaValorCampo(f, p) : (a.atributos ? a.atributos[f.id] : null); return `<td class="cg-trunc" data-sort-value="${esc(v == null ? '' : v)}">${v != null && v !== '' ? esc(sgaCampoMostrar(f, v)) : vac}</td>`; }).join('')}
       <td class="cg-stock" data-sort-value="${p ? 1 : 0}">${p ? `<span class="cg-st ok"><i></i>En almacén${p.actual > 1 ? ` · ${p.actual} palets` : ''}</span>` : '<span class="cg-st no"><i></i>Sin stock</span>'}</td>
     </tr>`;
   };
+  const vacio = !filas.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${q ? 'Ningún palet coincide con la búsqueda.' : filtro === 'stock' ? 'No hay palets en el almacén ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : 'Este cliente todavía no tiene mercancía registrada.'}</div>` : '';
   return `
+    ${kpis}
     <div class="card cg-compacta" style="padding:0;">
       <div class="tc-hist-box" style="max-height:660px;min-height:0;border:none;border-radius:10px;">
         <table class="tf-table cg-tabla"><thead><tr>${cabecera}</tr></thead><tbody>${filas.map(fila).join('')}</tbody></table>
@@ -5923,6 +5962,7 @@ function stockCatalogoBodyHtml(){
   const q = (window.__stockSearch || '').trim().toLowerCase();
   const filtro = catFiltro();
   const cols = catColumnas(cid);
+  if (!window.__catEditAll && catModoPalets(cid)) return catPaletsHtml(cid, cols, filtro, mapaNorm(q));   // clientes de pieza única: un palet por fila
   const nombreDe = c => ((c.nombreComercial || '').trim() || c.nombre);
   let lista = (cid ? sgaArticulosDe(cid, true) : sgaArticulos.filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && c.esClienteAlmacen && !c.archived; })).concat(catArticulosVirtuales(cid))
     .filter(a => !a.archived)
@@ -5936,7 +5976,6 @@ function stockCatalogoBodyHtml(){
   // «Editar» va en la primera casilla de la barra gris de la tabla (a la izquierda), no en la cabecera de la página
   const conBotonEditar = h => (!h || !puede || window.__catEditAll) ? h : h.replace(/^(<th[^>]*>)([\s\S]*)<\/th>$/, (m, ini, cont) => `${ini}<div class="cg-th-flex"><span>${cont}</span><button type="button" class="cg-th-ed" onclick="event.stopPropagation(); catEditarTodo();" title="Abrir una pantalla completa para editar todo el catálogo">${homeIcon(HOME_ICON_PATHS.edit, 13, 'currentColor', 2)}<span>Editar</span></button></div></th>`);
   const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${q ? 'Ningún artículo coincide con la búsqueda.' : filtro === 'stock' ? 'Ningún artículo tiene stock ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : cid ? 'Este cliente todavía no tiene artículos. Pulsa «Editar» (arriba a la derecha) para crear el primero o pegar varios desde Excel.' : 'Todavía no hay artículos. Elige un cliente y pulsa «Editar» para crear el primero.'}</div>` : '';
-  if (!window.__catEditAll && catModoPalets(cid)) return catPaletsHtml(lista, cols, vacio);
   return `
     ${cid ? '' : `<div class="card" style="padding:11px 16px;margin-bottom:12px;font-size:13.5px;color:var(--text);border-left:4px solid var(--primary);">Estás viendo los artículos de <b>todos los clientes</b>. Para <b>crear</b> uno, elige primero el cliente en el desplegable de arriba.</div>`}
     <div class="card${window.__catEditAll ? '' : ' cg-compacta'}" style="padding:0;">
