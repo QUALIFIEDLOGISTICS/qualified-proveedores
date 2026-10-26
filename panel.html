@@ -5344,7 +5344,7 @@ function sgaSitioTxt(p){
   const z = sgaZonaDe(p.zonaId), u = sgaUbicDe(p.ubicacionId);
   return z ? sgaZonaNombre(z) + (u ? ' · ' + u.codigo : '') : '—';
 }
-function stockSeg(){ return ['catalogo', 'entradas', 'salidas', 'operativas', 'resumen', 'liquidaciones'].includes(window.__stockSeg) ? window.__stockSeg : 'catalogo'; }   // «Stock» se fusionó con el catálogo
+function stockSeg(){ return ['catalogo', 'entradas', 'salidas', 'operativas', 'liquidaciones'].includes(window.__stockSeg) ? window.__stockSeg : 'catalogo'; }   // «Stock» se fusionó con el catálogo
 
 /* ---- Pantalla principal: stock por cliente y recepciones ---- */
 function whNombre(id){ const w = allWarehouses.find(x => x.id === id); return w ? w.name : '—'; }
@@ -5447,7 +5447,6 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') sgaAlbMenuCe
 window.addEventListener('scroll', sgaAlbMenuCerrar, true);
 function stockBodyHtml(){
   if (stockSeg() === 'catalogo') return stockCatalogoBodyHtml();
-  if (stockSeg() === 'resumen') return stockResumenBodyHtml();
   if (stockSeg() === 'liquidaciones') return sgaLiqBodyHtml();
   if (stockSeg() === 'operativas') return stockOperativasBodyHtml();
   const q = (window.__stockSearch || '').trim().toLowerCase();
@@ -6695,10 +6694,11 @@ function stockDashboardBodyHtml(){
     </div>${nota}`;
 }
 function sgaDashIrResumen(clienteId){
-  const rm = sgaResumenEstado();
-  rm.clienteId = clienteId; rm.periodo = sgaDashEstado().periodo; rm.datos = null;
-  window.__stockSeg = 'resumen';
-  setTab('stock');   // el resumen del cliente está en Control Stock SGA
+  const L = sgaLiqEstado(), rm = sgaResumenEstado();
+  L.periodo = sgaDashEstado().periodo; L.datos = null; L.estados = null; L.filtro = ''; L.q = ''; L.sel = clienteId;
+  rm.clienteId = clienteId; rm.periodo = L.periodo; rm.datos = null;
+  window.__stockSeg = 'liquidaciones';
+  setTab('stock');   // su liquidación del mes está en Control Stock SGA
   sgaResumenCargar();
 }
 // El dashboard del almacén, como apartado propio de la barra de Almacén (antes era una pestaña dentro de Control Stock SGA)
@@ -6738,12 +6738,9 @@ function stockEmpElegir(id, seg){
   else { window.__catSel = id || ''; try { localStorage.setItem('qualified.sga.catCliente', window.__catSel); } catch (e) { /* sin almacenamiento: no pasa nada */ } }
   refreshStockBody();
 }
-// Al pasar al Resumen mensual se abre el del cliente que se estaba mirando (si hay uno)
+// Al abrir Liquidaciones se empieza por la lista del mes, recalculada con lo último registrado
 function stockSegSync(seg){
-  if (seg === 'liquidaciones') { const L = sgaLiqEstado(); L.datos = null; L.estados = null; return; }   // al abrirlas se vuelve a calcular con lo último registrado
-  if (seg !== 'resumen') return;
-  const sel = catClienteSel(), rm = sgaResumenEstado();
-  if (sel && rm.clienteId !== sel && sgaClientesAlmacenLista().some(c => c.id === sel)) { rm.clienteId = sel; rm.datos = null; sgaResumenCargar(); }
+  if (seg === 'liquidaciones') { const L = sgaLiqEstado(); L.datos = null; L.estados = null; L.sel = ''; }
 }
 function stockEmpresaSelectHtml(seg){
   const lista = stockEmpresasConAlbaran(seg);
@@ -6781,7 +6778,7 @@ function tplStock(){
       ${acc('#C0721A', 'salida', 'Nueva expedición', 'Sacar mercancía y emitir albarán', 'sgaSalidaAbrir()', 'Sacar mercancía del almacén y generar el albarán')}
       ${acc('#2F7F86', 'regul', 'Regularizar', 'Ajustar el stock a lo contado', 'sgaRegulAbrir()', 'Ajustar el stock a lo que hay de verdad')}
     </div>
-    <div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('operativas', 'Operativas')}${segBtn('resumen', 'Resumen mensual')}${segBtn('liquidaciones', 'Liquidaciones')}</div>
+    <div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('operativas', 'Operativas')}${segBtn('liquidaciones', 'Liquidaciones')}</div>
     <div class="card deca-toolbar">
       ${seg === 'catalogo' ? `
       <select id="cat-cliente" onchange="catElegirCliente(this.value)" style="width:auto;flex:0 0 210px;min-width:0;"><option value="">Todos los clientes</option>${contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es')).map(c => `<option value="${c.id}" ${c.id === catClienteSel() ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
@@ -6792,16 +6789,13 @@ function tplStock(){
       <div class="doc-seg" id="cat-filtros">${catFiltrosHtml()}</div>
       ${catModoHtml()}
       ` : seg === 'liquidaciones' ? `${sgaLiqToolbarHtml()}
-      ` : seg === 'resumen' ? `
-      <select id="rm-cliente" onchange="sgaResumenElegir()" style="min-width:230px;"><option value="">Elige el cliente…</option>${sgaClientesAlmacenLista().map(c => `<option value="${c.id}" ${c.id === sgaResumenEstado().clienteId ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
-      <input id="rm-mes" type="month" value="${esc(sgaResumenEstado().periodo)}" onchange="sgaResumenElegir()" style="width:170px;" />
-      <button class="btn btn-ghost" onclick="sgaResumenImprimir()" title="Imprimir o guardar como PDF en blanco y negro">${homeIcon(HOME_ICON_PATHS.file, 16, 'currentColor', 1.8)}<span>Imprimir / PDF</span></button>` : `
+      ` : `
       <div class="deca-search">
         <input placeholder="${seg === 'catalogo' ? 'Buscar cliente o artículo…' : 'Buscar cliente por nombre o NIF…'}" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
       ${seg === 'entradas' || seg === 'salidas' || seg === 'operativas' ? stockEmpresaSelectHtml(seg) + stockEstadoSelectHtml(seg) : ''}${seg === 'operativas' && sgaPuedeEditarStock() ? '<button class="btn btn-primary" style="margin-left:auto;" onclick="sgaOperativaAbrir()">+ Nueva operativa</button>' : ''}`}
-      ${seg === 'resumen' || seg === 'liquidaciones' || seg === 'operativas' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
+      ${seg === 'liquidaciones' || seg === 'operativas' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
     </div>
     <div id="stock-body">${stockBodyHtml()}</div>
     </div>`;
@@ -8567,13 +8561,6 @@ async function sgaResumenCargar(){
   rm.cargando = false;
   refreshStockBody();
 }
-function sgaResumenElegir(){
-  const rm = sgaResumenEstado();
-  rm.clienteId = (document.getElementById('rm-cliente') || {}).value || '';
-  window.__catSel = rm.clienteId; try { localStorage.setItem('qualified.sga.catCliente', rm.clienteId); } catch (e) { /* sin almacenamiento: no pasa nada */ }
-  rm.periodo = (document.getElementById('rm-mes') || {}).value || today().slice(0, 7);
-  sgaResumenCargar();
-}
 // Cálculo del resumen a partir de lo cargado
 function sgaResumenCalcular(d){
   const cfg = sgaClienteCfg(d.clienteId);
@@ -8755,6 +8742,7 @@ function sgaLiqPeriodo(p){
   L.periodo = /^\d{4}-\d{2}$/.test(p) ? p : today().slice(0, 7);
   L.datos = null; L.estados = null;
   renderTab();
+  if (L.sel) { const rm = sgaResumenEstado(); rm.periodo = L.periodo; rm.datos = null; sgaResumenCargar(); }   // dentro del detalle, cambiar de mes recalcula el del mismo cliente
 }
 function sgaLiqMes(delta){
   const [y, m] = sgaLiqEstado().periodo.split('-').map(Number);
@@ -8791,8 +8779,7 @@ function sgaLiqBodyHtml(){
   const nombreDe = x => (x.c.nombreComercial || '').trim() || x.c.nombre;
   const est = x => (L.estados[x.c.id] || {}).estado === 'facturada' ? 'facturada' : 'pendiente';
   const q = mapaNorm(L.q).trim();
-  const lista = todas.filter(x => (!L.filtro || est(x) === L.filtro) && (!q || mapaNorm(nombreDe(x) + ' ' + ((L.estados[x.c.id] || {}).factura || '')).includes(q)))
-    .sort((a, b) => nombreDe(a).localeCompare(nombreDe(b), 'es'));
+  const lista = sgaLiqListaVisible();
   const suma = fn => sgaR2(todas.reduce((s, x) => s + fn(x), 0));
   const nFact = todas.filter(x => est(x) === 'facturada').length;
   const kpi = (t, v, sub, cls) => `<div class="rm-kpi ${cls || ''}"><small>${t}</small><b>${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
@@ -8805,6 +8792,7 @@ function sgaLiqBodyHtml(){
     </div>`;
   const aviso = (L.errorE ? `<div class="card" style="border-left:4px solid var(--danger);padding:11px 16px;margin-bottom:12px;font-size:13px;">${esc(L.errorE)}</div>` : '')
     + (enCurso ? '<div class="card" style="padding:10px 16px;margin-bottom:12px;font-size:12.5px;color:var(--muted);">Mes en curso: los importes son una previsión (incluyen el almacenaje de los días que faltan con el stock de hoy). Se cierran cuando acaba el mes.</div>' : '');
+  if (L.sel) return (L.errorE ? aviso : '') + sgaLiqDetalleHtml();
   if (!todas.length) return aviso + '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Ningún cliente tiene movimientos ni almacenaje en este mes.</div>';
   const puede = sgaPuedeEditarStock() && !L.errorE;
   const eurC = n => n ? dashEur(n) : '<span style="color:var(--mutedFaint);">—</span>';
@@ -8813,7 +8801,7 @@ function sgaLiqBodyHtml(){
     const cambio = es === 'facturada' && e.importe != null && Math.abs(Number(e.importe) - x.total) > 0.005;
     return `
       <tr>
-        <td data-sort-value="${esc(nombreDe(x))}"><b>${esc(nombreDe(x))}</b></td>
+        <td data-sort-value="${esc(nombreDe(x))}"><b style="cursor:pointer;" onclick="sgaLiqAbrir('${x.c.id}')" title="Abrir su liquidación">${esc(nombreDe(x))}</b></td>
         <td class="tf-precio" data-sort-value="${x.recs.length}">${x.recs.length || '—'}</td>
         <td class="tf-precio" data-sort-value="${x.exps.length}">${x.exps.length || '—'}</td>
         <td class="tf-precio" data-sort-value="${x.r.final.mod}">${x.r.final.mod || '—'}</td>
@@ -8826,7 +8814,7 @@ function sgaLiqBodyHtml(){
           : chipHtml(txt, col)}</td>
         <td data-sort-value="${esc(e.factura || '')}">${puede ? `<input class="liq-in" style="width:120px;" maxlength="40" placeholder="Nº factura" value="${esc(e.factura || '')}" onchange="sgaLiqGuardar('${x.c.id}', 'factura', this.value)" />` : esc(e.factura || '—')}</td>
         <td data-sort-value="${esc(e.nota || '')}">${puede ? `<input class="liq-in" style="width:170px;" maxlength="200" placeholder="Nota" value="${esc(e.nota || '')}" onchange="sgaLiqGuardar('${x.c.id}', 'nota', this.value)" />` : esc(e.nota || '—')}</td>
-        <td style="text-align:right;white-space:nowrap;"><button class="btn btn-ghost" style="padding:4px 12px;font-size:12px;" onclick="sgaLiqVerResumen('${x.c.id}')" title="Abrir el resumen del mes de este cliente (desglose día a día e impresión)">Resumen</button></td>
+        <td style="text-align:right;white-space:nowrap;"><button class="btn btn-ghost" style="padding:4px 12px;font-size:12px;" onclick="sgaLiqAbrir('${x.c.id}')" title="Abrir el desglose del mes de este cliente (día a día e impresión)">Abrir</button></td>
       </tr>`;
   };
   return aviso + kpis + (lista.length ? `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
@@ -8849,13 +8837,58 @@ async function sgaLiqGuardar(clienteId, campo, valor){
   L.estados[clienteId] = nuevo;
   if (campo === 'estado') refreshStockBody();
 }
-function sgaLiqVerResumen(clienteId){
+// Detalle de un cliente dentro de Liquidaciones: su estado y factura arriba, y debajo el desglose del mes (el de antes del Resumen mensual)
+function sgaLiqAbrir(clienteId){
   const L = sgaLiqEstado(), rm = sgaResumenEstado();
+  L.sel = clienteId;
   rm.clienteId = clienteId; rm.periodo = L.periodo; rm.datos = null;
   window.__catSel = clienteId; try { localStorage.setItem('qualified.sga.catCliente', clienteId); } catch (e) { /* sin almacenamiento: no pasa nada */ }
-  window.__stockSeg = 'resumen';
   renderTab();
+  window.scrollTo(0, 0);
   sgaResumenCargar();
+}
+function sgaLiqVolver(){ const L = sgaLiqEstado(); L.sel = ''; L.datos = null; renderTab(); }
+function sgaLiqNav(delta){
+  const L = sgaLiqEstado();
+  const ids = sgaLiqListaVisible().map(x => x.c.id), i = ids.indexOf(L.sel);
+  if (i < 0 || ids.length < 2) return;
+  sgaLiqAbrir(ids[(i + delta + ids.length) % ids.length]);
+}
+function sgaLiqDetalleHtml(){
+  const L = sgaLiqEstado(), rm = sgaResumenEstado();
+  const lista = sgaLiqListaVisible(), i = lista.findIndex(x => x.c.id === L.sel);
+  const x = sgaLiqFilas().find(f => f.c.id === L.sel);
+  const c = contactos.find(k => k.id === L.sel) || {};
+  const nombre = (c.nombreComercial || '').trim() || c.nombre || '';
+  const e = L.estados[L.sel] || {}, es = e.estado === 'facturada' ? 'facturada' : 'pendiente', col = SGA_LIQ_ESTADOS[es][1];
+  const puede = sgaPuedeEditarStock() && !L.errorE;
+  const cambio = x && es === 'facturada' && e.importe != null && Math.abs(Number(e.importe) - x.total) > 0.005;
+  const flecha = (d, t, ch) => `<button type="button" class="alb-mn-b" style="width:32px;height:32px;" ${lista.length > 1 ? '' : 'disabled'} onclick="sgaLiqNav(${d})" title="${t}" aria-label="${t}">${ch}</button>`;
+  const cabecera = `
+    <div class="card" style="padding:14px 16px;margin-bottom:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+      <button type="button" class="btn btn-ghost" onclick="sgaLiqVolver()">← Liquidaciones</button>
+      <div style="display:flex;align-items:center;gap:4px;">${flecha(-1, 'Cliente anterior', '‹')}<span style="min-width:44px;text-align:center;font-size:12.5px;color:var(--muted);">${i < 0 ? '—' : (i + 1) + '/' + lista.length}</span>${flecha(1, 'Cliente siguiente', '›')}</div>
+      <div style="min-width:0;flex:1 1 200px;"><div style="font-family:var(--display);font-size:18px;font-weight:700;">${esc(nombre)}</div>
+        <div style="font-size:12.5px;color:var(--muted);">${esc(sgaPeriodoTxt(L.periodo))}${x ? ` · total <b style="color:var(--text);">${dashEur(x.total)}</b>` : ''}${cambio ? ` · <b style="color:var(--danger);">se facturó ${dashEur(Number(e.importe))}</b>` : ''}</div></div>
+      ${puede
+        ? `<select class="liq-est" style="--c:${col};" onchange="sgaLiqGuardar('${L.sel}', 'estado', this.value)">${Object.keys(SGA_LIQ_ESTADOS).map(k => `<option value="${k}" ${k === es ? 'selected' : ''}>${SGA_LIQ_ESTADOS[k][0]}</option>`).join('')}</select>
+           <input class="liq-in" style="width:130px;" maxlength="40" placeholder="Nº factura" value="${esc(e.factura || '')}" onchange="sgaLiqGuardar('${L.sel}', 'factura', this.value)" />
+           <input class="liq-in" style="width:200px;" maxlength="200" placeholder="Nota" value="${esc(e.nota || '')}" onchange="sgaLiqGuardar('${L.sel}', 'nota', this.value)" />`
+        : `${chipHtml(SGA_LIQ_ESTADOS[es][0], col)}${e.factura ? `<span>${esc(e.factura)}</span>` : ''}`}
+    </div>`;
+  const cuerpo = rm.cargando || !rm.datos || rm.clienteId !== L.sel
+    ? '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Cargando…</div>'
+    : sgaResumenHtml(rm.datos, false);
+  return cabecera + cuerpo;
+}
+// Lista tal como se ve en pantalla (con el buscador y el filtro de estado), para pasar de un cliente a otro
+function sgaLiqListaVisible(){
+  const L = sgaLiqEstado();
+  const nombreDe = x => (x.c.nombreComercial || '').trim() || x.c.nombre;
+  const est = x => (L.estados[x.c.id] || {}).estado === 'facturada' ? 'facturada' : 'pendiente';
+  const q = mapaNorm(L.q).trim();
+  return sgaLiqFilas().filter(x => (!L.filtro || est(x) === L.filtro) && (!q || mapaNorm(nombreDe(x) + ' ' + ((L.estados[x.c.id] || {}).factura || '')).includes(q)))
+    .sort((a, b) => nombreDe(a).localeCompare(nombreDe(b), 'es'));
 }
 function sgaLiqToolbarHtml(){
   const L = sgaLiqEstado();
@@ -8866,18 +8899,14 @@ function sgaLiqToolbarHtml(){
         <input id="liq-mes" type="month" value="${esc(L.periodo)}" onchange="sgaLiqPeriodo(this.value)" style="width:170px;" />
         <button type="button" class="alb-mn-b" style="width:34px;height:34px;" onclick="sgaLiqMes(1)" title="Mes siguiente" aria-label="Mes siguiente">›</button>
       </div>
-      <div class="deca-search" style="flex:1 1 200px;">
+      ${L.sel
+        ? `<div style="flex:1 1 20px;"></div><button class="btn btn-ghost" onclick="sgaResumenImprimir()" title="Imprimir o guardar como PDF en blanco y negro">${homeIcon(HOME_ICON_PATHS.file, 16, 'currentColor', 1.8)}<span>Imprimir / PDF</span></button>`
+        : `<div class="deca-search" style="flex:1 1 200px;">
         <input id="liq-q" placeholder="Buscar cliente o nº de factura…" value="${esc(L.q)}" oninput="sgaLiqEstado().q=this.value; refreshStockBody();" autocomplete="off" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      <div class="doc-seg" id="liq-fil">${fil('', 'Todas')}${fil('pendiente', 'Pendientes')}${fil('facturada', 'Facturadas')}</div>
+      <div class="doc-seg" id="liq-fil">${fil('', 'Todas')}${fil('pendiente', 'Pendientes')}${fil('facturada', 'Facturadas')}</div>`}
       <button class="btn btn-ghost" onclick="sgaLiqRefrescar()" title="Volver a calcular con lo último que se haya registrado">${homeIcon(HOME_ICON_PATHS.clock, 16, 'currentColor', 1.8)}<span>Actualizar</span></button>`;
-}
-function stockResumenBodyHtml(){
-  const rm = sgaResumenEstado();
-  if (!rm.clienteId) return '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Elige un cliente y un mes para ver su resumen.</div>';
-  if (rm.cargando || !rm.datos) return '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">Cargando…</div>';
-  return sgaResumenHtml(rm.datos, false);
 }
 async function sgaResumenGuardarM2(){
   const rm = sgaResumenEstado();
