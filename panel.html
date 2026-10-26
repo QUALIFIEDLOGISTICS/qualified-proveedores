@@ -5898,13 +5898,15 @@ function catFilasPalets(cid, filtro, q){
   const texto = ({ a, p }) => [sgaArticuloTxt(a), a.referencia, a.medidas, p && p.codigo, p && p.lote, p && p.referencia, p && p.descripcion, p && whNombre(p.warehouseId), p && sgaSitioTxt(p), p && sgaProdTxt(p.productoId),
     ...Object.values(a.atributos || {}), ...campos.map(f => (p ? sgaValorCampo(f, p) : null))].filter(v => v != null).join(' ');
   const out = q ? filas.filter(f => mapaNorm(texto(f)).includes(q)) : filas;
-  return out.sort((x, y) => (x.p ? 0 : 1) - (y.p ? 0 : 1) || (x.p && y.p ? x.p.fechaEntrada.localeCompare(y.p.fechaEntrada) : 0) || x.a.nombre.localeCompare(y.a.nombre, 'es'));
+  // Orden: FIFO, lo más antiguo primero (lo que saldrá antes); LIFO, lo más reciente primero; manual, sin orden de entrada: por nombre y código
+  const modo = sgaClienteSalida(cid), sg = modo === 'lifo' ? -1 : 1;
+  return out.sort((x, y) => (x.p ? 0 : 1) - (y.p ? 0 : 1) || (modo !== 'manual' && x.p && y.p ? sg * x.p.fechaEntrada.localeCompare(y.p.fechaEntrada) : 0) || x.a.nombre.localeCompare(y.a.nombre, 'es') || (x.p && y.p ? String(x.p.codigo).localeCompare(String(y.p.codigo), 'es') : 0));
 }
 // Etiqueta de antigüedad: verde hasta 3 meses, ámbar hasta un año, roja a partir de ahí
-function catEdadChip(f){
+function catEdadChip(f, conColor){
   const d = catDiasDesde(f), t = catTiempoTxt(f);
   if (!(d >= 0)) return '';
-  const col = d <= 90 ? '#3F8F5F' : d <= 365 ? '#B26B00' : '#C1443D';
+  const col = !conColor ? '#6B7480' : d <= 90 ? '#3F8F5F' : d <= 365 ? '#B26B00' : '#C1443D';
   return `<span class="cfg-chip" style="color:${col};background:color-mix(in srgb, ${col} 13%, var(--panel));" title="Lleva ${esc(t)} en el almacén">${t === 'hoy' ? 'hoy' : 'hace ' + esc(t)}</span>`;
 }
 function catPaletsHtml(cid, cols, filtro, q){
@@ -5915,14 +5917,17 @@ function catPaletsHtml(cid, cols, filtro, q){
   const totalPalets = conPalet.reduce((s, f) => s + f.p.actual, 0);
   const porAlm = {};
   conPalet.forEach(f => { const n = whNombre(f.p.warehouseId); porAlm[n] = (porAlm[n] || 0) + f.p.actual; });
-  const viejo = conPalet[0];
+  const modoSalida = sgaClienteSalida(cid);
+  // FIFO / LIFO: el palet que saldrá primero. Manual no sigue el orden de entrada: se enseña la última recepción
+  const destacado = modoSalida === 'manual' ? conPalet.slice().sort((x, y) => y.p.fechaEntrada.localeCompare(x.p.fechaEntrada))[0] : conPalet[0];
+  const tituloDest = modoSalida === 'fifo' ? 'Sale primero (el más antiguo)' : modoSalida === 'lifo' ? 'Sale primero (el más reciente)' : 'Última entrada';
   const recientes = conPalet.filter(f => catDiasDesde(f.p.fechaEntrada) <= 30).reduce((s, f) => s + f.p.actual, 0);
   const kpi = (t, v, sub, cls) => `<div class="rm-kpi ${cls || ''}"><small>${t}</small><b>${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
   const almTxt = Object.keys(porAlm).sort((a, b) => a.localeCompare(b, 'es')).map(n => `${esc(n)} <b>${porAlm[n]}</b>`).join(' · ');
   const kpis = `<div class="rm-kpis" style="margin-bottom:14px;">
       ${kpi('En el almacén', totalPalets, `palet${totalPalets === 1 ? '' : 's'}${Object.keys(porAlm).length > 1 ? '' : ''}`, 'tot')}
       ${kpi('Dónde están', Object.keys(porAlm).length || '—', almTxt || 'ningún palet')}
-      ${kpi('El que más lleva', viejo ? catTiempoTxt(viejo.p.fechaEntrada) || 'hoy' : '—', viejo ? `${esc(viejo.a.nombre)}${viejo.p.codigo ? ' · ' + esc(viejo.p.codigo) : ''}` : '')}
+      ${kpi(tituloDest, destacado ? (catTiempoTxt(destacado.p.fechaEntrada) === 'hoy' ? 'Hoy' : 'Hace ' + catTiempoTxt(destacado.p.fechaEntrada)) : '—', destacado ? `${esc(destacado.a.nombre)}${destacado.p.codigo ? ' · ' + esc(destacado.p.codigo) : ''}` : '')}
       ${kpi('Entrados en 30 días', recientes, recientes === 1 ? 'palet' : 'palets')}
     </div>`;
   const num = v => (v == null ? '' : String(v).replace('.', ','));
@@ -5938,7 +5943,7 @@ function catPaletsHtml(cid, cols, filtro, q){
       <td data-sort-value="${esc(p ? p.codigo : '')}">${p && p.codigo ? `<span class="pl-cod">${esc(p.codigo)}</span>` : vac}</td>
       <td class="cg-prod" data-sort-value="${esc(a.nombre)}"><span class="cg-nom">${esc(a.nombre)}</span>${a.virtual ? ' <span class="cg-sinart" title="Esta mercancía no tiene artículo en el catálogo">Sin artículo</span>' : ''}${cols.referencia && a.referencia ? `<div class="cg-ref">${esc(a.referencia)}</div>` : ''}</td>
       <td data-sort-value="${esc(p ? whNombre(p.warehouseId) + ' ' + sitio : '')}">${p ? `<div class="pl-ub">${sitio !== '—' ? homeIcon(HOME_ICON_PATHS.pin, 14, 'currentColor', 2) + '<span>' + esc(sitio) + '</span>' : '<span style="color:var(--mutedFaint);">Sin ubicar</span>'}</div><div class="cg-ref">${esc(whNombre(p.warehouseId))}</div>` : vac}</td>
-      <td style="white-space:nowrap;" data-sort-value="${esc(p ? p.fechaEntrada : '')}">${p ? `${fmtDateDMY(p.fechaEntrada)}<div style="margin-top:3px;">${catEdadChip(p.fechaEntrada)}</div>` : vac}</td>
+      <td style="white-space:nowrap;" data-sort-value="${esc(p ? p.fechaEntrada : '')}">${p ? `${fmtDateDMY(p.fechaEntrada)}<div style="margin-top:3px;">${catEdadChip(p.fechaEntrada, modoSalida === 'fifo')}</div>` : vac}</td>
       ${cols.tipo ? `<td data-sort-value="${esc(prodTxt)}">${prodTxt ? `<span class="cg-chip" title="${esc(prodTxt)}">${esc(prodTxt.replace(/\s*·\s*sin subtipo definido/i, ''))}</span>` : vac}</td>` : ''}
       ${cols.ml ? celdaNum(num(a.metrosLineales)) : ''}${cols.peso ? celdaNum(num(a.peso)) : ''}
       ${cols.medidas ? `<td class="cg-trunc" data-sort-value="${esc(a.medidas)}">${a.medidas ? esc(a.medidas) : vac}</td>` : ''}
