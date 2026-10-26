@@ -5969,6 +5969,152 @@ function catTotalesHtml(filas, conBultos, titulo){
 function catFilasTotalesArticulos(lista){
   return lista.map(a => { const ps = catPartidasArticulo(a); const pal = ps.reduce((s, p) => s + p.actual, 0); return { pal, bul: ps.reduce((s, p) => s + (p.bultos != null ? sgaBultosSalida(p, p.actual) : p.actual), 0), pesoU: a.peso != null ? Number(a.peso) : null }; }).filter(f => f.pal > 0);
 }
+/* ---- Exportar el inventario (Excel o PDF) eligiendo las columnas ----
+   Exporta lo que se está viendo (con el buscador y los filtros), en la vista activa (por artículo o palet a palet). */
+function catExportColumnas(){
+  const E = window.__catExp;
+  if (!E) return [];
+  const { cid, cols } = E, u = sgaUnidadCfg(cid);
+  const nombreCli = a => { const c = contactos.find(x => x.id === a.clienteId); return c ? ((c.nombreComercial || '').trim() || c.nombre) : ''; };
+  const prodTxt = a => { const p = a.productoId ? almacenajeProducto(a.productoId) : null; return p ? almacenajeProductoTexto(p).replace(/\s*·\s*sin subtipo definido/i, '') : ''; };
+  const col = (id, label, get, num) => ({ id, label, get, num: !!num });
+  const extra = f => it => { const v = E.modo === 'palets' && it.p ? sgaValorCampo(f, it.p) : (it.a.atributos ? it.a.atributos[f.id] : null); return v != null && v !== '' ? sgaCampoMostrar(f, v) : ''; };
+  const kilosDe = (a, n) => (a.peso != null && n > 0 ? Math.round(Number(a.peso) * n * 10) / 10 : null);
+  if (E.modo === 'palets') {
+    return [
+      !cid ? col('cli', 'Cliente', it => nombreCli(it.a)) : null,
+      E.conCodigo ? col('cod', sgaCap(u.s), it => it.p ? it.p.codigo || '' : '') : null,
+      col('art', 'Código de artículo', it => it.a.nombre),
+      cols.referencia ? col('ref', 'Descripción', it => it.a.referencia || '') : null,
+      col('ubi', 'Ubicación', it => it.p ? sgaSitioTxt(it.p) : ''),
+      col('alm', 'Almacén', it => it.p ? whNombre(it.p.warehouseId) : ''),
+      E.manual ? null : col('ent', 'Fecha de entrada', it => it.p ? fmtDateDMY(it.p.fechaEntrada) : ''),
+      cols.tipo ? col('tipo', 'Tipo de carga', it => prodTxt(it.a)) : null,
+      cols.bultos ? col('bpp', 'Bultos / ' + u.s, it => it.a.bultos, true) : null,
+      cols.ml ? col('ml', 'M. lineales', it => it.a.metrosLineales, true) : null,
+      cols.peso ? col('peso', 'Peso por ' + u.s + ' (kg)', it => it.a.peso, true) : null,
+      cols.medidas ? col('med', 'Medidas', it => it.a.medidas || '') : null,
+      ...cols.x.map(f => col('x:' + f.id, f.label, extra(f))),
+      col('cant', sgaCap(u.p), it => it.p ? it.p.actual : 0, true),
+      cols.bultos ? col('bul', 'Bultos', it => it.p ? (it.p.bultos != null ? sgaBultosSalida(it.p, it.p.actual) : it.p.actual * (it.a.bultos || 1)) : 0, true) : null,
+      cols.peso ? col('kg', 'Kilos', it => it.p ? kilosDe(it.a, it.p.actual) : null, true) : null,
+      col('est', 'Estado', it => it.p ? 'En almacén' : 'Sin stock'),
+    ].filter(Boolean);
+  }
+  return [
+    !cid ? col('cli', 'Cliente', it => nombreCli(it.a)) : null,
+    col('art', 'Código de artículo', it => it.a.nombre),
+    cols.referencia ? col('ref', 'Descripción', it => it.a.referencia || '') : null,
+    cols.tipo ? col('tipo', 'Tipo de carga', it => prodTxt(it.a)) : null,
+    cols.bultos ? col('bpp', 'Bultos / ' + u.s, it => it.a.bultos, true) : null,
+    cols.ml ? col('ml', 'M. lineales', it => it.a.metrosLineales, true) : null,
+    cols.peso ? col('peso', 'Peso por ' + u.s + ' (kg)', it => it.a.peso, true) : null,
+    cols.medidas ? col('med', 'Medidas', it => it.a.medidas || '') : null,
+    ...cols.x.map(f => col('x:' + f.id, f.label, extra(f))),
+    col('cant', sgaCap(u.p) + ' en stock', it => it.st.mod, true),
+    cols.bultos ? col('bul', 'Bultos en stock', it => it.st.bul, true) : null,
+    cols.peso ? col('kg', 'Kilos en stock', it => kilosDe(it.a, it.st.mod), true) : null,
+    col('alm', 'Almacén', it => it.st.almacenes || ''),
+  ].filter(Boolean);
+}
+function catExportItems(){
+  const E = window.__catExp;
+  if (!E) return [];
+  return E.modo === 'palets' ? E.filas : E.lista.map(a => ({ a, st: catStockArticulo(a) }));
+}
+function catExportElegidas(){
+  const E = window.__catExp;
+  let guardadas = null;
+  try { guardadas = JSON.parse(localStorage.getItem('qualified.sga.exportCols.' + E.modo) || 'null'); } catch (e) { guardadas = null; }
+  const todas = catExportColumnas();
+  return todas.filter(c => !guardadas || guardadas.includes(c.id) || !guardadas.length);
+}
+function catExportarAbrir(){
+  const E = window.__catExp;
+  if (!E || !catExportItems().length) { appToast('No hay nada que exportar con lo que se ve ahora.', 'info'); return; }
+  const todas = catExportColumnas(), elegidas = new Set(catExportElegidas().map(c => c.id));
+  const cli = E.cid ? (contactos.find(c => c.id === E.cid) || {}) : null;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeModal()">
+      <div class="modal-box" style="max-width:560px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.download, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Exportar inventario</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">${cli ? esc((cli.nombreComercial || '').trim() || cli.nombre) : 'Todos los clientes'} · ${catExportItems().length} fila${catExportItems().length === 1 ? '' : 's'} (lo que ves ahora)</div></div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
+          <div class="field"><label>Formato</label>
+            <div class="doc-seg" id="exp-fmt"><button type="button" class="on" data-f="xlsx" onclick="catExportFormato('xlsx')">Excel</button><button type="button" data-f="pdf" onclick="catExportFormato('pdf')">PDF</button></div></div>
+          <div class="field" style="margin-bottom:6px;"><label>Columnas que aparecen <span style="font-weight:400;color:var(--mutedFaint);">· solo las de este inventario</span></label>
+            <div style="display:flex;gap:8px;margin-bottom:8px;"><button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="catExportMarcar(true)">Todas</button><button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="catExportMarcar(false)">Ninguna</button></div>
+            <div id="exp-cols" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px 16px;max-height:300px;overflow:auto;">${todas.map(c => `<label class="sgc-sw" style="font-size:13px;"><input type="checkbox" class="switch" data-id="${esc(c.id)}" ${elegidas.has(c.id) ? 'checked' : ''} /><span><b>${esc(c.label)}</b></span></label>`).join('')}</div></div>
+          <div id="exp-err" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
+          <div style="display:flex;gap:10px;">
+            <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary deca-submit" onclick="catExportarHacer()">Exportar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+function catExportFormato(f){ document.querySelectorAll('#exp-fmt button').forEach(b => b.classList.toggle('on', b.dataset.f === f)); }
+function catExportMarcar(on){ document.querySelectorAll('#exp-cols input').forEach(i => { i.checked = on; }); }
+async function catExportarHacer(){
+  const E = window.__catExp, err = document.getElementById('exp-err');
+  const ids = [...document.querySelectorAll('#exp-cols input:checked')].map(i => i.dataset.id);
+  const fmt = (document.querySelector('#exp-fmt button.on') || {}).dataset ? document.querySelector('#exp-fmt button.on').dataset.f : 'xlsx';
+  if (!ids.length) { if (err) err.textContent = 'Elige al menos una columna.'; return; }
+  try { localStorage.setItem('qualified.sga.exportCols.' + E.modo, JSON.stringify(ids)); } catch (e) { /* sin almacenamiento: no pasa nada */ }
+  const cols = catExportColumnas().filter(c => ids.includes(c.id)), items = catExportItems();
+  const cli = E.cid ? (contactos.find(c => c.id === E.cid) || {}) : null;
+  const nombre = cli ? ((cli.nombreComercial || '').trim() || cli.nombre) : 'todos-los-clientes';
+  const fichero = `inventario-${nombre.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${today()}`;
+  const filas = items.map(it => cols.map(c => c.get(it)));
+  // totales de las columnas numéricas que se suman (cantidad, bultos y kilos)
+  const suman = new Set(['cant', 'bul', 'kg']);
+  const tot = cols.map((c, i) => suman.has(c.id) ? Math.round(filas.reduce((s, r) => s + (Number(r[i]) || 0), 0) * 100) / 100 : '');
+  closeModal();
+  if (fmt === 'pdf') { catExportPdf(cols, filas, tot, nombre, E); return; }
+  try {
+    await mapaXlsxLib();
+    const aoa = [cols.map(c => c.label), ...filas.map(r => r.map((v, i) => (cols[i].num ? (v == null || v === '' ? '' : Number(v)) : (v == null ? '' : v)))), ['TOTAL', ...tot.slice(1)]];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = cols.map((c, i) => ({ wch: Math.min(40, Math.max(c.label.length + 2, ...filas.slice(0, 200).map(r => String(r[i] == null ? '' : r[i]).length + 2))) }));
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Inventario');
+    XLSX.writeFile(wb, fichero + '.xlsx');
+  } catch (e) {
+    // sin la librería de Excel (sin conexión): se baja un CSV que Excel también abre
+    const cel = x => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"';
+    const csv = '﻿' + [cols.map(c => c.label), ...filas, ['TOTAL', ...tot.slice(1)]].map(r => r.map(cel).join(';')).join('\r\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = fichero + '.csv';
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    appToast('No se pudo cargar el generador de Excel: se ha descargado un CSV, que Excel también abre.', 'info');
+  }
+}
+// PDF: se abre la ventana de impresión con la tabla (en «Destino» elige «Guardar como PDF»)
+function catExportPdf(cols, filas, tot, nombre, E){
+  const apaisado = cols.length > 6;
+  const celda = (c, v) => `<td${c.num ? ' class="r"' : ''}>${v == null || v === '' ? '' : esc(c.num ? sgaNumTxt(v) : v)}</td>`;
+  const css = `
+    @page{size:A4 ${apaisado ? 'landscape' : 'portrait'};margin:0;}
+    *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    body{font-family:Arial,Helvetica,sans-serif;color:#000;margin:0;font-size:${cols.length > 10 ? 8.5 : 10}px;}
+    .head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #000;padding-bottom:6px;margin-bottom:10px;} h1{font-size:17px;margin:0;} .gen{font-size:10px;color:#444;}
+    table.inv{width:100%;border-collapse:collapse;} table.inv th{text-align:left;font-size:${cols.length > 10 ? 7.5 : 9}px;text-transform:uppercase;letter-spacing:.4px;background:#EDEDED;border-bottom:1.5px solid #000;padding:5px 6px;}
+    table.inv td{padding:4px 6px;border-bottom:1px solid #BBB;vertical-align:top;} table.inv thead{display:table-header-group;} table.inv tr{page-break-inside:avoid;}
+    .r{text-align:right;white-space:nowrap;} table.inv tfoot td{border-top:2px solid #000;border-bottom:none;font-weight:800;background:#EDEDED;}`;
+  const cuerpo = `<div class="head"><h1>Inventario · ${esc(nombre === 'todos-los-clientes' ? 'Todos los clientes' : nombre)}</h1><div class="gen">${esc(fmtDateDMY(today()))} · ${filas.length} fila${filas.length === 1 ? '' : 's'}</div></div>
+    <table class="inv"><thead><tr>${cols.map(c => `<th${c.num ? ' class="r"' : ''}>${esc(c.label)}</th>`).join('')}</tr></thead>
+    <tbody>${filas.map(r => `<tr>${cols.map((c, i) => celda(c, r[i])).join('')}</tr>`).join('')}</tbody>
+    ${tot.some(v => v !== '') ? `<tfoot><tr>${cols.map((c, i) => `<td${c.num ? ' class="r"' : ''}>${i === 0 ? 'TOTAL' : (tot[i] === '' ? '' : esc(sgaNumTxt(tot[i])))}</td>`).join('')}</tr></tfoot>` : ''}</table>`;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Inventario ${esc(nombre)}</title><style>${css}${sgaPgCss(10)}</style></head><body>${sgaPgHtml(cuerpo)}</body></html>`;
+  const f = document.createElement('iframe');
+  f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+  document.body.appendChild(f);
+  const doc = f.contentWindow.document; doc.open(); doc.write(html); doc.close();
+  setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 3000); }, 200);
+}
 // Clientes de pieza única (cada palet es distinto): el inventario se ve palet a palet, no por artículo.
 // Se activa solo cuando el cliente da un código propio a cada palet (ficha SGA); en los demás se elige a mano con el selector de arriba
 // y la elección se recuerda por cliente.
@@ -6036,6 +6182,7 @@ function catPaletsHtml(cid, cols, filtro, q){
   const modoSalida = sgaClienteSalida(cid);
   const manual = modoSalida === 'manual';                       // sin orden de entrada: la fecha de recepción no se enseña
   const conCodigo = !!sgaClienteCfg(cid).codigosUnicos;         // la columna «Palet» solo si cada palet lleva su propio código
+  window.__catExp = { modo: 'palets', cid, cols, filas, manual, conCodigo };   // lo que se ve, para poder exportarlo
   // FIFO / LIFO: el palet que saldrá primero
   const destacado = conPalet[0];
   const tituloDest = modoSalida === 'fifo' ? 'Sale primero (el más antiguo)' : 'Sale primero (el más reciente)';
@@ -6096,6 +6243,7 @@ function stockCatalogoBodyHtml(){
     .filter(a => stockCatalogoCoincide(a, q) || (!cid && (nombreDe(contactos.find(c => c.id === a.clienteId) || {}) || '').toLowerCase().includes(q)));
   if (filtro === 'stock') lista = lista.filter(a => catStockArticulo(a).mod > 0);
   if (filtro === 'sin') lista = lista.filter(a => catStockArticulo(a).mod === 0);
+  window.__catExp = { modo: 'articulos', cid, cols, lista };   // lo que se ve, para poder exportarlo
   // Por defecto: primero lo que más stock tiene (palets), después por cliente y nombre
   lista.sort((a, b) => (catStockArticulo(b).mod - catStockArticulo(a).mod) || (cid ? 0 : nombreDe(contactos.find(c => c.id === a.clienteId) || {}).localeCompare(nombreDe(contactos.find(c => c.id === b.clienteId) || {}), 'es')) || sgaArticuloTxt(a).localeCompare(sgaArticuloTxt(b), 'es'));
   const puede = sgaPuedeEditarStock();
@@ -6965,7 +7113,7 @@ function tplStock(){
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
       ${seg === 'entradas' || seg === 'salidas' || seg === 'operativas' ? stockEmpresaSelectHtml(seg) + stockEstadoSelectHtml(seg) : ''}${seg === 'operativas' && sgaPuedeEditarStock() ? '<button class="btn btn-primary" style="margin-left:auto;" onclick="sgaOperativaAbrir()">+ Nueva operativa</button>' : ''}`}
-      ${seg === 'catalogo' && sgaPuedeEditarStock() ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);margin-left:auto;order:99;" onclick="catEditarTodo()" title="Abrir una pantalla completa para editar todo el catálogo del cliente">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>` : ''}
+      ${seg === 'catalogo' ? `<div style="margin-left:auto;order:99;display:flex;gap:8px;"><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catExportarAbrir()" title="Descargar el inventario en Excel o PDF, eligiendo las columnas">${homeIcon(HOME_ICON_PATHS.download, 15, 'currentColor', 2)}<span>Exportar</span></button>${sgaPuedeEditarStock() ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catEditarTodo()" title="Abrir una pantalla completa para editar todo el catálogo del cliente">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>` : ''}</div>` : ''}
       ${seg === 'liquidaciones' || seg === 'operativas' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
     </div>
     <div id="stock-body">${stockBodyHtml()}</div>
