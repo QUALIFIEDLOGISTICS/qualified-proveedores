@@ -6289,10 +6289,7 @@ async function catGuardarCelda(el){
     if (valor !== null && !isFinite(valor)) return volver('Escribe un número.');
     if (f === 'bultos' && !(valor > 0)) return volver('Los bultos por palet tienen que ser un número mayor que 0.');
   }
-  if (f === 'nombre' || f === 'referencia') {
-    const n = f === 'nombre' ? v : a.nombre, r = f === 'referencia' ? v : a.referencia;
-    if (sgaArticulos.some(x => x.clienteId === a.clienteId && x.id !== a.id && (x.referencia || x.nombre).toLowerCase() === (r || n).toLowerCase())) return volver('Este cliente ya tiene un artículo con esa descripción (o ese código, si no tiene descripción).');
-  }
+  if (f === 'nombre' && sgaArticulos.some(x => x.clienteId === a.clienteId && x.id !== a.id && x.nombre.toLowerCase() === v.toLowerCase())) return volver('Este cliente ya tiene un artículo con ese código de artículo (la descripción sí se puede repetir).');
   if (a[f] === valor || (a[f] === '' && valor === '')) return true;
   const dbVal = (['productoId', 'zonaId', 'referencia', 'medidas'].includes(f) && v === '') ? null : valor;
   const { error } = await supabaseClient.from('sga_articulos').update({ [campos[f]]: dbVal }).eq('id', a.id);
@@ -6400,8 +6397,8 @@ async function catGuardarFilaNueva(tr){
   if (ml != null && !isFinite(ml)) return marcar('metrosLineales', 'Escribe un número en metros lineales.');
   if (ml == null && sgaClienteMlObligatorio(cid)) return marcar('metrosLineales', 'Falta «Metros lineales».');
   if (peso != null && !isFinite(peso)) return marcar('peso', 'Escribe un número en el peso.');
-  if (sgaArticulos.some(x => x.clienteId === cid && (x.referencia || x.nombre).toLowerCase() === (referencia || nombre).toLowerCase())) {
-    return marcar(referencia ? 'referencia' : 'nombre', 'Este cliente ya tiene un artículo con esa descripción (o ese código, si no tiene descripción).');
+  if (sgaArticulos.some(x => x.clienteId === cid && x.nombre.toLowerCase() === nombre.toLowerCase())) {
+    return marcar('nombre', 'Este cliente ya tiene un artículo con ese código de artículo (la descripción sí se puede repetir).');
   }
   const atributos = {};
   for (const f of sgaCamposArticulo(cid)) {
@@ -7440,7 +7437,7 @@ async function sgaArtNuevoGuardar(){
   const bultos = Number(val('na-bultos').replace(',', '.'));
   if (!nombre) { errEl.textContent = 'Escribe el producto.'; return; }
   if (!isFinite(bultos) || bultos <= 0) { errEl.textContent = 'Los bultos por palet tienen que ser un número mayor que 0.'; return; }
-  if (sgaArticulos.some(x => x.clienteId === clienteId && (x.referencia || x.nombre).toLowerCase() === (referencia || nombre).toLowerCase())) { errEl.textContent = 'Este cliente ya tiene un artículo con esa descripción (o ese código, si no tiene descripción).'; return; }
+  if (sgaArticulos.some(x => x.clienteId === clienteId && x.nombre.toLowerCase() === nombre.toLowerCase())) { errEl.textContent = 'Este cliente ya tiene un artículo con ese código de artículo (la descripción sí se puede repetir).'; return; }
   const btn = document.querySelector('.na-save');
   if (btn) btn.disabled = true;
   const row = { cliente_id: clienteId, nombre, referencia: referencia || null, producto_id: val('na-prod') || null, bultos_por_unidad: bultos };
@@ -8682,8 +8679,8 @@ async function submitSgaArticulo(){
   if (!nombre) { errEl.textContent = 'Escribe el nombre del producto.'; return; }
   if (bultos == null || !isFinite(bultos) || bultos <= 0) { errEl.textContent = 'Indica cuántos bultos lleva cada palet (un número mayor que 0).'; return; }
   if ((ml != null && !isFinite(ml)) || (peso != null && !isFinite(peso))) { errEl.textContent = 'Los metros lineales y el peso tienen que ser números.'; return; }
-  const clave = (r, n) => (r || n).toLowerCase();
-  if (sgaArticulos.some(x => x.clienteId === pg.clienteId && x.id !== pg.id && clave(x.referencia, x.nombre) === clave(referencia, nombre))) { errEl.textContent = 'Este cliente ya tiene un artículo con esa descripción (o ese código, si no tiene descripción).'; return; }
+  const clave = (r, n) => n.toLowerCase();   // lo único es el código de artículo: la descripción puede repetirse
+  if (sgaArticulos.some(x => x.clienteId === pg.clienteId && x.id !== pg.id && clave(x.referencia, x.nombre) === clave(referencia, nombre))) { errEl.textContent = 'Este cliente ya tiene un artículo con ese código de artículo (la descripción sí se puede repetir).'; return; }
   // Datos adicionales (campos propios del artículo): se conservan los de campos archivados o que este cliente ya no usa
   const previaArt = pg.id ? sgaArticulos.find(x => x.id === pg.id) : null;
   const atributos = Object.assign({}, previaArt ? previaArt.atributos : {});
@@ -8798,7 +8795,7 @@ function sgaArtRapidaAnalizar(texto, clienteId, zonaDefecto){
   if (mapa.nombre !== undefined) datos = filas.slice(1);
   else mapa = { nombre: 0, referencia: 1, bultos: 2, ml: 3, peso: 4, nave: 5, medidas: 6, finalidad: 7 };
   const celda = (f, id) => { const v = mapa[id] !== undefined && f[mapa[id]] !== undefined ? String(f[mapa[id]]).trim() : ''; return v === '-' ? '' : v; };
-  const existentes = new Set(sgaArticulosDe(clienteId, true).map(a => (a.referencia || a.nombre).toLowerCase()));
+  const existentes = new Set(sgaArticulosDe(clienteId, true).map(a => a.nombre.toLowerCase()));   // solo el código de artículo debe ser único
   const vistas = new Set();
   const items = datos.map((f, n) => {
     const nombre = celda(f, 'nombre').toUpperCase(), referencia = celda(f, 'referencia').toUpperCase();
@@ -8811,7 +8808,7 @@ function sgaArtRapidaAnalizar(texto, clienteId, zonaDefecto){
     if (!nombre) { item.estado = 'error'; item.aviso = 'Falta el código de artículo.'; return item; }
     if (!isFinite(bultos) || bultos <= 0) { item.estado = 'error'; item.aviso = 'Los bultos tienen que ser un número mayor que 0.'; return item; }
     if (Number.isNaN(ml) || Number.isNaN(peso)) { item.estado = 'error'; item.aviso = 'Metros lineales o peso no son un número.'; return item; }
-    const clave = (referencia || nombre).toLowerCase();
+    const clave = nombre.toLowerCase();
     if (existentes.has(clave)) { item.estado = 'existe'; item.aviso = 'Ya está en el catálogo.'; return item; }
     if (vistas.has(clave)) { item.estado = 'existe'; item.aviso = 'Repetido en lo que has pegado.'; return item; }
     vistas.add(clave);
