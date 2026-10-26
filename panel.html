@@ -1555,6 +1555,8 @@
   .cg-donde span{color:var(--mutedFaint);margin-left:6px;}
   .cg-chip{display:inline-block;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:999px;background:color-mix(in srgb,var(--primary) 11%,var(--panel));color:var(--primary);vertical-align:middle;}
   .cg-st{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;white-space:nowrap;}
+  .cat-tot{display:flex;align-items:center;gap:30px;flex-wrap:wrap;margin-top:12px;padding:12px 18px;} .cat-tot-t{font-size:11px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted);margin-right:6px;}
+  .cat-tot-i{display:flex;flex-direction:column;line-height:1.15;} .cat-tot-i small{font-size:10.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);font-weight:700;} .cat-tot-i b{font-size:19px;font-variant-numeric:tabular-nums;} .cat-tot-i span{font-size:11.5px;color:var(--mutedFaint);}
   .pl-cod{display:inline-block;font-family:var(--mono);font-size:12.5px;font-weight:700;letter-spacing:.3px;padding:3px 9px;border-radius:7px;background:color-mix(in srgb,var(--primary) 10%,var(--panel));color:var(--primary);border:1px solid color-mix(in srgb,var(--primary) 22%,var(--border));white-space:nowrap;}
   .pl-ub{display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px;} .pl-ub svg{color:var(--muted);flex:0 0 auto;}
   .cg-st i{width:8px;height:8px;border-radius:50%;display:inline-block;}
@@ -5875,6 +5877,22 @@ function catFiltrosHtml(){
     `<button type="button" class="${catFiltro() === k ? 'on' : ''}" data-k="${k}" onclick="window.__catFiltro='${k}'; refreshStockBody();">${t}<span class="cl-n">${n[k]}</span></button>`).join('');
 }
 function catRefrescarFiltros(){ const f = document.getElementById('cat-filtros'); if (f) f.innerHTML = catFiltrosHtml(); }
+// Totales para comprobar de un vistazo que todo cuadra: palets, bultos (si el cliente los cuenta) y kilos (con el peso por palet del artículo)
+function catTotalesHtml(filas, conBultos, titulo){
+  const t = filas.reduce((s, f) => ({ pal: s.pal + f.pal, bul: s.bul + f.bul, kg: s.kg + (f.pesoU != null ? f.pesoU * f.pal : 0), sinPeso: s.sinPeso + (f.pesoU == null ? f.pal : 0), conPeso: s.conPeso + (f.pesoU != null ? f.pal : 0) }), { pal: 0, bul: 0, kg: 0, sinPeso: 0, conPeso: 0 });
+  if (!t.pal) return '';
+  const item = (etq, valor, sub) => `<div class="cat-tot-i"><small>${etq}</small><b>${valor}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
+  return `<div class="card cat-tot">
+    <div class="cat-tot-t">${esc(titulo || 'Total')}</div>
+    ${item('Palets', sgaNumTxt(t.pal))}
+    ${conBultos ? item('Bultos', sgaNumTxt(Math.round(t.bul * 100) / 100)) : ''}
+    ${t.conPeso ? item('Kilos', sgaNumTxt(Math.round(t.kg * 10) / 10) + ' kg', t.sinPeso ? `sin peso en ${sgaNumTxt(t.sinPeso)} palet${t.sinPeso === 1 ? '' : 's'}` : '') : ''}
+  </div>`;
+}
+// Una fila por artículo: lo que hay ahora en el almacén de cada uno
+function catFilasTotalesArticulos(lista){
+  return lista.map(a => { const ps = catPartidasArticulo(a); const pal = ps.reduce((s, p) => s + p.actual, 0); return { pal, bul: ps.reduce((s, p) => s + (p.bultos != null ? sgaBultosSalida(p, p.actual) : p.actual), 0), pesoU: a.peso != null ? Number(a.peso) : null }; }).filter(f => f.pal > 0);
+}
 // Clientes de pieza única (cada palet es distinto): el inventario se ve palet a palet, no por artículo.
 // Se activa solo cuando el cliente da un código propio a cada palet (ficha SGA); en los demás se elige a mano con el selector de arriba
 // y la elección se recuerda por cliente.
@@ -5983,7 +6001,8 @@ function catPaletsHtml(cid, cols, filtro, q){
         <table class="tf-table cg-tabla"><thead><tr>${cabecera}</tr></thead><tbody>${filas.map(fila).join('')}</tbody></table>
       </div>
       ${vacio}
-    </div>`;
+    </div>
+    ${catTotalesHtml(conPalet.map(f => ({ pal: f.p.actual, bul: f.p.bultos != null ? sgaBultosSalida(f.p, f.p.actual) : f.p.actual, pesoU: f.a.peso != null ? Number(f.a.peso) : null })), !!cols.bultos, 'Total de lo que se ve')}`;
 }
 function stockCatalogoBodyHtml(){
   if (window.__stockView !== 'catedit') window.__catEditAll = false;   // si se salió de la pantalla de edición sin pasar por «Listo», no se queda a medias
@@ -6017,6 +6036,7 @@ function stockCatalogoBodyHtml(){
       </div>
       ${vacio}
     </div>
+    ${catTotalesHtml(catFilasTotalesArticulos(lista), !!cols.bultos, 'Total de lo que se ve')}
 `;
 }
 function catTecla(ev, el){
@@ -7320,9 +7340,23 @@ function sgaEntradaResumenHtml(d){
     <div class="op-total-row" style="margin-top:10px;"><span>Total de la recepción</span><b>${esc(eur2(total))}</b></div>` : '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay nada que cobrar.</div>'}
     ${calc.avisos.map(a => `<div class="se-aviso">⚠ ${esc(a)}</div>`).join('')}`;
 }
+// Totales de la recepción que se está rellenando: palets, bultos (si el cliente los cuenta) y kilos con el peso por palet del artículo
+function sgaEntradaTotalesHtml(d){
+  const cfg = sgaClienteCfg(d.clienteId), conB = sgaClienteConBultos(d.clienteId);
+  const filas = d.lineas.map(l => {
+    const n = cfg.codigosUnicos ? (l.codigo ? 1 : 0) : (parseInt(l.cantidadTxt, 10) || 0);
+    const art = sgaArticulos.find(x => x.id === l.articuloId);
+    const b = sgaNumero(l.bultosTxt);
+    const pesoLinea = sgaNumero(l.peso);
+    return { pal: n, bul: isFinite(b) && b > 0 ? b : (art ? n * art.bultos : n), pesoU: art && art.peso != null ? Number(art.peso) : (isFinite(pesoLinea) && pesoLinea > 0 ? pesoLinea : null) };
+  }).filter(f => f.pal > 0);
+  return catTotalesHtml(filas, conB, 'Total de la recepción');
+}
 function sgaEntradaRefrescar(){
   const el = document.getElementById('se-resumen');
-  if (el) el.innerHTML = sgaEntradaResumenHtml(sgaEntradaLeer());
+  const d = sgaEntradaLeer();
+  if (el) el.innerHTML = sgaEntradaResumenHtml(d);
+  const tt = document.getElementById('se-totales'); if (tt) tt.innerHTML = sgaEntradaTotalesHtml(d);
 }
 function sgaEntradaAbrir(inicial, clienteId){
   window.__seInicial = inicial === true;   // «stock inicial»: mercancía que ya está en el almacén (cliente que venía de Excel), sin cobros de recepción
@@ -7517,6 +7551,7 @@ function tplStockEntradaPage(){
         ${decaCardHead('box', ini ? 'Mercancía que hay en el almacén' : 'Mercancía que entra', ini ? 'Una línea por tipo de carga; indica cuántos palets hay ahora mismo' : hayZonas ? 'Una línea por tipo de carga; palets iguales van juntos' : 'Crea las zonas del almacén en Configuración para poder situar la mercancía')}
         <div class="deca-card-body">
           <div id="se-lineas"><div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div></div>
+          <div id="se-totales"></div>
           <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
             <button type="button" id="se-add" class="btn btn-ghost" style="display:none;" onclick="sgaEntradaAddFila()">+ Añadir línea</button>
           </div>
