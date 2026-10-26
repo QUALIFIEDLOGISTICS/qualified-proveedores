@@ -1513,6 +1513,7 @@
   .sgac-alb-n{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-right:9px;border-radius:50%;background:var(--panel2);color:var(--muted);font-size:11px;font-weight:700;}
   .liq-est{width:auto;min-width:118px;padding:5px 10px;font-weight:700;font-size:12.5px;color:var(--c);border-color:color-mix(in srgb,var(--c) 45%,var(--border));background:color-mix(in srgb,var(--c) 10%,var(--panel));}
   .liq-in{padding:5px 9px;font-size:12.5px;}
+  .etq-slots{display:grid;grid-template-columns:repeat(2,64px);gap:6px;} .etq-slot{height:56px;border:1.5px solid var(--border);border-radius:8px;background:var(--panel);font-size:18px;font-weight:700;color:var(--muted);cursor:pointer;font-family:inherit;} .etq-slot:hover{border-color:var(--primary);} .etq-slot.on{background:var(--primary);color:var(--primary-text);border-color:var(--primary);}
   .sgc-sws{display:flex;flex-direction:column;gap:14px;}
   .sgc-sw{display:flex;align-items:flex-start;gap:12px;font-size:13.5px;cursor:pointer;} .sgc-sw input{margin-top:2px;flex:0 0 auto;} .sgc-sw small{display:block;font-size:12px;color:var(--muted);margin-top:1px;}
   .doc-seg button small{margin-left:4px;font-size:11px;font-weight:700;opacity:.7;}
@@ -5423,6 +5424,7 @@ function sgaAlbMenuItems(a){
   const puede = sgaPuedeEditarStock(), conf = a.estado === 'confirmado';
   const it = [];
   if (conf && a.tipo === 'salida' && a.borrador) it.push(['Imprimir albarán', 'file', `sgaAlbaranImprimir('${a.id}')`]);
+  if (conf && a.tipo === 'salida') it.push(['Etiqueta de envío', 'tag', `sgaEtiquetaAbrir('${a.id}')`]);
   if (conf && (a.tipo === 'salida' || a.tipo === 'entrada') && puede) it.push(['Editar', 'edit', `${a.tipo === 'salida' ? 'sgaSalidaEditar' : 'sgaEntradaEditar'}('${a.id}')`]);
   if (conf && a.tipo !== 'regularizacion' && puede) it.push(['Anular albarán', 'trash', `sgaAnularAbrir('${a.id}')`, true]);
   return it;
@@ -9020,6 +9022,117 @@ function sgaNumAlbaran(a){ return a.numeroTexto || String(a.numero); }
 // Albarán de expedición: «Ship from», cliente, destinatario, productos con modelo, medidas, cajas y peso; para imprimir o guardar en PDF.
 // Impresión sin la fecha, la hora ni la dirección web que el navegador pone en los márgenes de la hoja: la página se imprime sin margen
 // (así el navegador no tiene dónde escribirlos) y los márgenes los dan unos separadores que se repiten en cada hoja.
+/* ---- Etiqueta de expedición (envíos por paquetería) ----
+   Hojas de 4 etiquetas en vertical (2 × 2, de 105 × 148,5 mm). Como no todas las expediciones llevan etiqueta y las hojas se
+   reutilizan, se elige en qué hueco de la hoja empieza a imprimirse; el siguiente hueco libre se recuerda para la próxima vez. */
+function sgaEtiquetaPosGuardada(){ try { const n = Number(localStorage.getItem('qualified.sga.etqPos')); return n >= 1 && n <= 4 ? n : 1; } catch (e) { return 1; } }
+function sgaEtiquetaPosElegir(p){
+  const h = document.getElementById('etq-pos'); if (h) h.value = p;
+  document.querySelectorAll('.etq-slot').forEach(b => b.classList.toggle('on', Number(b.dataset.p) === p));
+}
+async function sgaEtiquetaAbrir(id){
+  const a = sgaAlbaranes.find(x => x.id === id);
+  if (!a) return;
+  let n = 1;   // por defecto, una etiqueta por palet de la expedición
+  try {
+    const { data } = await supabaseClient.from('sga_movimientos').select('cantidad').eq('albaran_id', id).eq('tipo', 'salida');
+    const t = (data || []).reduce((s, r) => s + Math.abs(Number(r.cantidad)), 0);
+    if (t >= 1) n = Math.min(40, Math.round(t));
+  } catch (e) { /* si falla, una etiqueta */ }
+  const pos = sgaEtiquetaPosGuardada();
+  const slot = p => `<button type="button" class="etq-slot${p === pos ? ' on' : ''}" data-p="${p}" onclick="sgaEtiquetaPosElegir(${p})">${p}</button>`;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeModal()">
+      <div class="modal-box" style="max-width:460px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.tag, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Etiqueta de expedición</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">Albarán ${esc(sgaNumAlbaran(a))} · ${esc(fmtDateDMY(a.fecha))}</div></div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
+          <div class="field"><label>¿Cuántas etiquetas?</label><input id="etq-n" type="number" min="1" max="40" value="${n}" style="width:110px;" />
+            <div style="font-size:12px;color:var(--muted);margin-top:4px;">Una por palet o bulto: cada una lleva «Bulto 1 de ${n}», «2 de ${n}»…</div></div>
+          <div class="field"><label>Empezar a imprimir en el hueco</label>
+            <input type="hidden" id="etq-pos" value="${pos}" />
+            <div class="etq-slots">${slot(1)}${slot(2)}${slot(3)}${slot(4)}</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:6px;">Así es la hoja, vista de frente: 1 y 2 arriba, 3 y 4 abajo. Elige el primer hueco que tengas libre.</div></div>
+          <div id="etq-err" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
+          <div style="display:flex;gap:10px;">
+            <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary deca-submit" onclick="sgaEtiquetaImprimir('${a.id}')">Imprimir</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+function sgaEtiquetaHtml(ctx, i, n){
+  const { a, w, dd, dirDest, tel, logo, qr } = ctx;
+  const dir = ls => ls.map((l, k) => `<div class="${k === ls.length - 1 ? 'et-cp' : 'et-l'}">${esc(l)}</div>`).join('');
+  const rem = w ? sgaDirLineas(w).join(', ') : '';
+  return `<div class="cel"><div class="et">
+    <div class="et-top"><img src="${logo}" alt="Qualified Logistics" /><div class="et-alb"><small>ALBARÁN</small><b>${esc(sgaNumAlbaran(a))}</b><span>${esc(fmtDateDMY(a.fecha))}</span></div></div>
+    <div class="et-dest"><small>DESTINO</small><div class="et-n">${esc(a.destinatario) || '—'}</div>${dir(dirDest)}${tel ? `<div class="et-tel">Tel. ${esc(tel)}</div>` : ''}</div>
+    <div class="et-rem"><small>REMITENTE</small><div><b>QUALIFIED LOGISTICS</b>${w && w.name ? ' · ' + esc(w.name) : ''}</div>${rem ? `<div>${esc(rem)}</div>` : ''}</div>
+    <div class="et-pie">
+      <div class="et-bulto"><small>BULTO</small><b>${i} / ${n}</b></div>
+      <div class="et-ref">${a.referencia ? `<div><small>REF.</small> ${esc(a.referencia)}</div>` : ''}${a.transportista ? `<div><small>TRANSPORTE</small> ${esc(a.transportista)}</div>` : ''}</div>
+      ${qr ? `<img class="et-qr" src="${qr}" alt="" />` : ''}
+    </div>
+  </div></div>`;
+}
+async function sgaEtiquetaImprimir(id){
+  const a = sgaAlbaranes.find(x => x.id === id);
+  const err = document.getElementById('etq-err');
+  if (!a) return;
+  const n = Math.round(Number((document.getElementById('etq-n') || {}).value));
+  const pos = Number((document.getElementById('etq-pos') || {}).value) || 1;
+  if (!(n >= 1 && n <= 40)) { if (err) err.textContent = 'Escribe cuántas etiquetas (de 1 a 40).'; return; }
+  const w = allWarehouses.find(x => x.id === a.warehouseId);
+  const dd = sgaDireccionPorNombre(a.destinatario);
+  const dirDest = dd ? sgaDirLineas(dd) : (() => {
+    const partes = String(a.destinatarioDireccion || '').split(/\s*,\s*/).filter(Boolean), k = partes.findIndex(p => /^\d{4,6}\b/.test(p));
+    return k < 0 ? partes : [...partes.slice(0, k), partes.slice(k).join(', ')];
+  })();
+  let qr = '';
+  try { if (typeof qrcode === 'function') { const q = qrcode(0, 'M'); q.addData(sgaNumAlbaran(a)); q.make(); qr = q.createDataURL(4, 0); } } catch (e) { qr = ''; }
+  const ctx = { a, w, dd, dirDest, tel: dd && dd.telefono ? phoneFormat(dd.telefono) : '', logo: new URL('logo-full.png', location.href).href, qr };
+  // las etiquetas se reparten en los huecos de la hoja a partir del elegido; si no caben, siguen en otra hoja
+  const hojas = Math.ceil((pos - 1 + n) / 4);
+  const paginas = Array.from({ length: hojas }, (_, h) => `<div class="hoja">${[0, 1, 2, 3].map(c => {
+    const k = h * 4 + c - (pos - 1);
+    return k >= 0 && k < n ? sgaEtiquetaHtml(ctx, k + 1, n) : '<div class="cel"></div>';
+  }).join('')}</div>`).join('');
+  const css = `
+    @page{size:A4 portrait;margin:0;}
+    *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    html,body{margin:0;padding:0;background:#fff;color:#000;font-family:"Segoe UI",Arial,Helvetica,sans-serif;}
+    .hoja{width:210mm;height:296.5mm;display:grid;grid-template-columns:105mm 105mm;grid-template-rows:148mm 148mm;break-after:page;page-break-after:always;}
+    .hoja:last-child{break-after:auto;page-break-after:auto;}
+    .cel{padding:8mm;overflow:hidden;}
+    .et{height:100%;display:flex;flex-direction:column;gap:3.5mm;}
+    .et small{font-size:7.5px;letter-spacing:1.4px;font-weight:700;color:#444;text-transform:uppercase;}
+    .et-top{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #000;padding-bottom:3mm;}
+    .et-top img{height:11mm;filter:grayscale(1);}
+    .et-alb{text-align:right;display:flex;flex-direction:column;line-height:1.15;} .et-alb b{font-size:15px;} .et-alb span{font-size:10px;}
+    .et-dest{flex:1;border:2px solid #000;border-radius:3px;padding:3.5mm 4mm;display:flex;flex-direction:column;gap:1mm;}
+    .et-n{font-size:20px;font-weight:800;line-height:1.15;margin-bottom:1mm;}
+    .et-l{font-size:14px;line-height:1.3;} .et-cp{font-size:15px;font-weight:700;line-height:1.3;margin-top:.5mm;}
+    .et-tel{font-size:14px;font-weight:700;margin-top:2mm;}
+    .et-rem{font-size:10.5px;line-height:1.35;} .et-rem small{display:block;margin-bottom:.5mm;}
+    .et-pie{display:flex;align-items:center;gap:4mm;border-top:2px solid #000;padding-top:3mm;}
+    .et-bulto{display:flex;flex-direction:column;line-height:1.1;} .et-bulto b{font-size:24px;}
+    .et-ref{flex:1;font-size:10.5px;line-height:1.4;min-width:0;overflow-wrap:anywhere;} .et-ref small{margin-right:2px;}
+    .et-qr{width:17mm;height:17mm;image-rendering:pixelated;}`;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Etiquetas ${esc(sgaNumAlbaran(a))}</title><style>${css}</style></head><body>${paginas}</body></html>`;
+  closeModal();
+  const f = document.createElement('iframe');
+  f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+  document.body.appendChild(f);
+  const doc = f.contentWindow.document; doc.open(); doc.write(html); doc.close();
+  try { localStorage.setItem('qualified.sga.etqPos', String(((pos - 1 + n) % 4) + 1)); } catch (e) { /* sin almacenamiento: no pasa nada */ }
+  setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 3000); }, 250);
+}
 // Los albaranes se imprimen en blanco y negro (también los logotipos), sin rellenos oscuros que gasten tinta
 const SGA_ALB_BN_CSS = `
     :root{--az:#000;--az2:#EDEDED;--gr:#444;--li:#8C8C8C;}
