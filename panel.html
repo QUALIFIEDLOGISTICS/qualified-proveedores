@@ -5799,9 +5799,10 @@ function catAbrirDonde(id){
   refreshStockBody();
 }
 function catDondeHtml(a){
+  const cfgD = sgaClienteCfg(a.clienteId), manualD = sgaClienteSalida(a.clienteId) === 'manual';   // en Manual la fecha de entrada no manda: no se enseña
   const ps = catPartidasArticulo(a).slice().sort((x, y) => x.fechaEntrada.localeCompare(y.fechaEntrada));
   if (!ps.length) return '';
-  return `<div class="cg-donde">${ps.map(p => `<div><b>${p.actual}</b> palet${p.actual === 1 ? '' : 's'} · ${esc(whNombre(p.warehouseId))}${sgaSitioTxt(p) !== '—' ? ' · ' + esc(sgaSitioTxt(p)) : ''}${p.codigo ? ' · <code>' + esc(p.codigo) + '</code>' : ''} <span>recepción ${fmtDateDMY(p.fechaEntrada)}</span></div>`).join('')}</div>`;
+  return `<div class="cg-donde">${ps.map(p => `<div><b>${p.actual}</b> palet${p.actual === 1 ? '' : 's'} · ${esc(whNombre(p.warehouseId))}${sgaSitioTxt(p) !== '—' ? ' · ' + esc(sgaSitioTxt(p)) : ''}${p.codigo && cfgD.codigosUnicos ? ' · <code>' + esc(p.codigo) + '</code>' : ''}${manualD ? '' : ' <span>recepción ' + fmtDateDMY(p.fechaEntrada) + '</span>'}</div>`).join('')}</div>`;
 }
 function catFilaHtml(a, cols, conCliente){
   const puede = sgaPuedeEditarStock();
@@ -5858,17 +5859,21 @@ function catFiltrosHtml(){
 }
 function catRefrescarFiltros(){ const f = document.getElementById('cat-filtros'); if (f) f.innerHTML = catFiltrosHtml(); }
 // Clientes de pieza única (cada palet es distinto): el inventario se ve palet a palet, no por artículo.
-// Por defecto se detecta solo (el cliente da un código propio a cada palet, o tiene varios artículos y ninguno con más de un palet);
-// se puede cambiar a mano arriba.
+// Se activa solo cuando el cliente da un código propio a cada palet (ficha SGA); en los demás se elige a mano con el selector de arriba
+// y la elección se recuerda por cliente.
+function catModoGuardado(cid){ try { return localStorage.getItem('qualified.sga.catModo.' + cid) || ''; } catch (e) { return ''; } }
 function catModoPalets(cid){
   if (!cid) return false;
-  const m = (window.__catModo || {})[cid];
-  if (m) return m === 'palets';
-  if (sgaClienteCfg(cid).codigosUnicos) return true;
-  const arts = sgaArticulosDe(cid, true).filter(a => !a.archived).concat(catArticulosVirtuales(cid));
-  return arts.length >= 4 && arts.every(a => (a.virtual ? a._partidas : sgaPartidas.filter(p => p.articuloId === a.id)).filter(p => p.actual > 0).length <= 1);
+  const m = (window.__catModo || {})[cid] || catModoGuardado(cid);
+  if (m === 'palets' || m === 'articulos') return m === 'palets';
+  return !!sgaClienteCfg(cid).codigosUnicos;
 }
-function catElegirModo(m){ const o = (window.__catModo = window.__catModo || {}); o[catClienteSel()] = m; renderTab(); }
+function catElegirModo(m){
+  const cid = catClienteSel();
+  const o = (window.__catModo = window.__catModo || {}); o[cid] = m;
+  try { localStorage.setItem('qualified.sga.catModo.' + cid, m); } catch (e) { /* sin almacenamiento: no pasa nada */ }
+  renderTab();
+}
 function catModoHtml(){
   const cid = catClienteSel();
   if (!cid) return '';
@@ -5918,21 +5923,23 @@ function catPaletsHtml(cid, cols, filtro, q){
   const porAlm = {};
   conPalet.forEach(f => { const n = whNombre(f.p.warehouseId); porAlm[n] = (porAlm[n] || 0) + f.p.actual; });
   const modoSalida = sgaClienteSalida(cid);
-  // FIFO / LIFO: el palet que saldrá primero. Manual no sigue el orden de entrada: se enseña la última recepción
-  const destacado = modoSalida === 'manual' ? conPalet.slice().sort((x, y) => y.p.fechaEntrada.localeCompare(x.p.fechaEntrada))[0] : conPalet[0];
-  const tituloDest = modoSalida === 'fifo' ? 'Sale primero (el más antiguo)' : modoSalida === 'lifo' ? 'Sale primero (el más reciente)' : 'Última entrada';
+  const manual = modoSalida === 'manual';                       // sin orden de entrada: la fecha de recepción no se enseña
+  const conCodigo = !!sgaClienteCfg(cid).codigosUnicos;         // la columna «Palet» solo si cada palet lleva su propio código
+  // FIFO / LIFO: el palet que saldrá primero
+  const destacado = conPalet[0];
+  const tituloDest = modoSalida === 'fifo' ? 'Sale primero (el más antiguo)' : 'Sale primero (el más reciente)';
   const recientes = conPalet.filter(f => catDiasDesde(f.p.fechaEntrada) <= 30).reduce((s, f) => s + f.p.actual, 0);
   const kpi = (t, v, sub, cls) => `<div class="rm-kpi ${cls || ''}"><small>${t}</small><b>${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
   const almTxt = Object.keys(porAlm).sort((a, b) => a.localeCompare(b, 'es')).map(n => `${esc(n)} <b>${porAlm[n]}</b>`).join(' · ');
   const kpis = `<div class="rm-kpis" style="margin-bottom:14px;">
       ${kpi('En el almacén', totalPalets, `palet${totalPalets === 1 ? '' : 's'}${Object.keys(porAlm).length > 1 ? '' : ''}`, 'tot')}
       ${kpi('Dónde están', Object.keys(porAlm).length || '—', almTxt || 'ningún palet')}
-      ${kpi(tituloDest, destacado ? (catTiempoTxt(destacado.p.fechaEntrada) === 'hoy' ? 'Hoy' : 'Hace ' + catTiempoTxt(destacado.p.fechaEntrada)) : '—', destacado ? `${esc(destacado.a.nombre)}${destacado.p.codigo ? ' · ' + esc(destacado.p.codigo) : ''}` : '')}
-      ${kpi('Entrados en 30 días', recientes, recientes === 1 ? 'palet' : 'palets')}
+      ${manual ? '' : kpi(tituloDest, destacado ? (catTiempoTxt(destacado.p.fechaEntrada) === 'hoy' ? 'Hoy' : 'Hace ' + catTiempoTxt(destacado.p.fechaEntrada)) : '—', destacado ? `${esc(destacado.a.nombre)}${destacado.p.codigo ? ' · ' + esc(destacado.p.codigo) : ''}` : '')}
+      ${manual ? '' : kpi('Entrados en 30 días', recientes, recientes === 1 ? 'palet' : 'palets')}
     </div>`;
   const num = v => (v == null ? '' : String(v).replace('.', ','));
   const celdaNum = v => `<td style="text-align:right;white-space:nowrap;" data-sort-value="${esc(v)}">${v === '' ? vac : esc(v)}</td>`;
-  const cabecera = [thSort('Palet', 'text'), thSort('Artículo', 'text'), thSort('Ubicación', 'text'), thSort('Entrada', 'date'),
+  const cabecera = [conCodigo ? thSort('Palet', 'text') : '', thSort('Artículo', 'text'), thSort('Ubicación', 'text'), manual ? '' : thSort('Entrada', 'date'),
     cols.tipo ? thSort('Tipo de carga', 'text') : '', cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : '', cols.peso ? thSort('Peso', 'number', 'style="text-align:right;"') : '', cols.medidas ? thSort('Medidas', 'text') : '',
     ...cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')), thSort('Estado', 'text')].join('');
   const fila = ({ a, p }) => {
@@ -5940,10 +5947,10 @@ function catPaletsHtml(cid, cols, filtro, q){
     const sitio = p ? sgaSitioTxt(p) : '—';
     return `
     <tr class="cg-row">
-      <td data-sort-value="${esc(p ? p.codigo : '')}">${p && p.codigo ? `<span class="pl-cod">${esc(p.codigo)}</span>` : vac}</td>
+      ${conCodigo ? `<td data-sort-value="${esc(p ? p.codigo : '')}">${p && p.codigo ? `<span class="pl-cod">${esc(p.codigo)}</span>` : vac}</td>` : ''}
       <td class="cg-prod" data-sort-value="${esc(a.nombre)}"><span class="cg-nom">${esc(a.nombre)}</span>${a.virtual ? ' <span class="cg-sinart" title="Esta mercancía no tiene artículo en el catálogo">Sin artículo</span>' : ''}${cols.referencia && a.referencia ? `<div class="cg-ref">${esc(a.referencia)}</div>` : ''}</td>
       <td data-sort-value="${esc(p ? whNombre(p.warehouseId) + ' ' + sitio : '')}">${p ? `<div class="pl-ub">${sitio !== '—' ? homeIcon(HOME_ICON_PATHS.pin, 14, 'currentColor', 2) + '<span>' + esc(sitio) + '</span>' : '<span style="color:var(--mutedFaint);">Sin ubicar</span>'}</div><div class="cg-ref">${esc(whNombre(p.warehouseId))}</div>` : vac}</td>
-      <td style="white-space:nowrap;" data-sort-value="${esc(p ? p.fechaEntrada : '')}">${p ? `${fmtDateDMY(p.fechaEntrada)}<div style="margin-top:3px;">${catEdadChip(p.fechaEntrada, modoSalida === 'fifo')}</div>` : vac}</td>
+      ${manual ? '' : `<td style="white-space:nowrap;" data-sort-value="${esc(p ? p.fechaEntrada : '')}">${p ? `${fmtDateDMY(p.fechaEntrada)}<div style="margin-top:3px;">${catEdadChip(p.fechaEntrada, modoSalida === 'fifo')}</div>` : vac}</td>`}
       ${cols.tipo ? `<td data-sort-value="${esc(prodTxt)}">${prodTxt ? `<span class="cg-chip" title="${esc(prodTxt)}">${esc(prodTxt.replace(/\s*·\s*sin subtipo definido/i, ''))}</span>` : vac}</td>` : ''}
       ${cols.ml ? celdaNum(num(a.metrosLineales)) : ''}${cols.peso ? celdaNum(num(a.peso)) : ''}
       ${cols.medidas ? `<td class="cg-trunc" data-sort-value="${esc(a.medidas)}">${a.medidas ? esc(a.medidas) : vac}</td>` : ''}
