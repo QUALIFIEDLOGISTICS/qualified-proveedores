@@ -5452,7 +5452,7 @@ function stockBodyHtml(){
   const okCli = c => !q || c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q);
   if (stockSeg() !== 'stock') {
     const esSal = stockSeg() === 'salidas';
-    const emp = window.__stockEmp || '', est = window.__stockEstado || '';
+    const emp = stockEmpActual(stockSeg()), est = window.__stockEstado || '';
     const lista = sgaAlbaranes.filter(a => (!wid || a.warehouseId === wid) && (!emp || a.clienteId === emp) && (!est || sgaAlbaranEstadoClave(a) === est) && (esSal ? a.tipo === 'salida' : a.tipo !== 'salida')).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && (okCli(c) || (q && ((esSal && (a.destinatario || '').toLowerCase().includes(q)) || (a.referencia || '').toLowerCase().includes(q) || sgaLineasAlb(a).some(l => (l.nombre + ' ' + l.desc).toLowerCase().includes(q))))); });
     if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q || emp || est ? 'Ningún albarán coincide con la búsqueda o el filtro.' : esSal ? 'Todavía no hay expediciones. Registra la primera con «Nueva expedición».' : 'Todavía no hay recepciones. Registra la primera con «Nueva recepción».'}</div>`;
     return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
@@ -6180,7 +6180,7 @@ function sgaOperativaFacPillHtml(o){
 }
 function stockOperativasBodyHtml(){
   const q = (window.__stockSearch || '').trim().toLowerCase();
-  const emp = window.__stockEmp || '', est = window.__stockEstado || '';
+  const emp = window.__stockEmpOp || '', est = window.__stockEstado || '';
   const okEst = o => !est || (est === 'anulada' ? o.estado === 'anulada' : o.estado === 'activa' && (est === 'facturada' ? !!o.facturada : !o.facturada));
   const lista = sgaOperativasHechas.filter(o => (!emp || o.clienteId === emp) && okEst(o)).filter(o => {
     const c = contactos.find(x => x.id === o.clienteId);
@@ -6727,10 +6727,28 @@ function stockEstadoSelectHtml(seg){
   if (window.__stockEstado && !ops.some(o => o[0] === window.__stockEstado)) window.__stockEstado = '';
   return `<select id="stock-estado" onchange="window.__stockEstado=this.value; refreshStockBody();" style="width:auto;flex:0 0 ${seg === 'operativas' ? 210 : 170}px;min-width:0;" title="Ver solo los registros en un estado">${ops.map(([v, t]) => `<option value="${v}" ${v === (window.__stockEstado || '') ? 'selected' : ''}>${t}</option>`).join('')}</select>`;
 }
+// El cliente elegido en Inventario se mantiene en Recepciones, Expediciones y Resumen mensual (y al revés).
+// Operativas lleva su propio filtro de empresa.
+function stockEmpActual(seg){ return seg === 'operativas' ? (window.__stockEmpOp || '') : catClienteSel(); }
+function stockEmpElegir(id, seg){
+  if (seg === 'operativas') window.__stockEmpOp = id || '';
+  else { window.__catSel = id || ''; try { localStorage.setItem('qualified.sga.catCliente', window.__catSel); } catch (e) { /* sin almacenamiento: no pasa nada */ } }
+  refreshStockBody();
+}
+// Al pasar al Resumen mensual se abre el del cliente que se estaba mirando (si hay uno)
+function stockSegSync(seg){
+  if (seg !== 'resumen') return;
+  const sel = catClienteSel(), rm = sgaResumenEstado();
+  if (sel && rm.clienteId !== sel && sgaClientesAlmacenLista().some(c => c.id === sel)) { rm.clienteId = sel; rm.datos = null; sgaResumenCargar(); }
+}
 function stockEmpresaSelectHtml(seg){
   const lista = stockEmpresasConAlbaran(seg);
-  if (window.__stockEmp && !lista.some(c => c.id === window.__stockEmp)) window.__stockEmp = '';
-  return `<select id="stock-emp" onchange="window.__stockEmp=this.value; refreshStockBody();" style="width:auto;flex:0 0 210px;min-width:0;" title="Ver solo los albaranes de una empresa"><option value="">Todas las empresas</option>${lista.map(c => `<option value="${c.id}" ${c.id === (window.__stockEmp || '') ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>`;
+  const act = stockEmpActual(seg);
+  if (seg === 'operativas' && act && !lista.some(c => c.id === act)) window.__stockEmpOp = '';
+  // el cliente de Inventario sale en la lista aunque todavía no tenga albaranes de este tipo
+  const selC = seg !== 'operativas' && act && !lista.some(c => c.id === act) ? contactos.find(c => c.id === act) : null;
+  const ops = (selC ? lista.concat(selC) : lista).slice().sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es'));
+  return `<select id="stock-emp" onchange="stockEmpElegir(this.value, '${seg}')" style="width:auto;flex:0 0 210px;min-width:0;" title="Ver solo los albaranes de una empresa"><option value="">Todas las empresas</option>${ops.map(c => `<option value="${c.id}" ${c.id === (stockEmpActual(seg) || '') ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>`;
 }
 function tplStock(){
   if (window.__stockView !== 'catedit') { window.__catEditAll = false; window.__catLocked = true; }
@@ -6743,7 +6761,7 @@ function tplStock(){
   if (window.__stockView === 'rapida') { const c = contactos.find(x => x.id === (window.__sgaArtRapida || {}).clienteId); return c ? tplSgaArtRapidaPage(c) : ''; }
   const wid = window.__stockAlm || '';
   const seg = stockSeg();
-  const segBtn = (id, label) => `<button type="button" class="${seg === id ? 'on' : ''}" onclick="window.__stockSeg='${id}'; renderTab();">${label}</button>`;
+  const segBtn = (id, label) => `<button type="button" class="${seg === id ? 'on' : ''}" onclick="window.__stockSeg='${id}'; stockSegSync('${id}'); renderTab();">${label}</button>`;
   const acc = (color, arte, titulo, texto, onclick, tip) => `<button type="button" class="sga-acc" style="--acc:${color};" onclick="${onclick}" title="${esc(tip)}"><span class="sga-acc-ico">${SGA_ACC_ARTE[arte]}</span><div style="min-width:0;"><span class="sga-acc-t">${titulo}</span><span class="sga-acc-s">${texto}</span></div><span class="sga-acc-go">${homeIcon(HOME_ICON_PATHS.arrow, 18, 'currentColor', 2.2)}</span></button>`;
   return `
     <div style="--bn-accent:var(--primary);">
@@ -8547,6 +8565,7 @@ async function sgaResumenCargar(){
 function sgaResumenElegir(){
   const rm = sgaResumenEstado();
   rm.clienteId = (document.getElementById('rm-cliente') || {}).value || '';
+  window.__catSel = rm.clienteId; try { localStorage.setItem('qualified.sga.catCliente', rm.clienteId); } catch (e) { /* sin almacenamiento: no pasa nada */ }
   rm.periodo = (document.getElementById('rm-mes') || {}).value || today().slice(0, 7);
   sgaResumenCargar();
 }
