@@ -1854,6 +1854,8 @@
   .combo-group{padding:9px 11px 4px;font-size:10.5px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);cursor:default;}
   .combo-group:not(:first-child){margin-top:4px;border-top:1px solid var(--border);}
   .combo-item.grouped{padding-left:18px;}
+  .combo-bus{position:sticky;top:-6px;z-index:1;margin:-6px -6px 4px;padding:8px 8px 6px;background:var(--panel);border-bottom:1px solid var(--border);border-radius:10px 10px 0 0;} .combo-bus input{padding:7px 10px;font-size:13px;}
+  .combo-vacio{padding:12px 11px;font-size:12.5px;color:var(--mutedFaint);text-align:center;}
   /* grupos con color propio (data-color en el optgroup): título con fondo de su color y una barra a la izquierda de cada opción */
   .combo-group[style*="--c"]{margin:6px 0 2px;padding:6px 11px;border-radius:7px;color:var(--c);background:color-mix(in srgb,var(--c) 13%,var(--panel));border-top:0;}
   .combo-group[style*="--c"]:first-child{margin-top:0;}
@@ -7871,6 +7873,20 @@ function sgaSalidaGruposSync(){
     el.value = s > 0 ? String(s) : ''; el.classList.remove('cg-err'); el.title = '';
   });
 }
+// Buscador sobre una tabla larga (qué sale, qué se regulariza): oculta las filas que no coinciden, sin tocar lo ya escrito en ellas
+function sgaBuscadorFilasHtml(id, tablaSel, placeholder){
+  return `<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+    <div class="deca-search" style="flex:1 1 280px;max-width:460px;"><input id="${id}" placeholder="${esc(placeholder)}" oninput="sgaFiltrarFilas(this.value, '${tablaSel}', '${id}-n')" autocomplete="off" /><span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span></div>
+    <span id="${id}-n" style="font-size:12.5px;color:var(--muted);"></span></div>`;
+}
+function sgaFiltrarFilas(q, tablaSel, contId){
+  const nq = comboNorm(q).trim();
+  const filas = [...document.querySelectorAll(tablaSel + ' tbody tr')];
+  let n = 0;
+  filas.forEach(tr => { const ok = !nq || comboNorm(tr.textContent).includes(nq); tr.style.display = ok ? '' : 'none'; if (ok) n++; });
+  const c = document.getElementById(contId);
+  if (c) c.textContent = nq ? (n ? `${n} de ${filas.length}` : 'Nada coincide') : '';
+}
 function sgaSalidaStockHtml(clienteId){
   const cfg = sgaClienteCfg(clienteId);
   const modo = sgaClienteSalida(clienteId), manual = modo === 'manual', agrupado = manual && !sgaClienteCfg(clienteId).codigosUnicos;
@@ -7885,6 +7901,7 @@ function sgaSalidaStockHtml(clienteId){
       ${manual ? '<div style="flex:1;min-width:200px;font-size:13px;color:var(--muted);"><b>Sin orden de entrada</b> · el stock sale junto, agrupado por artículo: indica abajo cuántos palets salen de cada uno.</div>' : `<button type="button" class="btn btn-ghost" onclick="sgaSalidaRepartir()" title="${modo === 'lifo' ? 'Reparte la cantidad entre las partidas más recientes' : 'Reparte la cantidad entre las partidas más antiguas'}">Repartir (${modo === 'lifo' ? 'más reciente' : 'más antiguo'} primero)</button>`}
       <button type="button" class="btn btn-ghost" onclick="sgaSalidaLimpiar()">Limpiar</button>
     </div>
+    ${ps.length > 8 ? sgaBuscadorFilasHtml('sl-buscar', '#sl-stock .tc-hist-box table', 'Buscar en el stock: artículo, descripción, código, sitio…') : ''}
     <div class="tc-hist-box" style="max-height:420px;">
     <table class="tf-table" style="min-width:640px;">
       <thead><tr>${manual ? '' : thSort('Recepción','date')}${conDesc ? thSort('Código de artículo','text') : ''}${thSort('Tipo de carga','text')}${thSort('Descripción','text')}${cfg.codigosUnicos && !agrupado ? thSort('Código','text') : ''}${thSort('Sitio','text')}${thSort('Hay','number','style="text-align:right;"')}<th style="text-align:right;">Sale</th></tr></thead>
@@ -9414,6 +9431,7 @@ function sgaRegulAlmacenCambio(){
     return;
   }
   cont.innerHTML = `
+    ${ps.length > 8 ? sgaBuscadorFilasHtml('rg-buscar', '#rg-stock .tc-hist-box table', 'Buscar en el stock: artículo, descripción, código, sitio…') : ''}
     <div class="tc-hist-box" style="max-height:460px;"><table class="tf-table" style="min-width:620px;">
       <thead><tr>${thSort('Recepción','date')}<th>Artículo</th>${thSort('Tipo de carga','text')}${thSort('Referencia','text')}<th>Sitio</th><th style="text-align:right;">En el SGA</th><th style="text-align:right;">Hay de verdad</th><th style="text-align:right;">Diferencia</th></tr></thead>
       <tbody>${ps.map(p => `
@@ -11466,7 +11484,7 @@ function comboPanel(){
   if (!p) {
     p = document.createElement('div');
     p.id = 'combo-panel';
-    p.addEventListener('mousedown', e => e.preventDefault());
+    p.addEventListener('mousedown', e => { if (!(e.target.closest && e.target.closest('#combo-q'))) e.preventDefault(); });
     p.addEventListener('click', e => { const it = e.target.closest('[data-idx]'); if (it) comboPick(Number(it.dataset.idx)); });
     document.body.appendChild(p);
   }
@@ -11511,8 +11529,9 @@ function comboSetActive(i){
   const p = document.getElementById('combo-panel');
   if (!p) return;
   Combo.active = i;
-  [...p.children].forEach((el, k) => el.classList.toggle('active', k === i));
-  const el = p.children[i];
+  const cont = document.getElementById('combo-lista') || p;
+  [...cont.children].forEach((el, k) => el.classList.toggle('active', k === i));
+  const el = cont.children[i];
   if (el) el.scrollIntoView({ block: 'nearest' });
 }
 function comboPick(i){
@@ -11524,6 +11543,7 @@ function comboPick(i){
   input.dispatchEvent(new Event('change', { bubbles: true }));
   Combo.picking = false;
   comboHide();
+  if (input.tagName === 'SELECT' && document.body.contains(input)) input.focus();   // el foco vuelve al desplegable (se había ido al buscador del panel)
 }
 // Los <select> del navegador abren una lista del sistema que no se puede
 // diseñar: se intercepta el clic y se abre este mismo panel. El select sigue
@@ -11539,15 +11559,35 @@ function comboOpenSelect(sel){
       ops.forEach(o => items.push({ value: o.value, text: o.textContent.trim(), disabled: o.disabled || ch.disabled, selected: o.value === sel.value, grouped: true, color: ch.dataset.color || '' }));
     } else if (ch.tagName === 'OPTION' && !ch.hidden) items.push({ value: ch.value, text: ch.textContent.trim(), disabled: ch.disabled, selected: ch.value === sel.value });
   });
-  Combo.input = sel; Combo.items = items;
+  Combo.input = sel; Combo.todos = items; Combo.items = items;
+  Combo.buscable = items.filter(i => !i.disabled && !i.group).length > 10;   // con muchas opciones, el panel lleva un buscador arriba
   Combo.active = items.findIndex(i => i.selected);
   if (Combo.active < 0) Combo.active = items.findIndex(i => !i.disabled);
   Combo.typeahead = ''; Combo.typeaheadAt = 0;
   const p = comboPanel();
   if (!items.length) { p.style.display = 'none'; return; }
-  p.innerHTML = items.map((o, i) => o.group ? `<div class="combo-group"${o.color ? ` style="--c:${o.color}"` : ''}>${esc(o.text)}</div>` : `<div class="combo-item${o.color ? ' colored' : ''}${o.selected?' selected':''}${o.disabled?' disabled':''}${o.grouped?' grouped':''}${i===Combo.active?' active':''}"${o.color ? ` style="--c:${o.color}"` : ''} data-idx="${i}"><span class="combo-main">${o.text ? esc(o.text) : '&nbsp;'}</span></div>`).join('');
+  p.innerHTML = `${Combo.buscable ? '<div class="combo-bus"><input id="combo-q" type="text" placeholder="Buscar…" autocomplete="off" oninput="comboFiltrarSelect(this.value)" /></div>' : ''}<div id="combo-lista"></div>`;
+  comboPintarSelect(items);
   p.style.display = 'block';
   p.style.minWidth = Math.max(sel.getBoundingClientRect().width, 160) + 'px';
+  comboPosition();
+  comboSetActive(Combo.active);
+  if (Combo.buscable) setTimeout(() => { const q = document.getElementById('combo-q'); if (q) q.focus(); }, 0);
+}
+function comboPintarSelect(items){
+  const l = document.getElementById('combo-lista');
+  if (!l) return;
+  l.innerHTML = items.map((o, i) => o.group ? `<div class="combo-group"${o.color ? ` style="--c:${o.color}"` : ''}>${esc(o.text)}</div>` : `<div class="combo-item${o.color ? ' colored' : ''}${o.selected?' selected':''}${o.disabled?' disabled':''}${o.grouped?' grouped':''}${i===Combo.active?' active':''}"${o.color ? ` style="--c:${o.color}"` : ''} data-idx="${i}"><span class="combo-main">${o.text ? esc(o.text) : '&nbsp;'}</span></div>`).join('');
+}
+const comboNorm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+// Buscador del panel de un desplegable largo: filtra por lo escrito (sin distinguir mayúsculas ni tildes) y deja marcada la primera coincidencia
+function comboFiltrarSelect(texto){
+  const q = comboNorm(texto).trim();
+  const todos = Combo.todos || [];
+  Combo.items = q ? todos.filter(o => !o.group && comboNorm(o.text).includes(q)) : todos;
+  Combo.active = Combo.items.findIndex(i => !i.disabled);
+  comboPintarSelect(Combo.items);
+  if (!Combo.items.length) { const l = document.getElementById('combo-lista'); if (l) l.innerHTML = '<div class="combo-vacio">Nada coincide con lo escrito.</div>'; }
   comboPosition();
   comboSetActive(Combo.active);
 }
@@ -11564,6 +11604,16 @@ document.addEventListener('input', e => {
 function comboIsSelect(el){ return !!el && el.tagName === 'SELECT' && !el.multiple && !el.disabled && !el.hasAttribute('data-native'); }
 document.addEventListener('keydown', e => {
   const t = e.target;
+  if (t && t.id === 'combo-q') {   // buscador del panel de un desplegable largo
+    const n = Combo.items.length;
+    const step = dir => { if (!n) return; let i = Combo.active; for (let k = 0; k < n; k++) { i = (i + dir + n) % n; if (!Combo.items[i].disabled) break; } comboSetActive(i); };
+    if (e.key === 'ArrowDown') { e.preventDefault(); step(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); step(-1); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (Combo.active >= 0 && Combo.items[Combo.active] && !Combo.items[Combo.active].disabled) comboPick(Combo.active); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); const s = Combo.input; comboHide(); if (s && document.body.contains(s)) s.focus(); }
+    else if (e.key === 'Tab') { const s = Combo.input; comboHide(); if (s && document.body.contains(s)) s.focus(); }
+    return;
+  }
   if (comboIsSelect(t)) {
     const p = document.getElementById('combo-panel');
     const open = p && p.style.display !== 'none' && Combo.input === t;
@@ -11617,7 +11667,10 @@ document.addEventListener('mousedown', e => {
   if (e.target === Combo.input || e.target.closest('#combo-panel')) return;
   comboHide();
 });
-document.addEventListener('focusout', e => { if (e.target === Combo.input) setTimeout(() => { if (document.activeElement !== Combo.input) comboHide(); }, 0); });
+document.addEventListener('focusout', e => {
+  const enPanel = () => document.activeElement === Combo.input || (document.activeElement && document.activeElement.id === 'combo-q');   // el buscador del panel también cuenta como «dentro»
+  if (e.target === Combo.input || (e.target && e.target.id === 'combo-q')) setTimeout(() => { if (!enPanel()) comboHide(); }, 0);
+});
 window.addEventListener('resize', comboPosition);
 window.addEventListener('scroll', comboPosition, true);
 function uppercaseInput(el){
