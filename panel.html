@@ -5416,6 +5416,11 @@ function stockClienteRowHtml(c, ps){
    Se ve una sola acción a la vista (Confirmar si es un borrador; si no, Albarán) y lo demás va en un menú «⋯»,
    con «Anular» separado y en rojo para que no se pulse sin querer. */
 function sgaAlbEstadoHtml(a){
+  const dc = a.tipo === 'salida' ? sgaDecaDeExpedicion(a.id) : null;
+  const chipDeca = dc ? ` <span class="cfg-chip" style="cursor:pointer;color:var(--primary);background:color-mix(in srgb, var(--primary) 12%, var(--panel));margin-left:4px;" onclick="openDecaViewModal('${dc.id}')" title="Abrir el DeCA de esta expedición">DeCA ${esc(dc.codigo || '')}</span>` : '';
+  return sgaAlbEstadoBase(a) + chipDeca;
+}
+function sgaAlbEstadoBase(a){
   if (a.estado === 'anulado') return chipHtml('Anulada', 'var(--danger)', a.anuladoMotivo ? 'Motivo: ' + a.anuladoMotivo : '');
   if (a.estado === 'confirmado' && a.borrador) return '<span class="sga-borr" title="Albarán impreso o preparado, pendiente de confirmar la expedición real">BORRADOR</span>';
   return a.estado === 'confirmado' ? chipHtml('Confirmada', 'var(--success)') : chipHtml('Borrador', 'var(--muted)');
@@ -5424,6 +5429,7 @@ function sgaAlbMenuItems(a){
   const puede = sgaPuedeEditarStock(), conf = a.estado === 'confirmado';
   const it = [];
   if (conf && a.tipo === 'salida' && a.borrador) it.push(['Imprimir albarán', 'file', `sgaAlbaranImprimir('${a.id}')`]);
+  if (conf && a.tipo === 'salida') it.push([sgaDecaDeExpedicion(a.id) ? 'Ver DeCA' : 'Generar DeCA', 'file', `sgaDecaDesdeExpedicion('${a.id}')`]);
   if (conf && a.tipo === 'salida') it.push(['Etiqueta de envío', 'tag', `sgaEtiquetaAbrir('${a.id}')`]);
   if (conf && (a.tipo === 'salida' || a.tipo === 'entrada') && puede) it.push(['Editar', 'edit', `${a.tipo === 'salida' ? 'sgaSalidaEditar' : 'sgaEntradaEditar'}('${a.id}')`]);
   if (conf && a.tipo !== 'regularizacion' && puede) it.push(['Anular albarán', 'trash', `sgaAnularAbrir('${a.id}')`, true]);
@@ -9149,6 +9155,53 @@ async function sgaEtiquetaImprimir(id){
   const doc = f.contentWindow.document; doc.open(); doc.write(html); doc.close();
   try { localStorage.setItem('qualified.sga.etqPos', String(((pos - 1 + n) % 4) + 1)); } catch (e) { /* sin almacenamiento: no pasa nada */ }
   setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 3000); }, 250);
+}
+/* ---- DeCA desde una expedición ----
+   Desde el menú «⋯» de una expedición se abre el formulario de DeCA ya rellenado y, al crearlo, queda vinculado a esa expedición
+   (deca_documents.albaran_id). El cargador contractual es siempre Qualified; lo demás sale de la expedición y se puede corregir. */
+function sgaDecaDeExpedicion(albaranId){ return decaDocuments.find(d => d.albaranId === albaranId) || null; }
+async function sgaDecaDesdeExpedicion(id){
+  const a = sgaAlbaranes.find(x => x.id === id);
+  if (!a) return;
+  const ya = sgaDecaDeExpedicion(id);
+  if (ya) { openDecaViewModal(ya.id); return; }   // ya tiene su DeCA: se abre
+  if (!(PROFILE.isAdmin || PROFILE.allowedTabs.includes('trafico'))) { appToast('Para generar un DeCA necesitas acceso a Transporte.', 'error'); return; }
+  // lo que sale: palet a palet, con lo que se sabe de cada artículo
+  const lineas = [];
+  try {
+    const mv = await supabaseClient.from('sga_movimientos').select('partida_id,cantidad').eq('albaran_id', id).eq('tipo', 'salida');
+    const movs = mv.data || [];
+    const pr = movs.length ? await supabaseClient.from('sga_partidas').select('id,producto_id,descripcion,articulo_id').in('id', movs.map(m => m.partida_id)) : { data: [] };
+    const partidas = {}; (pr.data || []).forEach(p => { partidas[p.id] = p; });
+    movs.forEach(m => {
+      const p = partidas[m.partida_id] || {}, art = sgaArticulos.find(x => x.id === p.articulo_id);
+      lineas.push({ nombre: p.descripcion || sgaProdTxt(p.producto_id), n: Math.abs(Number(m.cantidad)), peso: art && art.peso != null ? Number(art.peso) : null });
+    });
+  } catch (e) { /* sin líneas: se rellena a mano */ }
+  const pesoConocido = lineas.filter(l => l.peso != null);
+  const peso = pesoConocido.length ? Math.round(pesoConocido.reduce((s, l) => s + l.peso * l.n, 0)) : 0;
+  const nombres = [...new Set(lineas.map(l => String(l.nombre || '').trim()).filter(Boolean))];
+  // cargador: siempre Qualified
+  const emp = ocCfgEmpresa();
+  // transportista: si está dado de alta en Contactos se traen su NIF y su domicilio
+  const tn = String(a.transportista || '').trim().toLowerCase();
+  const tc = tn ? contactos.find(c => !c.archived && c.esTransportista && [c.nombre, c.nombreComercial].some(s => String(s || '').trim().toLowerCase() === tn)) : null;
+  const mat = sgaMatriculaSplit(a.matricula);
+  const w = allWarehouses.find(x => x.id === a.warehouseId);
+  const dd = sgaDireccionPorNombre(a.destinatario);
+  const draft = {
+    cargadorNombre: emp.nombre || 'QUALIFIED', cargadorNif: emp.cif || '', cargadorDomicilio: [emp.direccion, [emp.cp, emp.poblacion].filter(Boolean).join(' '), emp.provincia].filter(Boolean).join(', ').slice(0, 250),
+    transportistaNombre: tc ? tc.nombre : (a.transportista || ''), transportistaNif: tc ? tc.nif : '', transportistaDomicilio: tc ? cargadorDireccionCompleta(tc).slice(0, 250) : '',
+    matriculaTractora: mat.tractora, matriculaRemolque: mat.remolque,
+    origen: w ? decaDireccionText(Object.assign({}, w, { nombre: w.name ? 'Qualified · ' + w.name : 'Qualified' })) : '',
+    destino: dd ? decaDireccionText(dd) : [a.destinatario, a.destinatarioDireccion].filter(Boolean).join(', ').slice(0, 150),
+    mercanciaNaturaleza: nombres.join(', ').slice(0, 200), mercanciaPeso: peso ? String(peso) : '',
+    fechaTransporte: a.fecha, observaciones: 'Albarán ' + sgaNumAlbaran(a),
+  };
+  await setTab('trafico');
+  window.__decaFormDraft = draft;
+  openDecaForm(null, id);
+  window.__decaFormDraft = null;   // solo para esta apertura
 }
 // Los albaranes se imprimen en blanco y negro (también los logotipos), sin rellenos oscuros que gasten tinta
 const SGA_ALB_BN_CSS = `
@@ -24644,7 +24697,7 @@ async function loadDecaDocuments(){
     matriculaTractora: d.matricula_tractora, matriculaRemolque: d.matricula_remolque || '', observaciones: d.observaciones || '',
     relevos: Array.isArray(d.relevos) ? d.relevos : [],
     creacionFecha: d.creacion_fecha || '', creacionHora: d.creacion_hora ? String(d.creacion_hora).slice(0, 8) : '',
-    pdfStoragePath: d.pdf_storage_path || null, pdfUrl: d.pdf_url || null,
+    pdfStoragePath: d.pdf_storage_path || null, pdfUrl: d.pdf_url || null, albaranId: d.albaran_id || '',
   }));
 }
 
@@ -25438,7 +25491,8 @@ function decaVolverDesdeDireccion(direccionCreada){
   renderHeader(); renderTab();
   window.__decaFormDraft = null;
 }
-function openDecaForm(editId){
+function openDecaForm(editId, albaranId){
+  window.__decaAlbaranId = albaranId || null;   // expedición de Almacén de la que se genera este DeCA (vacío si se crea desde Transporte)
   window.__traficoSection = 'deca';
   window.__traficoView = 'decaForm';
   window.__decaFormId = editId || null;
@@ -25455,7 +25509,7 @@ function decaConfirmLeaveForm(){
 }
 function backToDecaList(){
   if (!decaConfirmLeaveForm()) return;
-  window.__decaFormDirty = false;
+  window.__decaFormDirty = false; window.__decaAlbaranId = null;
   window.__decaMenuOpen = null;
   window.__traficoView = 'deca';
   renderHeader(); renderTab();
@@ -25514,13 +25568,23 @@ function backToDecaList(){
       if (error) throw error;
       Object.assign(editing, { ...fields, pdfStoragePath: storagePath, pdfUrl: url });
     } else {
-      const { data, error } = await supabaseClient.from('deca_documents').insert(dbPayload).select().single();
+      const albaranId = window.__decaAlbaranId || '';
+      if (albaranId) dbPayload.albaran_id = albaranId;   // DeCA generado desde una expedición de Almacén
+      let ins = await supabaseClient.from('deca_documents').insert(dbPayload).select().single();
+      let vinculado = !!albaranId;
+      if (ins.error && albaranId && /albaran_id/i.test(ins.error.message || '')) {   // falta ejecutar el SQL de DeCA ↔ expedición: se crea igualmente, sin vincular
+        delete dbPayload.albaran_id; vinculado = false;
+        ins = await supabaseClient.from('deca_documents').insert(dbPayload).select().single();
+        appToast('El DeCA se ha creado, pero sin vincularlo a la expedición: falta ejecutar el SQL «deca-expedicion.sql» en Supabase.', 'error');
+      }
+      const { data, error } = ins;
       if (error || !data) throw (error || new Error('sin datos'));
+      window.__decaAlbaranId = null;
       newId = data.id;
       // El número lo asigna la base de datos al crear el DeCA: se vuelve a
       // generar el PDF (misma ruta y misma URL) para que lo lleve impreso.
       if (data.codigo) await buildAndUploadDecaPdf({ ...fields, codigo: data.codigo }, storagePath, url);
-      decaDocuments.unshift({ id: data.id, codigo: data.codigo || '', ...fields, pdfStoragePath: storagePath, pdfUrl: url });
+      decaDocuments.unshift({ id: data.id, codigo: data.codigo || '', ...fields, pdfStoragePath: storagePath, pdfUrl: url, albaranId: vinculado ? albaranId : '' });
     }
     window.__decaFormDirty = false;
     window.__traficoView = 'deca';
@@ -25676,6 +25740,7 @@ function decaDetalleGridHtml(d){
             ${decaViewRow('truck', (d.relevos && d.relevos.length) ? 'Tractoras (transporte sucesivo)' : 'Matrículas', `${(d.relevos && d.relevos.length) ? `<div style="${mono}">1.ª ${esc(d.matriculaTractora)}</div>${d.relevos.map((r, i) => `<div style="${mono}">${i + 2}.ª ${esc(r.matricula)}${r.transportistaNombre ? `<span style="font-family:var(--body);color:var(--muted);font-size:12.5px;"> · Transportista sucesivo: ${esc(r.transportistaNombre)}</span>` : ''}</div>`).join('')}` : `<span style="${mono}">${esc(d.matriculaTractora)}</span>`}${d.matriculaRemolque ? `<div style="${mono}color:var(--muted);">Remolque ${esc(d.matriculaRemolque)}</div>` : ''}`, '#3F8F5F')}
             ${decaViewRow('calendar', 'Fecha del transporte', esc(fmtDateY(d.fechaTransporte)), '#4A90C2')}
             ${d.creacionFecha ? decaViewRow('clock', 'Creación', `${esc(fmtDateY(d.creacionFecha))}${d.creacionHora ? `<div style="color:var(--muted);font-size:12.5px;">${esc(d.creacionHora)}</div>` : ''}`, '#4A90C2') : ''}
+            ${d.albaranId ? decaViewRow('file', 'Expedición', esc((sgaAlbaranes.find(x => x.id === d.albaranId) && sgaNumAlbaran(sgaAlbaranes.find(x => x.id === d.albaranId))) || 'vinculada'), '#5C6670') : ''}
             ${d.observaciones ? decaViewRow('file', 'Observaciones', esc(d.observaciones), '#5C6670', true) : ''}
           </div>`;
 }
