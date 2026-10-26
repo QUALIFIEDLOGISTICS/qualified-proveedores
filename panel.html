@@ -4860,6 +4860,16 @@ function sgaCamposAlbaranCliente(clienteId){
   if (typeof cc.__albaran === 'string') { const ids = cc.__albaran.split(',').filter(Boolean); return sgaCamposPropios().filter(f => sgaCampoAlbaranElegible(f) && ids.includes(f.clave)); }
   return sgaCamposPropios().filter(f => sgaCampoAlbaranElegible(f) && f.enAlbaran);
 }
+// Columnas del albarán de un cliente, en su orden: todas las elige el cliente en su ficha SGA (campos.__albaran_cols).
+// Mientras no lo haya decidido, valen las de siempre (las tres de serie, los datos extra que tuviera marcados y Cajas y Peso).
+const SGA_ALB_COLS = { '@codigo': 'Código de artículo', '@descripcion': 'Descripción', '@medidas': 'Medidas', '@cajas': 'Cajas', '@peso': 'Peso' };
+function sgaAlbColumnaNombre(k){ return SGA_ALB_COLS[k] || ((sgaCampos.find(f => f.clave === k) || {}).nombre || k); }
+function sgaAlbColumnasCliente(clienteId){
+  const cc = sgaClienteCfg(clienteId).campos || {};
+  const validos = new Set([...Object.keys(SGA_ALB_COLS), ...sgaCamposPropios().filter(sgaCampoAlbaranElegible).map(f => f.clave)]);
+  if (typeof cc.__albaran_cols === 'string') { const l = cc.__albaran_cols.split(',').filter(k => validos.has(k)); if (l.length) return l; }
+  return [...sgaAlbOrdenar(['@codigo', '@descripcion', '@medidas', ...sgaCamposAlbaranCliente(clienteId).map(f => f.clave)], sgaAlbOrdenCliente(clienteId)), '@cajas', '@peso'];
+}
 // Campos de serie que todavía no están en la base de datos: aparecen en la lista y se guardan al tocarlos por primera vez.
 function sgaCamposCompletar(filas){
   SGA_CAMPOS_BASE.forEach((b, i) => {
@@ -5103,39 +5113,33 @@ function sgaPrefijoVista(){
   const ej = sgaAlbaranEjemplo(limpio || sgaPrefijoPorDefecto(c));
   ['sgaalb-ej', 'sgaalb-svgnum'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = ej; });
 }
-// Datos del cliente que pueden salir en su albarán: los que usa (opcional u obligatorio) y que no tienen ya columna fija
-function sgacAlbColumnas(){
-  const est = window.__sgacCampos || {}, sel = window.__sgacAlb || [];
-  const extras = sgaCamposPropios().filter(f => sgaCampoAlbaranElegible(f) && (est[f.clave] || 'no') !== 'no' && sel.includes(f.clave)).map(f => f.clave);
-  return sgaAlbOrdenar(['@codigo', '@descripcion', '@medidas', ...extras], window.__sgacAlbOrden || []);
+// Columnas del albarán del cliente (ficha SGA): se eligen todas y se ordenan. Disponibles: las de serie y los datos extra que el cliente usa.
+function sgacAlbPool(){
+  // Solo los datos que este cliente usa en su catálogo (apartado «Datos de la mercancía» de arriba), más Cajas
+  const est = window.__sgacCampos || {};
+  const clave = { descripcion: '@codigo', referencia: '@descripcion', medidas: '@medidas', peso: '@peso' };   // los de serie tienen su columna propia
+  const ks = sgaCamposPropios().filter(f => !f.archived && !sgaEsCampoMl(f) && (est[f.clave] || 'no') !== 'no').map(f => clave[f.clave] || f.clave);
+  return [...new Set([...ks, '@cajas'])];
 }
+function sgacAlbColsActual(){ const pool = new Set(sgacAlbPool()); return (window.__sgacAlbCols || []).filter(k => pool.has(k)); }
 function sgacAlbaranHtml(){
-  const est = window.__sgacCampos || {}, sel = window.__sgacAlb || [];
-  const pool = sgaCamposPropios().filter(f => sgaCampoAlbaranElegible(f) && (est[f.clave] || 'no') !== 'no');
-  const nombre = k => SGA_ALB_COL_SERIE[k] || ((sgaCampos.find(f => f.clave === k) || {}).nombre || k);
-  const cols = sgacAlbColumnas();
-  const orden = `<div class="sgac-tit" style="margin-top:14px;">Orden de las columnas</div>
-    <div class="sgac-alb-ord">${cols.map((k, i) => `<div class="sgac-fila"><div class="sgac-nom"><span class="sgac-alb-n">${i + 1}</span>${esc(nombre(k))}</div>
-      <div style="display:flex;gap:4px;"><button type="button" class="alb-mn-b" style="width:28px;" ${i ? '' : 'disabled'} onclick="sgacAlbMover('${k}', -1)" title="Subir" aria-label="Subir">↑</button><button type="button" class="alb-mn-b" style="width:28px;" ${i < cols.length - 1 ? '' : 'disabled'} onclick="sgacAlbMover('${k}', 1)" title="Bajar" aria-label="Bajar">↓</button></div></div>`).join('')}
-      <div class="sgac-fila" style="opacity:.6;"><div class="sgac-nom"><span class="sgac-alb-n">·</span>Cajas y Peso</div><span style="font-size:12px;color:var(--muted);">siempre al final</span></div></div>`;
-  const marcas = pool.length
-    ? `<div class="sgc-sws" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px 18px;margin-top:8px;">${pool.map(f => `<label class="sgc-sw"><input type="checkbox" class="switch" ${sel.includes(f.clave) ? 'checked' : ''} onchange="sgacAlbToggle('${f.clave}', this.checked)" /><span><b>${esc(f.nombre + (f.unidad ? ` (${f.unidad})` : ''))}</b></span></label>`).join('')}</div>
-      <div class="sgac-h" style="margin-top:8px;">Un extra solo sale en el albarán si alguna línea tiene valor. Código, descripción, medidas, cajas y peso salen siempre.</div>`
-    : '<div class="sgac-h" style="margin-top:6px;">Este cliente no usa ningún dato extra que pueda salir en el albarán. Si los activas arriba, aquí podrás elegir cuáles se imprimen.</div>';
-  return marcas + orden;
+  const cols = sgacAlbColsActual(), libres = sgacAlbPool().filter(k => !cols.includes(k));
+  const fila = (k, i) => `<div class="sgac-fila"><div class="sgac-nom"><span class="sgac-alb-n">${i + 1}</span>${esc(sgaAlbColumnaNombre(k))}</div>
+      <div style="display:flex;gap:4px;align-items:center;"><button type="button" class="alb-mn-b" style="width:28px;" ${i ? '' : 'disabled'} onclick="sgacAlbMover('${k}', -1)" title="Subir" aria-label="Subir">↑</button><button type="button" class="alb-mn-b" style="width:28px;" ${i < cols.length - 1 ? '' : 'disabled'} onclick="sgacAlbMover('${k}', 1)" title="Bajar" aria-label="Bajar">↓</button>
+      <button type="button" class="sgac-x" ${cols.length > 1 ? '' : 'disabled'} title="Quitar esta columna del albarán" onclick="sgacAlbQuitar('${k}')">✕</button></div></div>`;
+  return `<div class="sgac-tit" style="margin-top:8px;">Salen, de izquierda a derecha</div>
+    <div class="sgac-alb-ord">${cols.map(fila).join('')}</div>
+    ${libres.length ? `<div class="sgac-tit" style="margin-top:12px;">Añadir al albarán</div><div style="display:flex;flex-wrap:wrap;gap:8px;">${libres.map(k => `<button type="button" class="btn btn-ghost" style="padding:5px 12px;font-size:12.5px;" onclick="sgacAlbAnadir('${k}')">+ ${esc(sgaAlbColumnaNombre(k))}</button>`).join('')}</div>` : ''}
+    <div class="sgac-h" style="margin-top:8px;">Solo se pueden elegir los datos que este cliente tiene en su catálogo (apartado «Datos de la mercancía», arriba) y Cajas. Las columnas que dejes salen siempre en este orden, tengan o no valor.</div>`;
 }
-function sgacAlbToggle(clave, on){
-  const s = new Set(window.__sgacAlb || []);
-  if (on) s.add(clave); else s.delete(clave);
-  window.__sgacAlb = [...s];
-  const al = document.getElementById('sgac-alb'); if (al) al.innerHTML = sgacAlbaranHtml();
-}
+function sgacAlbRefrescar(cols){ window.__sgacAlbCols = cols; const al = document.getElementById('sgac-alb'); if (al) al.innerHTML = sgacAlbaranHtml(); }
+function sgacAlbAnadir(k){ sgacAlbRefrescar([...sgacAlbColsActual(), k]); }
+function sgacAlbQuitar(k){ const c = sgacAlbColsActual(); if (c.length > 1) sgacAlbRefrescar(c.filter(x => x !== k)); }
 function sgacAlbMover(k, d){
-  const cols = sgacAlbColumnas(), i = cols.indexOf(k), j = i + d;
+  const cols = sgacAlbColsActual(), i = cols.indexOf(k), j = i + d;
   if (i < 0 || j < 0 || j >= cols.length) return;
   [cols[i], cols[j]] = [cols[j], cols[i]];
-  window.__sgacAlbOrden = cols;
-  const al = document.getElementById('sgac-alb'); if (al) al.innerHTML = sgacAlbaranHtml();
+  sgacAlbRefrescar(cols);
 }
 function sgacNivel(id, nivel){
   window.__sgacCampos = window.__sgacCampos || {};
@@ -5165,7 +5169,7 @@ function sgacSalida(v){
 function tplSgaClientePage(c){
   const cfg = sgaClienteCfg(c.id);
   const nombre = (c.nombreComercial || '').trim() || c.nombre;
-  if (window.__sgacFor !== c.id || !window.__sgacCampos) { window.__sgacCampos = Object.assign({}, cfg.campos); window.__sgacAlb = sgaCamposAlbaranCliente(c.id).map(f => f.clave); window.__sgacAlbOrden = sgaAlbOrdenCliente(c.id); window.__sgacFor = c.id; }
+  if (window.__sgacFor !== c.id || !window.__sgacCampos) { window.__sgacCampos = Object.assign({}, cfg.campos); window.__sgacAlbCols = sgaAlbColumnasCliente(c.id); window.__sgacFor = c.id; }
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
@@ -5219,7 +5223,7 @@ function tplSgaClientePage(c){
             <div class="sgac-h">Vacío = las 3 primeras letras del nombre (<b id="sgaalb-def">${esc(sgaPrefijoPorDefecto(c))}</b>). Después van la fecha y el orden del día.</div>
           </div>
           <div class="sgac-row" style="display:block;">
-            <div class="sgac-rq">Datos que salen en su albarán</div>
+            <div class="sgac-rq">Columnas de su albarán</div>
             <div id="sgac-alb">${sgacAlbaranHtml()}</div>
           </div>
         </div>
@@ -5250,11 +5254,8 @@ async function submitSgaCliente(){
   sgaCamposCliente().forEach(f => { campos[f.id] = (window.__sgacCampos || {})[f.id] || 'no'; });
   campos.__bultos = document.getElementById('sgac-bultos').checked ? 'si' : 'no';
   campos.__salida = (document.getElementById('sgac-salida') || {}).value || 'fifo';
-  const albPool = new Set(sgaCamposPropios().filter(f => sgaCampoAlbaranElegible(f) && campos[f.clave] && campos[f.clave] !== 'no').map(f => f.clave));
-  campos.__albaran = (window.__sgacAlb || []).filter(k => albPool.has(k)).join(',');
-  campos.__albaran_orden = sgacAlbColumnas().join(',');
-  const albAntes = sgaCamposAlbaranCliente(id).map(f => f.clave).sort().join(',');
-  const ordenAntes = sgaAlbOrdenar(['@codigo', '@descripcion', '@medidas', ...sgaCamposAlbaranCliente(id).map(f => f.clave)], sgaAlbOrdenCliente(id)).join(',');
+  campos.__albaran_cols = sgacAlbColsActual().join(',');
+  const colsAntes = sgaAlbColumnasCliente(id).join(',');
   const salidaAntes = sgaClienteSalida(id);
   const observaciones = document.getElementById('sgac-obs').value.trim();
   const prefijo = ((document.getElementById('sgac-prefijo') || {}).value || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
@@ -5268,8 +5269,7 @@ async function submitSgaCliente(){
   if (previa.codigosUnicos !== codigosUnicos) dif.push(`códigos únicos ${codigosUnicos ? 'sí' : 'no'}`);
   if (sgaCamposCliente().some(f => (previa.campos[f.id] || 'no') !== campos[f.id])) dif.push('datos de la mercancía');
   if (bultosAntes !== (campos.__bultos === 'si')) dif.push(`bultos por palet ${campos.__bultos === 'si' ? 'sí' : 'no'}`);
-  if (albAntes !== campos.__albaran.split(',').filter(Boolean).sort().join(',')) dif.push('datos del albarán');
-  else if (ordenAntes !== campos.__albaran_orden) dif.push('orden de las columnas del albarán');
+  if (colsAntes !== campos.__albaran_cols) dif.push('columnas del albarán');
   if (salidaAntes !== campos.__salida) dif.push(`salida de la mercancía a ${(SGA_SALIDA_MODOS[campos.__salida] || {}).nombre}`);
   if (dif.length) await logContactoHistorial(id, `SGA · ha cambiado ${dif.join(', ')}.`);
   sgaClienteCerrar();
@@ -9017,7 +9017,8 @@ async function sgaAlbaranImprimir(id){
   const pr = movs.length ? await supabaseClient.from('sga_partidas').select('id,producto_id,referencia,descripcion,lote,articulo_id,codigo,atributos').in('id', movs.map(m => m.partida_id)) : { data: [] };
   const partidas = {};
   (pr.data || []).forEach(p => { partidas[p.id] = p; });
-  const camposAlb = sgaCamposAlbaranCliente(a.clienteId);
+  const colList = sgaAlbColumnasCliente(a.clienteId);
+  const camposAlb = colList.filter(k => !k.startsWith('@')).map(k => sgaCampos.find(f => f.clave === k)).filter(Boolean);
   const lineas = movs.map(m => {
     const p = partidas[m.partida_id] || {};
     const art = sgaArticulos.find(x => x.id === p.articulo_id);
@@ -9026,8 +9027,8 @@ async function sgaAlbaranImprimir(id){
     return { producto: p.descripcion || sgaProdTxt(p.producto_id), modelo: p.referencia || '', medidas: art ? art.medidas : '', codigo: p.codigo || '', cajas, peso: art && art.peso != null ? sgaR2(art.peso * mod) : null,
       extra: camposAlb.map(f => sgaCampoMostrar(sgaCampoDef(f), (art && art.atributos && art.atributos[f.clave] != null && art.atributos[f.clave] !== '') ? art.atributos[f.clave] : (f.ambito === 'articulo' ? null : (SGA_CAMPOS_COLUMNA.includes(f.clave) ? p[f.clave] : (p.atributos || {})[f.clave])))) };
   });
-  // Campos que salen en el albarán: solo las columnas en las que alguna línea tiene valor (referencia y descripción ya van siempre)
-  const extraCols = camposAlb.map((f, k) => ({ nombre: f.nombre, k, clave: f.clave })).filter(c => lineas.some(l => l.extra[c.k] !== '—'));
+  // Campos que salen en el albarán: los que ha elegido el cliente en su ficha SGA
+  const extraCols = camposAlb.map((f, k) => ({ nombre: f.nombre, k, clave: f.clave }));
   const totCajas = sgaR2(lineas.reduce((s, l) => s + l.cajas, 0));
   const totPeso = sgaR2(lineas.reduce((s, l) => s + (l.peso || 0), 0));
   const w = allWarehouses.find(x => x.id === a.warehouseId);
@@ -9075,11 +9076,12 @@ async function sgaAlbaranImprimir(id){
     .firma small{font-weight:400;letter-spacing:0;text-transform:none;font-size:9.5px;border-top:1px solid var(--li);padding-top:4px;}
     .legal{margin-top:10px;padding-top:7px;border-top:1px solid var(--li);display:flex;justify-content:space-between;font-size:9px;color:var(--gr);}
   `;
-  // columnas en el orden de la ficha del cliente (Cajas y Peso siempre al final)
-  const colDef = { '@codigo': { th: 'Código de artículo', td: l => `<td><b>${esc(l.producto)}</b>${l.codigo ? `<div style="font-size:10.5px;color:#444;">Código: ${esc(l.codigo)}</div>` : ''}</td>` }, '@descripcion': { th: 'Descripción', td: l => `<td>${esc(l.modelo) || '—'}</td>` }, '@medidas': { th: 'Medidas', td: l => `<td style="white-space:pre-line;">${esc(l.medidas) || '—'}</td>` } };
+  // columnas que ha elegido el cliente en su ficha SGA, en su orden
+  const colDef = Object.assign({}, { '@codigo': { th: 'Código de artículo', td: l => `<td><b>${esc(l.producto)}</b>${l.codigo ? `<div style="font-size:10.5px;color:#444;">Código: ${esc(l.codigo)}</div>` : ''}</td>` }, '@descripcion': { th: 'Descripción', td: l => `<td>${esc(l.modelo) || '—'}</td>` }, '@medidas': { th: 'Medidas', td: l => `<td style="white-space:pre-line;">${esc(l.medidas) || '—'}</td>` },
+    '@cajas': { th: 'Cajas', r: true, td: l => `<td class="r"><b>${sgaNumTxt(l.cajas)}</b></td>`, tot: sgaNumTxt(totCajas) }, '@peso': { th: sgaPesoLabel(false), r: true, td: l => `<td class="r">${l.peso != null ? sgaNumTxt(l.peso) + ' kg' : '—'}</td>`, tot: totPeso ? sgaNumTxt(totPeso) + ' kg' : '—' } });
   extraCols.forEach(c => { colDef[c.clave] = { th: c.nombre, td: l => `<td>${esc(l.extra[c.k])}</td>` }; });
-  const colOrden = sgaAlbOrdenar(['@codigo', '@descripcion', '@medidas', ...extraCols.map(c => c.clave)], sgaAlbOrdenCliente(a.clienteId));
-  const filas = lineas.length ? lineas.map(l => `<tr>${colOrden.map(k => colDef[k].td(l)).join('')}<td class="r"><b>${sgaNumTxt(l.cajas)}</b></td><td class="r">${l.peso != null ? sgaNumTxt(l.peso) + ' kg' : '—'}</td></tr>`).join('') : `<tr><td colspan="${2 + colOrden.length}">Sin líneas.</td></tr>`;
+  const colOrden = colList.filter(k => colDef[k]);
+  const filas = lineas.length ? lineas.map(l => `<tr>${colOrden.map(k => colDef[k].td(l)).join('')}</tr>`).join('') : `<tr><td colspan="${colOrden.length}">Sin líneas.</td></tr>`;
   const dirAlm = w && sgaDirWh(w) ? esc(sgaDirWh(w)) : '';
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Albarán ${esc(sgaNumAlbaran(a))}</title><style>${css}</style></head><body><div class="hoja">
     <div class="cab">
@@ -9096,8 +9098,8 @@ async function sgaAlbaranImprimir(id){
         <div class="mats"><div class="mat"><span>Matrícula tractora</span>${mat.tractora ? `<b>${esc(mat.tractora)}</b>` : "<i></i>"}</div><div class="mat"><span>Matrícula remolque</span>${mat.remolque ? `<b>${esc(mat.remolque)}</b>` : "<i></i>"}</div></div></div>
     </div>
     <div class="centro">
-      <table><thead><tr>${colOrden.map(k => `<th>${esc(colDef[k].th)}</th>`).join('')}<th class="r">Cajas</th><th class="r">${esc(sgaPesoLabel(false))}</th></tr></thead><tbody>${filas}</tbody>
-        <tfoot><tr><td colspan="${colOrden.length}">TOTAL</td><td class="r">${sgaNumTxt(totCajas)}</td><td class="r">${totPeso ? sgaNumTxt(totPeso) + ' kg' : '—'}</td></tr></tfoot></table>
+      <table><thead><tr>${colOrden.map(k => `<th${colDef[k].r ? ' class="r"' : ''}>${esc(colDef[k].th)}</th>`).join('')}</tr></thead><tbody>${filas}</tbody>
+        <tfoot><tr>${(() => { const li = Math.max(0, colOrden.findIndex(k => colDef[k].tot == null)); return colOrden.map((k, i) => `<td${colDef[k].r ? ' class="r"' : ''}>${i === li ? 'TOTAL' : (colDef[k].tot != null ? colDef[k].tot : '')}</td>`).join(''); })()}</tr></tfoot></table>
       ${a.observaciones ? `<div class="obs"><b>Observaciones</b>${esc(a.observaciones)}</div>` : ''}
     </div>
     <div class="pie"><div class="firma">Entregado · Qualified Logistics<small>Nombre, firma y sello</small></div><div class="firma">Recibí conforme<small>Nombre, firma y fecha</small></div></div>
