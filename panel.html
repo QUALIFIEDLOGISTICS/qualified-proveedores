@@ -7572,6 +7572,7 @@ function sgaEntradaAlmacenCambio(){
     if (z) z.innerHTML = sgaZonaOptionsHtml('', sgaEntradaWhLinea(i));
     if (u) u.innerHTML = '<option value="">—</option>';
   });
+  sgaEntradaPegarZonas();   // las zonas del selector de «añadir pegando códigos» también son las del almacén elegido
   window.__stockDirty = true;
   sgaEntradaRefrescar();
 }
@@ -7666,6 +7667,8 @@ function sgaEntradaClienteCambio(){
   cont.innerHTML = clienteId ? sgaEntradaLineasHtml(cfg) : '<div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div>';
   const pegar = document.getElementById('se-pegar');
   if (pegar) pegar.style.display = clienteId && cfg.codigosUnicos ? '' : 'none';
+  const pegarSel = document.getElementById('se-pegar-sel');
+  if (pegarSel && clienteId && cfg.codigosUnicos) { pegarSel.innerHTML = sgaEntradaPegarSelHtml(); sgaEntradaPegarZonas(); }
   const add = document.getElementById('se-add');
   if (add) add.style.display = clienteId ? '' : 'none';
   if (clienteId) sgaEntradaAddFila({});
@@ -7701,19 +7704,53 @@ function sgaEntradaModalidad(m){
   window.__stockDirty = true;
   sgaEntradaRefrescar();
 }
+// Selectores de «añadir pegando códigos»: artículo, tipo de carga, almacén (stock inicial con varios) y zona que llevarán todos los palets nuevos
+function sgaEntradaPegarSelHtml(){
+  const clienteId = sgaEntradaClienteId();
+  if (!clienteId) return '';
+  const campo = (label, id, inner, extra) => `<div class="field" style="flex:1;min-width:170px;margin-bottom:0;"><label>${label}</label><select id="${id}" ${extra || ''}>${inner}</select></div>`;
+  return [
+    sgaClienteConArticulos(clienteId) ? campo('Artículo', 'se-pg-art', sgaArticuloOptionsHtml(clienteId, '').replace(/<option value="__nuevo">.*?<\/option>/, '')) : '',
+    sgaEntradaConTipo(clienteId) ? campo('Tipo de carga', 'se-pg-prod', sgaProdOptionsHtml(clienteId, '').replace('Elige el tipo…', 'Como la última línea')) : '',
+    sgaEntradaPorLinea() ? campo('Almacén', 'se-pg-alm', sgaAlmacenOptionsHtml(clienteId, ''), 'onchange="sgaEntradaPegarZonas()"') : '',
+    campo('Zona', 'se-pg-zona', ''),
+  ].join('');
+}
+function sgaEntradaPegarZonas(){
+  const z = document.getElementById('se-pg-zona');
+  if (!z) return;
+  const a = document.getElementById('se-pg-alm');
+  const zs = sgaZonasActivas(a && a.value ? a.value : undefined);
+  z.innerHTML = `<option value="">Como la última línea</option>${zs.map(x => `<option value="${x.id}">${esc(sgaZonaNombre(x))}${x.tipo === 'estanteria' ? ' (estantería)' : ''}</option>`).join('')}`;
+}
 function sgaEntradaPegarCodigos(){
   const ta = document.getElementById('se-pegar-txt');
   const codigos = [...new Set(ta.value.split('\n').map(s => s.trim()).filter(Boolean))];
   if (!codigos.length) return;
+  const v = id => ((document.getElementById(id) || {}).value || '');
+  const sel = { art: v('se-pg-art'), prod: v('se-pg-prod'), alm: v('se-pg-alm'), zona: v('se-pg-zona') };
+  if (document.getElementById('se-pg-art') && !sel.art) { appToast('Elige el artículo de estos palets.', 'error'); return; }
   const rows = [...document.querySelectorAll('.se-row')];
   const last = rows[rows.length - 1];
   const j = last ? last.dataset.i : null;
-  const pre = j !== null ? { prod: (document.getElementById(`se-${j}-prod`) || {}).value || '', zona: document.getElementById(`se-${j}-zona`).value } : {};
+  const de = k => (j !== null && document.getElementById(`se-${j}-${k}`) ? document.getElementById(`se-${j}-${k}`).value : '');
+  const mismoAlm = !sel.alm || sel.alm === de('alm');   // la zona de la última línea solo vale si es del mismo almacén
+  const pre = j !== null ? { prod: sel.prod || de('prod'), zona: sel.zona || (mismoAlm ? de('zona') : ''), alm: sel.alm || de('alm'), art: sel.art } : { prod: sel.prod, zona: sel.zona, alm: sel.alm, art: sel.art };
+  // Lo elegido arriba se aplica después del artículo (que rellena solo su tipo, su zona y sus bultos): lo elegido manda.
+  const aplicar = i => {
+    if (sel.art) sgaEntradaArticuloCambio(i);
+    if (sel.zona) { const z = document.getElementById(`se-${i}-zona`); if (z) { z.value = sel.zona; sgaEntradaZonaCambio(i); } }
+    if (sel.prod) { const p = document.getElementById(`se-${i}-prod`); if (p) p.value = sel.prod; }
+  };
   // La primera línea vacía se aprovecha para el primer código.
   codigos.forEach((c, k) => {
     const vacia = k === 0 && rows.length === 1 && !document.getElementById(`se-${j}-codigo`).value;
-    if (vacia) document.getElementById(`se-${j}-codigo`).value = c;
-    else { const i = sgaEntradaAddFila({ ...pre, codigo: c }); }
+    if (vacia) {
+      document.getElementById(`se-${j}-codigo`).value = c;
+      const a = document.getElementById(`se-${j}-art`); if (a && sel.art) a.value = sel.art;
+      const w = document.getElementById(`se-${j}-alm`); if (w && sel.alm) { w.value = sel.alm; sgaEntradaLineaAlmCambio(j); }
+      aplicar(j);
+    } else { const i = sgaEntradaAddFila({ ...pre, codigo: c }); aplicar(i); }
   });
   ta.value = '';
   appToast(`${codigos.length} código${codigos.length !== 1 ? 's' : ''} añadido${codigos.length !== 1 ? 's' : ''}.`, 'ok');
@@ -8002,7 +8039,8 @@ function tplStockEntradaPage(){
         <div class="deca-card-body">
           <div id="se-lineas"><div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div></div>
           <div id="se-pegar" style="display:none;margin-top:14px;">
-            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Añadir varios palets pegando sus códigos (uno por línea; copian el tipo y la zona de la última línea)</label>
+            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Añadir varios palets pegando sus códigos (uno por línea). Elige el artículo y la zona de todos; solo cambia el código. Lo que dejes sin elegir copia lo de la última línea.</label>
+            <div id="se-pegar-sel" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;"></div>
             <div style="display:flex;gap:10px;align-items:flex-start;"><textarea id="se-pegar-txt" rows="3" style="flex:1;font-family:var(--mono);font-size:12.5px;" placeholder="PAL-0001&#10;PAL-0002"></textarea><button type="button" class="btn btn-ghost" onclick="sgaEntradaPegarCodigos()">Añadir</button></div>
           </div>
         </div>
