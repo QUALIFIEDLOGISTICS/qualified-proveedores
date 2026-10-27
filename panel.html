@@ -8812,7 +8812,7 @@ async function sgaSalidaConfirmar(comoBorrador){
     if (!s.productoId || !(sgaNumero(s.cantidadTxt) > 0)) errores.push(`Servicio ${n + 1}: elige el servicio y una cantidad mayor que 0.`);
   });
   // DeCA: solo al confirmar (un borrador todavía no sale); se comprueba antes de guardar para no dejar la expedición sin su DeCA
-  const conDeca = !comoBorrador && !!(document.getElementById('sl-deca-on') && document.getElementById('sl-deca-on').checked);
+  const conDeca = !!(document.getElementById('sl-deca-on') && document.getElementById('sl-deca-on').checked);   // también en borrador: el DeCA hace falta antes de que salga el camión
   const decaPeso = ((document.getElementById('sl-deca-peso') || {}).value || '').trim(), decaNif = ((document.getElementById('sl-deca-nif') || {}).value || '').trim();
   if (conDeca) {
     const tc = sgaTransportistaContacto(d.transportista), mt = sgaMatriculaSplit(d.matricula);
@@ -8853,6 +8853,12 @@ async function sgaSalidaConfirmar(comoBorrador){
   const numAlb = (sgaAlbaranes.find(x => x.id === albId) || {}).numeroTexto || '';
   const albDeca = albId || (edit && edit.id);
   let decaCreadoId = '';
+  // Si la expedición ya tenía su DeCA (p. ej. generado cuando era borrador) y cambia la fecha de salida, el DeCA se actualiza con la nueva fecha
+  const decaPrevio = edit ? sgaDecaDeExpedicion(edit.id) : null;
+  if (decaPrevio && decaPrevio.fechaTransporte !== d.fecha) {
+    try { await sgaActualizarFechaDeca(decaPrevio, d.fecha); appToast(`DeCA ${decaPrevio.codigo || ''} actualizado con la nueva fecha de salida.`.replace('  ', ' '), 'ok'); }
+    catch (err) { appToast('La expedición se ha guardado, pero no se pudo actualizar la fecha del DeCA: ' + (err && err.message ? err.message : 'error desconocido.') + ' Corrígela desde Transporte → DeCA.', 'error'); }
+  }
   if (conDeca && albDeca) {
     try {
       const doc = await sgaCrearDecaExpedicion(albDeca, d, sale, decaPeso, decaNif);
@@ -9857,10 +9863,10 @@ function sgaTransportistaContacto(nombre){
 function sgaSalidaDecaHtml(){
   const edit = window.__slEdit;
   const ya = edit ? sgaDecaDeExpedicion(edit.id) : null;
-  if (ya) return `<div style="font-size:13.5px;">Esta expedición ya tiene su DeCA: <button type="button" class="deca-code-pill" style="cursor:pointer;border:none;" onclick="openDecaViewModal('${ya.id}')">${esc(ya.codigo || 'DeCA')}</button> <span style="color:var(--muted);font-size:12.5px;">· su QR sale en el albarán.</span></div>`;
+  if (ya) return `<div style="font-size:13.5px;">Esta expedición ya tiene su DeCA: <button type="button" class="deca-code-pill" style="cursor:pointer;border:none;" onclick="openDecaViewModal('${ya.id}')">${esc(ya.codigo || 'DeCA')}</button> <span style="color:var(--muted);font-size:12.5px;">· su QR sale en el albarán. Si cambias la fecha de salida, se actualiza con la nueva.</span></div>`;
   if (!(PROFILE.isAdmin || PROFILE.allowedTabs.includes('trafico'))) return '<div style="font-size:13px;color:var(--muted);">Para generar el DeCA hace falta acceso a Transporte.</div>';
   return `<label style="display:flex;align-items:flex-start;gap:10px;font-size:13.5px;cursor:pointer;"><input type="checkbox" class="switch" id="sl-deca-on" onchange="sgaSalidaDecaToggle()" style="margin-top:2px;" />
-      <span><b>Generar también el DeCA</b><br><span style="font-size:12px;color:var(--muted);">Se crea al confirmar la expedición con sus datos (el cargador contractual es Qualified) y su QR sale impreso en el albarán. No hace falta en transportes internacionales.</span></span></label>
+      <span><b>Generar también el DeCA</b><br><span style="font-size:12px;color:var(--muted);">Se crea al guardar la expedición, también si es un borrador, con sus datos (el cargador contractual es Qualified), y su QR sale impreso en el albarán. Si luego cambia la fecha de salida, el DeCA se actualiza solo. No hace falta en transportes internacionales.</span></span></label>
     <div id="sl-deca-campos" style="display:none;margin-top:14px;">
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
         <div class="field" style="flex:1;min-width:200px;max-width:260px;margin-bottom:0;"><label>Peso de la mercancía <span class="dc-req">*</span></label>${decaInputIcon('weight', `<input id="sl-deca-peso" inputmode="decimal" maxlength="30" placeholder="Ej. 12.500" oninput="this.dataset.manual='1'" />`, 'kg')}
@@ -9944,6 +9950,13 @@ async function sgaCrearDecaExpedicion(albaranId, d, sale, pesoTxt, nifTxt){
    Como el DeCA: en el formulario hay un interruptor «Generar también la orden de carga». Al confirmar la expedición se crea la orden
    (OC-xxxx) con el transportista, las matrículas, la carga (el almacén) y la descarga (el destinatario) de la expedición, y queda vinculada a ella.
    Lo que no sale de la expedición se pide aquí: cliente de transporte, servicio, metros y precios. */
+// El camión puede recoger otro día: del DeCA de una expedición solo cambia la fecha de transporte (y se regenera su PDF, con el mismo número y QR)
+async function sgaActualizarFechaDeca(doc, fecha){
+  const { url } = await buildAndUploadDecaPdf({ ...doc, fechaTransporte: fecha }, doc.pdfStoragePath, doc.pdfUrl);
+  const { error } = await supabaseClient.from('deca_documents').update({ fecha_transporte: fecha, pdf_url: url, updated_at: new Date().toISOString() }).eq('id', doc.id);
+  if (error) throw error;
+  doc.fechaTransporte = fecha; doc.pdfUrl = url;
+}
 function sgaOcDeExpedicion(albaranId){ return ordenesCarga.find(o => o.albaranId === albaranId) || null; }
 function sgaAbrirOcExpedicion(id){
   Promise.resolve(setTab('trafico')).then(() => openOcForm(id));
