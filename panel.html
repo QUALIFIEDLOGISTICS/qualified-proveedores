@@ -5767,25 +5767,38 @@ function catHistRefrescar(){
   if (u) u.disabled = !h.u.length;
   if (r) r.disabled = !h.r.length;
 }
-function catHistAplicar(dir){
-  if (!window.__catEditAll || window.__catLocked) return;
-  const h = catHist();
-  const desde = dir < 0 ? h.u : h.r, hacia = dir < 0 ? h.r : h.u;
-  let it = null;
-  while (desde.length) { const x = desde.pop(); if (x.el.isConnected) { it = x; break; } }   // las filas nuevas quitadas ya no se pueden deshacer
-  if (!it) { catHistRefrescar(); return; }
-  const el = it.el, v = dir < 0 ? it.antes : it.despues;
+// Pone el valor de una casilla; si es de un artículo existente, vuelve a estar «sin cambios» al recuperar su valor original
+function catHistPonerValor(el, v){
   el.value = v;
   catPrev.set(el, v);
-  if (el.dataset.id) {   // casilla de un artículo existente: vuelve a estar «sin cambios» si recupera su valor original
+  if (el.dataset.id) {
     if (v === catOrig(el)) {
       delete (window.__catDirty || {})[el.dataset.id + '|' + (el.dataset.f || 'x:' + el.dataset.x)];
       el.classList.remove('cg-mod', 'cg-err');
     } else catMarcarCambio(el);
   }
+}
+function catHistAplicar(dir){
+  if (!window.__catEditAll || window.__catLocked) return;
+  const h = catHist();
+  const desde = dir < 0 ? h.u : h.r, hacia = dir < 0 ? h.r : h.u;
+  let it = null;
+  while (desde.length) { const x = desde.pop(); if (x.grupo || x.el.isConnected) { it = x; break; } }   // las filas nuevas quitadas ya no se pueden deshacer
+  if (!it) { catHistRefrescar(); return; }
+  let el;
+  if (it.grupo) {   // una pegada: todas sus casillas (y las filas que creó) de golpe
+    if (dir < 0) it.creadas.forEach(tr => { if (tr.isConnected) tr.remove(); });
+    else if (it.tbody && it.tbody.isConnected) it.creadas.forEach(tr => { if (!tr.isConnected) it.tbody.appendChild(tr); });
+    it.grupo.forEach(x => { if (x.el.isConnected) catHistPonerValor(x.el, dir < 0 ? x.antes : x.despues); });
+    el = (it.grupo.find(x => x.el.isConnected) || {}).el;
+  } else {
+    el = it.el;
+    catHistPonerValor(el, dir < 0 ? it.antes : it.despues);
+  }
   hacia.push(it);
   catActualizarContador();
   catHistRefrescar();
+  if (!el) return;
   el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   el.focus();
   if (el.select && el.tagName === 'INPUT') el.select();
@@ -5796,6 +5809,7 @@ function catHistAplicar(dir){
   document.addEventListener('change', e => {
     const el = e.target;
     if (!window.__catEditAll || window.__catLocked || !enCatalogo(el)) return;
+    if (window.__catPegando) { catPrev.set(el, el.value); return; }   // una pegada se anota entera (ver el manejador de pegar)
     const antes = catPrev.has(el) ? catPrev.get(el) : el.defaultValue;
     catPrev.set(el, el.value);
     if (antes === el.value) return;
@@ -6396,9 +6410,11 @@ document.addEventListener('paste', e => {
   const filasTabla = () => [...document.querySelectorAll('#stock-body table.cg-tabla tbody tr.cg-row')];
   const ini = filasTabla().indexOf(tr0);
   let nuevas = 0, sinHueco = 0, omitidas = 0;
+  const antes = new Map(), creadas = [];   // para poder deshacer la pegada entera con Ctrl+Z
+  window.__catPegando = true;   // mientras se pega, las casillas no anotan su propio paso en el historial
   datos.forEach((vals, i) => {
     let tr = filasTabla()[ini + i];
-    if (!tr) { if (!catClienteSel()) return; catAnadirFila(); nuevas++; tr = filasTabla()[ini + i]; }
+    if (!tr) { if (!catClienteSel()) return; catAnadirFila(); nuevas++; tr = filasTabla()[ini + i]; if (tr) creadas.push(tr); }
     if (!tr) return;
     vals.forEach((v, j) => {
       const k = claves[c0 + j];
@@ -6406,6 +6422,7 @@ document.addEventListener('paste', e => {
       const ctl = catControlPorClave(tr, k);
       if (!ctl || ctl.disabled) { omitidas++; return; }
       const val = v.trim();
+      if (!antes.has(ctl)) antes.set(ctl, ctl.value);
       if (ctl.tagName === 'SELECT') {
         const n = s => String(s || '').trim().toLowerCase();
         const o = [...ctl.options].find(x => n(x.value) === n(val) || n(x.text) === n(val));
@@ -6417,9 +6434,14 @@ document.addEventListener('paste', e => {
     });
   });
   catActualizarContador();
+  window.__catPegando = false;
+  // toda la pegada es UN solo paso del historial (deshacer / rehacer), no uno por casilla
+  const grupo = [...antes].map(([c, a]) => ({ el: c, antes: a, despues: c.value })).filter(x => x.antes !== x.despues);
+  if (grupo.length || creadas.length) { const h = catHist(); h.u.push({ grupo, creadas, tbody: tr0.parentNode }); if (h.u.length > 300) h.u.shift(); h.r = []; catHistRefrescar(); }
   const ncols = Math.max(...datos.map(d => d.length));
-  appToast(`Pegado: ${datos.length} fila${datos.length === 1 ? '' : 's'} × ${ncols} columna${ncols === 1 ? '' : 's'}${nuevas ? ` (${nuevas} fila${nuevas === 1 ? '' : 's'} nueva${nuevas === 1 ? '' : 's'})` : ''}.${omitidas || sinHueco ? ` ${omitidas + sinHueco} dato${omitidas + sinHueco === 1 ? '' : 's'} no se ${omitidas + sinHueco === 1 ? 'pudo' : 'pudieron'} pegar (columna que no existe o valor que no está en la lista).` : ''} Revisa y pulsa «Guardar».`, omitidas || sinHueco ? 'info' : 'ok');
+  appToast(`Pegado: ${datos.length} fila${datos.length === 1 ? '' : 's'} × ${ncols} columna${ncols === 1 ? '' : 's'}${nuevas ? ` (${nuevas} fila${nuevas === 1 ? '' : 's'} nueva${nuevas === 1 ? '' : 's'})` : ''}.${omitidas || sinHueco ? ` ${omitidas + sinHueco} dato${omitidas + sinHueco === 1 ? '' : 's'} no se ${omitidas + sinHueco === 1 ? 'pudo' : 'pudieron'} pegar (columna que no existe o valor que no está en la lista).` : ''} Con Ctrl+Z se deshace la pegada entera. Revisa y pulsa «Guardar».`, omitidas || sinHueco ? 'info' : 'ok');
 });
+// Ctrl+Z justo después de pegar deshace la pegada entera (valores de antes y filas nuevas); en cuanto se escribe algo a mano, vuelve a ir casilla a casilla
 // Atajos en «Editar catálogo» (cuando está desbloqueado): F8 (o Ctrl+D, como «rellenar hacia abajo» de Excel) copia en la casilla en la que
 // estás lo que hay en la casilla de arriba (misma columna) y F2 añade una fila nueva. Si no se puede, avisa de por qué.
 document.addEventListener('keydown', e => {
