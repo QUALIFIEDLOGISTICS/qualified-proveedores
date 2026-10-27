@@ -5956,7 +5956,7 @@ function catFilaHtml(a, cols, conCliente){
       ${cols.peso ? dato('peso', num(a.peso), 'inputmode="decimal" style="width:80px;text-align:right;"') : ''}
       ${cols.medidas ? (edit ? `<td>${catCeldaInput(a, 'medidas', a.medidas, 'style="min-width:170px;"')}</td>` : `<td class="cg-trunc" data-sort-value="${esc(a.medidas)}">${a.medidas ? esc(a.medidas) : vacio}</td>`) : ''}
       ${cols.x.map(campoX).join('')}
-      <td class="cg-stock" data-sort-value="${st.mod}" ${st.almacenes ? `title="${esc(st.almacenes)}"` : ''}>${st.mod
+      <td class="cg-stock" data-sort-value="${st.mod}" ${st.almacenes ? `title="${esc(st.almacenes)}"` : ''}>${edit && !window.__catLocked && !st.mod ? `<button type="button" class="deca-act danger" style="float:right;margin-left:8px;" onclick="catEliminarArticulo('${a.id}')" title="Eliminar este artículo del catálogo (solo si no tiene entradas ni salidas)">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>` : ''}${st.mod
         ? `<span class="cg-st ok"><i></i><b>${st.mod}</b> ${sgaUd(a.clienteId, st.mod)}</span>${st.porAlm.length ? `<div class="cg-ref">${st.porAlm.map(x => `${esc(x.n)}: <b>${x.mod}</b>`).join(' · ')}</div>` : ''}${cols.bultos && (a.bultos !== 1 || st.bul !== st.mod) ? `<div class="cg-ref">${sgaNumTxt(st.bul)} bultos</div>` : ''}`
         : '<span class="cg-st no"><i></i>Sin stock</span>'}</td>
     </tr>`;
@@ -6473,6 +6473,27 @@ document.addEventListener('keydown', e => {
   el.dispatchEvent(new Event('change', { bubbles: true }));
   if (el.select && el.tagName === 'INPUT') el.select();
 });
+// Elimina un artículo del catálogo, solo si nunca ha tenido entradas ni salidas (cualquier partida suya, aunque ya esté agotada, lo impide)
+async function catEliminarArticulo(id){
+  const a = sgaArticulos.find(x => x.id === id);
+  if (!a || window.__catLocked) return;
+  if (catStockArticulo(a).mod > 0) { appToast(`«${a.nombre}» tiene stock en el almacén: no se puede eliminar.`, 'error'); return; }
+  const { data: usado, error: e0 } = await supabaseClient.from('sga_partidas').select('id').eq('articulo_id', id).limit(1);
+  if (e0) { appToast('No se pudo comprobar si el artículo tiene movimientos: ' + e0.message, 'error'); return; }
+  if (usado && usado.length) { appToast(`«${a.nombre}» tiene entradas o salidas asignadas: no se puede eliminar.`, 'error'); return; }
+  if (!(await appConfirm({ title: 'Eliminar artículo', name: a.nombre, message: 'Se quitará del catálogo del cliente. No tiene entradas ni salidas. Esta acción no se puede deshacer.', confirmLabel: 'Eliminar', tone: 'danger', icon: 'trash' }))) return;
+  const { data, error } = await supabaseClient.from('sga_articulos').delete().eq('id', id).select();
+  if (error) { appToast('No se pudo eliminar: ' + (/foreign key|violates/i.test(error.message || '') ? 'el artículo tiene entradas o salidas asignadas.' : error.message), 'error'); return; }
+  if (!data || !data.length) { appToast('No se pudo eliminar: falta ejecutar el SQL «sga-articulos-eliminar.sql» en Supabase.', 'error'); return; }
+  const i = sgaArticulos.findIndex(x => x.id === id);
+  if (i > -1) sgaArticulos.splice(i, 1);
+  Object.keys(window.__catDirty || {}).forEach(k => { if (k.startsWith(id + '|')) delete window.__catDirty[k]; });
+  const tr = document.querySelector(`#stock-body tr.cg-row[data-id="${id}"]`);
+  if (tr) tr.remove();
+  catActualizarContador();
+  catRefrescarFiltros();
+  appToast(`Artículo «${a.nombre}» eliminado.`, 'ok');
+}
 function catActualizarContador(){
   const n = catNumCambios();
   const el = document.getElementById('cat-ncambios');
