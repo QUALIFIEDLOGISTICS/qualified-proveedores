@@ -8426,6 +8426,7 @@ function sgaNumeroSalidaPrevisto(clienteId, fecha){
 function sgaSalidaRefrescar(){
   const d = sgaSalidaLeer();
   sgaSalidaDecaRefrescar();
+  sgaSalidaOcRefrescar();
   const numEl = document.getElementById('sl-num');
   if (numEl) numEl.value = sgaNumeroSalidaPrevisto(d.clienteId, d.fecha);
   const el = document.getElementById('sl-resumen');
@@ -8496,6 +8497,10 @@ function tplStockSalidaPage(){
         <div class="deca-card-body">${sgaSalidaDecaHtml()}</div>
       </div>
       <div class="card deca-card">
+        ${decaCardHead('file', 'Orden de carga', 'Opcional · se vincula a esta expedición y se crea en Transporte')}
+        <div class="deca-card-body">${sgaSalidaOcHtml()}</div>
+      </div>
+      <div class="card deca-card">
         ${decaCardHead('clock', 'Servicios', 'Horas y extras de esta expedición (opcional)', `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="sgaServicioAdd()">+ Servicio</button>`)}
         <div class="deca-card-body"><div id="se-servicios"></div></div>
       </div>
@@ -8552,6 +8557,9 @@ async function sgaSalidaConfirmar(comoBorrador){
     if (!d.destinatario) errores.push('DeCA: elige el destinatario.');
     if (!(Number(decaPeso.replace(',', '.')) > 0)) errores.push('DeCA: indica el peso de la mercancía.');
   }
+  // Orden de carga: igual, solo al confirmar y comprobada antes de guardar
+  const conOc = !comoBorrador && !!(document.getElementById('sl-oc-on') && document.getElementById('sl-oc-on').checked);
+  if (conOc) errores.push(...sgaSalidaOcErrores(d));
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const servicios = d.servicios.filter(s => s.productoId).map(s => ({ producto_id: s.productoId, cantidad: sgaNumero(s.cantidadTxt), nota: s.nota }));
   const fifo = sgaSalidaFifo(d.clienteId, d.items);
@@ -8579,11 +8587,19 @@ async function sgaSalidaConfirmar(comoBorrador){
   const total = sale.reduce((s, x) => s + x.n, 0);
   const numAlb = (sgaAlbaranes.find(x => x.id === albId) || {}).numeroTexto || '';
   const albDeca = albId || (edit && edit.id);
+  let decaCreadoId = '';
   if (conDeca && albDeca) {
     try {
       const doc = await sgaCrearDecaExpedicion(albDeca, d, sale, decaPeso, decaNif);
+      decaCreadoId = doc.id;
       appToast(doc.sinVincular ? `DeCA ${doc.codigo} creado, pero sin vincular a la expedición: falta ejecutar el SQL «deca-expedicion.sql» en Supabase.` : `DeCA ${doc.codigo} creado y vinculado a la expedición.`, doc.sinVincular ? 'error' : 'ok');
     } catch (err) { appToast('La expedición se ha guardado, pero el DeCA no se pudo crear: ' + (err && err.message ? err.message : 'error desconocido.') + ' Ábrela con «Editar» para reintentarlo.', 'error'); }
+  }
+  if (conOc && albDeca) {
+    try {
+      const oc = await sgaCrearOcExpedicion(albDeca, d, sale, decaCreadoId);
+      appToast(oc.sinVincular ? `Orden ${ocRef(oc)} creada, pero sin vincular a la expedición: falta ejecutar el SQL «orden-carga-expedicion.sql» en Supabase.` : `Orden de carga ${ocRef(oc)} creada y vinculada a la expedición.`, oc.sinVincular ? 'error' : 'ok');
+    } catch (err) { appToast('La expedición se ha guardado, pero la orden de carga no se pudo crear: ' + (err && err.message ? err.message : 'error desconocido.') + ' Ábrela con «Editar» para reintentarlo.', 'error'); }
   }
   if (edit) {
     window.__slEdit = null;   // el stock ya está recargado de la base de datos
@@ -9658,6 +9674,116 @@ async function sgaCrearDecaExpedicion(albaranId, d, sale, pesoTxt, nifTxt){
   decaDocuments.unshift(doc);
   doc.sinVincular = !vinculado;
   return doc;
+}
+/* ---- Orden de carga dentro de la expedición ----
+   Como el DeCA: en el formulario hay un interruptor «Generar también la orden de carga». Al confirmar la expedición se crea la orden
+   (OC-xxxx) con el transportista, las matrículas, la carga (el almacén) y la descarga (el destinatario) de la expedición, y queda vinculada a ella.
+   Lo que no sale de la expedición se pide aquí: cliente de transporte, servicio, metros y precios. */
+function sgaOcDeExpedicion(albaranId){ return ordenesCarga.find(o => o.albaranId === albaranId) || null; }
+function sgaAbrirOcExpedicion(id){
+  Promise.resolve(setTab('trafico')).then(() => openOcForm(id));
+}
+function sgaSalidaOcClienteTransporte(clienteId){
+  const c = contactos.find(x => x.id === clienteId);
+  return c && c.esClienteTransporte && !c.archived ? c : null;
+}
+function sgaSalidaOcHtml(){
+  const edit = window.__slEdit;
+  const ya = edit ? sgaOcDeExpedicion(edit.id) : null;
+  if (ya) return `<div style="font-size:13.5px;">Esta expedición ya tiene su orden de carga: <button type="button" class="deca-code-pill" style="cursor:pointer;border:none;" onclick="sgaAbrirOcExpedicion('${ya.id}')">${esc(ocRef(ya))}</button></div>`;
+  if (!(PROFILE.isAdmin || sectionAllowedFor(PROFILE, 'trafico', 'ordenes'))) return '<div style="font-size:13px;color:var(--muted);">Para generar la orden de carga hace falta acceso a Órdenes de carga (Transporte).</div>';
+  const req = '<span class="dc-req">*</span>';
+  return `<label style="display:flex;align-items:flex-start;gap:10px;font-size:13.5px;cursor:pointer;"><input type="checkbox" class="switch" id="sl-oc-on" onchange="sgaSalidaOcToggle()" style="margin-top:2px;" />
+      <span><b>Generar también la orden de carga</b><br><span style="font-size:12px;color:var(--muted);">Se crea al confirmar la expedición con su transportista, matrículas, carga (el almacén) y descarga (el destinatario), y queda vinculada a ella.</span></span></label>
+    <div id="sl-oc-campos" style="display:none;margin-top:14px;">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div class="field" style="flex:2;min-width:240px;margin-bottom:12px;"><label>Cliente de transporte ${req}</label>${decaInputIcon('building', `<input id="sl-oc-cli" maxlength="150" data-combo="sl-oc-clientes-datalist" autocomplete="off" placeholder="Quien nos contrata el transporte" oninput="this.dataset.manual='1'" />`)}
+          <datalist id="sl-oc-clientes-datalist">${contactos.filter(c => !c.archived && c.esClienteTransporte).map(c => `<option value="${esc(c.nombre)}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('')}</datalist>
+          <div id="sl-oc-cli-ayuda" style="font-size:11.5px;color:var(--mutedFaint);margin-top:4px;"></div></div>
+        <div class="field" style="flex:1;min-width:130px;margin-bottom:12px;"><label>Servicio ${req}</label><select id="sl-oc-serv"><option value="">Elige…</option><option value="FTL">FTL</option><option value="LTL">LTL</option></select></div>
+        <div class="field" style="flex:1;min-width:110px;margin-bottom:12px;"><label>Metros</label><select id="sl-oc-metros"><option value="">—</option>${Array.from({ length: 13 }, (_, i) => `<option value="${i + 1}">${i + 1}</option>`).join('')}</select></div>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><label>Precio del transportista ${req} <span class="oc-tag pdf">Sale en el PDF</span></label>${decaInputIcon('weight', `<input id="sl-oc-precio" inputmode="decimal" maxlength="12" placeholder="Ej. 700" />`, '€')}</div>
+        <div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><label>Lo que cobramos al cliente <span class="oc-tag int">Solo interno</span></label>${decaInputIcon('weight', `<input id="sl-oc-precio-cli" inputmode="decimal" maxlength="12" placeholder="Ej. 850" />`, '€')}</div>
+        <div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><label>Referencia de facturación</label>${decaInputIcon('tag', `<input id="sl-oc-ref" maxlength="60" placeholder="Opcional" />`)}</div>
+      </div>
+      <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">También hace falta el transportista y el destinatario (elegido de la lista de Direcciones).</div>
+    </div>`;
+}
+function sgaSalidaOcToggle(){
+  const on = (document.getElementById('sl-oc-on') || {}).checked;
+  const box = document.getElementById('sl-oc-campos');
+  if (box) box.style.display = on ? '' : 'none';
+  sgaSalidaOcRefrescar();
+}
+// Mientras no se escriba a mano, el cliente de transporte es el cliente de la expedición (si también lo es de Transporte)
+function sgaSalidaOcRefrescar(){
+  const on = document.getElementById('sl-oc-on');
+  if (!on || !on.checked) return;
+  const cli = document.getElementById('sl-oc-cli');
+  if (!cli) return;
+  const c = sgaSalidaOcClienteTransporte(sgaSalidaClienteId());
+  if (cli.dataset.manual !== '1') cli.value = c ? c.nombre : '';
+  const ayuda = document.getElementById('sl-oc-cli-ayuda');
+  if (ayuda) ayuda.textContent = cli.dataset.manual === '1' ? '' : c ? 'El cliente de la expedición.' : 'El cliente de la expedición no está dado de alta como cliente de transporte: elige uno de la lista.';
+}
+// Lo que hay que comprobar antes de guardar la expedición (devuelve los errores)
+function sgaSalidaOcErrores(d){
+  const e = [];
+  const v = id => ((document.getElementById(id) || {}).value || '').trim();
+  const cli = contactos.find(c => !c.archived && c.esClienteTransporte && c.nombre === v('sl-oc-cli'));
+  if (!v('sl-oc-cli')) e.push('Orden de carga: elige el cliente de transporte.');
+  else if (!cli) e.push('Orden de carga: el cliente tiene que ser uno de la lista (cliente de transporte).');
+  if (!v('sl-oc-serv')) e.push('Orden de carga: elige el servicio (FTL o LTL).');
+  const precio = ocNumTxt(v('sl-oc-precio'));
+  if (precio == null || !isFinite(precio) || precio < 0) e.push('Orden de carga: indica el precio del transportista (un número).');
+  const pc = ocNumTxt(v('sl-oc-precio-cli'));
+  if (pc != null && (!isFinite(pc) || pc < 0)) e.push('Orden de carga: lo que se cobra al cliente tiene que ser un número.');
+  if (!d.transportista) e.push('Orden de carga: escribe el transportista.');
+  if (!d.destinatario) e.push('Orden de carga: elige el destinatario (es la descarga).');
+  return e;
+}
+// Crea la orden de carga de una expedición (si ya se creó su DeCA, la orden queda enlazada a él)
+async function sgaCrearOcExpedicion(albaranId, d, sale, decaId){
+  const v = id => ((document.getElementById(id) || {}).value || '').trim();
+  const emp = ocCfgEmpresa();
+  const w = allWarehouses.find(x => x.id === sgaSalidaWh());
+  const dd = sgaDireccionPorNombre(d.destinatario);
+  const tc = sgaTransportistaContacto(d.transportista);
+  const mat = sgaMatriculaSplit(d.matricula);
+  const cli = contactos.find(c => !c.archived && c.esClienteTransporte && c.nombre === v('sl-oc-cli'));
+  const total = sale.reduce((s, x) => s + x.n, 0);
+  const nombres = [...new Set(sale.map(x => String(x.p.descripcion || sgaProdTxt(x.p.productoId) || '').trim()).filter(Boolean))];
+  const punto = (empresa, o, extra) => Object.assign({ empresa, direccion: [o.calle1, o.calle2].filter(Boolean).join(', '), cp: o.codigoPostal || '', poblacion: o.ciudad || '', pais: o.pais || '' }, extra);
+  const carga = punto([emp.nombre || 'Qualified', w && w.name].filter(Boolean).join(' · '), w || {}, { fecha: d.fecha });
+  const descarga = dd ? punto(dd.nombre, dd, { horario: dd.horarios || '', maps: dd.mapsUrl || '', observaciones: dd.observacionesOc || '' }) : { empresa: d.destinatario };
+  if (!carga.poblacion) throw new Error('el almacén no tiene población en su ficha.');
+  if (!descarga.poblacion) throw new Error('el destinatario no tiene población en su dirección.');
+  const peso = sgaSalidaPesoCalculado(sale);
+  const pesoTxt = peso || Number(((document.getElementById('sl-deca-peso') || {}).value || '').replace(',', '.')) || 0;
+  const fila = {
+    fecha_pedido: today(), cliente_id: cli.id, servicio: v('sl-oc-serv'), metros: v('sl-oc-metros') ? Number(v('sl-oc-metros')) : null,
+    precio: ocNumTxt(v('sl-oc-precio')), precio_cliente: ocNumTxt(v('sl-oc-precio-cli')), ref_facturacion: v('sl-oc-ref') || null,
+    transportista_id: tc ? tc.id : null, transportista_nombre: tc ? tc.nombre : d.transportista, transportista_nif: tc ? tc.nif || null : null,
+    transportista_direccion: tc ? [tc.calle1, tc.calle2].filter(Boolean).join(', ') || null : null, transportista_poblacion: tc ? tc.ciudad || null : null,
+    matricula_tractora: mat.tractora || null, matricula_remolque: mat.remolque || null,
+    mercancia: (`${total} ${sgaUd(d.clienteId, total)}` + (nombres.length ? ': ' + nombres.join(', ') : '')).slice(0, 250),
+    indicaciones: ocCfgIndicaciones() || null, observaciones_especiales: null,
+    cargas: [carga], descargas: [descarga], peso_kg: pesoTxt ? String(pesoTxt) : null, deca_id: decaId || null,
+    albaran_id: albaranId, created_by: currentUserEmail(), updated_at: new Date().toISOString(),
+  };
+  let ins = await supabaseClient.from('ordenes_carga').insert(fila).select().single();
+  let vinculada = true;
+  if (ins.error && /albaran_id/i.test(ins.error.message || '')) {   // falta ejecutar el SQL de orden ↔ expedición: se crea igualmente, sin vincular
+    delete fila.albaran_id; vinculada = false;
+    ins = await supabaseClient.from('ordenes_carga').insert(fila).select().single();
+  }
+  if (ins.error || !ins.data) throw (ins.error || new Error('sin datos'));
+  const oc = ocDeFila(ins.data);
+  if (!vinculada) oc.sinVincular = true;
+  ordenesCarga.unshift(oc);
+  return oc;
 }
 /* ---- Cómo llama cada cliente a su unidad ----
    Por defecto «palet / palets». Un cliente puede llamarla «carpa / carpas», «jumbo / jumbos»…: se elige en su ficha SGA y se guarda en su
@@ -18411,7 +18537,7 @@ function ocDeFila(r){
     mercancia: r.mercancia || '', indicaciones: r.indicaciones || '', observacionesEspeciales: r.observaciones_especiales || '',
     precio: r.precio == null ? null : Number(r.precio),
     cargas: Array.isArray(r.cargas) ? r.cargas : [], descargas: Array.isArray(r.descargas) ? r.descargas : [],
-    pesoKg: r.peso_kg || '', decaId: r.deca_id || '', refFacturacion: r.ref_facturacion || '',
+    pesoKg: r.peso_kg || '', decaId: r.deca_id || '', albaranId: r.albaran_id || '', refFacturacion: r.ref_facturacion || '',
     precioCliente: r.precio_cliente == null ? null : Number(r.precio_cliente), servicio: r.servicio || '', metros: r.metros == null ? '' : String(r.metros),
   };
 }
