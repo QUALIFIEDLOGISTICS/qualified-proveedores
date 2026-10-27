@@ -7321,8 +7321,9 @@ function sgaCalcularEntrada(d){
   if (!porAlbaran) {
     const grupos = {};
     let sinTipo = 0;
+    const sinTipoPs = [];
     d.partidas.forEach(p => {
-      if (!p.productoId) { sinTipo += p.cantidad; return; }   // sin tipo de carga (clientes que cobran por m²): no hay tarifa de movimiento por palet
+      if (!p.productoId) { sinTipo += p.cantidad; sinTipoPs.push(p); return; }   // sin tipo de carga: se mira más abajo si se le puede aplicar la única tarifa de movimiento del cliente
       const ps = almacenajeProducto(p.productoId);
       const enlace = ps && almacenajeProducto(salida ? ps.cobroSalida : ps.cobroEntrada);
       const fam = ps && ps.familia;
@@ -7330,8 +7331,14 @@ function sgaCalcularEntrada(d){
       if (!pe) { res.avisos.push(`«${sgaProdTxt(p.productoId)}» no tiene un producto de ${palabra} asociado: elige cuál se cobra en Almacén → Configuración → Productos. Su ${palabra} no se cobra.`); return; }
       grupos[pe.id] = (grupos[pe.id] || 0) + (pe.unidad === 'bulto' ? (p.bultos != null ? p.bultos : p.cantidad) : p.cantidad);
     });
-    const cobraMov = almacenajeTarifas.some(t => { const pr = t.clienteId === d.clienteId ? almacenajeProducto(t.tipo) : null; return pr && ['entrada', 'salida'].includes(pr.disparador); });   // si no tiene ninguna tarifa de movimiento, no cobrarlos es lo normal
-    if (sinTipo > 0 && cobraMov) res.avisos.push(`${sgaUdN(d.clienteId, sinTipo)} sin tipo de carga: sin él no se puede aplicar una tarifa de ${palabra} y no se cobra. Si este cliente cobra solo por m², es normal; si no, a esa mercancía le falta el tipo de carga (se asigna en el catálogo del cliente o al recibirla) y su tarifa de ${salida ? 'salida' : 'entrada'} en Almacén → Configuración → Productos.`);
+    // Mercancía sin tipo de carga: si el cliente tiene UNA sola tarifa de este movimiento (salida o entrada), se le aplica esa. Si tiene varias,
+    // no se puede saber cuál toca y se avisa; si no tiene ninguna, no cobrarla es lo normal.
+    const prodsMov = [...new Set(almacenajeTarifas.filter(t => t.clienteId === d.clienteId).map(t => almacenajeProducto(t.tipo)).filter(pr => pr && !pr.archived && pr.disparador === (salida ? 'salida' : 'entrada')))];
+    const cobraMov = prodsMov.length > 0;
+    if (sinTipo > 0 && prodsMov.length === 1) {
+      const pe = prodsMov[0];
+      grupos[pe.id] = (grupos[pe.id] || 0) + sinTipoPs.reduce((s, p) => s + (pe.unidad === 'bulto' ? (p.bultos != null ? p.bultos : p.cantidad) : p.cantidad), 0);
+    } else if (sinTipo > 0 && cobraMov) res.avisos.push(`${sgaUdN(d.clienteId, sinTipo)} sin tipo de carga: sin él no se puede aplicar una tarifa de ${palabra} y no se cobra. Si este cliente cobra solo por m², es normal; si no, a esa mercancía le falta el tipo de carga (se asigna en el catálogo del cliente o al recibirla) y su tarifa de ${salida ? 'salida' : 'entrada'} en Almacén → Configuración → Productos.`);
     Object.keys(grupos).forEach(id => {
       const t = sgaTarifaEn(d.clienteId, id, d.fecha);
       if (!t) { res.avisos.push(`Sin tarifa de «${sgaProdTxt(id)}» para este cliente: esa ${palabra} no se cobra.`); return; }
