@@ -7493,6 +7493,59 @@ function sgaEntradaAddFila(pre){
   sgaEntradaRefrescar();
   return i;
 }
+// Pegar desde Excel en las líneas de una recepción: varias filas y/o columnas se reparten desde la casilla en la que estás (como en Excel),
+// y se crean las líneas que falten. Las columnas se buscan por su dato (artículo, palets, zona…), no por su posición.
+const SE_PEGAR_ORDEN = ['art', 'prod', 'alm', 'zona', 'ubic'];   // primero lo que condiciona al resto (el artículo rellena tipo, zona y bultos)
+document.addEventListener('paste', e => {
+  const el = e.target;
+  if (window.__stockView !== 'entrada' || !el || !el.closest || !el.matches('input, select, textarea') || !el.closest('#se-rows')) return;
+  const txt = ((e.clipboardData && e.clipboardData.getData('text/plain')) || '').replace(/[\r\n]+$/, '');
+  if (!/[\t\n\r]/.test(txt)) return;   // una sola celda: se pega como siempre
+  const datos = catPegarTabla(txt);
+  if (!datos.length) return;
+  e.preventDefault();
+  if (datos.length > 500) { appToast('Se pueden pegar hasta 500 líneas de una vez.', 'error'); return; }
+  const clave = c => (c.id || '').replace(/^se-\d+-/, '');
+  const tr0 = el.closest('tr.se-row');
+  const claves = [...tr0.cells].map(td => { const c = td.querySelector('input, select, textarea'); return c ? clave(c) : ''; });
+  const c0 = claves.indexOf(clave(el));
+  if (c0 < 0) return;
+  const filas = () => [...document.querySelectorAll('#se-rows tr.se-row')];
+  const ini = filas().indexOf(tr0);
+  const norm = s => String(s || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  let nuevas = 0, omitidas = 0;
+  datos.forEach((vals, r) => {
+    let tr = filas()[ini + r];
+    if (!tr) { sgaEntradaAddFila(); nuevas++; tr = filas()[ini + r]; }
+    if (!tr) return;
+    const i = tr.dataset.i;
+    const asign = [];
+    vals.forEach((v, j) => { const k = claves[c0 + j]; if (k) asign.push([k, v.trim()]); else if (v.trim()) omitidas++; });
+    const rango = k => { const p = SE_PEGAR_ORDEN.indexOf(k); return p < 0 ? 99 : p; };
+    asign.sort((a, b) => rango(a[0]) - rango(b[0]));
+    asign.forEach(([k, val]) => {
+      const ctl = document.getElementById(`se-${i}-${k}`);
+      if (!ctl || ctl.disabled) { omitidas++; return; }
+      if (ctl.tagName === 'SELECT') {
+        if (val === '') return;
+        const n = norm(val), ops = [...ctl.options].filter(o => o.value && o.value !== '__nuevo');
+        let o = ops.find(x => norm(x.value) === n || norm(x.text) === n) || ops.find(x => norm(x.text).split(' · ')[0] === n);
+        if (!o) { const cand = ops.filter(x => norm(x.text).startsWith(n)); if (cand.length === 1) o = cand[0]; }
+        if (!o) { omitidas++; return; }
+        ctl.value = o.value;
+      } else {
+        ctl.value = val;
+        if (k === 'bultos') ctl.dataset.manual = '1';   // un nº de bultos pegado no se recalcula solo
+      }
+      ctl.dispatchEvent(new Event('input', { bubbles: true }));
+      ctl.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
+  window.__stockDirty = true;
+  sgaEntradaRefrescar();
+  const ncols = Math.max(...datos.map(d => d.length));
+  appToast(`Pegado: ${datos.length} línea${datos.length === 1 ? '' : 's'} × ${ncols} columna${ncols === 1 ? '' : 's'}${nuevas ? ` (${nuevas} nueva${nuevas === 1 ? '' : 's'})` : ''}.${omitidas ? ` ${omitidas} dato${omitidas === 1 ? '' : 's'} no se ${omitidas === 1 ? 'pudo' : 'pudieron'} pegar (columna que no existe o valor que no está en la lista).` : ''} Revisa las líneas antes de confirmar.`, omitidas ? 'info' : 'ok');
+});
 function sgaEntradaQuitarFila(i){
   const row = document.querySelector(`.se-row[data-i="${i}"]`);
   if (row && document.querySelectorAll('.se-row').length > 1) { row.remove(); window.__stockDirty = true; sgaEntradaRefrescar(); }
