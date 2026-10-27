@@ -5561,17 +5561,20 @@ function stockBodyHtml(){
     const emp = stockEmpActual(stockSeg()), est = window.__stockEstado || '';
     const lista = sgaAlbaranes.filter(a => (!wid || a.warehouseId === wid) && (!emp || a.clienteId === emp) && (!est || sgaAlbaranEstadoClave(a) === est) && (esSal ? a.tipo === 'salida' : a.tipo !== 'salida')).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && (okCli(c) || (q && ((esSal && (a.destinatario || '').toLowerCase().includes(q)) || (a.referencia || '').toLowerCase().includes(q) || sgaLineasAlb(a).some(l => (l.nombre + ' ' + l.desc).toLowerCase().includes(q))))); });
     if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q || emp || est ? 'Ningún albarán coincide con la búsqueda o el filtro.' : esSal ? 'Todavía no hay expediciones. Registra la primera con «Nueva expedición».' : 'Todavía no hay recepciones. Registra la primera con «Nueva recepción».'}</div>`;
+    // Solo se enseñan las columnas que tienen algo: las que no tienen dato en ninguna fila de la lista se ocultan
+    const conDR = lista.some(a => esSal ? a.destinatario : a.referencia), conMerc = lista.some(a => sgaMercanciaResumen(a));
+    const conModal = lista.some(a => a.tipo === 'regularizacion' || a.tipo === 'apertura' || (a.modalidad && a.modalidad !== 'palet'));
     return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
-      <thead><tr>${thSort('Nº','number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Almacén','text')}${(esSal ? thSort('Destinatario','text') : thSort('Referencia','text')) + thSort('Mercancía','text')}${thSort('Modalidad','text')}${thSort('Palets','number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
+      <thead><tr>${thSort('Nº','number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Almacén','text')}${conDR ? (esSal ? thSort('Destinatario','text') : thSort('Referencia','text')) : ''}${conMerc ? thSort('Mercancía','text') : ''}${conModal ? thSort('Modalidad','text') : ''}${thSort('Palets','number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
       <tbody>${lista.map(a => { const c = contactos.find(x => x.id === a.clienteId); return `
         <tr data-alb="${a.id}">
           <td data-sort-value="${a.numero}"><b>${esc(sgaNumAlbaran(a))}</b></td>
           <td style="white-space:nowrap;" data-sort-value="${esc(a.fecha)}">${fmtDateDMY(a.fecha)}</td>
           <td data-sort-value="${esc(c ? c.nombre : '')}">${esc(c ? ((c.nombreComercial || '').trim() || c.nombre) : '—')}</td>
           <td data-sort-value="${esc(whNombre(a.warehouseId))}">${esc(whNombre(a.warehouseId))}</td>
-          ${esSal ? `<td data-sort-value="${esc(a.destinatario)}" title="${esc(a.destinatarioDireccion)}">${esc(a.destinatario) || '—'}</td>` : `<td data-sort-value="${esc(a.referencia)}">${esc(a.referencia) || '—'}</td>`}
-          <td class="sga-merc" data-sort-value="${esc(sgaMercanciaResumen(a))}"${sgaLineasAlb(a).length ? ` data-tip="${esc(sgaMercanciaDetalle(a))}"` : ''}>${sgaMercanciaResumen(a) ? esc(sgaMercanciaResumen(a)) : '<span style="color:var(--mutedFaint);">—</span>'}</td>
-          <td data-sort-value="${esc(a.modalidad)}">${a.tipo === 'regularizacion' ? 'Regularización' : a.tipo === 'apertura' ? 'Stock inicial' : esc(SGA_MODALIDADES[a.modalidad] || a.modalidad)}</td>
+          ${!conDR ? '' : esSal ? `<td data-sort-value="${esc(a.destinatario)}" title="${esc(a.destinatarioDireccion)}">${esc(a.destinatario) || '—'}</td>` : `<td data-sort-value="${esc(a.referencia)}">${esc(a.referencia) || '—'}</td>`}
+          ${conMerc ? `<td class="sga-merc" data-sort-value="${esc(sgaMercanciaResumen(a))}"${sgaLineasAlb(a).length ? ` data-tip="${esc(sgaMercanciaDetalle(a))}"` : ''}>${sgaMercanciaResumen(a) ? esc(sgaMercanciaResumen(a)) : '<span style="color:var(--mutedFaint);">—</span>'}</td>` : ''}
+          ${conModal ? `<td data-sort-value="${esc(a.modalidad)}">${a.tipo === 'regularizacion' ? 'Regularización' : a.tipo === 'apertura' ? 'Stock inicial' : esc(SGA_MODALIDADES[a.modalidad] || a.modalidad)}</td>` : ''}
           <td class="tf-precio" data-sort-value="${Math.abs(sgaMovsAlbaran[a.id] || 0)}">${sgaMovsAlbaran[a.id] == null ? '—' : a.tipo === 'regularizacion' ? (sgaMovsAlbaran[a.id] > 0 ? '+' : '') + sgaMovsAlbaran[a.id] : Math.abs(sgaMovsAlbaran[a.id])}</td>
           <td data-sort-value="${esc(a.estado)}">${sgaAlbEstadoHtml(a)}</td>
           <td style="text-align:right;white-space:nowrap;">${sgaAlbAccionesHtml(a)}</td>
@@ -8371,7 +8374,8 @@ async function sgaSalidaCancelar(){
 }
 // Sin orden de entrada («Manual»): el stock del cliente se enseña junto, agrupado por artículo, y solo se indica cuántos palets salen.
 // Por debajo se reparten entre sus partidas (las más antiguas primero, da igual cuál) en campos ocultos que lee el resto del programa.
-function sgaSalidaGruposHtml(clienteId, ps, conDesc){
+function sgaSalidaGruposHtml(clienteId, ps, flags){
+  const { conDesc, conTipo, conRef, conSitio } = flags;
   const grupos = {};
   ps.slice().sort((a, b) => String(a.fechaEntrada).localeCompare(String(b.fechaEntrada))).forEach(p => { const k = [p.productoId, p.descripcion, p.referencia].join('|'); (grupos[k] = grupos[k] || []).push(p); });
   const lista = Object.values(grupos).sort((a, b) => sgaProdTxt(a[0].productoId).localeCompare(sgaProdTxt(b[0].productoId), 'es') || (a[0].descripcion || '').localeCompare(b[0].descripcion || '', 'es') || (a[0].referencia || '').localeCompare(b[0].referencia || '', 'es'));
@@ -8383,9 +8387,9 @@ function sgaSalidaGruposHtml(clienteId, ps, conDesc){
     const pids = g.map(p => p.id).join(',');
     return `<tr data-pids="${pids}" data-pid="${p0.id}">
       ${conDesc ? `<td data-sort-value="${esc(p0.descripcion)}">${esc(p0.descripcion) || '—'}</td>` : ''}
-      <td data-sort-value="${esc(sgaProdTxt(p0.productoId))}">${esc(sgaProdTxt(p0.productoId))}</td>
-      <td data-sort-value="${esc(p0.referencia)}">${esc(p0.referencia) || '—'}</td>
-      <td data-sort-value="${esc(sitios)}">${esc(sitios) || '—'}</td>
+      ${conTipo ? `<td data-sort-value="${esc(sgaProdTxt(p0.productoId))}">${esc(sgaProdTxt(p0.productoId))}</td>` : ''}
+      ${conRef ? `<td data-sort-value="${esc(p0.referencia)}">${esc(p0.referencia) || '—'}</td>` : ''}
+      ${conSitio ? `<td data-sort-value="${esc(sitios)}">${esc(sitios) || '—'}</td>` : ''}
       <td class="tf-precio" data-sort-value="${total}">${total}${bultos != null ? `<small> (${sgaNumTxt(bultos)} bultos)</small>` : ''}</td>
       <td style="text-align:right;width:110px;"><input class="sl-g" id="sl-g-${i}" data-pids="${pids}" data-total="${total}" inputmode="numeric" maxlength="6" placeholder="0" style="width:80px;text-align:right;" oninput="sgaSalidaGrupoIn(this)" onblur="sgaSalidaGruposSync()" />
         <span style="display:none;">${g.map(p => `<input type="hidden" class="sl-in" id="sl-in-${p.id}" data-pid="${p.id}" />`).join('')}</span></td>
@@ -8428,28 +8432,33 @@ function sgaSalidaStockHtml(clienteId){
   const modo = sgaClienteSalida(clienteId), manual = modo === 'manual', agrupado = manual && !sgaClienteCfg(clienteId).codigosUnicos;
   const ps = sgaStockCliente(clienteId, sgaSalidaWh());
   const conDesc = ps.some(p => p.descripcion);
+  // Solo se enseñan los datos que este cliente usa: un apartado que ninguna de sus partidas tiene relleno se oculta
+  const conTipo = ps.some(p => p.productoId), conRef = ps.some(p => p.referencia), conSitio = ps.some(p => { const s = sgaSitioTxt(p); return s && s !== '—'; });
+  const flags = { conDesc, conTipo, conRef, conSitio };
   const tipos = [...new Set(ps.map(p => p.productoId))].sort((a, b) => sgaProdTxt(a).localeCompare(sgaProdTxt(b), 'es'));
+  // «Pedir por cantidad» va como título del primer filtro que se vea
+  const pedir = conTipo ? 'Pedir por cantidad' : '', pedirArt = !conTipo ? 'Pedir por cantidad · código de artículo' : 'Código de artículo', pedirRef = !conTipo && !conDesc ? 'Pedir por cantidad · descripción' : 'Descripción';
   return `
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;padding:12px 14px;border:1px dashed var(--border);border-radius:12px;margin-bottom:14px;">
-      ${manual ? '' : `<div class="field" style="flex:1;min-width:190px;margin-bottom:0;"><label>Pedir por cantidad</label><select id="sl-q-tipo" onchange="sgaSalidaTipoCambio()">${tipos.map(t => `<option value="${t}">${esc(sgaProdTxt(t))}</option>`).join('')}</select></div>
-      ${conDesc ? '<div class="field" style="flex:1;min-width:170px;margin-bottom:0;"><label>Código de artículo</label><select id="sl-q-art" onchange="sgaSalidaArtCambio()"></select></div>' : ''}
-      <div class="field" style="flex:1;min-width:150px;margin-bottom:0;"><label>Descripción</label><select id="sl-q-ref"></select></div>
-      <div class="field" style="width:110px;margin-bottom:0;"><label>Cantidad</label><input id="sl-q-cant" inputmode="numeric" maxlength="6" placeholder="Nº" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaSalidaRepartir(); }" /></div>`}
+      ${manual ? '' : `<div class="field" style="flex:1;min-width:190px;margin-bottom:0;${conTipo ? '' : 'display:none;'}"><label>${pedir}</label><select id="sl-q-tipo" onchange="sgaSalidaTipoCambio()">${tipos.map(t => `<option value="${t}">${esc(sgaProdTxt(t))}</option>`).join('')}</select></div>
+      ${conDesc ? `<div class="field" style="flex:1;min-width:170px;margin-bottom:0;"><label>${pedirArt}</label><select id="sl-q-art" onchange="sgaSalidaArtCambio()"></select></div>` : ''}
+      <div class="field" style="flex:1;min-width:150px;margin-bottom:0;${conRef ? '' : 'display:none;'}"><label>${pedirRef}</label><select id="sl-q-ref"></select></div>
+      <div class="field" style="width:110px;margin-bottom:0;"><label>${!conTipo && !conDesc && !conRef ? 'Pedir cantidad' : 'Cantidad'}</label><input id="sl-q-cant" inputmode="numeric" maxlength="6" placeholder="Nº" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaSalidaRepartir(); }" /></div>`}
       ${manual ? '<div style="flex:1;min-width:200px;font-size:13px;color:var(--muted);"><b>Sin orden de entrada</b> · el stock sale junto, agrupado por artículo: indica abajo cuántos ' + sgaUnidadCfg(clienteId).p + ' salen de cada uno.</div>' : `<button type="button" class="btn btn-ghost" onclick="sgaSalidaRepartir()" title="${modo === 'lifo' ? 'Reparte la cantidad entre las partidas más recientes' : 'Reparte la cantidad entre las partidas más antiguas'}">Repartir (${modo === 'lifo' ? 'más reciente' : 'más antiguo'} primero)</button>`}
       <button type="button" class="btn btn-ghost" onclick="sgaSalidaLimpiar()">Limpiar</button>
     </div>
     ${ps.length > 8 ? sgaBuscadorFilasHtml('sl-buscar', '#sl-stock .tc-hist-box table', 'Buscar en el stock: artículo, descripción, código, sitio…') : ''}
     <div class="tc-hist-box" style="max-height:420px;">
     <table class="tf-table" style="min-width:640px;">
-      <thead><tr>${manual ? '' : thSort('Recepción','date')}${conDesc ? thSort('Código de artículo','text') : ''}${thSort('Tipo de carga','text')}${thSort('Descripción','text')}${cfg.codigosUnicos && !agrupado ? thSort('Código','text') : ''}${thSort('Sitio','text')}${thSort('Hay','number','style="text-align:right;"')}<th style="text-align:right;">Sale</th></tr></thead>
-      <tbody>${agrupado ? sgaSalidaGruposHtml(clienteId, ps, conDesc) : ps.map(p => `
+      <thead><tr>${manual ? '' : thSort('Recepción','date')}${conDesc ? thSort('Código de artículo','text') : ''}${conTipo ? thSort('Tipo de carga','text') : ''}${conRef ? thSort('Descripción','text') : ''}${cfg.codigosUnicos && !agrupado ? thSort('Código','text') : ''}${conSitio ? thSort('Sitio','text') : ''}${thSort('Hay','number','style="text-align:right;"')}<th style="text-align:right;">Sale</th></tr></thead>
+      <tbody>${agrupado ? sgaSalidaGruposHtml(clienteId, ps, flags) : ps.map(p => `
         <tr data-pid="${p.id}">
           ${manual ? '' : `<td style="white-space:nowrap;" data-sort-value="${esc(p.fechaEntrada)}">${fmtDateDMY(p.fechaEntrada)}</td>`}
           ${conDesc ? `<td data-sort-value="${esc(p.descripcion)}">${esc(p.descripcion) || "—"}</td>` : ""}
-          <td data-sort-value="${esc(sgaProdTxt(p.productoId))}">${esc(sgaProdTxt(p.productoId))}</td>
-          <td data-sort-value="${esc(p.referencia)}">${esc(p.referencia) || '—'}</td>
+          ${conTipo ? `<td data-sort-value="${esc(sgaProdTxt(p.productoId))}">${esc(sgaProdTxt(p.productoId))}</td>` : ''}
+          ${conRef ? `<td data-sort-value="${esc(p.referencia)}">${esc(p.referencia) || '—'}</td>` : ''}
           ${cfg.codigosUnicos ? `<td style="font-family:var(--mono);font-size:12px;" data-sort-value="${esc(p.codigo)}">${esc(p.codigo) || '—'}</td>` : ''}
-          <td data-sort-value="${esc(sgaSitioTxt(p))}">${esc(sgaSitioTxt(p))}</td>
+          ${conSitio ? `<td data-sort-value="${esc(sgaSitioTxt(p))}">${esc(sgaSitioTxt(p))}</td>` : ''}
           <td class="tf-precio" data-sort-value="${p.actual}">${p.actual}${sgaClienteConBultos(p.clienteId) && p.bultos != null ? `<small> (${sgaNumTxt(sgaBultosSalida(p, p.actual))} bultos)</small>` : ''}</td>
           <td style="text-align:right;width:110px;">${p.actual === 1 && cfg.codigosUnicos
             ? `<input type="checkbox" class="switch sl-in" id="sl-in-${p.id}" data-pid="${p.id}" onchange="sgaSalidaRefrescar()" />`
@@ -10211,17 +10220,20 @@ function sgaRegulAlmacenCambio(){
     sgaRegulRefrescar();
     return;
   }
+  // Solo se enseñan los datos que este cliente usa (un apartado sin nada relleno en sus partidas se oculta)
+  const rgDesc = ps.some(p => p.descripcion), rgTipo = ps.some(p => p.productoId), rgRef = ps.some(p => p.referencia), rgSitio = ps.some(p => { const s = sgaSitioTxt(p); return s && s !== '—'; });
+  const rgRefCol = rgRef || ps.some(p => p.codigo);
   cont.innerHTML = `
     ${ps.length > 8 ? sgaBuscadorFilasHtml('rg-buscar', '#rg-stock .tc-hist-box table', 'Buscar en el stock: artículo, descripción, código, sitio…') : ''}
     <div class="tc-hist-box" style="max-height:460px;"><table class="tf-table" style="min-width:620px;">
-      <thead><tr>${thSort('Recepción','date')}<th>Artículo</th>${thSort('Tipo de carga','text')}${thSort('Referencia','text')}<th>Sitio</th><th style="text-align:right;">En el SGA</th><th style="text-align:right;">Hay de verdad</th><th style="text-align:right;">Diferencia</th></tr></thead>
+      <thead><tr>${thSort('Recepción','date')}${rgDesc ? '<th>Artículo</th>' : ''}${rgTipo ? thSort('Tipo de carga','text') : ''}${rgRefCol ? thSort('Referencia','text') : ''}${rgSitio ? '<th>Sitio</th>' : ''}<th style="text-align:right;">En el SGA</th><th style="text-align:right;">Hay de verdad</th><th style="text-align:right;">Diferencia</th></tr></thead>
       <tbody>${ps.map(p => `
         <tr data-pid="${p.id}">
           <td style="white-space:nowrap;" data-sort-value="${esc(p.fechaEntrada)}">${fmtDateDMY(p.fechaEntrada)}</td>
-          <td>${esc(p.descripcion) || '—'}</td>
-          <td data-sort-value="${esc(sgaProdTxt(p.productoId))}">${esc(sgaProdTxt(p.productoId))}</td>
-          <td data-sort-value="${esc(p.referencia)}">${esc(p.referencia) || '—'}${p.codigo ? `<div style="font-family:var(--mono);font-size:11px;color:var(--muted);">${esc(p.codigo)}</div>` : ''}</td>
-          <td>${esc(sgaSitioTxt(p))}</td>
+          ${rgDesc ? `<td>${esc(p.descripcion) || '—'}</td>` : ''}
+          ${rgTipo ? `<td data-sort-value="${esc(sgaProdTxt(p.productoId))}">${esc(sgaProdTxt(p.productoId))}</td>` : ''}
+          ${rgRefCol ? `<td data-sort-value="${esc(p.referencia)}">${esc(p.referencia) || '—'}${p.codigo ? `<div style="font-family:var(--mono);font-size:11px;color:var(--muted);">${esc(p.codigo)}</div>` : ''}</td>` : ''}
+          ${rgSitio ? `<td>${esc(sgaSitioTxt(p))}</td>` : ''}
           <td class="tf-precio">${p.actual}</td>
           <td style="text-align:right;width:120px;"><input class="rg-in" id="rg-in-${p.id}" data-pid="${p.id}" inputmode="numeric" maxlength="6" value="${p.actual}" style="width:90px;text-align:right;" /></td>
           <td class="tf-precio rg-dif" id="rg-dif-${p.id}">0</td>
