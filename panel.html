@@ -7320,8 +7320,9 @@ function sgaCalcularEntrada(d){
   }
   if (!porAlbaran) {
     const grupos = {};
+    let sinTipo = 0;
     d.partidas.forEach(p => {
-      if (!p.productoId) return;   // sin tipo de carga (clientes que cobran por m²): no hay tarifa de movimiento por palet
+      if (!p.productoId) { sinTipo += p.cantidad; return; }   // sin tipo de carga (clientes que cobran por m²): no hay tarifa de movimiento por palet
       const ps = almacenajeProducto(p.productoId);
       const enlace = ps && almacenajeProducto(salida ? ps.cobroSalida : ps.cobroEntrada);
       const fam = ps && ps.familia;
@@ -7329,6 +7330,8 @@ function sgaCalcularEntrada(d){
       if (!pe) { res.avisos.push(`«${sgaProdTxt(p.productoId)}» no tiene un producto de ${palabra} asociado: elige cuál se cobra en Almacén → Configuración → Productos. Su ${palabra} no se cobra.`); return; }
       grupos[pe.id] = (grupos[pe.id] || 0) + (pe.unidad === 'bulto' ? (p.bultos != null ? p.bultos : p.cantidad) : p.cantidad);
     });
+    const cobraMov = almacenajeTarifas.some(t => { const pr = t.clienteId === d.clienteId ? almacenajeProducto(t.tipo) : null; return pr && ['entrada', 'salida'].includes(pr.disparador); });   // si no tiene ninguna tarifa de movimiento, no cobrarlos es lo normal
+    if (sinTipo > 0 && cobraMov) res.avisos.push(`${sgaUdN(d.clienteId, sinTipo)} sin tipo de carga: sin él no se puede aplicar una tarifa de ${palabra} y no se cobra. Si este cliente cobra solo por m², es normal; si no, a esa mercancía le falta el tipo de carga (se asigna en el catálogo del cliente o al recibirla) y su tarifa de ${salida ? 'salida' : 'entrada'} en Almacén → Configuración → Productos.`);
     Object.keys(grupos).forEach(id => {
       const t = sgaTarifaEn(d.clienteId, id, d.fecha);
       if (!t) { res.avisos.push(`Sin tarifa de «${sgaProdTxt(id)}» para este cliente: esa ${palabra} no se cobra.`); return; }
@@ -8642,7 +8645,7 @@ function sgaSalidaResumenHtml(d){
   const total = sgaR2(calc.cobros.reduce((s, c) => s + c.importe, 0));
   return `
     ${calc.cobros.length ? `<div class="op-lines">${calc.cobros.map(c => `<div class="op-line"><span>${esc(sgaProdTxt(c.producto_id))}${c.cantidad !== 1 ? ` × ${esc(String(c.cantidad))}` : ''} <small style="color:var(--mutedFaint);">${esc(eurPrecio(c.precio))}${c.nota ? ' · ' + esc(c.nota) : ''}</small></span><span class="op-dots"></span><b>${esc(eur2(c.importe))}</b></div>`).join('')}</div>
-    <div class="op-total-row" style="margin-top:10px;"><span>Total de la expedición</span><b>${esc(eur2(total))}</b></div>` : '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay nada que cobrar.</div>'}
+    <div class="op-total-row" style="margin-top:10px;"><span>Total de la expedición</span><b>${esc(eur2(total))}</b></div>` : `<div style="color:var(--mutedFaint);font-size:12.5px;">${!sale.length ? 'Todavía no hay nada que cobrar: marca qué sale.' : calc.avisos.length ? 'Esta expedición no genera ningún cobro (mira el aviso de abajo).' : 'Esta expedición <b>no genera ningún cobro</b>: este cliente no tiene en su tarifa ningún cobro por salida (la tarifa se configura en su ficha de cliente → Tarifas de almacenaje).'}</div>`}
     ${calc.avisos.map(a => `<div class="se-aviso">⚠ ${esc(a)}</div>`).join('')}${avisosFifo}`;
 }
 // Nº de albarán que se le va a asignar a la expedición (el programa lo genera al guardar: 3 letras del cliente + fecha + orden del día).
