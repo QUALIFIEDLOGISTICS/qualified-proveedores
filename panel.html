@@ -5432,7 +5432,7 @@ function sgaMercanciaResumen(a){
 function sgaMercanciaDetalle(a){
   const ls = sgaLineasAlb(a);
   const total = ls.reduce((s, l) => s + l.cantidad, 0);
-  return ls.map(l => sgaLineaTxt(l) + (l.desc ? ' · ' + l.desc : '') + (l.tipo ? ' (' + l.tipo + ')' : '')).join('\n') + (ls.length > 1 && a.tipo !== 'regularizacion' ? `\nTotal: ${sgaNumTxt(total)} palet${total === 1 ? '' : 's'}` : '');
+  return ls.map(l => sgaLineaTxt(l) + (l.desc ? ' · ' + l.desc : '') + (l.tipo ? ' (' + l.tipo + ')' : '')).join('\n') + (ls.length > 1 && a.tipo !== 'regularizacion' ? `\nTotal: ${sgaNumTxt(total)} ${sgaUd(a.clienteId, total)}` : '');
 }
 const SGA_MODALIDADES = { palet: 'Palets', contenedor_20: "Contenedor 20'", contenedor_40: "Contenedor 40'", trailer: 'Trailer' };
 function sgaProdTxt(id){ const p = almacenajeProducto(id); return p ? almacenajeProductoTexto(p) : (id || '—'); }
@@ -5564,8 +5564,12 @@ function stockBodyHtml(){
     // Solo se enseñan las columnas que tienen algo: las que no tienen dato en ninguna fila de la lista se ocultan
     const conDR = lista.some(a => esSal ? a.destinatario : a.referencia), conMerc = lista.some(a => sgaMercanciaResumen(a));
     const conModal = lista.some(a => a.tipo === 'regularizacion' || a.tipo === 'apertura' || (a.modalidad && a.modalidad !== 'palet'));
+    // Cada cliente llama a su unidad como quiere (palets, carpas, jumbos…): el título de la columna es ese nombre si todos los de la lista
+    // coinciden; si se mezclan, «Palets» y cada cifra lleva el nombre de la suya
+    const unidades = [...new Set(lista.map(a => sgaCap(sgaUnidadCfg(a.clienteId).p)))];
+    const udTit = unidades.length === 1 ? unidades[0] : 'Palets';
     return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
-      <thead><tr>${thSort('Nº','number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Almacén','text')}${conDR ? (esSal ? thSort('Destinatario','text') : thSort('Referencia','text')) : ''}${conMerc ? thSort('Mercancía','text') : ''}${conModal ? thSort('Modalidad','text') : ''}${thSort('Palets','number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
+      <thead><tr>${thSort('Nº','number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Almacén','text')}${conDR ? (esSal ? thSort('Destinatario','text') : thSort('Referencia','text')) : ''}${conMerc ? thSort('Mercancía','text') : ''}${conModal ? thSort('Modalidad','text') : ''}${thSort(udTit,'number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
       <tbody>${lista.map(a => { const c = contactos.find(x => x.id === a.clienteId); return `
         <tr data-alb="${a.id}">
           <td data-sort-value="${a.numero}"><b>${esc(sgaNumAlbaran(a))}</b></td>
@@ -5574,8 +5578,8 @@ function stockBodyHtml(){
           <td data-sort-value="${esc(whNombre(a.warehouseId))}">${esc(whNombre(a.warehouseId))}</td>
           ${!conDR ? '' : esSal ? `<td data-sort-value="${esc(a.destinatario)}" title="${esc(a.destinatarioDireccion)}">${esc(a.destinatario) || '—'}</td>` : `<td data-sort-value="${esc(a.referencia)}">${esc(a.referencia) || '—'}</td>`}
           ${conMerc ? `<td class="sga-merc" data-sort-value="${esc(sgaMercanciaResumen(a))}"${sgaLineasAlb(a).length ? ` data-tip="${esc(sgaMercanciaDetalle(a))}"` : ''}>${sgaMercanciaResumen(a) ? esc(sgaMercanciaResumen(a)) : '<span style="color:var(--mutedFaint);">—</span>'}</td>` : ''}
-          ${conModal ? `<td data-sort-value="${esc(a.modalidad)}">${a.tipo === 'regularizacion' ? 'Regularización' : a.tipo === 'apertura' ? 'Stock inicial' : esc(SGA_MODALIDADES[a.modalidad] || a.modalidad)}</td>` : ''}
-          <td class="tf-precio" data-sort-value="${Math.abs(sgaMovsAlbaran[a.id] || 0)}">${sgaMovsAlbaran[a.id] == null ? '—' : a.tipo === 'regularizacion' ? (sgaMovsAlbaran[a.id] > 0 ? '+' : '') + sgaMovsAlbaran[a.id] : Math.abs(sgaMovsAlbaran[a.id])}</td>
+          ${conModal ? `<td data-sort-value="${esc(a.modalidad)}">${a.tipo === 'regularizacion' ? 'Regularización' : a.tipo === 'apertura' ? 'Stock inicial' : a.modalidad === 'palet' ? esc(sgaCap(sgaUnidadCfg(a.clienteId).p)) : esc(SGA_MODALIDADES[a.modalidad] || a.modalidad)}</td>` : ''}
+          <td class="tf-precio" data-sort-value="${Math.abs(sgaMovsAlbaran[a.id] || 0)}">${sgaMovsAlbaran[a.id] == null ? '—' : a.tipo === 'regularizacion' ? (sgaMovsAlbaran[a.id] > 0 ? '+' : '') + sgaMovsAlbaran[a.id] : Math.abs(sgaMovsAlbaran[a.id])}${unidades.length > 1 && sgaMovsAlbaran[a.id] != null && sgaCap(sgaUnidadCfg(a.clienteId).p) !== 'Palets' ? `<small style="color:var(--mutedFaint);"> ${esc(sgaUd(a.clienteId, Math.abs(sgaMovsAlbaran[a.id])))}</small>` : ''}</td>
           <td data-sort-value="${esc(a.estado)}">${sgaAlbEstadoHtml(a)}</td>
           <td style="text-align:right;white-space:nowrap;">${sgaAlbAccionesHtml(a)}</td>
         </tr>`; }).join('')}</tbody></table></div>`;
