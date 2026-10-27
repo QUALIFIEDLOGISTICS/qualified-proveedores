@@ -6361,6 +6361,65 @@ function catTeclaNueva(ev, el){
   const ultima = [...document.querySelectorAll('#stock-body tr.cg-new')].pop() === tr;
   if (ultima) catAnadirFila();   // Enter en la última casilla de la última fila: otra fila nueva
 }
+// Pegar desde Excel en la rejilla: al pegar varias celdas (varias filas y/o columnas) se reparten a partir de la casilla en la que estás,
+// como en Excel; si faltan filas se crean nuevas. Las columnas se buscan por su dato (no por su posición), así que da igual el orden en que estén.
+function catPegarTabla(txt){
+  const filas = []; let fila = [], cel = '', q = false;
+  for (let i = 0; i < txt.length; i++) {
+    const ch = txt[i];
+    if (q) { if (ch === '"') { if (txt[i + 1] === '"') { cel += '"'; i++; } else q = false; } else cel += ch; }
+    else if (ch === '"' && cel === '') q = true;
+    else if (ch === '\t') { fila.push(cel); cel = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && txt[i + 1] === '\n') i++; fila.push(cel); filas.push(fila); fila = []; cel = ''; }
+    else cel += ch;
+  }
+  if (cel !== '' || fila.length) { fila.push(cel); filas.push(fila); }
+  return filas;
+}
+function catClaveCelda(el){ return el.dataset.n || el.dataset.f || (el.dataset.x ? 'x:' + el.dataset.x : ''); }
+function catControlPorClave(tr, k){ return k ? [...tr.querySelectorAll('input, select, textarea')].find(c => catClaveCelda(c) === k) || null : null; }
+document.addEventListener('paste', e => {
+  if (!window.__catEditAll || window.__stockView !== 'catedit' || window.__catLocked) return;
+  const el = e.target;
+  if (!el || !el.closest || !el.matches('input, select, textarea') || !el.closest('#stock-body table.cg-tabla')) return;
+  const raw = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+  const txt = raw.replace(/[\r\n]+$/, '');
+  if (!/[\t\n\r]/.test(txt)) return;   // una sola celda: se pega como siempre
+  const datos = catPegarTabla(txt);
+  if (!datos.length) return;
+  e.preventDefault();
+  const tr0 = el.closest('tr');
+  const claves = [...tr0.cells].map(td => { const c = td.querySelector('input, select, textarea'); return c ? catClaveCelda(c) : ''; });
+  const c0 = claves.indexOf(catClaveCelda(el));
+  if (c0 < 0) return;
+  if (datos.length > 500) { appToast('Se pueden pegar hasta 500 filas de una vez.', 'error'); return; }
+  const filasTabla = () => [...document.querySelectorAll('#stock-body table.cg-tabla tbody tr.cg-row')];
+  const ini = filasTabla().indexOf(tr0);
+  let nuevas = 0, sinHueco = 0, omitidas = 0;
+  datos.forEach((vals, i) => {
+    let tr = filasTabla()[ini + i];
+    if (!tr) { if (!catClienteSel()) return; catAnadirFila(); nuevas++; tr = filasTabla()[ini + i]; }
+    if (!tr) return;
+    vals.forEach((v, j) => {
+      const k = claves[c0 + j];
+      if (!k) { if (c0 + j >= claves.length) sinHueco++; return; }
+      const ctl = catControlPorClave(tr, k);
+      if (!ctl || ctl.disabled) { omitidas++; return; }
+      const val = v.trim();
+      if (ctl.tagName === 'SELECT') {
+        const n = s => String(s || '').trim().toLowerCase();
+        const o = [...ctl.options].find(x => n(x.value) === n(val) || n(x.text) === n(val));
+        if (!o) { if (val) omitidas++; return; }
+        ctl.value = o.value;
+      } else ctl.value = val;
+      ctl.dispatchEvent(new Event('input', { bubbles: true }));
+      ctl.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
+  catActualizarContador();
+  const ncols = Math.max(...datos.map(d => d.length));
+  appToast(`Pegado: ${datos.length} fila${datos.length === 1 ? '' : 's'} × ${ncols} columna${ncols === 1 ? '' : 's'}${nuevas ? ` (${nuevas} fila${nuevas === 1 ? '' : 's'} nueva${nuevas === 1 ? '' : 's'})` : ''}.${omitidas || sinHueco ? ` ${omitidas + sinHueco} dato${omitidas + sinHueco === 1 ? '' : 's'} no se ${omitidas + sinHueco === 1 ? 'pudo' : 'pudieron'} pegar (columna que no existe o valor que no está en la lista).` : ''} Revisa y pulsa «Guardar».`, omitidas || sinHueco ? 'info' : 'ok');
+});
 // Atajos en «Editar catálogo» (cuando está desbloqueado): F8 (o Ctrl+D, como «rellenar hacia abajo» de Excel) copia en la casilla en la que
 // estás lo que hay en la casilla de arriba (misma columna) y F2 añade una fila nueva. Si no se puede, avisa de por qué.
 document.addEventListener('keydown', e => {
