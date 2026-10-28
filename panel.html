@@ -4289,38 +4289,28 @@ function sgaCampoFilaHtml(f){
             </td>
           </tr>`;
 }
-function sgaCamposFiltro(){ return ['articulo', 'entrada', 'archivados'].includes(window.__sgaCamposFiltro) ? window.__sgaCamposFiltro : 'todos'; }
+function sgaCamposFiltro(){ return window.__sgaCamposFiltro === 'archivados' ? 'archivados' : 'todos'; }
 function sgaCamposFiltrar(f){ window.__sgaCamposFiltro = f; window.__sgaCamposArch = f === 'archivados'; renderTab(); }
 function sgaCamposBuscar(v){ window.__sgaCamposQ = v; const el = document.getElementById('sgacampos-lista'); if (el) el.innerHTML = sgaCamposListaHtml(); }
 function sgaCamposVisibles(){
   const f = sgaCamposFiltro(), q = (window.__sgaCamposQ || '').trim().toLowerCase();
   let l = sgaCamposPropios(null, true);
-  l = f === 'archivados' ? l.filter(x => x.archived) : l.filter(x => !x.archived && (f === 'todos' || sgaCampoSePideAlRecibir(x) === (f === 'entrada')));
+  l = f === 'archivados' ? l.filter(x => x.archived) : l.filter(x => !x.archived);
   if (q) l = l.filter(x => (x.nombre + ' ' + sgaCampoTipoTxt(x)).toLowerCase().includes(q));
   return l.slice().sort((a, b) => (a.orden - b.orden) || a.nombre.localeCompare(b.nombre, 'es'));
 }
 function sgaCamposListaHtml(){
   const l = sgaCamposVisibles();
   if (!l.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${(window.__sgaCamposQ || sgaCamposFiltro() !== 'todos') ? 'Ningún dato coincide con la búsqueda o el filtro.' : 'Crea el primero con «+ Nuevo dato»: por ejemplo «Fecha de caducidad» o «Color».'}</div>`;
-  const tabla = ps => `<table class="tf-table">
+  // Una sola tabla: dónde se pide cada dato (en el catálogo o al recibir) lo decide cada cliente en su ficha SGA
+  return `<div class="card" style="padding:0;overflow-x:auto;margin-bottom:14px;"><table class="tf-table">
         <thead><tr>${thSort('Dato', 'text')}${thSort('Tipo', 'text')}${thSort('En stock', 'number', 'style="text-align:center;"')}<th></th></tr></thead>
-        <tbody>${ps.map(sgaCampoFilaHtml).join('')}</tbody></table>`;
-  const art = l.filter(x => !sgaCampoSePideAlRecibir(x)), rec = l.filter(sgaCampoSePideAlRecibir);
-  const grupo = (icono, color, t, s, ps) => `
-    <section class="ap-sec card ap-grp" style="--c:${color};padding:0;margin-bottom:14px;overflow:hidden;">
-      <div class="ap-grp-h" style="cursor:default;"><span class="ap-gi">${homeIcon(HOME_ICON_PATHS[icono], 17, 'currentColor', 1.9)}</span><b>${t}</b><small>${s}</small><span>${ps.length} dato${ps.length === 1 ? '' : 's'}</span></div>
-      <div style="overflow-x:auto;border-top:1px solid var(--border);">${tabla(ps)}</div>
-    </section>`;
-  // Solo se separan por ámbito si hay de los dos: los nuevos son siempre «del artículo»
-  if (!rec.length) return `<div class="card" style="padding:0;overflow-x:auto;margin-bottom:14px;">${tabla(art)}</div>`;
-  return (art.length ? grupo('box', '#1B3A6B', 'Datos del artículo', 'Se rellenan una vez por artículo, en el catálogo', art) : '')
-    + grupo('truck', '#C0721A', 'Datos de la recepción', 'Se piden al recibir la mercancía', rec);
+        <tbody>${l.map(sgaCampoFilaHtml).join('')}</tbody></table></div>`;
 }
 function tplSgaCamposPage(){
   const todos = sgaCamposPropios(null, true);
   const activos = todos.filter(f => !f.archived);
   const archivados = todos.length - activos.length;
-  const nRec = activos.filter(sgaCampoSePideAlRecibir).length;
   const fl = sgaCamposFiltro();
   const chip = (id, t, n) => `<button type="button" class="${fl === id ? 'on' : ''}" onclick="sgaCamposFiltrar('${id}')">${t}${n != null ? ` <small>${n}</small>` : ''}</button>`;
   return tplAlmacenConfigTabsHtml() + `
@@ -4341,7 +4331,7 @@ function tplSgaCamposPage(){
         <input id="sgacampos-q" placeholder="Buscar un dato…" value="${esc(window.__sgaCamposQ || '')}" oninput="sgaCamposBuscar(this.value)" autocomplete="off" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      <div class="doc-seg">${chip('todos', 'Todos', null)}${nRec ? chip('articulo', 'Del artículo', activos.length - nRec) + chip('entrada', 'De la recepción', nRec) : ''}${archivados ? chip('archivados', 'Archivados', archivados) : ''}</div>
+      <div class="doc-seg">${chip('todos', 'Todos', null)}${archivados ? chip('archivados', 'Archivados', archivados) : ''}</div>
     </div>
     <div id="sgacampos-lista">${sgaCamposListaHtml()}</div>
     </div>`;
@@ -4387,22 +4377,13 @@ function sgaCampoTipoElegir(k){
   sgaCampoFormCambio(); sgaCampoResumen();
   window.__sgaCampoDirty = true;
 }
-// ¿Dónde se pide el dato? En el catálogo (una vez por artículo) o al recibir la mercancía (en cada recepción)
-function sgaCampoAmbito(v){
-  const pg = window.__sgaPage; if (!pg) return;
-  pg.ambito = v;
-  document.querySelectorAll('#sgacp-amb button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
-  window.__sgaCampoDirty = true;
-  sgaCampoResumen();
-}
 // La frase verde: cómo va a quedar el dato
 function sgaCampoResumen(){
   const el = document.getElementById('sgacp-resumen'); if (!el) return;
   const tipo = (document.getElementById('sgacp-tipo') || {}).value || 'texto';
   const stock = (document.getElementById('sgacp-stock') || {}).checked;
   const pg = window.__sgaPage || {}, prev = pg.id ? sgaCampos.find(x => x.id === pg.id) : null;
-  const alRecibir = (pg.ambito || (prev ? prev.ambito : 'articulo')) === 'entrada' && !(prev && (SGA_CAMPOS_ART_PROPIOS.includes(prev.clave) || sgaEsCampoMl(prev)));
-  const donde = alRecibir ? 'se pide al recibir la mercancía' : 'se rellena una vez por artículo en el catálogo';
+  const donde = 'cada cliente elige en su ficha SGA si se pide en el catálogo o al recibir la mercancía';
   el.textContent = `Se guarda como ${(SGA_CAMPO_TIPOS[tipo] || tipo).toLowerCase()}, ${donde}${stock ? ' y sale en la tabla de Stock' : ' y no sale en la tabla de Stock'}.`;
 }
 async function sgaCampoAccionForm(accion, id){
@@ -4419,8 +4400,6 @@ function tplSgaCampoFormPage(){
   const sec = (n, t, s) => `<div class="dr-sec"><span class="dr-n">${n}</span><div><b>${t}</b>${s ? `<small>${s}</small>` : ''}</div></div>`;
   const sw = (id, on, titulo, txt) => `<label class="sgc-sw"><input type="checkbox" class="switch" id="${id}" ${on ? 'checked' : ''} onchange="sgaCampoResumen()" /><span><b>${titulo}</b><small>${txt}</small></span></label>`;
   const fijo = f && ['referencia', 'descripcion'].includes(f.clave);
-  const ambFijo = !!f && (SGA_CAMPOS_ART_PROPIOS.includes(f.clave) || sgaEsCampoMl(f));   // descripción, peso, medidas y metros lineales son siempre del artículo
-  const amb = pg.ambito || (f ? f.ambito : 'articulo');
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
@@ -4453,10 +4432,7 @@ function tplSgaCampoFormPage(){
           <div class="dr-hint">Escribe cada opción en una línea. Se pueden añadir más después; quitar una no borra lo ya guardado.</div></div>
       </div>
       <div class="card dr-card">
-        ${sec(2, '¿Dónde se ve?', 'Dónde se rellena y dónde sale')}
-        ${ambFijo ? '' : `<div class="field" style="margin-bottom:14px;"><label>¿Dónde se pide?</label>
-          <div class="doc-seg" id="sgacp-amb"><button type="button" data-v="articulo" class="${amb === 'articulo' ? 'on' : ''}" onclick="sgaCampoAmbito('articulo')">En el catálogo</button><button type="button" data-v="entrada" class="${amb === 'entrada' ? 'on' : ''}" onclick="sgaCampoAmbito('entrada')">Al recibir la mercancía</button></div>
-          <div class="dr-hint" style="margin-top:6px;">En el catálogo: se rellena una vez en cada artículo. Al recibir: se pide en cada recepción, línea por línea (lote, unidades por palet…).</div></div>`}
+        ${sec(2, '¿Dónde se ve?', 'Si sale como columna en la tabla de Stock')}
         ${fijo
           ? '<div class="dr-hint" style="font-size:13px;">Este dato ya sale siempre en la tabla de Stock y en el albarán.</div><input type="checkbox" id="sgacp-stock" style="display:none;" />'
           : `<div class="sgc-sws">${sw('sgacp-stock', f ? f.enStock : true, 'En la tabla de Stock', 'Sale como columna al abrir un cliente en Stock.')}</div><div class="dr-hint" style="margin-top:10px;">Qué datos salen en el albarán se decide en la ficha SGA de cada cliente, porque cada uno pide cosas distintas.</div>`}
@@ -4485,8 +4461,7 @@ async function submitSgaCampo(){
   let nombre = document.getElementById('sgacp-nombre').value.trim();
   if (!previa || !sgaCampoEsSistema(previa)) nombre = sgaMayus(nombre);   // al guardar un dato propio se corrige también un nombre antiguo («Fecha De Caducidad» → «Fecha de Caducidad»)
   const tipo = previa ? previa.tipo : (document.getElementById('sgacp-tipo').value || 'texto');
-  const ambFijo = !!previa && (SGA_CAMPOS_ART_PROPIOS.includes(previa.clave) || sgaEsCampoMl(previa));
-  const ambito = ambFijo ? previa.ambito : (pg.ambito || (previa ? previa.ambito : 'articulo'));
+  const ambito = previa ? previa.ambito : (pg.ambito || 'articulo');   // solo el valor por defecto: cada cliente decide dónde se pide en su ficha SGA
   const unidad = tipo === 'numero' ? document.getElementById('sgacp-unidad').value.trim() : '';
   const opciones = tipo === 'lista' ? [...new Set(document.getElementById('sgacp-opciones').value.split('\n').map(s => s.trim()).filter(Boolean))] : [];
   if (!nombre) { errEl.textContent = 'Escribe el nombre del dato.'; return; }
@@ -4499,11 +4474,11 @@ async function submitSgaCampo(){
   if (btn) btn.disabled = true;
   try {
     if (previa && previa.virtual) {
-      await sgaCampoMaterializar(previa, { nombre, unidad, opciones, enStock, enAlbaran, ambito });
+      await sgaCampoMaterializar(previa, { nombre, unidad, opciones, enStock, enAlbaran });
     } else if (previa) {
-      const { error } = await supabaseClient.from('sga_campos').update({ nombre, unidad: unidad || null, opciones, en_stock: enStock, en_albaran: enAlbaran, ambito }).eq('id', previa.id);
+      const { error } = await supabaseClient.from('sga_campos').update({ nombre, unidad: unidad || null, opciones, en_stock: enStock, en_albaran: enAlbaran }).eq('id', previa.id);
       if (error) throw error;
-      Object.assign(previa, { nombre, unidad, opciones, enStock, enAlbaran, ambito });
+      Object.assign(previa, { nombre, unidad, opciones, enStock, enAlbaran });
     } else {
       const clave = sgaCampoClaveNueva(nombre);
       const orden = sgaCampos.reduce((m, x) => Math.max(m, x.orden || 0), 0) + 1;
@@ -4993,8 +4968,6 @@ const SGA_CAMPOS_ART_PROPIOS = ['referencia', 'descripcion', 'peso', 'medidas'];
 function sgaEsCampoMl(f){ const n = String(f.nombre || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]/g, ''); return n === 'ml' || /^metros?lineal(es)?(m|ml)?$/.test(n) || n === 'mlineales'; }   // «Metros lineales», «M. lineales», «ML»…
 function sgaClienteUsaMl(clienteId){ const cfg = sgaClienteCfg(clienteId).campos; return sgaCamposPropios().some(f => sgaEsCampoMl(f) && (cfg[f.clave] || 'no') !== 'no'); }
 function sgaClienteMlObligatorio(clienteId){ const cfg = sgaClienteCfg(clienteId).campos; return sgaCamposPropios().some(f => sgaEsCampoMl(f) && cfg[f.clave] === 'obligatorio'); }
-// ¿Se pide al recibir la mercancía (en cada recepción) y no en el catálogo? Descripción, peso y medidas son siempre del artículo.
-function sgaCampoSePideAlRecibir(f){ return f.ambito === 'entrada' && !SGA_CAMPOS_ART_PROPIOS.includes(f.clave || f.id) && !sgaEsCampoMl(f); }   // vale para el dato guardado (clave) y para su versión de formulario (id = clave)
 // Dónde se pide un dato a un cliente: lo que haya decidido en su ficha SGA (campos.__donde = «lote:c,unidades:r», c = catálogo, r = al recibir)
 // y, si no ha decidido nada para ese dato, lo que tenga el propio dato en Datos de mercancía. Devuelve 'articulo' o 'entrada'.
 function sgaCampoDondeEn(campos, f){
