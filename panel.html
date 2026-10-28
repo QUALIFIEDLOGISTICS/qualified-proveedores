@@ -4970,7 +4970,8 @@ const SGA_CAMPOS_ART_PROPIOS = ['referencia', 'descripcion', 'peso', 'medidas'];
 function sgaEsCampoMl(f){ const n = String(f.nombre || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]/g, ''); return n === 'ml' || /^metros?lineal(es)?(m|ml)?$/.test(n) || n === 'mlineales'; }   // «Metros lineales», «M. lineales», «ML»…
 function sgaClienteUsaMl(clienteId){ const cfg = sgaClienteCfg(clienteId).campos; return sgaCamposPropios().some(f => sgaEsCampoMl(f) && (cfg[f.clave] || 'no') !== 'no'); }
 function sgaClienteMlObligatorio(clienteId){ const cfg = sgaClienteCfg(clienteId).campos; return sgaCamposPropios().some(f => sgaEsCampoMl(f) && cfg[f.clave] === 'obligatorio'); }
-function sgaCamposArticulo(clienteId){ return sgaCamposPropios().map(sgaCampoDef).filter(f => !SGA_CAMPOS_ART_PROPIOS.includes(f.id) && !sgaEsCampoMl(f) && (sgaClienteCfg(clienteId).campos[f.id] || 'no') !== 'no'); }
+// Solo los datos «del artículo»: los «de la recepción» (lote, unidades por palet…) se piden al recibir la mercancía, no en el catálogo.
+function sgaCamposArticulo(clienteId){ return sgaCamposPropios('articulo').map(sgaCampoDef).filter(f => !SGA_CAMPOS_ART_PROPIOS.includes(f.id) && !sgaEsCampoMl(f) && (sgaClienteCfg(clienteId).campos[f.id] || 'no') !== 'no'); }
 /* ---- Mayúscula solo en la primera letra de cada palabra ----
    Los campos que llevan data-mayus (nombres, transportista, destinatario…) escriben solos «Carpa Green 20x20»: la primera
    letra de cada palabra en mayúscula y el resto en minúscula. Una palabra con números (códigos como «306515RG») solo
@@ -7436,9 +7437,10 @@ function sgaUbicOptionsHtml(zonaId, sel, excluirI){
 // Con catálogo de artículos, los datos del artículo (referencia, descripción, peso, medidas) salen de él y no se piden en cada línea.
 function sgaClienteConArticulos(clienteId){ return sgaArticulosDe(clienteId).length > 0; }
 function sgaCamposLinea(cfg, conArt){
-  // Con catálogo, los datos de la mercancía salen del artículo y no se piden al recibir. Salvo con código propio por palet: ahí cada palet
-  // puede ser distinto, así que los datos de la ficha del cliente se piden en cada línea (el artículo, si se elige, los rellena).
-  return conArt && !cfg.codigosUnicos ? [] : sgaCamposActivos(cfg);
+  // Con catálogo, los datos fijos del artículo (descripción, peso, medidas) salen de él y no se piden al recibir; los datos «de la recepción»
+  // (lote, unidades por palet…) sí, en cada línea. Con código propio por palet, cada palet puede ser distinto, así que los datos de la ficha
+  // del cliente se piden todos en cada línea (el artículo, si se elige, los rellena).
+  return conArt && !cfg.codigosUnicos ? sgaCamposActivos(cfg).filter(f => !SGA_CAMPOS_ART_PROPIOS.includes(f.id)) : sgaCamposActivos(cfg);
 }
 function sgaArticuloOptionsHtml(clienteId, sel){
   // Primero los artículos con más stock ahora mismo y, hacia abajo, los que menos (los que no tienen, al final por orden alfabético)
@@ -7981,7 +7983,7 @@ function sgaEntradaRellenar(){
   e.partidas.forEach(p => {
     const pre = { pid: p.id, cons: Math.max(0, p.inicial - p.actual), prod: p.productoId, zona: p.zonaId || '', ubic: p.ubicacionId || '', art: p.articuloId || '',
       codigo: p.codigo || '', cant: String(p.inicial), bultos: num(p.bultos), alm: p.warehouseId };
-    if (!conArt || cfg.codigosUnicos) sgaCamposActivos(cfg).forEach(f => { pre[f.id] = SGA_CAMPOS_COLUMNA.includes(f.id) ? (p[f.id] || '') : num((p.atributos || {})[f.id]); });
+    sgaCamposLinea(cfg, conArt).forEach(f => { pre[f.id] = SGA_CAMPOS_COLUMNA.includes(f.id) ? (p[f.id] || '') : num((p.atributos || {})[f.id]); });
     sgaEntradaAddFila(pre);
   });
   (e.servicios || []).forEach(s => {
@@ -8173,8 +8175,9 @@ async function sgaEntradaConfirmar(){
       if (sgaPartidas.some(p => p.actual > 0 && p.ubicacionId === l.ubicacionId && !propios.has(p.id))) { errores.push(`${f}: esa ubicación ya está ocupada.`); return; }
       ubicsUsadas.add(l.ubicacionId);
     }
+    const enLinea = sgaCamposLinea(cfg, conArt).map(x => x.id);
     for (const c of sgaCamposEntrada()) {
-      if (conArt && l.articuloId) continue;   // con artículo elegido, estos datos viven en el artículo (sin artículo, se piden en la línea)
+      if (!enLinea.includes(c.id) || (conArt && cfg.codigosUnicos && l.articuloId)) continue;   // los datos fijos del artículo (descripción, peso, medidas) viven en el catálogo, no se piden en la línea
       if (cfg.campos[c.id] === 'obligatorio' && !l[c.id]) { errores.push(`${f}: falta «${c.label}».`); return; }
       if ((c.id === 'peso' || c.id === 'unidades' || c.tipo === 'numero') && l[c.id] && !isFinite(sgaNumero(l[c.id]))) { errores.push(`${f}: «${c.label}» tiene que ser un número.`); return; }
     }
