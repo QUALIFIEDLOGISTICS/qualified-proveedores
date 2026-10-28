@@ -3258,7 +3258,7 @@ async function loadAppointments(){
   (data||[]).forEach(a => (next[a.warehouse_id] = next[a.warehouse_id] || []).push({
     id: a.id, clientId: a.client_id, date: a.date, start: a.start_time, duration: a.duration_min,
     status: a.status, carrier: a.carrier, plate: a.plate, trailerPlate: a.trailer_plate,
-    cargoRef: a.cargo_ref, type: a.type, notes: a.notes, attachments: attByParent[a.id] || [],
+    cargoRef: a.cargo_ref, type: a.type, notes: a.notes, attachments: attByParent[a.id] || [], albaranId: a.albaran_id || '',
   }));
   appointments = next;
 }
@@ -3416,7 +3416,7 @@ async function loadUnscheduled(){
   const next = warehouseMap(() => []);
   (data||[]).forEach(u => (next[u.warehouse_id] = next[u.warehouse_id] || []).push({
     id: u.id, clientId: u.client_id, date: u.date, status: u.status, carrier: u.carrier, plate: u.plate,
-    trailerPlate: u.trailer_plate, cargoRef: u.cargo_ref, type: u.type, notes: u.notes, attachments: attByParent[u.id] || [],
+    trailerPlate: u.trailer_plate, cargoRef: u.cargo_ref, type: u.type, notes: u.notes, attachments: attByParent[u.id] || [], albaranId: u.albaran_id || '',
   }));
   unscheduled = next;
 }
@@ -8766,6 +8766,10 @@ function tplStockSalidaPage(){
         <div class="deca-card-body">${sgaSalidaOcHtml()}</div>
       </div>
       <div class="card deca-card">
+        ${decaCardHead('calendar', 'Franja horaria', 'Se reserva en Franjas horarias el día de salida, sin hora')}
+        <div class="deca-card-body">${sgaSalidaFranjaHtml()}</div>
+      </div>
+      <div class="card deca-card">
         ${decaCardHead('clock', 'Servicios', 'Horas y extras de esta expedición (opcional)', `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="sgaServicioAdd()">+ Servicio</button>`)}
         <div class="deca-card-body"><div id="se-servicios"></div></div>
       </div>
@@ -8872,6 +8876,7 @@ async function sgaSalidaConfirmar(comoBorrador){
       appToast(oc.sinVincular ? `Orden ${ocRef(oc)} creada, pero sin vincular a la expedición: falta ejecutar el SQL «orden-carga-expedicion.sql» en Supabase.` : `Orden de carga ${ocRef(oc)} creada y vinculada a la expedición.`, oc.sinVincular ? 'error' : 'ok');
     } catch (err) { appToast('La expedición se ha guardado, pero la orden de carga no se pudo crear: ' + (err && err.message ? err.message : 'error desconocido.') + ' Ábrela con «Editar» para reintentarlo.', 'error'); }
   }
+  if (albDeca) await sgaFranjaExpedicionSync(albDeca, d, numAlb || (edit ? sgaNumAlbaran(edit.albaran) : ''));   // franja horaria del día de salida (borrador o confirmada)
   if (edit) {
     window.__slEdit = null;   // el stock ya está recargado de la base de datos
     const eraBorrador = !!edit.albaran.borrador;
@@ -9957,6 +9962,59 @@ async function sgaActualizarFechaDeca(doc, fecha){
   if (error) throw error;
   doc.fechaTransporte = fecha; doc.pdfUrl = url;
 }
+/* ---- Franja horaria dentro de la expedición ----
+   Al guardar la expedición (borrador o confirmada) se apunta un «camión sin cita» ese día en Franjas horarias del almacén de salida,
+   con el transportista y las matrículas. Si le pones hora allí, la cita sigue enlazada. Si cambia la fecha de salida, el aviso o la cita
+   se mueven de día; si se anula la expedición, se quitan. */
+function sgaFranjaDeExpedicion(albaranId){
+  if (!albaranId) return null;
+  for (const w of Object.keys(appointments)) { const c = (appointments[w] || []).find(x => x.albaranId === albaranId); if (c) return { cita: true, ...c }; }
+  for (const w of Object.keys(unscheduled)) { const u = (unscheduled[w] || []).find(x => x.albaranId === albaranId); if (u) return { cita: false, ...u }; }
+  return null;
+}
+function sgaSalidaFranjaHtml(){
+  const edit = window.__slEdit;
+  const f = edit ? sgaFranjaDeExpedicion(edit.id) : null;
+  const estado = f ? `<div style="font-size:12.5px;color:var(--muted);margin-top:10px;">Ahora está ${f.cita ? `como cita a las <b>${esc(f.start)}</b>` : '<b>sin hora</b>'} el <b>${esc(fmtDateDMY(f.date))}</b>. Si cambias la fecha de salida, se mueve sola de día.</div>` : '';
+  return `<label style="display:flex;align-items:flex-start;gap:10px;font-size:13.5px;cursor:pointer;"><input type="checkbox" class="switch" id="sl-franja-on" checked style="margin-top:2px;" />
+      <span><b>Reservar la franja horaria del día</b><br><span style="font-size:12px;color:var(--muted);">Apunta el camión en Franjas horarias del almacén de salida, ese día y sin hora, con el transportista y las matrículas. Si le pones hora allí, sigue enlazada y se mueve de día con la fecha de salida. Solo se reserva si la fecha es de hoy o posterior. Desmarcado, se quita la reserva.</span></span></label>${estado}`;
+}
+// Crea, mueve o quita la franja de la expedición según el interruptor. Un fallo aquí no deshace la expedición ya guardada.
+async function sgaFranjaExpedicionSync(albaranId, d, numAlb){
+  const sw = document.getElementById('sl-franja-on');
+  const quiere = !sw || sw.checked;
+  const ya = sgaFranjaDeExpedicion(albaranId);
+  const recargar = () => Promise.all([loadAppointments(), loadUnscheduled()]);
+  try {
+    if (!quiere) {
+      if (!ya) return;
+      const { error } = await supabaseClient.rpc('sga_franja_expedicion_quitar', { p_albaran: albaranId });
+      if (error) throw error;
+      await recargar();
+      appToast('Franja horaria quitada de Franjas horarias.', 'ok');
+      return;
+    }
+    const wh = sgaSalidaWh();
+    if (!WAREHOUSES.some(w => w.id === wh)) return;
+    if (!ya && d.fecha < today()) return;
+    const mat = sgaMatriculaSplit(d.matricula);
+    const oc = sgaOcDeExpedicion(albaranId);
+    const { error } = await supabaseClient.rpc('sga_franja_expedicion', { p: {
+      albaran_id: albaranId, warehouse_id: wh, client_id: d.clienteId, date: d.fecha,
+      carrier: d.transportista || '', plate: mat.tractora || '', trailer_plate: mat.remolque || '',
+      cargo_ref: oc ? ocRef(oc) : (numAlb ? 'Albarán ' + numAlb : ''), notes: d.destinatario ? 'Para: ' + d.destinatario : '',
+    } });
+    if (error) throw error;
+    await recargar();
+    if (!ya) appToast(`Franja reservada el ${fmtDateDMY(d.fecha)} en Franjas horarias (sin hora).`, 'ok');
+    else if (ya.date !== d.fecha) appToast(ya.cita
+      ? `La cita de las ${ya.start} se ha movido al ${fmtDateDMY(d.fecha)}. Revisa en Franjas horarias que haya hueco y que el almacén abra ese día.`
+      : `La franja se ha movido al ${fmtDateDMY(d.fecha)}.`, ya.cita ? 'info' : 'ok');
+  } catch (err) {
+    const m = (err && err.message) || 'error desconocido.';
+    appToast('La expedición se ha guardado, pero la franja horaria no se pudo ' + (quiere ? 'reservar' : 'quitar') + ': ' + (/sga_franja_expedicion|albaran_id|schema cache|does not exist/i.test(m) ? 'falta ejecutar el SQL «franja-expedicion.sql» en Supabase.' : m), 'error');
+  }
+}
 function sgaOcDeExpedicion(albaranId){ return ordenesCarga.find(o => o.albaranId === albaranId) || null; }
 function sgaAbrirOcExpedicion(id){
   Promise.resolve(setTab('trafico')).then(() => openOcForm(id));
@@ -10284,6 +10342,11 @@ async function sgaAnularConfirmar(){
   }
   await loadSgaStock();
   await logAlbaranHistorial(id, 'Anulada: ' + motivo);
+  if (a && a.tipo === 'salida' && sgaFranjaDeExpedicion(id)) {   // el camión ya no viene: se quita su franja
+    const q = await supabaseClient.rpc('sga_franja_expedicion_quitar', { p_albaran: id });
+    if (q.error) appToast('El albarán se ha anulado, pero no se pudo quitar su franja horaria: ' + q.error.message + ' Quítala desde Franjas horarias.', 'error');
+    else await Promise.all([loadAppointments(), loadUnscheduled()]);
+  }
   closeModal();
   appToast('Albarán anulado.', 'ok');
   renderTab();
@@ -14227,6 +14290,20 @@ function duplicateAppointment(id){
   if (!a) return;
   openAppointmentModal(a.start, null, { clientId: a.clientId, type: a.type, carrier: a.carrier, plate: a.plate, trailerPlate: a.trailerPlate, cargoRef: a.cargoRef, notes: a.notes });
 }
+// Etiqueta de una reserva o aviso que viene de una expedición de Almacén: abre la expedición
+function sgaFranjaChipHtml(albaranId){
+  if (!albaranId) return '';
+  const a = sgaAlbaranes.find(x => x.id === albaranId);
+  const txt = 'Expedición' + (a ? ' ' + sgaNumAlbaran(a) : '');
+  return sgaPuedeEditarStock()
+    ? ` <span class="cfg-chip" style="cursor:pointer;color:var(--primary);background:color-mix(in srgb, var(--primary) 12%, var(--panel));margin-left:4px;" onclick="event.stopPropagation(); sgaFranjaAbrirExpedicion('${albaranId}')" title="Abrir la expedición de esta franja">${esc(txt)}</span>`
+    : ` <span class="cfg-chip" style="margin-left:4px;" title="Viene de una expedición de Almacén">${esc(txt)}</span>`;
+}
+async function sgaFranjaAbrirExpedicion(id){
+  await setTab('stock');
+  if (!sgaAlbaranes.some(x => x.id === id)) await loadSgaStock();
+  sgaSalidaEditar(id);
+}
 function apptNotesLineHtml(notes){
   if (!notes) return '';
   return `<div title="${esc(notes)}" style="font-size:11.5px;color:var(--muted);margin-top:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;"><span style="color:var(--mutedFaint);font-weight:600;">Obs.:</span> ${esc(notes)}</div>`;
@@ -14262,7 +14339,7 @@ function apptCellHtml(appt, wh, rowStart){
         <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 ${esc(appt.carrier||'—')}</span>
         <span style="font-family:var(--mono);white-space:nowrap;">🚚 ${esc(appt.plate||'—')}${appt.trailerPlate ? ' · 🔗 '+esc(appt.trailerPlate) : ''}</span>
       </div>
-      <div style="font-size:11px;color:var(--mutedFaint);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Ref: ${esc(appt.cargoRef||'—')}</div>
+      <div style="font-size:11px;color:var(--mutedFaint);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Ref: ${esc(appt.cargoRef||'—')}${sgaFranjaChipHtml(appt.albaranId)}</div>
       ${apptNotesLineHtml(appt.notes)}
     </div>`;
 }
@@ -14426,7 +14503,7 @@ function tplUnscheduled(){
             <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 ${esc(u.carrier||'—')}</span>
             <span style="font-family:var(--mono);white-space:nowrap;">🚚 ${esc(u.plate||'—')}${u.trailerPlate ? ' · 🔗 '+esc(u.trailerPlate) : ''}</span>
           </div>
-          <div style="font-size:11px;color:var(--mutedFaint);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Ref: ${esc(u.cargoRef||'—')}</div>
+          <div style="font-size:11px;color:var(--mutedFaint);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Ref: ${esc(u.cargoRef||'—')}${sgaFranjaChipHtml(u.albaranId)}</div>
           ${apptNotesLineHtml(u.notes)}
         </div>`;
       }).join('')}
@@ -15510,7 +15587,7 @@ async function unassignTime(id){
   const { data: row, error } = await supabaseClient.from('unscheduled_trucks').insert({
     warehouse_id: currentWarehouseId, client_id: appt.clientId, date: appt.date, status: appt.status,
     carrier: appt.carrier, plate: appt.plate, trailer_plate: appt.trailerPlate,
-    cargo_ref: appt.cargoRef, type: appt.type, notes: appt.notes,
+    cargo_ref: appt.cargoRef, type: appt.type, notes: appt.notes, ...(appt.albaranId ? { albaran_id: appt.albaranId } : {}),
   }).select().single();
   if (error || !row) return;
   if ((appt.attachments||[]).length) {
@@ -15577,6 +15654,11 @@ async function submitAppointmentInner(editId){
     type: document.getElementById('af-type').value,
     notes: document.getElementById('af-notes').value.trim(),
   };
+
+  // al ponerle hora a un aviso que viene de una expedición, la cita sigue enlazada a ella
+  const origenId = document.getElementById('af-from-unscheduled')?.value;
+  const origen = origenId ? (unscheduled[currentWarehouseId] || []).find(x => x.id === origenId) : null;
+  if (origen && origen.albaranId) data.albaran_id = origen.albaranId;
 
   let id = editId;
   if (editId) {
