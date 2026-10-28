@@ -4963,12 +4963,25 @@ function sgaArticuloExtra(clienteId, atributos){
   const vals = sgaUnicoCampos(clienteId).map(f => String(at[f.id] == null ? '' : at[f.id]).trim().toLowerCase());
   return vals.some(Boolean) ? vals.join('|') : '';
 }
+// ¿El código de artículo deja de contar para distinguir los artículos de este cliente? (solo si ha marcado otros datos: campos.__unico lleva «sin_codigo»)
+function sgaUnicoSinCodigo(clienteId){
+  return String(sgaClienteCfg(clienteId).campos.__unico || '').split(',').includes('sin_codigo') && sgaUnicoCampos(clienteId).length > 0;
+}
 function sgaArticuloRepetido(clienteId, nombre, atributos, exceptoId){
   const extra = sgaArticuloExtra(clienteId, atributos);
-  return sgaArticulos.find(x => x.clienteId === clienteId && x.id !== exceptoId && x.nombre.toLowerCase() === String(nombre).toLowerCase() && (x.claveExtra || '') === extra) || null;
+  const mismoCodigo = x => x.nombre.toLowerCase() === String(nombre).toLowerCase() && (x.claveExtra || '') === extra;   // la base de datos no deja repetir código + datos
+  const propios = sgaArticulos.filter(x => x.clienteId === clienteId && x.id !== exceptoId);
+  if (sgaUnicoSinCodigo(clienteId) && extra) return propios.find(x => (x.claveExtra || '') === extra) || propios.find(mismoCodigo) || null;   // lo único son esos datos, aunque el código sea otro
+  return propios.find(mismoCodigo) || null;
+}
+// Sin el código de artículo, los datos marcados son lo único que identifica al artículo: no pueden quedar vacíos
+function sgaArticuloFaltaClave(clienteId, atributos){
+  if (!sgaUnicoSinCodigo(clienteId) || sgaArticuloExtra(clienteId, atributos)) return '';
+  return `Escribe ${sgaUnicoCampos(clienteId).map(f => '«' + f.nombre + '»').join(' o ')}: en este cliente es lo que identifica al artículo.`;
 }
 function sgaArticuloRepetidoTxt(clienteId){
   const u = sgaUnicoCampos(clienteId).map(f => f.nombre.toLowerCase());
+  if (u.length && sgaUnicoSinCodigo(clienteId)) return `Este cliente ya tiene un artículo con ${u.length > 1 ? 'esos mismos' : 'el mismo'} ${u.join(' y ')}.`;
   return `Este cliente ya tiene un artículo con ese código de artículo${u.length ? (u.length > 1 ? ' y esos mismos ' : ' y el mismo ') + u.join(' y ') : ''} (la descripción sí se puede repetir).`;
 }
 // Si el SQL de la clave única no está ejecutado, la base de datos sigue rechazando el código repetido
@@ -5133,8 +5146,13 @@ function sgacCamposHtml(){
   // Qué distingue a un artículo de otro: siempre el código de artículo y, si se marca, también alguno de los datos del catálogo (p. ej. el lote)
   const elegibles = act.filter(f => !fijo(f) && sgaCampoDondeEn(est, f) === 'articulo');
   const unicos = String(est.__unico || '').split(',').filter(Boolean);
-  const bloqueUnico = elegibles.length ? `<div class="sgac-tit" style="margin-top:14px;">Un artículo es único por<small style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--mutedFaint);margin-left:8px;">dos artículos pueden compartir código si se distinguen por lo que marques</small></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;"><span class="sgac-uchip on fija">Código de artículo</span>${elegibles.map(f => `<button type="button" class="sgac-uchip${unicos.includes(f.id) ? ' on' : ''}" onclick="sgacUnico('${f.id}')" title="${unicos.includes(f.id) ? 'Quitar' : 'Añadir'} «${esc(f.nombre)}» a lo que distingue a un artículo">${unicos.includes(f.id) ? '' : '+ '}${esc(f.nombre)}</button>`).join('')}</div>` : '';
+  const marcados = elegibles.filter(f => unicos.includes(f.id));
+  const sinCodigo = unicos.includes('sin_codigo') && marcados.length > 0;
+  const bloqueUnico = elegibles.length ? `<div class="sgac-tit" style="margin-top:14px;">Un artículo es único por<small style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--mutedFaint);margin-left:8px;">lo que no se puede repetir entre dos artículos del cliente</small></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">${marcados.length
+        ? `<button type="button" class="sgac-uchip${sinCodigo ? '' : ' on'}" onclick="sgacUnico('@codigo')" title="${sinCodigo ? 'Volver a contar el código de artículo' : 'Quitar el código de artículo: serían únicos solo los datos marcados'}">${sinCodigo ? '+ ' : ''}Código de artículo</button>`
+        : '<span class="sgac-uchip on fija" title="Marca otro dato para poder quitar el código">Código de artículo</span>'}${elegibles.map(f => `<button type="button" class="sgac-uchip${unicos.includes(f.id) ? ' on' : ''}" onclick="sgacUnico('${f.id}')" title="${unicos.includes(f.id) ? 'Quitar' : 'Añadir'} «${esc(f.nombre)}» a lo que distingue a un artículo">${unicos.includes(f.id) ? '' : '+ '}${esc(f.nombre)}</button>`).join('')}</div>
+      <div class="sgac-h" style="margin-top:6px;">${sinCodigo ? 'Solo cuentan los datos marcados: dos artículos con el mismo código pueden convivir, pero no dos con los mismos datos.' : marcados.length ? 'Dos artículos pueden compartir código si se distinguen por lo que marques.' : 'Por defecto no puede haber dos artículos con el mismo código de artículo. Marca un dato (p. ej. el lote) si quieres que el mismo código pueda repetirse con otro valor.'}</div>` : '';
   return `
     ${act.length ? zona('articulo', 'En el catálogo del cliente', 'se rellena una vez por artículo', act.filter(f => sgaCampoDondeEn(est, f) === 'articulo'), 'Arrastra aquí los datos que se rellenan en cada artículo.')
         + zona('entrada', 'Al recibir la mercancía', 'se pide en cada recepción', act.filter(f => sgaCampoDondeEn(est, f) === 'entrada'), 'Arrastra aquí los datos que quieras pedir en cada recepción (lote, unidades por palet…).') + bloqueUnico
@@ -5288,8 +5306,11 @@ function sgacMover(id, zona){
 // Marcar / desmarcar un dato de lo que distingue a los artículos de este cliente (campos.__unico = «lote,color»)
 function sgacUnico(id){
   const est = (window.__sgacCampos = window.__sgacCampos || {});
-  const l = String(est.__unico || '').split(',').filter(Boolean);
-  est.__unico = (l.includes(id) ? l.filter(x => x !== id) : [...l, id]).join(',');
+  let l = String(est.__unico || '').split(',').filter(Boolean);
+  if (id === '@codigo') l = l.includes('sin_codigo') ? l.filter(x => x !== 'sin_codigo') : [...l, 'sin_codigo'];   // contar o no el código de artículo
+  else l = l.includes(id) ? l.filter(x => x !== id) : [...l, id];
+  if (!l.some(x => x !== 'sin_codigo')) l = [];   // sin ningún dato marcado, lo único vuelve a ser el código
+  est.__unico = l.join(',');
   const el = document.getElementById('sgac-campos');
   if (el) el.innerHTML = sgacCamposHtml();
 }
@@ -5791,7 +5812,9 @@ async function catGuardarCeldaCampo(el){
   if (r.valor == null) delete atributos[f.id]; else atributos[f.id] = r.valor;
   if (JSON.stringify(atributos) === JSON.stringify(a.atributos || {})) return true;
   // Si este dato forma parte de lo que distingue a los artículos del cliente (p. ej. el lote), no puede coincidir con otro artículo del mismo código
-  if (sgaArticuloRepetido(a.clienteId, a.nombre, atributos, a.id)) { appToast(sgaArticuloRepetidoTxt(a.clienteId), 'error'); if (!window.__catLote) renderTab(); return false; }
+  const esClave = sgaUnicoCampos(a.clienteId).some(u => u.id === f.id);
+  if (esClave && sgaArticuloFaltaClave(a.clienteId, atributos)) { appToast(sgaArticuloFaltaClave(a.clienteId, atributos), 'error'); if (!window.__catLote) renderTab(); return false; }
+  if (esClave && sgaArticuloRepetido(a.clienteId, a.nombre, atributos, a.id)) { appToast(sgaArticuloRepetidoTxt(a.clienteId), 'error'); if (!window.__catLote) renderTab(); return false; }
   const extra = sgaArticuloExtra(a.clienteId, atributos);
   const upd = { atributos };
   if (extra || a.claveExtra) upd.clave_extra = extra;   // sin datos que distingan, no se toca la columna
@@ -6635,6 +6658,7 @@ async function catGuardarFilaNueva(tr){
     if (r.valor == null) { if (sgaClienteCfg(cid).campos[f.id] === 'obligatorio') return marcar('x:' + f.id, `Falta «${f.label}».`); }
     else atributos[f.id] = r.valor;
   }
+  if (sgaArticuloFaltaClave(cid, atributos)) return marcar('nombre', sgaArticuloFaltaClave(cid, atributos));
   if (sgaArticuloRepetido(cid, nombre, atributos)) return marcar('nombre', sgaArticuloRepetidoTxt(cid));
   const claveExtra = sgaArticuloExtra(cid, atributos);
   const row = { cliente_id: cid, nombre, referencia: referencia || null, producto_id: g('productoId') || null, bultos_por_unidad: bultos, metros_lineales: ml, peso, medidas: medidas || null };
@@ -7769,6 +7793,7 @@ async function sgaArtNuevoGuardar(){
   const bultos = Number(val('na-bultos').replace(',', '.'));
   if (!nombre) { errEl.textContent = 'Escribe el producto.'; return; }
   if (!isFinite(bultos) || bultos <= 0) { errEl.textContent = 'Los bultos por palet tienen que ser un número mayor que 0.'; return; }
+  if (sgaUnicoSinCodigo(clienteId)) { errEl.textContent = 'En este cliente el código no identifica al artículo (lo hacen ' + sgaUnicoCampos(clienteId).map(f => f.nombre.toLowerCase()).join(' o ') + '): créalo desde el catálogo del cliente.'; return; }
   if (sgaArticuloRepetido(clienteId, nombre, {})) { errEl.textContent = sgaArticuloRepetidoTxt(clienteId) + (sgaUnicoCampos(clienteId).length ? ' Para crear otro con el mismo código, hazlo desde el catálogo del cliente, rellenando también ese dato.' : ''); return; }
   const btn = document.querySelector('.na-save');
   if (btn) btn.disabled = true;
@@ -9144,6 +9169,7 @@ async function submitSgaArticulo(){
     else atributos[f.id] = r.valor;
   }
   // Lo único es el código de artículo (la descripción puede repetirse) y, si el cliente lo ha elegido así, también los datos que lo distinguen (p. ej. el lote)
+  if (sgaArticuloFaltaClave(pg.clienteId, atributos)) { errEl.textContent = sgaArticuloFaltaClave(pg.clienteId, atributos); return; }
   if (sgaArticuloRepetido(pg.clienteId, nombre, atributos, pg.id)) { errEl.textContent = sgaArticuloRepetidoTxt(pg.clienteId); return; }
   const claveExtra = sgaArticuloExtra(pg.clienteId, atributos);
   const btn = document.querySelector('.sgaa-save');
