@@ -3258,7 +3258,7 @@ async function loadAppointments(){
   (data||[]).forEach(a => (next[a.warehouse_id] = next[a.warehouse_id] || []).push({
     id: a.id, clientId: a.client_id, date: a.date, start: a.start_time, duration: a.duration_min,
     status: a.status, carrier: a.carrier, plate: a.plate, trailerPlate: a.trailer_plate,
-    cargoRef: a.cargo_ref, type: a.type, notes: a.notes, attachments: attByParent[a.id] || [], albaranId: a.albaran_id || '',
+    cargoRef: a.cargo_ref, type: a.type, notes: a.notes, attachments: attByParent[a.id] || [], albaranId: a.albaran_id || '', ordenId: a.orden_carga_id || '',
   }));
   appointments = next;
 }
@@ -3416,7 +3416,7 @@ async function loadUnscheduled(){
   const next = warehouseMap(() => []);
   (data||[]).forEach(u => (next[u.warehouse_id] = next[u.warehouse_id] || []).push({
     id: u.id, clientId: u.client_id, date: u.date, status: u.status, carrier: u.carrier, plate: u.plate,
-    trailerPlate: u.trailer_plate, cargoRef: u.cargo_ref, type: u.type, notes: u.notes, attachments: attByParent[u.id] || [], albaranId: u.albaran_id || '',
+    trailerPlate: u.trailer_plate, cargoRef: u.cargo_ref, type: u.type, notes: u.notes, attachments: attByParent[u.id] || [], albaranId: u.albaran_id || '', ordenId: u.orden_carga_id || '',
   }));
   unscheduled = next;
 }
@@ -14496,7 +14496,14 @@ function duplicateAppointment(id){
   openAppointmentModal(a.start, null, { clientId: a.clientId, type: a.type, carrier: a.carrier, plate: a.plate, trailerPlate: a.trailerPlate, cargoRef: a.cargoRef, notes: a.notes });
 }
 // Etiqueta de una reserva o aviso que viene de una expedición de Almacén: abre la expedición
-function sgaFranjaChipHtml(albaranId){
+function sgaFranjaChipHtml(albaranId, ordenId){
+  if (ordenId) {   // viene de una orden de carga (Transporte)
+    const o = ordenesCarga.find(x => x.id === ordenId);
+    const txt = o ? ocRef(o) : 'Orden de carga';
+    return (PROFILE.isAdmin || sectionAllowedFor(PROFILE, 'trafico', 'ordenes'))
+      ? ` <span class="cfg-chip" style="cursor:pointer;color:var(--primary);background:color-mix(in srgb, var(--primary) 12%, var(--panel));margin-left:4px;" onclick="event.stopPropagation(); sgaAbrirOcExpedicion('${ordenId}')" title="Abrir la orden de carga de esta franja">${esc(txt)}</span>`
+      : ` <span class="cfg-chip" style="margin-left:4px;" title="Viene de una orden de carga">${esc(txt)}</span>`;
+  }
   if (!albaranId) return '';
   const a = sgaAlbaranes.find(x => x.id === albaranId);
   const txt = 'Expedición' + (a ? ' ' + sgaNumAlbaran(a) : '');
@@ -14544,7 +14551,7 @@ function apptCellHtml(appt, wh, rowStart){
         <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 ${esc(appt.carrier||'—')}</span>
         <span style="font-family:var(--mono);white-space:nowrap;">🚚 ${esc(appt.plate||'—')}${appt.trailerPlate ? ' · 🔗 '+esc(appt.trailerPlate) : ''}</span>
       </div>
-      <div style="font-size:11px;color:var(--mutedFaint);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Ref: ${esc(appt.cargoRef||'—')}${sgaFranjaChipHtml(appt.albaranId)}</div>
+      <div style="font-size:11px;color:var(--mutedFaint);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Ref: ${esc(appt.cargoRef||'—')}${sgaFranjaChipHtml(appt.albaranId, appt.ordenId)}</div>
       ${apptNotesLineHtml(appt.notes)}
     </div>`;
 }
@@ -14708,7 +14715,7 @@ function tplUnscheduled(){
             <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 ${esc(u.carrier||'—')}</span>
             <span style="font-family:var(--mono);white-space:nowrap;">🚚 ${esc(u.plate||'—')}${u.trailerPlate ? ' · 🔗 '+esc(u.trailerPlate) : ''}</span>
           </div>
-          <div style="font-size:11px;color:var(--mutedFaint);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Ref: ${esc(u.cargoRef||'—')}${sgaFranjaChipHtml(u.albaranId)}</div>
+          <div style="font-size:11px;color:var(--mutedFaint);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Ref: ${esc(u.cargoRef||'—')}${sgaFranjaChipHtml(u.albaranId, u.ordenId)}</div>
           ${apptNotesLineHtml(u.notes)}
         </div>`;
       }).join('')}
@@ -15792,7 +15799,7 @@ async function unassignTime(id){
   const { data: row, error } = await supabaseClient.from('unscheduled_trucks').insert({
     warehouse_id: currentWarehouseId, client_id: appt.clientId, date: appt.date, status: appt.status,
     carrier: appt.carrier, plate: appt.plate, trailer_plate: appt.trailerPlate,
-    cargo_ref: appt.cargoRef, type: appt.type, notes: appt.notes, ...(appt.albaranId ? { albaran_id: appt.albaranId } : {}),
+    cargo_ref: appt.cargoRef, type: appt.type, notes: appt.notes, ...(appt.albaranId ? { albaran_id: appt.albaranId } : {}), ...(appt.ordenId ? { orden_carga_id: appt.ordenId } : {}),
   }).select().single();
   if (error || !row) return;
   if ((appt.attachments||[]).length) {
@@ -15864,6 +15871,7 @@ async function submitAppointmentInner(editId){
   const origenId = document.getElementById('af-from-unscheduled')?.value;
   const origen = origenId ? (unscheduled[currentWarehouseId] || []).find(x => x.id === origenId) : null;
   if (origen && origen.albaranId) data.albaran_id = origen.albaranId;
+  if (origen && origen.ordenId) data.orden_carga_id = origen.ordenId;
 
   let id = editId;
   if (editId) {
@@ -19477,6 +19485,7 @@ function ocSnapshotForm(){
     clienteNombre: v('oc-cli-nombre'), precioCliente: v('oc-precio-cli').replace(/\s*€$/, '').replace(',', '.'), servicio: v('oc-servicio'), metros: v('oc-metros'),
     refFacturacion: v('oc-ref-fact'), pesoKg: v('oc-peso'), decaOn: !!(document.getElementById('oc-deca-on') && document.getElementById('oc-deca-on').checked),
     cargas: ocLeerPuntos('carga'), descargas: ocLeerPuntos('descarga'),
+    ...(document.getElementById('oc-fr-on') ? (() => { const f = ocFranjaLeer(); return { frOn: f.on, frWh: f.wh, frCli: f.cli, frTipo: f.tipo, frDate: f.date, frHora: f.hora, frDur: f.dur }; })() : {}),
   };
 }
 function ocIrACrearDireccion(btn){
@@ -19603,6 +19612,119 @@ function ocElegirTransportista(){
   document.getElementById('oc-transp-dir').value = [c.calle1, c.calle2].filter(Boolean).join(', ');
   document.getElementById('oc-transp-pob').value = c.ciudad || '';
 }
+/* ---- Franja horaria dentro de la orden de carga ----
+   Junto al DeCA: se puede reservar la franja de un almacén eligiendo almacén, cliente, día y hora. Queda como cita con hora en
+   Franjas horarias, enlazada a la orden (no lleva ningún PDF). Si se desmarca o se anula la orden, se quita. */
+function ocFranjaDe(ordenId){
+  if (!ordenId) return null;
+  for (const w of Object.keys(appointments)) { const c = (appointments[w] || []).find(x => x.ordenId === ordenId); if (c) return { cita: true, warehouseId: w, ...c }; }
+  for (const w of Object.keys(unscheduled)) { const u = (unscheduled[w] || []).find(x => x.ordenId === ordenId); if (u) return { cita: false, warehouseId: w, ...u }; }
+  return null;
+}
+// Horas libres del almacén ese día: las que no caben en el horario o ya tienen 2 camiones salen apagadas
+function ocFranjaHorasHtml(whId, fecha, dur, sel, ordenId){
+  if (!whId || !fecha) return '<option value="">Elige almacén y día</option>';
+  const sch = schedules[whId] && daySchedule(whId, fecha);
+  if (!sch || !sch.open) return '<option value="">Almacén cerrado ese día</option>';
+  const ocupadas = (appointments[whId] || []).filter(a => a.date === fecha && !(ordenId && a.ordenId === ordenId));
+  return '<option value="">Elige la hora…</option>' + slotTimes(sch.ranges).map(m => {
+    const cabe = fitsInARange(sch.ranges, m, m + dur);
+    const lleno = ocupadas.filter(a => { const s = timeToMin(a.start); return m < s + a.duration && m + dur > s; }).length >= LANES;
+    const motivo = !cabe ? ' · no cabe' : lleno ? ' · completo' : '';
+    return `<option value="${minToTime(m)}"${motivo ? ' disabled' : ''}${minToTime(m) === sel ? ' selected' : ''}>${minToTime(m)}${motivo}</option>`;
+  }).join('');
+}
+function ocFranjaClientesHtml(whId, sel){
+  const lista = whId ? clients.filter(c => !c.archived && c.warehouseIds.includes(whId)) : [];
+  return `<option value="">${whId ? 'Elige el cliente…' : 'Elige primero el almacén'}</option>` + lista.map(c => `<option value="${c.id}"${c.id === sel ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
+}
+function ocFranjaLeer(){
+  const v = id => (document.getElementById(id) || {}).value || '';
+  const on = document.getElementById('oc-fr-on');
+  return { on: !!(on && on.checked), wh: v('oc-fr-wh'), cli: v('oc-fr-cli'), tipo: v('oc-fr-tipo') || 'carga', date: v('oc-fr-date'), hora: v('oc-fr-hora'), dur: Number(v('oc-fr-dur')) || 60 };
+}
+function ocFranjaToggle(){
+  const f = ocFranjaLeer();
+  const box = document.getElementById('oc-fr-campos');
+  if (box) box.style.display = f.on ? '' : 'none';
+  const d = document.getElementById('oc-fr-date');
+  if (f.on && d && !d.value) { const c = ocLeerPuntos('carga')[0]; d.value = (c && c.fecha) || (document.getElementById('oc-fecha') || {}).value || ''; }
+  ocFranjaRefrescar();
+}
+// Al cambiar el almacén, el día o la duración se vuelven a calcular los clientes del almacén y las horas disponibles
+function ocFranjaRefrescar(){
+  const f = ocFranjaLeer();
+  const cli = document.getElementById('oc-fr-cli'), hora = document.getElementById('oc-fr-hora');
+  if (!cli || !hora) return;
+  const ocCli = contactos.find(c => !c.archived && c.esClienteTransporte && c.nombre === ((document.getElementById('oc-cli-nombre') || {}).value || '').trim());
+  const lista = f.wh ? clients.filter(c => !c.archived && c.warehouseIds.includes(f.wh)) : [];
+  const sel = lista.some(c => c.id === f.cli) ? f.cli : (ocCli && lista.some(c => c.id === ocCli.id) ? ocCli.id : '');   // sin elegir, el cliente de la orden si también lo es del almacén
+  cli.innerHTML = ocFranjaClientesHtml(f.wh, sel);
+  hora.innerHTML = ocFranjaHorasHtml(f.wh, f.date, f.dur, f.hora, window.__ocFormId);
+}
+function ocFranjaErrores(f){
+  const e = [];
+  if (!f.wh) e.push('Franja horaria: elige el almacén.');
+  if (!f.cli) e.push('Franja horaria: elige el cliente del almacén.');
+  if (!f.date) e.push('Franja horaria: elige el día.');
+  if (f.wh && f.date) {
+    const sch = schedules[f.wh] && daySchedule(f.wh, f.date);
+    if (sch && !sch.open) e.push('Franja horaria: el almacén está cerrado ese día.');
+    else if (!f.hora) e.push('Franja horaria: elige la hora.');
+    else if (sch) {
+      const s = timeToMin(f.hora);
+      if (!fitsInARange(sch.ranges, s, s + f.dur)) e.push(`Franja horaria: esa franja no cabe en el horario del día (${scheduleLabel(sch)}).`);
+      const ocupadas = (appointments[f.wh] || []).filter(a => a.date === f.date && !(window.__ocFormId && a.ordenId === window.__ocFormId));
+      if (ocupadas.filter(a => { const as = timeToMin(a.start); return s < as + a.duration && s + f.dur > as; }).length >= LANES) e.push(`Franja horaria: ya hay ${LANES} camiones reservados en ese horario.`);
+    }
+  } else if (!f.hora) e.push('Franja horaria: elige la hora.');
+  return e;
+}
+function ocFranjaHtml(F, ya, editId){
+  const req = '<span class="dc-req">*</span>';
+  const avisoSinHora = ya && !ya.cita ? `<div style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">Ahora está como camión sin cita el <b>${esc(fmtDateDMY(ya.date))}</b>: elige la hora para convertirla en cita.</div>` : '';
+  return `<label style="display:flex;align-items:flex-start;gap:10px;font-size:13.5px;cursor:pointer;"><input type="checkbox" class="switch" id="oc-fr-on" onchange="ocFranjaToggle()" ${F.on ? 'checked' : ''} style="margin-top:2px;" />
+      <span><b>Reservar franja horaria en un almacén</b><br><span style="font-size:12px;color:var(--muted);">Reserva el día y la hora en Franjas horarias, con el transportista y las matrículas de esta orden. No lleva ningún documento. Si desmarcas esto o anulas la orden, se quita.</span></span></label>
+    <div id="oc-fr-campos" style="display:${F.on ? '' : 'none'};margin-top:14px;">
+      ${avisoSinHora}
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:170px;margin-bottom:12px;"><label>Almacén ${req}</label><select id="oc-fr-wh" onchange="ocFranjaRefrescar()"><option value="">Elige el almacén…</option>${WAREHOUSES.map(w => `<option value="${esc(w.id)}"${w.id === F.wh ? ' selected' : ''}>${esc(w.name)}</option>`).join('')}</select></div>
+        <div class="field" style="flex:1.4;min-width:200px;margin-bottom:12px;"><label>Cliente del almacén ${req}</label><select id="oc-fr-cli">${ocFranjaClientesHtml(F.wh, F.cli)}</select></div>
+        <div class="field" style="flex:1;min-width:130px;margin-bottom:12px;"><label>Tipo</label><select id="oc-fr-tipo"><option value="carga"${F.tipo === 'carga' ? ' selected' : ''}>Carga</option><option value="descarga"${F.tipo === 'descarga' ? ' selected' : ''}>Descarga</option><option value="trasvase"${F.tipo === 'trasvase' ? ' selected' : ''}>Trasvase</option></select></div>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:150px;margin-bottom:0;"><label>Día ${req}</label>${decaInputIcon('calendar', `<input id="oc-fr-date" type="date" value="${esc(F.date || '')}" onchange="ocFranjaRefrescar()" />`)}</div>
+        <div class="field" style="flex:1;min-width:150px;margin-bottom:0;"><label>Hora de inicio ${req}</label><select id="oc-fr-hora">${ocFranjaHorasHtml(F.wh, F.date, F.dur, F.hora, editId)}</select></div>
+        <div class="field" style="flex:1;min-width:150px;margin-bottom:0;"><label>Duración</label><select id="oc-fr-dur" onchange="ocFranjaRefrescar()">${[[30, '30 minutos'], [60, '1 hora'], [120, '2 horas'], [180, '3 horas'], [240, '4 horas']].map(([m, t]) => `<option value="${m}"${m === F.dur ? ' selected' : ''}>${t}</option>`).join('')}</select></div>
+      </div>
+    </div>`;
+}
+// Reserva, mueve o quita la franja de la orden según el interruptor. Un fallo aquí no deshace la orden ya guardada.
+async function ocFranjaSync(oc, f){
+  const ya = ocFranjaDe(oc.id);
+  const recargar = () => Promise.all([loadAppointments(), loadUnscheduled()]);
+  try {
+    if (!f) {
+      if (!ya) return { msg: '' };
+      const { error } = await supabaseClient.rpc('oc_franja_quitar', { p_orden: oc.id });
+      if (error) throw error;
+      await recargar();
+      return { msg: 'Franja horaria quitada.' };
+    }
+    const igual = ya && ya.cita && ya.warehouseId === f.wh && ya.date === f.date && ya.start === f.hora && ya.duration === f.dur;
+    const { error } = await supabaseClient.rpc('oc_franja', { p: {
+      orden_id: oc.id, warehouse_id: f.wh, client_id: f.cli, date: f.date, start_time: f.hora, duration_min: f.dur, type: f.tipo,
+      carrier: oc.transportistaNombre || '', plate: oc.matriculaTractora || '', trailer_plate: oc.matriculaRemolque || '', cargo_ref: ocRef(oc),
+    } });
+    if (error) throw error;
+    await recargar();
+    const alm = (allWarehouses.find(w => w.id === f.wh) || {}).name;
+    return { msg: igual ? '' : `Franja reservada el ${fmtDateDMY(f.date)} a las ${f.hora}${alm ? ' en ' + alm : ''}.` };
+  } catch (err) {
+    const m = (err && err.message) || 'error desconocido.';
+    return { error: `no se pudo ${f ? 'reservar' : 'quitar'} la franja horaria: ` + (/oc_franja|orden_carga_id|schema cache|does not exist/i.test(m) ? 'falta ejecutar el SQL «franja-orden-carga.sql» en Supabase.' : m) };
+  }
+}
 function ocDecaToggle(){
   const on = document.getElementById('oc-deca-on').checked;
   const box = document.getElementById('oc-deca-campos');
@@ -19615,6 +19737,18 @@ function tplOcFormPage(){
   const cargas = e.cargas.length ? e.cargas : [{}], descargas = e.descargas.length ? e.descargas : [{}];
   const req = '<span class="dc-req">*</span>';
   const deca = o && o.decaId ? decaDocuments.find(x => x.id === o.decaId) : null;
+  // franja horaria: lo que ya tiene reservado la orden, o lo que se estaba escribiendo antes de salir a crear una dirección
+  const ya = o ? ocFranjaDe(o.id) : null;
+  const F = {
+    on: e.frOn != null ? !!e.frOn : !!ya,
+    wh: e.frWh != null ? e.frWh : (ya ? ya.warehouseId : (WAREHOUSES.length === 1 ? WAREHOUSES[0].id : '')),
+    cli: e.frCli != null ? e.frCli : (ya ? ya.clientId : ''),
+    tipo: e.frTipo || (ya ? ya.type : 'carga'),
+    date: e.frDate != null ? e.frDate : (ya ? ya.date : ((cargas[0] || {}).fecha || '')),
+    hora: e.frHora != null ? e.frHora : (ya && ya.cita ? ya.start : ''),
+    dur: e.frDur || (ya && ya.cita ? ya.duration : 60),
+  };
+  if (!F.cli && F.wh && e.clienteId && clients.some(c => c.id === e.clienteId && !c.archived && c.warehouseIds.includes(F.wh))) F.cli = e.clienteId;
   return `
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.file, 26, '#fff', 1.8)}</span>
@@ -19702,6 +19836,10 @@ function tplOcFormPage(){
                 </div>`}
           </div>
         </div>
+        <div class="card deca-card" style="--dc-accent:var(--primary);">
+          ${decaCardHead('calendar', 'Franja horaria', 'Opcional · reserva el día y la hora en un almacén, sin documentos')}
+          <div class="deca-card-body">${ocFranjaHtml(F, ya, editId)}</div>
+        </div>
       </div>
     </div>
     <div class="deca-actions">
@@ -19743,6 +19881,8 @@ async function submitOcForm(editId){
     if (!v('oc-mercancia')) errores.push('DeCA: escribe la mercancía.');
     if (!pesoTxt) errores.push('DeCA: indica el peso de la mercancía.');
   }
+  const franja = ocFranjaLeer();
+  if (franja.on) errores.push(...ocFranjaErrores(franja));
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const btn = document.querySelector('.oc-save');
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando…'; }
@@ -19787,10 +19927,13 @@ async function submitOcForm(editId){
         oc.decaId = doc.id;
       } catch (err) { avisoDeca = ' La orden se ha guardado, pero el DeCA no se pudo crear: ' + (err && err.message ? err.message : 'error desconocido.') + ' Ábrela con «Editar» para reintentarlo.'; }
     }
+    // franja horaria (solo si se ha marcado, o para quitar la que tenía)
+    const fr = await ocFranjaSync(oc, franja.on ? franja : null);
+    const avisoFr = fr.error ? ' La orden se ha guardado, pero ' + fr.error : fr.msg ? ' ' + fr.msg : '';
     window.__ocFormDirty = false;
     window.__ocView = 'list';
     renderHeader(); renderTab();
-    appToast(`Orden ${ocRef(oc)} ${editId ? 'actualizada' : 'creada'}.${avisoDeca}`, avisoDeca ? 'error' : 'ok');
+    appToast(`Orden ${ocRef(oc)} ${editId ? 'actualizada' : 'creada'}.${avisoDeca}${avisoFr}`, avisoDeca || fr.error ? 'error' : 'ok');
   } catch (err) {
     const m = err && err.message ? err.message : 'error desconocido.';
     errEl.textContent = 'No se pudo guardar: ' + (/precio_cliente|servicio|metros/i.test(m) ? 'falta ejecutar el SQL «Datos internos de la orden» en Supabase.' : /ref_facturacion/i.test(m) ? 'falta ejecutar el SQL «Referencia de facturación» en Supabase.' : /ordenes_carga|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL «Órdenes de carga» en Supabase.' : m);
@@ -19869,9 +20012,10 @@ async function ocAnularConfirmar(){
   const { error } = await supabaseClient.from('ordenes_carga').update({ estado: 'anulada', anulado_motivo: motivo, updated_at: new Date().toISOString() }).eq('id', o.id);
   if (error) { errEl.textContent = 'No se pudo anular: ' + error.message; if (btn) btn.disabled = false; return; }
   o.estado = 'anulada'; o.anuladoMotivo = motivo;
+  const fr = ocFranjaDe(o.id) ? await ocFranjaSync(o, null) : { msg: '' };   // el camión ya no viene: se quita su franja
   closeModal();
   refreshOcListBody();
-  appToast(`Orden ${ocRef(o)} anulada.`, 'ok');
+  appToast(`Orden ${ocRef(o)} anulada.${fr.error ? ' Pero ' + fr.error : fr.msg ? ' ' + fr.msg : ''}`, fr.error ? 'error' : 'ok');
 }
 
 // Una orden anulada se puede eliminar del todo (las emitidas solo se anulan). El DeCA que tuviera no se toca.
