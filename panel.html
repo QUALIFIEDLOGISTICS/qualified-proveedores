@@ -10119,13 +10119,17 @@ async function sgaAlbaranImprimir(id){
   (pr.data || []).forEach(p => { partidas[p.id] = p; });
   const colList = sgaAlbColumnasCliente(a.clienteId);
   const camposAlb = colList.filter(k => !k.startsWith('@')).map(k => sgaCampos.find(f => f.clave === k)).filter(Boolean);
-  const lineas = movs.map(m => {
+  const lineas = movs.flatMap(m => {
     const p = partidas[m.partida_id] || {};
     const art = sgaArticulos.find(x => x.id === p.articulo_id);
     const mod = Math.abs(Number(m.cantidad));
     const cajas = conBultos && m.bultos != null ? Math.abs(Number(m.bultos)) : mod;   // sin bultos por palet, la cantidad son los palets
-    return { producto: p.descripcion || sgaProdTxt(p.producto_id), modelo: p.referencia || '', medidas: art ? art.medidas : '', codigo: p.codigo || '', cajas, peso: art && art.peso != null ? sgaR2(art.peso * mod) : null,
+    const linea = { producto: p.descripcion || sgaProdTxt(p.producto_id), modelo: p.referencia || '', medidas: art ? art.medidas : '', codigo: p.codigo || '', cajas, peso: art && art.peso != null ? sgaR2(art.peso * mod) : null,
       extra: camposAlb.map(f => sgaCampoMostrar(sgaCampoDef(f), (art && art.atributos && art.atributos[f.clave] != null && art.atributos[f.clave] !== '') ? art.atributos[f.clave] : (f.ambito === 'articulo' ? null : (SGA_CAMPOS_COLUMNA.includes(f.clave) ? p[f.clave] : (p.atributos || {})[f.clave])))) };
+    // Varias unidades iguales (2 carpas del mismo artículo) con cajas o medidas por unidad: una línea por unidad, cada una con sus medidas y sus cajas
+    const n = Math.round(mod);
+    const porUnidad = n > 1 && n <= 200 && n === mod && (conBultos || (art && catMedidasLineas(art.medidas).length > 1));
+    return porUnidad ? Array.from({ length: n }, () => ({ ...linea, cajas: sgaR2(cajas / n), peso: art && art.peso != null ? sgaR2(art.peso) : null })) : [linea];
   });
   // Campos que salen en el albarán: los que ha elegido el cliente en su ficha SGA
   const extraCols = camposAlb.map((f, k) => ({ nombre: f.nombre, k, clave: f.clave }));
