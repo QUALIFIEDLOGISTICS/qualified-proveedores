@@ -298,6 +298,9 @@
   .sgac-zona.over{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 7%,var(--panel));}
   .sgac-zona .sgac-tit small{font-weight:400;text-transform:none;letter-spacing:0;color:var(--mutedFaint);margin-left:8px;}
   .sgac-vacio{border:1.5px dashed var(--border);border-radius:10px;padding:14px;text-align:center;font-size:12.5px;color:var(--mutedFaint);}
+  .sgac-uchip{border:1px solid var(--border);background:var(--panel2);color:var(--muted);font-size:12.5px;font-weight:600;padding:5px 13px;border-radius:999px;cursor:pointer;}
+  .sgac-uchip.on{background:var(--primary);border-color:var(--primary);color:var(--primary-text);}
+  .sgac-uchip.fija{cursor:default;opacity:.9;}
   .sgac-fila.sgac-mov{cursor:grab;}
   .sgac-fila.sgac-mov:active{cursor:grabbing;}
   .sgac-asa{color:var(--mutedFaint);font-size:13px;letter-spacing:-2px;user-select:none;margin-left:-4px;}
@@ -4879,7 +4882,7 @@ function sgaFinalidad(a){ return String((a && a.atributos && a.atributos.finalid
 // Un artículo tal como viene de la base de datos
 function sgaArticuloDeFila(r){
   const atributos = Object.assign(r.finalidad ? { finalidad: r.finalidad } : {}, r.atributos || {});
-  return { id: r.id, clienteId: r.cliente_id, nombre: r.nombre, referencia: r.referencia || '', productoId: r.producto_id || '', zonaId: r.zona_id || '', bultos: Number(r.bultos_por_unidad), metrosLineales: r.metros_lineales == null ? null : Number(r.metros_lineales), peso: r.peso == null ? null : Number(r.peso), medidas: r.medidas || '', atributos, archived: false };   // los productos no se archivan
+  return { id: r.id, clienteId: r.cliente_id, nombre: r.nombre, referencia: r.referencia || '', productoId: r.producto_id || '', zonaId: r.zona_id || '', bultos: Number(r.bultos_por_unidad), metrosLineales: r.metros_lineales == null ? null : Number(r.metros_lineales), peso: r.peso == null ? null : Number(r.peso), medidas: r.medidas || '', atributos, claveExtra: r.clave_extra || '', archived: false };   // los productos no se archivan
 }
 const SGA_CAMPOS_COLUMNA = ['referencia', 'descripcion', 'lote'];   // se guardan en columnas de la partida
 const SGA_CAMPO_NIVELES = { no: 'No se usa', opcional: 'Opcional', obligatorio: 'Obligatorio' };
@@ -4947,6 +4950,33 @@ const SGA_CAMPOS_ART_PROPIOS = ['referencia', 'descripcion', 'peso', 'medidas'];
 function sgaEsCampoMl(f){ const n = String(f.nombre || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]/g, ''); return n === 'ml' || /^metros?lineal(es)?(m|ml)?$/.test(n) || n === 'mlineales'; }   // «Metros lineales», «M. lineales», «ML»…
 function sgaClienteUsaMl(clienteId){ const cfg = sgaClienteCfg(clienteId).campos; return sgaCamposPropios().some(f => sgaEsCampoMl(f) && (cfg[f.clave] || 'no') !== 'no'); }
 function sgaClienteMlObligatorio(clienteId){ const cfg = sgaClienteCfg(clienteId).campos; return sgaCamposPropios().some(f => sgaEsCampoMl(f) && cfg[f.clave] === 'obligatorio'); }
+/* ---- Qué hace único a un artículo ----
+   Por defecto, su código de artículo: no puede haber dos iguales en un cliente. Un cliente puede añadir datos de su catálogo que, junto al
+   código, lo distinguen (p. ej. el lote: el mismo código con otro lote es otro artículo). Se elige en su ficha SGA (campos.__unico = «lote,color»)
+   y lo que distingue a cada artículo se guarda en sga_articulos.clave_extra (SQL «sga-articulos-clave-unica.sql»). */
+function sgaUnicoCampos(clienteId){
+  const ids = String(sgaClienteCfg(clienteId).campos.__unico || '').split(',').filter(Boolean);
+  return ids.length ? sgaCamposArticulo(clienteId).filter(f => ids.includes(f.id)) : [];
+}
+function sgaArticuloExtra(clienteId, atributos){
+  const at = atributos || {};
+  const vals = sgaUnicoCampos(clienteId).map(f => String(at[f.id] == null ? '' : at[f.id]).trim().toLowerCase());
+  return vals.some(Boolean) ? vals.join('|') : '';
+}
+function sgaArticuloRepetido(clienteId, nombre, atributos, exceptoId){
+  const extra = sgaArticuloExtra(clienteId, atributos);
+  return sgaArticulos.find(x => x.clienteId === clienteId && x.id !== exceptoId && x.nombre.toLowerCase() === String(nombre).toLowerCase() && (x.claveExtra || '') === extra) || null;
+}
+function sgaArticuloRepetidoTxt(clienteId){
+  const u = sgaUnicoCampos(clienteId).map(f => f.nombre.toLowerCase());
+  return `Este cliente ya tiene un artículo con ese código de artículo${u.length ? (u.length > 1 ? ' y esos mismos ' : ' y el mismo ') + u.join(' y ') : ''} (la descripción sí se puede repetir).`;
+}
+// Si el SQL de la clave única no está ejecutado, la base de datos sigue rechazando el código repetido
+function sgaArticuloErrorTxt(err, clienteId){
+  const m = err && err.message ? err.message : 'error desconocido.';
+  if (/clave_extra|duplicate key|unique/i.test(m) && sgaUnicoCampos(clienteId).length) return 'falta ejecutar el SQL «sga-articulos-clave-unica.sql» en Supabase (para poder repetir el código con otro ' + sgaUnicoCampos(clienteId).map(f => f.nombre.toLowerCase()).join(' o ') + ').';
+  return m;
+}
 // Dónde se pide un dato a un cliente: lo que haya decidido en su ficha SGA (campos.__donde = «lote:c,unidades:r», c = catálogo, r = al recibir)
 // y, si no ha decidido nada para ese dato, lo que tenga el propio dato en Datos de mercancía. Devuelve 'articulo' o 'entrada'.
 function sgaCampoDondeEn(campos, f){
@@ -5100,9 +5130,14 @@ function sgacCamposHtml(){
     </div>`;
   };
   const zona = (cod, titulo, ayuda, lista, vacio) => `<div class="sgac-zona" ondragover="sgacSobre(event, this)" ondragleave="this.classList.remove('over')" ondrop="sgacSoltar(event, '${cod}')"><div class="sgac-tit">${titulo}<small>${ayuda}</small></div>${lista.length ? `<div class="sgac-grid">${lista.map(fila).join('')}</div>` : `<div class="sgac-vacio">${vacio}</div>`}</div>`;
+  // Qué distingue a un artículo de otro: siempre el código de artículo y, si se marca, también alguno de los datos del catálogo (p. ej. el lote)
+  const elegibles = act.filter(f => !fijo(f) && sgaCampoDondeEn(est, f) === 'articulo');
+  const unicos = String(est.__unico || '').split(',').filter(Boolean);
+  const bloqueUnico = elegibles.length ? `<div class="sgac-tit" style="margin-top:14px;">Un artículo es único por<small style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--mutedFaint);margin-left:8px;">dos artículos pueden compartir código si se distinguen por lo que marques</small></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;"><span class="sgac-uchip on fija">Código de artículo</span>${elegibles.map(f => `<button type="button" class="sgac-uchip${unicos.includes(f.id) ? ' on' : ''}" onclick="sgacUnico('${f.id}')" title="${unicos.includes(f.id) ? 'Quitar' : 'Añadir'} «${esc(f.nombre)}» a lo que distingue a un artículo">${unicos.includes(f.id) ? '' : '+ '}${esc(f.nombre)}</button>`).join('')}</div>` : '';
   return `
     ${act.length ? zona('articulo', 'En el catálogo del cliente', 'se rellena una vez por artículo', act.filter(f => sgaCampoDondeEn(est, f) === 'articulo'), 'Arrastra aquí los datos que se rellenan en cada artículo.')
-        + zona('entrada', 'Al recibir la mercancía', 'se pide en cada recepción', act.filter(f => sgaCampoDondeEn(est, f) === 'entrada'), 'Arrastra aquí los datos que quieras pedir en cada recepción (lote, unidades por palet…).')
+        + zona('entrada', 'Al recibir la mercancía', 'se pide en cada recepción', act.filter(f => sgaCampoDondeEn(est, f) === 'entrada'), 'Arrastra aquí los datos que quieras pedir en cada recepción (lote, unidades por palet…).') + bloqueUnico
       : '<div style="color:var(--mutedFaint);font-size:12.5px;">Este cliente no usa ningún dato extra de la mercancía.</div>'}
     <div class="sgac-add">
       ${window.__sgacPicker
@@ -5250,6 +5285,14 @@ function sgacMover(id, zona){
   const el = document.getElementById('sgac-campos');
   if (el) el.innerHTML = sgacCamposHtml();
 }
+// Marcar / desmarcar un dato de lo que distingue a los artículos de este cliente (campos.__unico = «lote,color»)
+function sgacUnico(id){
+  const est = (window.__sgacCampos = window.__sgacCampos || {});
+  const l = String(est.__unico || '').split(',').filter(Boolean);
+  est.__unico = (l.includes(id) ? l.filter(x => x !== id) : [...l, id]).join(',');
+  const el = document.getElementById('sgac-campos');
+  if (el) el.innerHTML = sgacCamposHtml();
+}
 function sgacNivel(id, nivel){
   window.__sgacCampos = window.__sgacCampos || {};
   window.__sgacCampos[id] = nivel;
@@ -5377,6 +5420,7 @@ async function submitSgaCliente(){
   const campos = Object.assign({}, previa.campos);   // se conservan los niveles de los campos archivados
   sgaCamposCliente().forEach(f => { campos[f.id] = (window.__sgacCampos || {})[f.id] || 'no'; });
   campos.__donde = (window.__sgacCampos || {}).__donde || '';   // dónde se pide cada dato a este cliente (catálogo o al recibir)
+  campos.__unico = (window.__sgacCampos || {}).__unico || '';   // qué distingue a un artículo de otro, además de su código
   campos.__bultos = document.getElementById('sgac-bultos').checked ? 'si' : 'no';
   campos.__salida = (document.getElementById('sgac-salida') || {}).value || 'fifo';
   const udS = ((document.getElementById('sgac-ud-s') || {}).value || '').trim().toLowerCase(), udP = ((document.getElementById('sgac-ud-p') || {}).value || '').trim().toLowerCase();
@@ -5396,6 +5440,7 @@ async function submitSgaCliente(){
   if (previa.codigosUnicos !== codigosUnicos) dif.push(`códigos únicos ${codigosUnicos ? 'sí' : 'no'}`);
   if (sgaCamposCliente().some(f => (previa.campos[f.id] || 'no') !== campos[f.id])) dif.push('datos de la mercancía');
   if ((previa.campos.__donde || '') !== campos.__donde) dif.push('dónde se piden los datos (catálogo o al recibir)');
+  if ((previa.campos.__unico || '') !== campos.__unico) dif.push('qué distingue a un artículo de otro');
   if (bultosAntes !== (campos.__bultos === 'si')) dif.push(`bultos por palet ${campos.__bultos === 'si' ? 'sí' : 'no'}`);
   if (unidadAntes !== campos.__unidad) dif.push(campos.__unidad ? `unidad «${campos.__unidad.split('|')[0]} / ${campos.__unidad.split('|')[1]}»` : 'unidad «palet»');
   if (salidaAntes !== campos.__salida) dif.push(`salida de la mercancía a ${(SGA_SALIDA_MODOS[campos.__salida] || {}).nombre}`);
@@ -5745,9 +5790,14 @@ async function catGuardarCeldaCampo(el){
   const atributos = Object.assign({}, a.atributos);
   if (r.valor == null) delete atributos[f.id]; else atributos[f.id] = r.valor;
   if (JSON.stringify(atributos) === JSON.stringify(a.atributos || {})) return true;
-  const { error } = await supabaseClient.from('sga_articulos').update({ atributos }).eq('id', a.id);
-  if (error) { appToast('No se pudo guardar: ' + error.message, 'error'); if (!window.__catLote) renderTab(); return false; }
-  a.atributos = atributos;
+  // Si este dato forma parte de lo que distingue a los artículos del cliente (p. ej. el lote), no puede coincidir con otro artículo del mismo código
+  if (sgaArticuloRepetido(a.clienteId, a.nombre, atributos, a.id)) { appToast(sgaArticuloRepetidoTxt(a.clienteId), 'error'); if (!window.__catLote) renderTab(); return false; }
+  const extra = sgaArticuloExtra(a.clienteId, atributos);
+  const upd = { atributos };
+  if (extra || a.claveExtra) upd.clave_extra = extra;   // sin datos que distingan, no se toca la columna
+  const { error } = await supabaseClient.from('sga_articulos').update(upd).eq('id', a.id);
+  if (error) { appToast('No se pudo guardar: ' + sgaArticuloErrorTxt(error, a.clienteId), 'error'); if (!window.__catLote) renderTab(); return false; }
+  a.atributos = atributos; a.claveExtra = extra;
   el.classList.add('cg-ok'); setTimeout(() => el.classList.remove('cg-ok'), 900);
   return true;
 }
@@ -6377,7 +6427,7 @@ async function catGuardarCelda(el){
     if (valor !== null && !isFinite(valor)) return volver('Escribe un número.');
     if (f === 'bultos' && !(valor > 0)) return volver('Los bultos por palet tienen que ser un número mayor que 0.');
   }
-  if (f === 'nombre' && sgaArticulos.some(x => x.clienteId === a.clienteId && x.id !== a.id && x.nombre.toLowerCase() === v.toLowerCase())) return volver('Este cliente ya tiene un artículo con ese código de artículo (la descripción sí se puede repetir).');
+  if (f === 'nombre' && sgaArticuloRepetido(a.clienteId, v, a.atributos, a.id)) return volver(sgaArticuloRepetidoTxt(a.clienteId));
   if (a[f] === valor || (a[f] === '' && valor === '')) return true;
   const dbVal = (['productoId', 'zonaId', 'referencia', 'medidas'].includes(f) && v === '') ? null : valor;
   const { error } = await supabaseClient.from('sga_articulos').update({ [campos[f]]: dbVal }).eq('id', a.id);
@@ -6578,9 +6628,6 @@ async function catGuardarFilaNueva(tr){
   if (ml != null && !isFinite(ml)) return marcar('metrosLineales', 'Escribe un número en metros lineales.');
   if (ml == null && sgaClienteMlObligatorio(cid)) return marcar('metrosLineales', 'Falta «Metros lineales».');
   if (peso != null && !isFinite(peso)) return marcar('peso', 'Escribe un número en el peso.');
-  if (sgaArticulos.some(x => x.clienteId === cid && x.nombre.toLowerCase() === nombre.toLowerCase())) {
-    return marcar('nombre', 'Este cliente ya tiene un artículo con ese código de artículo (la descripción sí se puede repetir).');
-  }
   const atributos = {};
   for (const f of sgaCamposArticulo(cid)) {
     const r = sgaCampoParsear(f, g('x:' + f.id));
@@ -6588,11 +6635,14 @@ async function catGuardarFilaNueva(tr){
     if (r.valor == null) { if (sgaClienteCfg(cid).campos[f.id] === 'obligatorio') return marcar('x:' + f.id, `Falta «${f.label}».`); }
     else atributos[f.id] = r.valor;
   }
+  if (sgaArticuloRepetido(cid, nombre, atributos)) return marcar('nombre', sgaArticuloRepetidoTxt(cid));
+  const claveExtra = sgaArticuloExtra(cid, atributos);
   const row = { cliente_id: cid, nombre, referencia: referencia || null, producto_id: g('productoId') || null, bultos_por_unidad: bultos, metros_lineales: ml, peso, medidas: medidas || null };
   if (Object.keys(atributos).length) row.atributos = atributos;
+  if (claveExtra) row.clave_extra = claveExtra;
   const { data, error } = await supabaseClient.from('sga_articulos').insert(row).select().single();
-  if (error || !data) { appToast('No se pudo crear «' + nombre + '»: ' + (error && error.message ? error.message : 'error desconocido.'), 'error'); return false; }
-  sgaArticulos.push({ id: data.id, clienteId: cid, nombre, referencia, productoId: row.producto_id || '', zonaId: '', bultos, metrosLineales: ml, peso, medidas, finalidad: '', atributos, archived: false });
+  if (error || !data) { appToast('No se pudo crear «' + nombre + '»: ' + (error ? sgaArticuloErrorTxt(error, cid) : 'error desconocido.'), 'error'); return false; }
+  sgaArticulos.push({ id: data.id, clienteId: cid, nombre, referencia, productoId: row.producto_id || '', zonaId: '', bultos, metrosLineales: ml, peso, medidas, finalidad: '', atributos, claveExtra, archived: false });
   tr.classList.remove('cg-new');
   return true;
 }
@@ -7719,7 +7769,7 @@ async function sgaArtNuevoGuardar(){
   const bultos = Number(val('na-bultos').replace(',', '.'));
   if (!nombre) { errEl.textContent = 'Escribe el producto.'; return; }
   if (!isFinite(bultos) || bultos <= 0) { errEl.textContent = 'Los bultos por palet tienen que ser un número mayor que 0.'; return; }
-  if (sgaArticulos.some(x => x.clienteId === clienteId && x.nombre.toLowerCase() === nombre.toLowerCase())) { errEl.textContent = 'Este cliente ya tiene un artículo con ese código de artículo (la descripción sí se puede repetir).'; return; }
+  if (sgaArticuloRepetido(clienteId, nombre, {})) { errEl.textContent = sgaArticuloRepetidoTxt(clienteId) + (sgaUnicoCampos(clienteId).length ? ' Para crear otro con el mismo código, hazlo desde el catálogo del cliente, rellenando también ese dato.' : ''); return; }
   const btn = document.querySelector('.na-save');
   if (btn) btn.disabled = true;
   const row = { cliente_id: clienteId, nombre, referencia: referencia || null, producto_id: val('na-prod') || null, bultos_por_unidad: bultos };
@@ -9083,8 +9133,6 @@ async function submitSgaArticulo(){
   if (!nombre) { errEl.textContent = 'Escribe el nombre del producto.'; return; }
   if (bultos == null || !isFinite(bultos) || bultos <= 0) { errEl.textContent = 'Indica cuántos bultos lleva cada palet (un número mayor que 0).'; return; }
   if ((ml != null && !isFinite(ml)) || (peso != null && !isFinite(peso))) { errEl.textContent = 'Los metros lineales y el peso tienen que ser números.'; return; }
-  const clave = (r, n) => n.toLowerCase();   // lo único es el código de artículo: la descripción puede repetirse
-  if (sgaArticulos.some(x => x.clienteId === pg.clienteId && x.id !== pg.id && clave(x.referencia, x.nombre) === clave(referencia, nombre))) { errEl.textContent = 'Este cliente ya tiene un artículo con ese código de artículo (la descripción sí se puede repetir).'; return; }
   // Datos adicionales (campos propios del artículo): se conservan los de campos archivados o que este cliente ya no usa
   const previaArt = pg.id ? sgaArticulos.find(x => x.id === pg.id) : null;
   const atributos = Object.assign({}, previaArt ? previaArt.atributos : {});
@@ -9095,11 +9143,15 @@ async function submitSgaArticulo(){
     if (r.valor == null) { if (cfgCli.campos[f.id] === 'obligatorio') { errEl.textContent = `Falta «${f.label}».`; return; } delete atributos[f.id]; }
     else atributos[f.id] = r.valor;
   }
+  // Lo único es el código de artículo (la descripción puede repetirse) y, si el cliente lo ha elegido así, también los datos que lo distinguen (p. ej. el lote)
+  if (sgaArticuloRepetido(pg.clienteId, nombre, atributos, pg.id)) { errEl.textContent = sgaArticuloRepetidoTxt(pg.clienteId); return; }
+  const claveExtra = sgaArticuloExtra(pg.clienteId, atributos);
   const btn = document.querySelector('.sgaa-save');
   if (btn) btn.disabled = true;
   const row = { cliente_id: pg.clienteId, nombre, referencia: referencia || null, producto_id: productoId || null, zona_id: zonaId || null, bultos_por_unidad: bultos, metros_lineales: ml, peso, medidas: medidas || null };
   if (Object.keys(atributos).length || (previaArt && Object.keys(previaArt.atributos || {}).length)) row.atributos = atributos;   // sin campos propios no se toca la columna
-  const local = { clienteId: pg.clienteId, nombre, referencia, productoId, zonaId, bultos, metrosLineales: ml, peso, medidas, atributos };
+  if (claveExtra || (previaArt && previaArt.claveExtra)) row.clave_extra = claveExtra;   // sin datos que distingan, no se toca la columna
+  const local = { clienteId: pg.clienteId, nombre, referencia, productoId, zonaId, bultos, metrosLineales: ml, peso, medidas, atributos, claveExtra };
   try {
     if (pg.id) {
       const { error } = await supabaseClient.from('sga_articulos').update(row).eq('id', pg.id);
@@ -9112,7 +9164,7 @@ async function submitSgaArticulo(){
     }
     sgaArticuloCerrar();
   } catch (err) {
-    errEl.textContent = 'No se pudo guardar: ' + (err && err.message ? err.message : 'error desconocido.');
+    errEl.textContent = 'No se pudo guardar: ' + sgaArticuloErrorTxt(err, pg.clienteId);
     if (btn) btn.disabled = false;
   }
 }
