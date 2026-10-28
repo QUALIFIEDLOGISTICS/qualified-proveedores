@@ -9990,6 +9990,7 @@ async function sgaFranjaExpedicionSync(albaranId, d, numAlb){
       if (!ya) return;
       const { error } = await supabaseClient.rpc('sga_franja_expedicion_quitar', { p_albaran: albaranId });
       if (error) throw error;
+      await sgaFranjaBorrarPdf(albaranId);
       await recargar();
       appToast('Franja horaria quitada de Franjas horarias.', 'ok');
       return;
@@ -10005,8 +10006,12 @@ async function sgaFranjaExpedicionSync(albaranId, d, numAlb){
       cargo_ref: oc ? ocRef(oc) : (numAlb ? 'Albarán ' + numAlb : ''), notes: d.destinatario ? 'Para: ' + d.destinatario : '',
     } });
     if (error) throw error;
+    // el albarán en PDF queda adjunto a la franja (si falla, la franja ya está reservada)
+    let adj = false, adjErr = '';
+    try { await sgaFranjaAdjuntarAlbaran(albaranId); adj = true; } catch (e) { adjErr = (e && e.message) || 'error desconocido.'; }
     await recargar();
-    if (!ya) appToast(`Franja reservada el ${fmtDateDMY(d.fecha)} en Franjas horarias (sin hora).`, 'ok');
+    if (adjErr) appToast('La franja se ha reservado, pero no se pudo adjuntar el albarán en PDF: ' + (/sga_franja_adjuntar|schema cache|does not exist/i.test(adjErr) ? 'falta ejecutar el SQL «franja-expedicion-adjunto.sql» en Supabase.' : adjErr), 'error');
+    if (!ya) appToast(`Franja reservada el ${fmtDateDMY(d.fecha)} en Franjas horarias (sin hora)${adj ? ', con el albarán en PDF' : ''}.`, 'ok');
     else if (ya.date !== d.fecha) appToast(ya.cita
       ? `La cita de las ${ya.start} se ha movido al ${fmtDateDMY(d.fecha)}. Revisa en Franjas horarias que haya hueco y que el almacén abra ese día.`
       : `La franja se ha movido al ${fmtDateDMY(d.fecha)}.`, ya.cita ? 'info' : 'ok');
@@ -10173,10 +10178,10 @@ async function sgaSalidaVerAlbaran(){
   if (window.__stockDirty && !(await appConfirm({ title: 'Ver albarán', message: 'Has cambiado cosas que todavía no están guardadas. El albarán se genera con lo que ya tiene guardado el borrador.', confirmLabel: 'Ver igualmente', cancelLabel: 'Volver', tone: 'warn', icon: 'warn' }))) return;
   sgaAlbaranImprimir(e.id);
 }
-async function sgaAlbaranImprimir(id){
+// Las líneas del albarán, con sus columnas y totales: lo comparten su impresión y su PDF
+async function sgaAlbaranDatos(id){
   const a = sgaAlbaranes.find(x => x.id === id);
-  if (!a) return;
-  const cliente = contactos.find(c => c.id === a.clienteId) || {};
+  if (!a) return null;
   const conBultos = sgaClienteConBultos(a.clienteId);   // palets con varias cajas: se cuentan cajas; si no, la cantidad son palets
   const mv = await supabaseClient.from('sga_movimientos').select('partida_id,cantidad,bultos').eq('albaran_id', id).eq('tipo', a.tipo === 'salida' ? 'salida' : 'entrada');
   const movs = mv.data || [];
@@ -10201,6 +10206,12 @@ async function sgaAlbaranImprimir(id){
   const extraCols = camposAlb.map((f, k) => ({ nombre: f.nombre, k, clave: f.clave }));
   const totCajas = sgaR2(lineas.reduce((s, l) => s + l.cajas, 0));
   const totPeso = sgaR2(lineas.reduce((s, l) => s + (l.peso || 0), 0));
+  return { a, conBultos, colList, lineas, extraCols, totCajas, totPeso };
+}
+async function sgaAlbaranImprimir(id){
+  const D = await sgaAlbaranDatos(id);
+  if (!D) return;
+  const { a, conBultos, colList, lineas, extraCols, totCajas, totPeso } = D;
   const w = allWarehouses.find(x => x.id === a.warehouseId);
   const logoPropio = new URL('logo-full.png', location.href).href;   // ruta absoluta: el iframe del albarán no conoce la de la página
   const mat = sgaMatriculaSplit(a.matricula);
@@ -10305,6 +10316,192 @@ async function sgaAlbaranImprimir(id){
     setTimeout(() => f.remove(), 3000);
   }, 150);
 }
+/* ---- PDF del albarán (se genera al momento con el mismo contenido que el impreso) ----
+   Sirve para adjuntarlo a la franja horaria de la expedición. Si la expedición tiene DeCA, su QR sale también. */
+async function sgaAlbaranPdfBytes(id){
+  const D = await sgaAlbaranDatos(id);
+  if (!D) throw new Error('no se encuentra el albarán.');
+  const { a, conBultos, colList, lineas, extraCols, totCajas, totPeso } = D;
+  const { PDFDocument, StandardFonts, rgb } = PDFLib;
+  const pdf = await PDFDocument.create();
+  const num = sgaNumAlbaran(a);
+  pdf.setTitle(`Albarán ${num}`); pdf.setAuthor(ocCfgEmpresa().nombre);
+  const font = await pdf.embedFont(StandardFonts.Helvetica), bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const AZ = rgb(0.106, 0.227, 0.42), AZ2 = rgb(0.91, 0.929, 0.961), GR = rgb(0.357, 0.392, 0.447), LI = rgb(0.788, 0.82, 0.867), NG = rgb(0.07, 0.07, 0.07), BL = rgb(1, 1, 1);
+  let logo = null;
+  try { const r = await fetch('logo-full.png'); if (r.ok) logo = await pdf.embedPng(await r.arrayBuffer()); } catch (e) { /* sin logo */ }
+  const PW = 595.28, PH = 841.89, M = 34, W = PW - 2 * M, PIE = 26;
+  const esSal = a.tipo === 'salida';
+  const w = allWarehouses.find(x => x.id === a.warehouseId);
+  const mat = sgaMatriculaSplit(a.matricula);
+  const dd = esSal ? sgaDireccionPorNombre(a.destinatario) : null;
+  const T = ocPdfTxt;
+  let page = pdf.addPage([PW, PH]), y = PH - M;
+  const tw = (s, size, b) => (b ? bold : font).widthOfTextAtSize(T(s), size);
+  const draw = (s, x, yy, size, o) => {
+    o = o || {};
+    page.drawText(T(s), { x: o.right ? x - tw(s, size, o.bold) : o.center ? x - tw(s, size, o.bold) / 2 : x, y: yy, size, font: o.bold ? bold : font, color: o.color || NG });
+  };
+  // texto partido en líneas que caben en maxW (respeta los saltos de línea y parte las palabras más anchas que la celda)
+  const wrap = (s, size, maxW, b) => {
+    const f = b ? bold : font, out = [];
+    String(s == null ? '' : s).split(/\r?\n/).forEach(par => {
+      let line = '';
+      par.split(/\s+/).filter(Boolean).forEach(word => {
+        let wd = T(word);
+        while (f.widthOfTextAtSize(wd, size) > maxW && wd.length > 1) {
+          let n = wd.length - 1;
+          while (n > 1 && f.widthOfTextAtSize(wd.slice(0, n), size) > maxW) n--;
+          if (line) { out.push(line); line = ''; }
+          out.push(wd.slice(0, n)); wd = wd.slice(n);
+        }
+        const test = line ? line + ' ' + wd : wd;
+        if (line && f.widthOfTextAtSize(test, size) > maxW) { out.push(line); line = wd; } else line = test;
+      });
+      out.push(line);
+    });
+    return out;
+  };
+  const nuevaPagina = () => { page = pdf.addPage([PW, PH]); y = PH - M; };
+  const hueco = h => y - h >= M + PIE;
+  // cabecera: logo, número y QR del DeCA
+  const decaDoc = esSal ? sgaDecaDeExpedicion(a.id) : null;
+  let qr = null;
+  try { if (decaDoc && decaDoc.pdfUrl) qr = await pdf.embedPng(dataUrlToUint8Array(qrDataUrl(decaDoc.pdfUrl, 6, 1))); } catch (e) { qr = null; }
+  const hy = y;
+  if (logo) { const s = Math.min(150 / logo.width, 40 / logo.height); page.drawImage(logo, { x: M, y: hy - logo.height * s - 4, width: logo.width * s, height: logo.height * s }); }
+  draw('ALBARÁN', PW / 2, hy - 18, 9, { bold: true, center: true, color: GR });
+  draw(num, PW / 2, hy - 40, 20, { bold: true, center: true, color: AZ });
+  if (qr) { page.drawImage(qr, { x: PW - M - 44, y: hy - 44, width: 44, height: 44 }); draw('DeCA ' + (decaDoc.codigo || ''), PW - M - 22, hy - 53, 6.5, { bold: true, center: true }); }
+  y = hy - 60;
+  page.drawRectangle({ x: M, y, width: W, height: 3, color: AZ });
+  y -= 12;
+  page.drawRectangle({ x: M, y: y - 24, width: W, height: 24, color: AZ });
+  draw('ALBARÁN DE ' + (esSal ? 'EXPEDICIÓN' : 'RECEPCIÓN'), M + 10, y - 16, 12, { bold: true, color: BL });
+  draw(`${a.referencia ? 'Ref.: ' + a.referencia + '   ·   ' : ''}Fecha: ${fmtDateDMY(a.fecha)}`, PW - M - 10, y - 16, 9.5, { right: true, color: BL });
+  y -= 34;
+  // origen y destino
+  const dirDest = dd ? sgaDirLineas(dd) : (() => {
+    const partes = String(a.destinatarioDireccion || '').split(/\s*,\s*/).filter(Boolean), i = partes.findIndex(p => /^\d{4,6}\b/.test(p));
+    return i < 0 ? partes : [...partes.slice(0, i), partes.slice(i).join(', ')];
+  })();
+  const bw = (W - 10) / 2;
+  const cajas = [
+    { label: 'ORIGEN', nombre: 'QUALIFIED LOGISTICS', ls: [w && w.name, ...(w ? sgaDirLineas(w) : [])].filter(Boolean) },
+    { label: esSal ? 'DESTINO' : 'PROCEDENCIA', nombre: a.destinatario || '—', ls: [...dirDest, ...(dd && dd.telefono ? ['Tel. ' + phoneFormat(dd.telefono)] : [])] },
+  ];
+  cajas.forEach(c => { c.nl = wrap(c.nombre, 10.5, bw - 18, true); c.lt = c.ls.flatMap(s => wrap(s, 9, bw - 18)); });
+  const bh = 14 + Math.max(...cajas.map(c => c.nl.length * 13 + c.lt.length * 11)) + 10;
+  cajas.forEach((c, i) => {
+    const x = M + i * (bw + 10);
+    page.drawRectangle({ x, y: y - bh, width: bw, height: bh, borderColor: LI, borderWidth: 0.8 });
+    page.drawRectangle({ x, y: y - 2.5, width: bw, height: 2.5, color: AZ });
+    draw(c.label, x + 9, y - 14, 6.5, { bold: true, color: GR });
+    let ty = y - 14;
+    c.nl.forEach(s => { ty -= 13; draw(s, x + 9, ty, 10.5, { bold: true }); });
+    c.lt.forEach(s => { ty -= 11; draw(s, x + 9, ty, 9); });
+  });
+  y -= bh + 10;
+  // transportista y matrículas
+  page.drawRectangle({ x: M, y: y - 44, width: W, height: 44, borderColor: LI, borderWidth: 0.8 });
+  page.drawRectangle({ x: M, y: y - 2.5, width: W, height: 2.5, color: AZ });
+  draw('TRANSPORTISTA', M + 9, y - 14, 6.5, { bold: true, color: GR });
+  const cw3 = [(W - 18) * 0.5, (W - 18) * 0.25, (W - 18) * 0.25];
+  [['Nombre o razón social', a.transportista], ['Matrícula tractora', mat.tractora], ['Matrícula remolque', mat.remolque]].forEach((f, i) => {
+    const x = M + 9 + cw3.slice(0, i).reduce((s, n) => s + n, 0);
+    draw(f[0].toUpperCase(), x, y - 26, 6, { color: GR });
+    draw(wrap(f[1] || '', 10, cw3[i] - 8, true)[0], x, y - 38, 10, { bold: true });
+  });
+  y -= 58;
+  // tabla: las columnas que ha elegido el cliente en su ficha SGA, en su orden
+  const cols = {
+    '@codigo': { th: 'Código de artículo', wt: 2, b0: true, ls: l => [l.producto, ...(l.codigo ? ['Código: ' + l.codigo] : [])] },
+    '@descripcion': { th: 'Descripción', wt: 2, ls: l => [l.modelo || '—'] },
+    '@medidas': { th: 'Medidas', wt: 2.2, ls: l => { const m = catMedidasLineas(l.medidas); return m.length ? m : ['—']; } },
+    '@cajas': { th: conBultos ? 'Cajas' : sgaCap(sgaUnidadCfg(a.clienteId).p), wt: 0.9, r: true, b: true, ls: l => [sgaNumTxt(l.cajas)], tot: sgaNumTxt(totCajas) },
+    '@peso': { th: sgaPesoLabel(false), wt: 1, r: true, ls: l => [l.peso != null ? sgaNumTxt(l.peso) + ' kg' : '—'], tot: totPeso ? sgaNumTxt(totPeso) + ' kg' : '—' },
+  };
+  extraCols.forEach(c => { cols[c.clave] = { th: c.nombre, wt: 1.4, ls: l => [l.extra[c.k]] }; });
+  const orden = colList.filter(k => cols[k]);
+  const wsum = orden.reduce((s, k) => s + cols[k].wt, 0);
+  const cwid = orden.map(k => W * cols[k].wt / wsum);
+  const PAD = 5, FS = 9, LH = 11;
+  const xCol = i => M + cwid.slice(0, i).reduce((s, n) => s + n, 0);
+  const cabTabla = () => {
+    page.drawRectangle({ x: M, y: y - 20, width: W, height: 20, color: AZ2 });
+    page.drawRectangle({ x: M, y: y - 20, width: W, height: 1.5, color: AZ });
+    orden.forEach((k, i) => draw(wrap(cols[k].th.toUpperCase(), 7, cwid[i] - 2 * PAD, true)[0], cols[k].r ? xCol(i) + cwid[i] - PAD : xCol(i) + PAD, y - 13, 7, { bold: true, color: AZ, right: !!cols[k].r }));
+    y -= 20;
+  };
+  cabTabla();
+  if (!lineas.length) { draw('Sin líneas.', M + PAD, y - 14, FS); y -= 22; }
+  lineas.forEach((l, ri) => {
+    const cel = orden.map((k, i) => cols[k].ls(l).flatMap((s, j) => {
+      const b = !!cols[k].b || (!!cols[k].b0 && j === 0);
+      return wrap(s, FS, cwid[i] - 2 * PAD, b).map(t => ({ t, b }));
+    }));
+    const rh = Math.max(...cel.map(c => c.length)) * LH + 2 * PAD - 1;
+    if (!hueco(rh)) { nuevaPagina(); cabTabla(); }
+    if (ri % 2) page.drawRectangle({ x: M, y: y - rh, width: W, height: rh, color: rgb(0.969, 0.976, 0.988) });
+    page.drawRectangle({ x: M, y: y - rh, width: W, height: 0.6, color: LI });
+    cel.forEach((c, i) => c.forEach((o, j) => draw(o.t, cols[orden[i]].r ? xCol(i) + cwid[i] - PAD : xCol(i) + PAD, y - PAD - 7.5 - j * LH, FS, { bold: o.b, right: !!cols[orden[i]].r })));
+    y -= rh;
+  });
+  if (!hueco(22)) { nuevaPagina(); cabTabla(); }
+  page.drawRectangle({ x: M, y: y - 22, width: W, height: 22, color: AZ2 });
+  page.drawRectangle({ x: M, y: y - 1.5, width: W, height: 1.5, color: AZ });
+  const li = Math.max(0, orden.findIndex(k => cols[k].tot == null));
+  orden.forEach((k, i) => {
+    const t = i === li ? 'TOTAL' : (cols[k].tot != null ? cols[k].tot : '');
+    if (t) draw(t, cols[k].r ? xCol(i) + cwid[i] - PAD : xCol(i) + PAD, y - 15, 10, { bold: true, color: AZ, right: !!cols[k].r });
+  });
+  y -= 32;
+  // observaciones
+  if (a.observaciones) {
+    const ol = wrap(a.observaciones, 9.5, W - 20);
+    const oh = 20 + ol.length * 12;
+    if (!hueco(oh)) nuevaPagina();
+    page.drawRectangle({ x: M, y: y - oh, width: W, height: oh, borderColor: LI, borderWidth: 0.8, borderDashArray: [3, 2] });
+    draw('OBSERVACIONES', M + 10, y - 12, 6.5, { bold: true, color: GR });
+    ol.forEach((s, j) => draw(s, M + 10, y - 25 - j * 12, 9.5));
+    y -= oh + 12;
+  }
+  // firmas: al pie de la última hoja
+  const fh = 86;
+  if (y - fh - 6 < M + PIE) nuevaPagina();
+  const fy = M + PIE + fh, fw = (W - 24) / 3;
+  ['Remitente', 'Transportista', 'Destinatario'].forEach((t, i) => {
+    const x = M + i * (fw + 12);
+    page.drawRectangle({ x, y: fy - fh, width: fw, height: fh, borderColor: LI, borderWidth: 0.8 });
+    draw(t.toUpperCase(), x + 8, fy - 14, 7, { bold: true, color: GR });
+    page.drawRectangle({ x: x + 8, y: fy - fh + 18, width: fw - 16, height: 0.6, color: LI });
+    draw('Nombre / sello, firma y fecha', x + 8, fy - fh + 8, 7.5, { color: GR });
+  });
+  // pie de cada hoja
+  const hojas = pdf.getPages();
+  hojas.forEach((pg, i) => {
+    page = pg;
+    page.drawRectangle({ x: M, y: M + 14, width: W, height: 0.6, color: LI });
+    draw(`Qualified Logistics & Transport${w && w.name ? ' · ' + w.name : ''}`, M, M + 4, 7.5, { color: GR });
+    draw(`Albarán ${num} · ${fmtDateDMY(a.fecha)}${hojas.length > 1 ? ` · Página ${i + 1}/${hojas.length}` : ''}`, PW - M, M + 4, 7.5, { right: true, color: GR });
+  });
+  return await pdf.save();
+}
+// Sube el PDF del albarán y lo adjunta a la franja de la expedición (la sustituye si ya estaba)
+function sgaFranjaPdfRuta(albaranId){ return `attachments/albaran-${albaranId}.pdf`; }
+async function sgaFranjaAdjuntarAlbaran(albaranId){
+  const a = sgaAlbaranes.find(x => x.id === albaranId);
+  if (!a) throw new Error('no se encuentra el albarán.');
+  const bytes = await sgaAlbaranPdfBytes(albaranId);
+  const path = sgaFranjaPdfRuta(albaranId);
+  const up = await supabaseClient.storage.from(DOCS_BUCKET).upload(path, new Blob([bytes], { type: 'application/pdf' }), { upsert: true, contentType: 'application/pdf', cacheControl: '0' });
+  if (up.error) throw up.error;
+  const { error } = await supabaseClient.rpc('sga_franja_adjuntar', { p_albaran: albaranId, p_name: `Albarán ${sgaNumAlbaran(a)}.pdf`, p_path: path, p_size: bytes.length });
+  if (error) throw error;
+}
+async function sgaFranjaBorrarPdf(albaranId){
+  try { await supabaseClient.storage.from(DOCS_BUCKET).remove([sgaFranjaPdfRuta(albaranId)]); } catch (e) { /* un archivo suelto sin enlace no estorba */ }
+}
 /* ---- Anular un albarán ---- */
 function sgaAnularAbrir(id){
   const a = sgaAlbaranes.find(x => x.id === id);
@@ -10353,7 +10550,7 @@ async function sgaAnularConfirmar(){
   if (a && a.tipo === 'salida' && sgaFranjaDeExpedicion(id)) {   // el camión ya no viene: se quita su franja
     const q = await supabaseClient.rpc('sga_franja_expedicion_quitar', { p_albaran: id });
     if (q.error) appToast('El albarán se ha anulado, pero no se pudo quitar su franja horaria: ' + q.error.message + ' Quítala desde Franjas horarias.', 'error');
-    else await Promise.all([loadAppointments(), loadUnscheduled()]);
+    else { await sgaFranjaBorrarPdf(id); await Promise.all([loadAppointments(), loadUnscheduled()]); }
   }
   closeModal();
   appToast('Albarán anulado.', 'ok');
