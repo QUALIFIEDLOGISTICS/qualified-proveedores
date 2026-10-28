@@ -7329,7 +7329,7 @@ function sgaTarifaEn(clienteId, productoId, fecha){
 }
 // Producto de cobro «por albarán» de una modalidad: descarga (recepciones) o carga (expediciones).
 function sgaProductoAlbaran(modalidad, disparador){
-  const ps = almacenajeProductos.filter(p => !p.archived && p.disparador === (disparador || 'descarga'));
+  const ps = almacenajeProductos.filter(p => !p.archived && almacenajeCobraEn(p, disparador || 'descarga'));
   const n = s => String(s || '').toLowerCase();
   const completo = p => n(p.nombre + ' ' + (p.subtipoValor || ''));   // sirve igual con el nombre fusionado («Descarga Contenedor 20' Paletizado») que con el antiguo nombre + subtipo
   if (modalidad === 'contenedor_20') return ps.find(p => /contenedor/.test(completo(p)) && /20/.test(completo(p)));
@@ -7366,13 +7366,13 @@ function sgaCalcularEntrada(d){
       const ps = almacenajeProducto(p.productoId);
       const enlace = ps && almacenajeProducto(salida ? ps.cobroSalida : ps.cobroEntrada);
       const fam = ps && ps.familia;
-      const pe = (enlace && !enlace.archived ? enlace : null) || (fam ? almacenajeProductos.find(x => !x.archived && x.disparador === (salida ? 'salida' : 'entrada') && x.familia === fam) : null);
+      const pe = (enlace && !enlace.archived ? enlace : null) || (fam ? almacenajeProductos.find(x => !x.archived && almacenajeCobraEn(x, salida ? 'salida' : 'entrada') && x.familia === fam) : null);
       if (!pe) { res.avisos.push(`«${sgaProdTxt(p.productoId)}» no tiene un producto de ${palabra} asociado: elige cuál se cobra en Almacén → Configuración → Productos. Su ${palabra} no se cobra.`); return; }
       grupos[pe.id] = (grupos[pe.id] || 0) + (porBulto(pe) ? (p.bultos != null ? p.bultos : p.cantidad) : p.cantidad);
     });
     // Mercancía sin tipo de carga: si el cliente tiene UNA sola tarifa de este movimiento (salida o entrada), se le aplica esa. Si tiene varias,
     // no se puede saber cuál toca y se avisa; si no tiene ninguna, no cobrarla es lo normal.
-    const prodsMov = [...new Set(almacenajeTarifas.filter(t => t.clienteId === d.clienteId).map(t => almacenajeProducto(t.tipo)).filter(pr => pr && !pr.archived && pr.disparador === (salida ? 'salida' : 'entrada')))];
+    const prodsMov = [...new Set(almacenajeTarifas.filter(t => t.clienteId === d.clienteId).map(t => almacenajeProducto(t.tipo)).filter(pr => pr && !pr.archived && almacenajeCobraEn(pr, salida ? 'salida' : 'entrada')))];
     const cobraMov = prodsMov.length > 0;
     if (sinTipo > 0 && prodsMov.length === 1) {
       const pe = prodsMov[0];
@@ -9476,7 +9476,7 @@ function sgaResumenHtml(d, paraImprimir){
   // 2) Lo que se cobra: una sola tabla con los conceptos y, si el cliente tiene tarifa de m², su línea
   // Los conceptos van siempre en este orden: movimientos (recepciones y luego expediciones), almacenaje y, al final, extras
   const grupoDe = c => { if (c.origen === 'stock') return 'almacenaje'; const cat = (almacenajeProducto(c.productoId) || {}).categoria; return cat || (c.origen === 'servicio' ? 'extra' : 'movimiento'); };
-  const ordenDe = c => { const p = almacenajeProducto(c.productoId) || {}; return c.origen === 'stock' ? 0 : p.disparador === 'descarga' ? 0 : p.disparador === 'carga' ? 1 : 2; };
+  const ordenDe = c => { const p = almacenajeProducto(c.productoId) || {}; return c.origen === 'stock' ? 0 : ['descarga', 'descarga_carga'].includes(p.disparador) ? 0 : p.disparador === 'carga' ? 1 : 2; };
   const lineas = r.conceptos.map(c => ({ g: grupoDe(c), o: ordenDe(c), importe: c.importe, html: `<tr><td>${esc(sgaProdTxt(c.productoId))}${c.origen === 'stock' ? ` <small style="color:var(--muted);">· almacenaje (${esc(c.detalle)})</small>` : ''}</td><td class="r">${sgaNumTxt(c.cantidad)}</td><td class="r">${esc(eurPrecio(c.precio))}</td><td class="r">${eur(c.importe)}</td></tr>` }));
   r.operativas.slice().sort((x, y) => x.fecha.localeCompare(y.fecha)).forEach(o => {
     const det = sgaOperativaDetalleTxt(o.apartados);
@@ -22804,7 +22804,7 @@ function almacenajeCategoriaCambio(){
 }
 // Desplegable «Al entrar / Al salir se cobra»: los productos de movimiento que se cobran por palet o unidad en la recepción o en la expedición
 function almacenajeEnlaceOpcionesHtml(disparador, actual){
-  const lista = almacenajeProductos.filter(x => x.categoria === 'movimiento' && x.disparador === disparador && (!x.archived || x.id === actual))
+  const lista = almacenajeProductos.filter(x => x.categoria === 'movimiento' && almacenajeCobraEn(x, disparador) && (!x.archived || x.id === actual))
     .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
   return `<option value="">— No se cobra —</option>` + lista.map(x => `<option value="${x.id}" ${x.id === actual ? 'selected' : ''}>${esc(almacenajeProductoTexto(x))}</option>`).join('');
 }
@@ -22813,7 +22813,16 @@ function almacenajeDisparadorDe(cat, unidad, direccion){
   if (cat === 'almacenaje') return unidad === 'mes' ? 'stock_mes' : 'stock_dia';
   if (cat === 'extra') return 'manual';
   const albaran = unidad === 'albaran', sale = direccion === 'expedicion';
+  if (direccion === 'ambas') return albaran ? 'descarga_carga' : 'entrada_salida';   // un solo producto y un solo precio, en la recepción y en la expedición
   return sale ? (albaran ? 'carga' : 'salida') : (albaran ? 'descarga' : 'entrada');
+}
+// ¿Se cobra este producto de movimiento en este movimiento (entrada, salida, descarga o carga)? Los que se cobran «en las dos» valen para ambos sentidos.
+function almacenajeCobraEn(p, disp){
+  return p.disparador === disp || p.disparador === (disp === 'entrada' || disp === 'salida' ? 'entrada_salida' : 'descarga_carga');
+}
+// Dónde se cobra un producto de movimiento, con palabras
+function almacenajeDireccionTxt(p){
+  return ['entrada_salida', 'descarga_carga'].includes(p.disparador) ? 'Recepción y expedición' : ['salida', 'carga'].includes(p.disparador) ? 'Expedición' : 'Recepción';
 }
 // Enseña u oculta «Se cobra en» y explica con una frase cómo se cobrará el producto
 function almacenajeCobroActualizar(){
@@ -22827,7 +22836,7 @@ function almacenajeCobroActualizar(){
   const dir = (document.getElementById('ap-direccion') || {}).value;
   h.textContent = cat === 'almacenaje' ? (uni === 'mes' ? 'Se cobra solo cada mes, con los metros cuadrados que ocupa el cliente.' : 'Se cobra solo cada día, con el stock que haya en el almacén.')
     : cat === 'extra' ? 'Lo apunta el operario a mano en el albarán, con la cantidad que toque.'
-    : `Se cobra solo en cada ${dir === 'expedicion' ? 'expedición' : 'recepción'}${uni === 'albaran' ? ', una vez por albarán' : uni === 'bulto' ? ', por cada bulto' : ', por cada palet o unidad'}.`;
+    : `Se cobra solo en cada ${dir === 'expedicion' ? 'expedición' : dir === 'ambas' ? 'recepción y en cada expedición, con el mismo precio' : 'recepción'}${uni === 'albaran' ? ', una vez por albarán' : uni === 'bulto' ? ', por cada bulto' : ', por cada palet o unidad'}.`;
 }
 async function submitAlmacenajeProducto(editId){
   const nombre = (document.getElementById('ap-nombre').value || '').trim();
@@ -22933,8 +22942,8 @@ function almacenajeCobroFrase(p){
     return 'Cada día, con el stock que haya' + (e || s ? ` · Al entrar: ${e ? e.nombre : '—'} · Al salir: ${s ? s.nombre : '—'}` : '');
   }
   if (p.categoria === 'extra') return `Lo apunta el operario · ${cuenta}`;
-  const sale = ['salida', 'carga'].includes(p.disparador);
-  return `En cada ${sale ? 'expedición' : 'recepción'} · ${cuenta}`;
+  const dir = almacenajeDireccionTxt(p);
+  return `En cada ${dir === 'Expedición' ? 'expedición' : dir === 'Recepción' ? 'recepción' : 'recepción y expedición'} · ${cuenta}`;
 }
 function apFilaProductoHtml(p){
   return `
@@ -22957,7 +22966,7 @@ function apChipsHtml(p){
   const cuenta = { movimiento: 'Por palet o unidad', bulto: 'Por bulto', albaran: 'Por albarán', hora: 'Por hora' }[p.unidad];
   const l = p.categoria === 'almacenaje' ? [p.unidad === 'mes' ? 'Cada mes' : 'Cada día', p.unidad === 'mes' ? 'Por m²' : (p.unidad === 'bulto' ? 'Por bulto' : '')]
     : p.categoria === 'extra' ? ['A mano', cuenta]
-    : [['salida', 'carga'].includes(p.disparador) ? 'Expedición' : 'Recepción', cuenta];
+    : [almacenajeDireccionTxt(p), cuenta];
   return l.filter(Boolean).map(t => `<span>${esc(t)}</span>`).join('');
 }
 function apTarjetaHtml(p){
@@ -23056,7 +23065,7 @@ function tplAlmacenajeProductoFormPage(){
   const editing = editId ? almacenajeProducto(editId) : null;
   const p = editing || {};
   const cat = p.categoria || 'almacenaje';
-  const dir = ['salida', 'carga'].includes(p.disparador) ? 'expedicion' : 'recepcion';
+  const dir = ['entrada_salida', 'descarga_carga'].includes(p.disparador) ? 'ambas' : ['salida', 'carga'].includes(p.disparador) ? 'expedicion' : 'recepcion';
   const sec = (n, t, s) => `<div class="dr-sec"><span class="dr-n">${n}</span><div><b>${t}</b>${s ? `<small>${s}</small>` : ''}</div></div>`;
   return `
     <div style="--bn-accent:var(--primary);">
@@ -23095,7 +23104,7 @@ function tplAlmacenajeProductoFormPage(){
           <div class="field" id="ap-dir-w" style="${cat === 'movimiento' ? '' : 'display:none;'}margin-bottom:12px;">
             <label>Se cobra en</label>
             <input type="hidden" id="ap-direccion" value="${dir}" />
-            <div class="doc-seg" id="ap-dir-seg"><button type="button" data-d="recepcion" class="${dir === 'recepcion' ? 'on' : ''}" onclick="apElegirDireccion('recepcion')">Recepción</button><button type="button" data-d="expedicion" class="${dir === 'expedicion' ? 'on' : ''}" onclick="apElegirDireccion('expedicion')">Expedición</button></div>
+            <div class="doc-seg" id="ap-dir-seg"><button type="button" data-d="recepcion" class="${dir === 'recepcion' ? 'on' : ''}" onclick="apElegirDireccion('recepcion')">Recepción</button><button type="button" data-d="expedicion" class="${dir === 'expedicion' ? 'on' : ''}" onclick="apElegirDireccion('expedicion')">Expedición</button><button type="button" data-d="ambas" class="${dir === 'ambas' ? 'on' : ''}" onclick="apElegirDireccion('ambas')" title="Un solo producto y un solo precio, que se cobra al recibir y al expedir (p. ej. el handling de un contenedor)">Las dos</button></div>
           </div>
         </div>
         <div id="ap-enlaces-w" style="${cat === 'almacenaje' && p.unidad !== 'mes' ? '' : 'display:none;'}">
