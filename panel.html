@@ -9354,6 +9354,26 @@ function sgaResumenCalcular(d){
   }
   const antes = d.movs.filter(m => m.fecha >= d.periodo + '-01');
   const inicial = { mod: actualMod - antes.reduce((s, m) => s + m.cantidad, 0), bul: actualBul - antes.reduce((s, m) => s + bm(m), 0) };
+  // Saldo por tipo de palet (el tipo de carga de cada partida): solo si el cliente mueve o tiene más de un tipo
+  const tiposIds = [...new Set([...ps.map(p => p.productoId || ''), ...d.movs.map(m => m.productoId || '')])];
+  let porTipo = null;
+  if (tiposIds.length > 1) {
+    porTipo = tiposIds.map(t => {
+      const es = x => (x.productoId || '') === t;
+      const actual = ps.filter(es).reduce((s, p) => s + p.actual, 0);
+      const mt = d.movs.filter(es);
+      const fin = { id: t, nombre: t ? sgaProdTxt(t) : 'Sin tipo', inicial: actual - mt.reduce((s, m) => s + m.cantidad, 0), ent: 0, sal: 0, reg: 0, final: actual };
+      filas.forEach(f => {
+        const dia = mt.filter(m => m.fecha === f.f);
+        const normal = dia.filter(m => m.tipo !== 'apertura' && m.tipo !== 'ajuste');
+        fin.ent += normal.filter(m => m.cantidad > 0).reduce((s, m) => s + m.cantidad, 0);
+        fin.sal -= normal.filter(m => m.cantidad < 0).reduce((s, m) => s + m.cantidad, 0);
+        fin.reg += dia.filter(m => m.tipo === 'ajuste').reduce((s, m) => s + m.cantidad, 0);
+        (f.tipos = f.tipos || {})[t] = actual - mt.filter(m => m.fecha > f.f).reduce((s, m) => s + m.cantidad, 0);
+      });
+      return fin;
+    }).sort((a, b) => (a.id ? 0 : 1) - (b.id ? 0 : 1) || a.nombre.localeCompare(b.nombre, 'es'));   // «sin tipo» al final
+  }
   const conceptos = {};
   d.cobros.forEach(c => { const k = c.productoId + '|' + c.precio; const e = (conceptos[k] = conceptos[k] || { productoId: c.productoId, precio: c.precio, cantidad: 0, importe: 0, origen: c.origen, detalle: '' }); e.cantidad += c.cantidad; e.importe += c.importe; });
   const totMov = d.cobros.filter(c => c.origen === 'movimiento').reduce((s, c) => s + c.importe, 0);
@@ -9393,7 +9413,7 @@ function sgaResumenCalcular(d){
   const prodM2 = almacenajeProductos.find(p => !p.archived && p.disparador === 'stock_mes' && almacenajeTarifas.some(t => t.clienteId === d.clienteId && t.tipo === p.id));
   const finMes = `${d.periodo}-${String(dias).padStart(2, '0')}`;
   const tM2 = prodM2 ? sgaTarifaEn(d.clienteId, prodM2.id, finMes) : null;
-  return { cfg, usaBultos, filas, inicial, final: { mod: actualMod, bul: actualBul }, conceptos: [...Object.values(conceptos), ...stockLineas], hayReg: filas.some(x => x.regMod), mesActual, proyectar, almPrevisto: sgaR2(almPrevisto), totMov, totServ, totOper, totOperMes: sgaR2(filas.reduce((s, x) => s + (x.oper || 0), 0)), operativas: d.operativas || [], totStock, m2, m2Guardado: !!guardado, m2Origen, m2Desde: contrato ? contrato.desde : '', prodM2, tM2, finMes };
+  return { cfg, usaBultos, filas, inicial, porTipo, final: { mod: actualMod, bul: actualBul }, conceptos: [...Object.values(conceptos), ...stockLineas], hayReg: filas.some(x => x.regMod), mesActual, proyectar, almPrevisto: sgaR2(almPrevisto), totMov, totServ, totOper, totOperMes: sgaR2(filas.reduce((s, x) => s + (x.oper || 0), 0)), operativas: d.operativas || [], totStock, m2, m2Guardado: !!guardado, m2Origen, m2Desde: contrato ? contrato.desde : '', prodM2, tM2, finMes };
 }
 function sgaResumenHtml(d, paraImprimir){
   const r = sgaResumenCalcular(d);
@@ -9456,23 +9476,24 @@ function sgaResumenHtml(d, paraImprimir){
 
   // 3) Día a día: solo las columnas que usa este cliente
   const filasDia = r.filas.filter(f => !soloAct || f.entMod || f.salMod || f.regMod || f.mov || f.serv || f.oper);
-  const nCols = 1 + 1 + (colsB ? 1 : 0) + 1 + (colsB ? 1 : 0) + (reg ? 1 : 0) + 1 + (colsB ? 1 : 0) + (hayAlm ? 1 : 0) + (hayCobros ? 1 : 0);
+  const pt = r.porTipo;   // saldo por tipo de palet (solo si el cliente tiene más de un tipo)
+  const nCols = 1 + 1 + (colsB ? 1 : 0) + 1 + (colsB ? 1 : 0) + (reg ? 1 : 0) + 1 + (colsB ? 1 : 0) + (pt ? pt.length : 0) + (hayAlm ? 1 : 0) + (hayCobros ? 1 : 0);
   const tabla = `
     <table class="${paraImprimir ? '' : 'tf-table'} rm-tabla">
-      <thead><tr>${th('Día')}${th('Recepciones', 1)}${colsB ? th('Bultos', 1) : ''}${th('Expediciones', 1)}${colsB ? th('Bultos', 1) : ''}${reg ? th('Regul.', 1) : ''}${th('Saldo', 1)}${colsB ? th('Bultos', 1) : ''}${hayAlm ? th('Almacenaje €', 1) : ''}${hayCobros ? th('Cobrado €', 1) : ''}</tr></thead>
+      <thead><tr>${th('Día')}${th('Recepciones', 1)}${colsB ? th('Bultos', 1) : ''}${th('Expediciones', 1)}${colsB ? th('Bultos', 1) : ''}${reg ? th('Regul.', 1) : ''}${th('Saldo', 1)}${colsB ? th('Bultos', 1) : ''}${pt ? pt.map(t => th('Saldo · ' + esc(t.nombre), 1)).join('') : ''}${hayAlm ? th('Almacenaje €', 1) : ''}${hayCobros ? th('Cobrado €', 1) : ''}</tr></thead>
       <tbody>
-        <tr class="rm-ini"><td>Stock inicial</td><td></td>${colsB ? '<td></td>' : ''}<td></td>${colsB ? '<td></td>' : ''}${reg ? '<td></td>' : ''}<td class="r">${sgaNumTxt(r.inicial.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.inicial.bul)}</td>` : ''}${hayAlm ? '<td></td>' : ''}${hayCobros ? '<td></td>' : ''}</tr>
+        <tr class="rm-ini"><td>Stock inicial</td><td></td>${colsB ? '<td></td>' : ''}<td></td>${colsB ? '<td></td>' : ''}${reg ? '<td></td>' : ''}<td class="r">${sgaNumTxt(r.inicial.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.inicial.bul)}</td>` : ''}${pt ? pt.map(t => `<td class="r">${sgaNumTxt(t.inicial)}</td>`).join('') : ''}${hayAlm ? '<td></td>' : ''}${hayCobros ? '<td></td>' : ''}</tr>
         ${filasDia.map(f => { const act = f.entMod || f.salMod || f.regMod || f.mov || f.serv || f.oper; return `
         <tr class="${act ? 'rm-act' : 'rm-sin'}${f.prev ? ' rm-prev' : ''}"><td style="white-space:nowrap;">${fmtDateDMY(f.f).split('/').join('-')}${f.prev ? ' <small>previsto</small>' : ''}</td>
           <td class="r">${num(f.entMod)}</td>${colsB ? `<td class="r">${num(f.entBul)}</td>` : ''}
           <td class="r">${num(f.salMod)}</td>${colsB ? `<td class="r">${num(f.salBul)}</td>` : ''}
           ${reg ? `<td class="r">${f.regMod ? (f.regMod > 0 ? '+' : '') + sgaNumTxt(f.regMod) : '·'}</td>` : ''}
-          <td class="r">${sgaNumTxt(f.saldoMod)}</td>${colsB ? `<td class="r">${sgaNumTxt(f.saldoBul)}</td>` : ''}
+          <td class="r">${sgaNumTxt(f.saldoMod)}</td>${colsB ? `<td class="r">${sgaNumTxt(f.saldoBul)}</td>` : ''}${pt ? pt.map(t => `<td class="r">${sgaNumTxt((f.tipos || {})[t.id])}</td>`).join('') : ''}
           ${hayAlm ? `<td class="r">${f.alm ? eur(f.alm) : '·'}</td>` : ''}
           ${hayCobros ? `<td class="r">${f.mov || f.serv || f.oper ? eur(f.mov + f.serv + f.oper) : '·'}</td>` : ''}</tr>`; }).join('')}
         ${!filasDia.length ? `<tr><td colspan="${nCols}" style="color:var(--mutedFaint);">Sin movimientos este mes.</td></tr>` : ''}
       </tbody>
-      <tfoot><tr><td>TOTAL</td><td class="r">${sgaNumTxt(tot('entMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('entBul'))}</td>` : ''}<td class="r">${sgaNumTxt(tot('salMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('salBul'))}</td>` : ''}${reg ? `<td class="r">${sgaNumTxt(tot('regMod'))}</td>` : ''}<td class="r">${sgaNumTxt(r.final.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.final.bul)}</td>` : ''}${hayAlm ? `<td class="r">${eur(r.filas.reduce((s, x) => s + (x.alm || 0), 0))}</td>` : ''}${hayCobros ? `<td class="r">${eur(r.totMov + r.totServ + r.totOperMes)}</td>` : ''}</tr></tfoot>
+      <tfoot><tr><td>TOTAL</td><td class="r">${sgaNumTxt(tot('entMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('entBul'))}</td>` : ''}<td class="r">${sgaNumTxt(tot('salMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('salBul'))}</td>` : ''}${reg ? `<td class="r">${sgaNumTxt(tot('regMod'))}</td>` : ''}<td class="r">${sgaNumTxt(r.final.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.final.bul)}</td>` : ''}${pt ? pt.map(t => `<td class="r">${sgaNumTxt(t.final)}</td>`).join('') : ''}${hayAlm ? `<td class="r">${eur(r.filas.reduce((s, x) => s + (x.alm || 0), 0))}</td>` : ''}${hayCobros ? `<td class="r">${eur(r.totMov + r.totServ + r.totOperMes)}</td>` : ''}</tr></tfoot>
     </table>`;
   const interruptorPrev = !paraImprimir && r.mesActual ? `<label class="rm-solo" title="Suma al almacenaje los días que faltan del mes, con el stock que hay hoy"><input type="checkbox" ${r.proyectar ? 'checked' : ''} onchange="window.__rmProy=this.checked; refreshStockBody();" /> Prever almacenaje hasta fin de mes</label>` : '';
   const interruptor = interruptorPrev + `<label class="rm-solo"><input type="checkbox" ${soloAct ? 'checked' : ''} onchange="window.__rmSoloAct=this.checked; refreshStockBody();" /> Solo días con movimiento</label>`;
@@ -9482,6 +9503,19 @@ function sgaResumenHtml(d, paraImprimir){
         ${paraImprimir ? '<h2>A facturar</h2>' : decaCardHead('tag', 'A facturar', 'Por concepto y precio')}
         <div class="${paraImprimir ? '' : 'deca-card-body'}">${cobro}</div>
       </div>`;
+  // Resumen del mes por tipo de palet (el saldo día a día de cada tipo va en las columnas «Saldo · tipo» de la tabla de abajo)
+  const sumT = k => pt ? pt.reduce((s, t) => s + t[k], 0) : 0;
+  const tablaTipos = pt ? `
+    <table class="${paraImprimir ? '' : 'tf-table'} rm-tabla">
+      <thead><tr>${th('Tipo de palet')}${th('Stock inicial', 1)}${th('Recepciones', 1)}${th('Expediciones', 1)}${reg ? th('Regul.', 1) : ''}${th('Stock final', 1)}</tr></thead>
+      <tbody>${pt.map(t => `<tr class="rm-act"><td>${esc(t.nombre)}</td><td class="r">${sgaNumTxt(t.inicial)}</td><td class="r">${num(t.ent)}</td><td class="r">${num(t.sal)}</td>${reg ? `<td class="r">${t.reg ? (t.reg > 0 ? '+' : '') + sgaNumTxt(t.reg) : '·'}</td>` : ''}<td class="r"><b>${sgaNumTxt(t.final)}</b></td></tr>`).join('')}</tbody>
+      <tfoot><tr><td>TOTAL</td><td class="r">${sgaNumTxt(sumT('inicial'))}</td><td class="r">${sgaNumTxt(sumT('ent'))}</td><td class="r">${sgaNumTxt(sumT('sal'))}</td>${reg ? `<td class="r">${sgaNumTxt(sumT('reg'))}</td>` : ''}<td class="r">${sgaNumTxt(sumT('final'))}</td></tr></tfoot>
+    </table>` : '';
+  const cardTipos = pt ? `
+      <div class="card deca-card" style="--dc-accent:var(--primary);margin-bottom:16px;${paraImprimir ? 'margin-top:14px;' : ''}${flat}">
+        ${paraImprimir ? '<h2>Saldo por tipo de palet</h2>' : decaCardHead('box', 'Saldo por tipo de palet', 'Lo que había, lo que entró y salió y lo que queda de cada tipo')}
+        <div class="${paraImprimir ? '' : 'deca-card-body'}"><div>${tablaTipos}</div></div>
+      </div>` : '';
   const cardDias = `
       <div class="card deca-card" style="--dc-accent:var(--primary);${paraImprimir ? 'margin-top:14px;' : ''}${flat}">
         ${paraImprimir ? '<h2>Día a día</h2>' : decaCardHead('calendar', 'Día a día', 'Lo que entra, lo que sale y lo que se cobra', interruptor)}
@@ -9494,8 +9528,8 @@ function sgaResumenHtml(d, paraImprimir){
       ${paraImprimir ? `<div class="rm-cab"><h1>Resumen mensual · ${esc(sgaPeriodoTxt(d.periodo))}</h1><div>${esc(nombre)}</div></div>` : ''}
       ${kpis}
       ${paraImprimir
-        ? cardCobro + cardDias
-        : `<div class="rm-grid"><div class="rm-main">${cardDias}</div><aside class="rm-side">${cardCobro}${nota}</aside></div>`}
+        ? cardCobro + cardTipos + cardDias
+        : `<div class="rm-grid"><div class="rm-main">${cardTipos}${cardDias}</div><aside class="rm-side">${cardCobro}${nota}</aside></div>`}
     </div>`;
 }
 /* ---- Liquidaciones: el mes de todos los clientes con movimiento o almacenaje, para ir liquidando ----
