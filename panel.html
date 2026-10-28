@@ -4287,7 +4287,7 @@ function sgaCamposBuscar(v){ window.__sgaCamposQ = v; const el = document.getEle
 function sgaCamposVisibles(){
   const f = sgaCamposFiltro(), q = (window.__sgaCamposQ || '').trim().toLowerCase();
   let l = sgaCamposPropios(null, true);
-  l = f === 'archivados' ? l.filter(x => x.archived) : l.filter(x => !x.archived && (f === 'todos' || x.ambito === f));
+  l = f === 'archivados' ? l.filter(x => x.archived) : l.filter(x => !x.archived && (f === 'todos' || sgaCampoSePideAlRecibir(x) === (f === 'entrada')));
   if (q) l = l.filter(x => (x.nombre + ' ' + sgaCampoTipoTxt(x)).toLowerCase().includes(q));
   return l.slice().sort((a, b) => (a.orden - b.orden) || a.nombre.localeCompare(b.nombre, 'es'));
 }
@@ -4297,7 +4297,7 @@ function sgaCamposListaHtml(){
   const tabla = ps => `<table class="tf-table">
         <thead><tr>${thSort('Dato', 'text')}${thSort('Tipo', 'text')}${thSort('En stock', 'number', 'style="text-align:center;"')}<th></th></tr></thead>
         <tbody>${ps.map(sgaCampoFilaHtml).join('')}</tbody></table>`;
-  const art = l.filter(x => x.ambito !== 'entrada'), rec = l.filter(x => x.ambito === 'entrada');
+  const art = l.filter(x => !sgaCampoSePideAlRecibir(x)), rec = l.filter(sgaCampoSePideAlRecibir);
   const grupo = (icono, color, t, s, ps) => `
     <section class="ap-sec card ap-grp" style="--c:${color};padding:0;margin-bottom:14px;overflow:hidden;">
       <div class="ap-grp-h" style="cursor:default;"><span class="ap-gi">${homeIcon(HOME_ICON_PATHS[icono], 17, 'currentColor', 1.9)}</span><b>${t}</b><small>${s}</small><span>${ps.length} dato${ps.length === 1 ? '' : 's'}</span></div>
@@ -4312,7 +4312,7 @@ function tplSgaCamposPage(){
   const todos = sgaCamposPropios(null, true);
   const activos = todos.filter(f => !f.archived);
   const archivados = todos.length - activos.length;
-  const nRec = activos.filter(f => f.ambito === 'entrada').length;
+  const nRec = activos.filter(sgaCampoSePideAlRecibir).length;
   const fl = sgaCamposFiltro();
   const chip = (id, t, n) => `<button type="button" class="${fl === id ? 'on' : ''}" onclick="sgaCamposFiltrar('${id}')">${t}${n != null ? ` <small>${n}</small>` : ''}</button>`;
   return tplAlmacenConfigTabsHtml() + `
@@ -4379,13 +4379,22 @@ function sgaCampoTipoElegir(k){
   sgaCampoFormCambio(); sgaCampoResumen();
   window.__sgaCampoDirty = true;
 }
+// ¿Dónde se pide el dato? En el catálogo (una vez por artículo) o al recibir la mercancía (en cada recepción)
+function sgaCampoAmbito(v){
+  const pg = window.__sgaPage; if (!pg) return;
+  pg.ambito = v;
+  document.querySelectorAll('#sgacp-amb button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  window.__sgaCampoDirty = true;
+  sgaCampoResumen();
+}
 // La frase verde: cómo va a quedar el dato
 function sgaCampoResumen(){
   const el = document.getElementById('sgacp-resumen'); if (!el) return;
   const tipo = (document.getElementById('sgacp-tipo') || {}).value || 'texto';
   const stock = (document.getElementById('sgacp-stock') || {}).checked;
   const pg = window.__sgaPage || {}, prev = pg.id ? sgaCampos.find(x => x.id === pg.id) : null;
-  const donde = prev && prev.ambito === 'entrada' ? 'se pide al recibir la mercancía' : 'se rellena una vez por artículo en el catálogo';
+  const alRecibir = (pg.ambito || (prev ? prev.ambito : 'articulo')) === 'entrada' && !(prev && (SGA_CAMPOS_ART_PROPIOS.includes(prev.clave) || sgaEsCampoMl(prev)));
+  const donde = alRecibir ? 'se pide al recibir la mercancía' : 'se rellena una vez por artículo en el catálogo';
   el.textContent = `Se guarda como ${(SGA_CAMPO_TIPOS[tipo] || tipo).toLowerCase()}, ${donde}${stock ? ' y sale en la tabla de Stock' : ' y no sale en la tabla de Stock'}.`;
 }
 async function sgaCampoAccionForm(accion, id){
@@ -4402,6 +4411,8 @@ function tplSgaCampoFormPage(){
   const sec = (n, t, s) => `<div class="dr-sec"><span class="dr-n">${n}</span><div><b>${t}</b>${s ? `<small>${s}</small>` : ''}</div></div>`;
   const sw = (id, on, titulo, txt) => `<label class="sgc-sw"><input type="checkbox" class="switch" id="${id}" ${on ? 'checked' : ''} onchange="sgaCampoResumen()" /><span><b>${titulo}</b><small>${txt}</small></span></label>`;
   const fijo = f && ['referencia', 'descripcion'].includes(f.clave);
+  const ambFijo = !!f && (SGA_CAMPOS_ART_PROPIOS.includes(f.clave) || sgaEsCampoMl(f));   // descripción, peso, medidas y metros lineales son siempre del artículo
+  const amb = pg.ambito || (f ? f.ambito : 'articulo');
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
@@ -4434,7 +4445,10 @@ function tplSgaCampoFormPage(){
           <div class="dr-hint">Escribe cada opción en una línea. Se pueden añadir más después; quitar una no borra lo ya guardado.</div></div>
       </div>
       <div class="card dr-card">
-        ${sec(2, '¿Dónde se ve?', 'Además de en el catálogo, donde se rellena')}
+        ${sec(2, '¿Dónde se ve?', 'Dónde se rellena y dónde sale')}
+        ${ambFijo ? '' : `<div class="field" style="margin-bottom:14px;"><label>¿Dónde se pide?</label>
+          <div class="doc-seg" id="sgacp-amb"><button type="button" data-v="articulo" class="${amb === 'articulo' ? 'on' : ''}" onclick="sgaCampoAmbito('articulo')">En el catálogo</button><button type="button" data-v="entrada" class="${amb === 'entrada' ? 'on' : ''}" onclick="sgaCampoAmbito('entrada')">Al recibir la mercancía</button></div>
+          <div class="dr-hint" style="margin-top:6px;">En el catálogo: se rellena una vez en cada artículo. Al recibir: se pide en cada recepción, línea por línea (lote, unidades por palet…).</div></div>`}
         ${fijo
           ? '<div class="dr-hint" style="font-size:13px;">Este dato ya sale siempre en la tabla de Stock y en el albarán.</div><input type="checkbox" id="sgacp-stock" style="display:none;" />'
           : `<div class="sgc-sws">${sw('sgacp-stock', f ? f.enStock : true, 'En la tabla de Stock', 'Sale como columna al abrir un cliente en Stock.')}</div><div class="dr-hint" style="margin-top:10px;">Qué datos salen en el albarán se decide en la ficha SGA de cada cliente, porque cada uno pide cosas distintas.</div>`}
@@ -4463,7 +4477,8 @@ async function submitSgaCampo(){
   let nombre = document.getElementById('sgacp-nombre').value.trim();
   if (!previa || !sgaCampoEsSistema(previa)) nombre = sgaMayus(nombre);   // al guardar un dato propio se corrige también un nombre antiguo («Fecha De Caducidad» → «Fecha de Caducidad»)
   const tipo = previa ? previa.tipo : (document.getElementById('sgacp-tipo').value || 'texto');
-  const ambito = previa ? previa.ambito : (pg.ambito || 'articulo');
+  const ambFijo = !!previa && (SGA_CAMPOS_ART_PROPIOS.includes(previa.clave) || sgaEsCampoMl(previa));
+  const ambito = ambFijo ? previa.ambito : (pg.ambito || (previa ? previa.ambito : 'articulo'));
   const unidad = tipo === 'numero' ? document.getElementById('sgacp-unidad').value.trim() : '';
   const opciones = tipo === 'lista' ? [...new Set(document.getElementById('sgacp-opciones').value.split('\n').map(s => s.trim()).filter(Boolean))] : [];
   if (!nombre) { errEl.textContent = 'Escribe el nombre del dato.'; return; }
@@ -4476,11 +4491,11 @@ async function submitSgaCampo(){
   if (btn) btn.disabled = true;
   try {
     if (previa && previa.virtual) {
-      await sgaCampoMaterializar(previa, { nombre, unidad, opciones, enStock, enAlbaran });
+      await sgaCampoMaterializar(previa, { nombre, unidad, opciones, enStock, enAlbaran, ambito });
     } else if (previa) {
-      const { error } = await supabaseClient.from('sga_campos').update({ nombre, unidad: unidad || null, opciones, en_stock: enStock, en_albaran: enAlbaran }).eq('id', previa.id);
+      const { error } = await supabaseClient.from('sga_campos').update({ nombre, unidad: unidad || null, opciones, en_stock: enStock, en_albaran: enAlbaran, ambito }).eq('id', previa.id);
       if (error) throw error;
-      Object.assign(previa, { nombre, unidad, opciones, enStock, enAlbaran });
+      Object.assign(previa, { nombre, unidad, opciones, enStock, enAlbaran, ambito });
     } else {
       const clave = sgaCampoClaveNueva(nombre);
       const orden = sgaCampos.reduce((m, x) => Math.max(m, x.orden || 0), 0) + 1;
@@ -4970,6 +4985,8 @@ const SGA_CAMPOS_ART_PROPIOS = ['referencia', 'descripcion', 'peso', 'medidas'];
 function sgaEsCampoMl(f){ const n = String(f.nombre || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]/g, ''); return n === 'ml' || /^metros?lineal(es)?(m|ml)?$/.test(n) || n === 'mlineales'; }   // «Metros lineales», «M. lineales», «ML»…
 function sgaClienteUsaMl(clienteId){ const cfg = sgaClienteCfg(clienteId).campos; return sgaCamposPropios().some(f => sgaEsCampoMl(f) && (cfg[f.clave] || 'no') !== 'no'); }
 function sgaClienteMlObligatorio(clienteId){ const cfg = sgaClienteCfg(clienteId).campos; return sgaCamposPropios().some(f => sgaEsCampoMl(f) && cfg[f.clave] === 'obligatorio'); }
+// ¿Se pide al recibir la mercancía (en cada recepción) y no en el catálogo? Descripción, peso y medidas son siempre del artículo.
+function sgaCampoSePideAlRecibir(f){ return f.ambito === 'entrada' && !SGA_CAMPOS_ART_PROPIOS.includes(f.clave || f.id) && !sgaEsCampoMl(f); }   // vale para el dato guardado (clave) y para su versión de formulario (id = clave)
 // Solo los datos «del artículo»: los «de la recepción» (lote, unidades por palet…) se piden al recibir la mercancía, no en el catálogo.
 function sgaCamposArticulo(clienteId){ return sgaCamposPropios('articulo').map(sgaCampoDef).filter(f => !SGA_CAMPOS_ART_PROPIOS.includes(f.id) && !sgaEsCampoMl(f) && (sgaClienteCfg(clienteId).campos[f.id] || 'no') !== 'no'); }
 /* ---- Mayúscula solo en la primera letra de cada palabra ----
@@ -5069,7 +5086,7 @@ function tplSgaClienteCard(c){
         </div>
         <div class="sgv-sec">
           <div class="sgv-sec-h">${homeIcon(HOME_ICON_PATHS.list, 14, 'currentColor', 2)}<span>Datos de la mercancía</span>${hayOb ? '<span class="sgv-leg"><b>*</b> obligatorio</span>' : ''}</div>
-          ${usados.length ? grupo('En el catálogo', usados) : '<div style="color:var(--mutedFaint);font-size:13px;">Este cliente no usa ningún dato extra.</div>'}
+          ${usados.length ? grupo('En el catálogo', usados.filter(f => !sgaCampoSePideAlRecibir(f))) + grupo('Al recibir la mercancía', usados.filter(sgaCampoSePideAlRecibir)) :'<div style="color:var(--mutedFaint);font-size:13px;">Este cliente no usa ningún dato extra.</div>'}
         </div>
         ${cfg.observaciones ? `<div class="sgv-sec"><div class="sgv-sec-h">${homeIcon(HOME_ICON_PATHS.file, 14, 'currentColor', 2)}<span>Observaciones</span></div><div style="font-size:13.5px;line-height:1.5;">${esc(cfg.observaciones)}</div></div>` : ''}
       </div>
@@ -5109,7 +5126,7 @@ function sgacCamposHtml(){
     </div>`;
   const grupo = (titulo, lista) => lista.length ? `<div class="sgac-tit">${titulo}</div><div class="sgac-grid">${lista.map(fila).join('')}</div>` : '';
   return `
-    ${act.length ? grupo('En el catálogo del cliente', act)
+    ${act.length ? grupo('En el catálogo del cliente', act.filter(f => !sgaCampoSePideAlRecibir(f))) + grupo('Al recibir la mercancía', act.filter(sgaCampoSePideAlRecibir))
       : '<div style="color:var(--mutedFaint);font-size:12.5px;">Este cliente no usa ningún dato extra de la mercancía.</div>'}
     <div class="sgac-add">
       ${window.__sgacPicker
@@ -5133,7 +5150,7 @@ function sgacPickerListaHtml(){
   const tipoTxt = f => (SGA_CAMPO_TIPOS[f.tipo] || f.tipo) + (f.tipo === 'lista' ? ` · ${f.opciones.length} opciones` : f.tipo === 'numero' && f.unidad ? ` · ${f.unidad}` : '');
   const fila = f => `<button type="button" class="sgac-op" onclick="sgacNivel('${f.id}', 'opcional')"><span class="sgac-op-n">${esc(f.nombre)}<small>${esc(tipoTxt(f))}</small></span><span class="sgac-op-a">+ Añadir</span></button>`;
   const grupo = (t, l) => l.length ? `<div class="sgac-pick-g">${t}</div>${l.map(fila).join('')}` : '';
-  return grupo('En el catálogo del cliente', libres);
+  return grupo('En el catálogo del cliente', libres.filter(f => !sgaCampoSePideAlRecibir(f))) + grupo('Al recibir la mercancía', libres.filter(sgaCampoSePideAlRecibir));
 }
 function sgacPicker(abrir){
   window.__sgacPicker = !!abrir;
