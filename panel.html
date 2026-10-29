@@ -22437,6 +22437,10 @@ async function crmOfertaPdfBytes(o, num){
     };
     cab();
     filas.forEach(r => {
+      if (r.grupo) {   // rótulo de un grupo de líneas (no es una fila de datos); no se queda solo al final de una página
+        if (y - 44 < BOTTOM) { nueva(false); cab(); }
+        txt(r.grupo.toUpperCase(), M + px, y - 13, 7.2, bold, NAVY); y -= 19; return;
+      }
       const ls = r.map((v, i) => wrap(v, cols[i].b ? bold : font, fs, CW * cols[i].w - px * 2));
       const nl = r.nota ? r.nota.split(/\r?\n/).flatMap(p => wrap(p, font, 7.8, CW * 0.85 - px * 2)) : [];   // comentario bajo la fila, en letra pequeña
       const h = Math.max(...ls.map(l => l.length)) * lh + py * 2 - 3 + (nl.length ? nl.length * 9.6 + 2 : 0);
@@ -22507,11 +22511,18 @@ async function crmOfertaPdfBytes(o, num){
   }
   if (al.length) {
     seccion('Almacén');
-    tabla([{ t: 'Apartado', w: 0.2 }, { t: 'Concepto', w: 0.45, b: true }, { t: 'Tarifa', w: 0.35, a: 'r', b: true }],
-      al.map(x => { const u = CRM_UNIDAD_AL[x.unidad], cat = CRM_CAT_AL[x.cat || crmCatClave(x)];
-        const fila = [cat ? cat[0] : '—', x.n, x.precio == null ? 'A consultar' : eur(x.precio) + (x.unidad === 'operativa' ? ' por operación' : u ? ' ' + u.txt : '')];
-        if (x.nota) fila.nota = x.nota;
-        return fila; }));
+    // Sin columna «Apartado»: las líneas van agrupadas bajo un rótulo (Almacenaje, Movimiento…) cuando hay más de un apartado
+    const orden = Object.keys(CRM_CAT_AL), catDe = x => x.cat || crmCatClave(x), pos = c => orden.indexOf(c) < 0 ? 99 : orden.indexOf(c);
+    const alOrd = al.map((x, i) => ({ x, i, c: catDe(x) })).sort((a, b) => pos(a.c) - pos(b.c) || a.i - b.i);
+    const varios = new Set(alOrd.map(e => pos(e.c))).size > 1, filas = []; let grupoAnt = null;
+    alOrd.forEach(({ x, c }) => {
+      if (varios && pos(c) !== grupoAnt) { grupoAnt = pos(c); const g = ['grupo']; g.grupo = CRM_CAT_AL[c] ? CRM_CAT_AL[c][0] : 'Otros'; filas.push(g); }
+      const u = CRM_UNIDAD_AL[x.unidad];
+      const fila = [x.n, x.precio == null ? 'A consultar' : eur(x.precio) + (x.unidad === 'operativa' ? ' por operación' : u ? ' ' + u.txt : '')];
+      if (x.nota) fila.nota = x.nota;
+      filas.push(fila);
+    });
+    tabla([{ t: 'Concepto', w: 0.6, b: true }, { t: 'Tarifa', w: 0.4, a: 'r', b: true }], filas);
   }
   // ---- Observaciones y condiciones ----
   const obs = (o.titulo || '').trim();
