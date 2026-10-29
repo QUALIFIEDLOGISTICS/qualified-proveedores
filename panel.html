@@ -5505,6 +5505,30 @@ async function submitSgaCliente(){
 let sgaPartidas = [];
 let sgaAlbaranes = [];
 let sgaMovsAlbaran = {};
+// Bultos que quedan de cada partida = los de entrada + lo que han movido sus salidas y ajustes (cada salida guarda los bultos que se anotaron,
+// que pueden no ser proporcionales a los palets). Si alguna salida antigua no guardó sus bultos, no se puede saber: esa partida sigue calculándose en proporción.
+async function sgaBultosRestantes(){
+  const ps = sgaPartidas.filter(p => p.bultos != null && p.inicial);
+  ps.forEach(p => { p.bultosAct = null; });
+  if (!ps.length) return;
+  try {
+    const suma = {}, falta = new Set();
+    const trozos = [];
+    for (let i = 0; i < ps.length; i += 40) trozos.push(ps.slice(i, i + 40).map(p => p.id));
+    await Promise.all(trozos.map(async ids => {
+      for (let desde = 0; ; desde += 1000) {
+        const r = await supabaseClient.from('sga_movimientos').select('partida_id,cantidad,bultos').in('partida_id', ids).in('tipo', ['salida', 'ajuste']).order('id').range(desde, desde + 999);
+        if (r.error) throw r.error;
+        (r.data || []).forEach(m => {
+          if (m.bultos == null) { if (Number(m.cantidad) !== 0) falta.add(m.partida_id); return; }
+          suma[m.partida_id] = (suma[m.partida_id] || 0) + Number(m.bultos);
+        });
+        if ((r.data || []).length < 1000) break;
+      }
+    }));
+    ps.forEach(p => { if (!falta.has(p.id)) p.bultosAct = Math.max(0, Math.round((p.bultos + (suma[p.id] || 0)) * 100) / 100); });
+  } catch (e) { ps.forEach(p => { p.bultosAct = null; }); }
+}
 async function loadSgaStock(){
   if (window.__dash) window.__dash.datos = null;   // el dashboard se vuelve a calcular con los datos nuevos
   const [p, a] = await Promise.all([
@@ -5512,6 +5536,7 @@ async function loadSgaStock(){
     supabaseClient.from('sga_albaranes').select('*').order('fecha', { ascending: false }).order('created_at', { ascending: false }).limit(1000),   // las más recientes primero (con las mismas fechas, las últimas creadas)
   ]);
   sgaPartidas = (p.data || []).map(sgaPartidaDeFila);
+  await sgaBultosRestantes();
   window.__sgaBorradorOk = (a.data || []).length ? 'borrador' in a.data[0] : null;   // false = falta ejecutar el SQL de borradores
   sgaAlbaranes =(a.data || []).map(r => ({
     id: r.id, numero: r.numero, tipo: r.tipo, clienteId: r.cliente_id, warehouseId: r.warehouse_id, fecha: r.fecha, referencia: r.referencia || '',
@@ -8394,6 +8419,7 @@ async function sgaEntradaConfirmar(){
 const SGA_MODALIDADES_SALIDA = ['palet', 'trailer'];
 // Bultos que salen de una partida al sacar n módulos (proporcional a los bultos con que entró).
 function sgaBultosSalida(p, n){
+  if (p.bultosAct != null && p.actual > 0) return Math.round(n * p.bultosAct / p.actual * 100) / 100;   // proporcional a lo que queda de verdad
   if (p.bultos != null && p.inicial) return Math.round(n * p.bultos / p.inicial * 100) / 100;
   // Palet que no guardó sus bultos al recibirse: se usan los bultos por palet de su artículo (el «modelo») si el cliente cuenta por bultos
   const a = p.articuloId ? sgaArticulos.find(x => x.id === p.articuloId) : null;
@@ -8404,6 +8430,8 @@ function sgaStockCliente(clienteId, wid){
     .sort((a, b) => a.fechaEntrada.localeCompare(b.fechaEntrada) || String(a.createdAt).localeCompare(String(b.createdAt)));
 }
 function sgaClientesParaSalida(){ return sgaClientesAlmacenLista().filter(c => sgaStockCliente(c.id).length); }
+// Bultos de una línea de la expedición: los que se escribieron a mano o, si no, el reparto automático.
+function sgaBultosSale(x){ return x.bm != null && isFinite(x.bm) && x.bm >= 0 ? x.bm : sgaBultosSalida(x.p, x.n); }
 function sgaSalidaClienteId(){ const el = document.getElementById('sl-cliente'); return el ? el.value : ''; }
 function sgaSalidaAbrir(){
   window.__stockView = 'salida';
@@ -8432,12 +8460,12 @@ async function sgaSalidaEditar(id, confirmar, keepNav){
     window.__slNavConfirmar = confirmar === true;
   }
   const [m, s] = await Promise.all([
-    supabaseClient.from('sga_movimientos').select('partida_id,cantidad').eq('albaran_id', id).eq('tipo', 'salida'),
+    supabaseClient.from('sga_movimientos').select('partida_id,cantidad,bultos').eq('albaran_id', id).eq('tipo', 'salida'),
     supabaseClient.from('sga_servicios').select('producto_id,cantidad,nota').eq('albaran_id', id),
   ]);
   if (m.error) { appToast('No se pudo abrir la expedición: ' + m.error.message, 'error'); return; }
-  const prev = {};
-  (m.data || []).forEach(r => { prev[r.partida_id] = (prev[r.partida_id] || 0) + Math.abs(Number(r.cantidad)); });
+  const prev = {}, prevB = {};
+  (m.data || []).forEach(r => { prev[r.partida_id] = (prev[r.partida_id] || 0) + Math.abs(Number(r.cantidad)); if (r.bultos != null) prevB[r.partida_id] = (prevB[r.partida_id] || 0) + Math.abs(Number(r.bultos)); });
   const pids = Object.keys(prev);
   // las partidas que esta expedición dejó a cero no están cargadas: se traen
   const faltan = pids.filter(pid => !sgaPartidas.some(p => p.id === pid));
@@ -8445,8 +8473,8 @@ async function sgaSalidaEditar(id, confirmar, keepNav){
     const { data } = await supabaseClient.from('sga_partidas').select('*').in('id', faltan);
     (data || []).forEach(r => sgaPartidas.push(sgaPartidaDeFila(r)));
   }
-  pids.forEach(pid => { const p = sgaPartidas.find(x => x.id === pid); if (p) p.actual += prev[pid]; });
-  window.__slEdit = { id, albaran: a, prev, servicios: s.data || [], confirmar: confirmar === true };
+  pids.forEach(pid => { const p = sgaPartidas.find(x => x.id === pid); if (p) { p.actual += prev[pid]; if (p.bultosAct != null) p.bultosAct += prevB[pid] || 0; } });
+  window.__slEdit = { id, albaran: a, prev, prevB, servicios: s.data || [], confirmar: confirmar === true };
   window.__stockView = 'salida';
   window.__stockDirty = false;
   renderHeader(); renderTab();
@@ -8491,6 +8519,11 @@ function sgaSalidaRellenar(){
   set('sl-dest', a.destinatario);
   if (sgaDireccionPorNombre(a.destinatario)) sgaSalidaDestinatarioCambio(); else { set('sl-destdir', a.destinatarioDireccion); sgaSalidaDestinatarioCambio(); }   // destinatario escrito a mano: se conserva su dirección
   Object.keys(e.prev).forEach(pid => sgaSalidaPonerCantidad(pid, e.prev[pid]));
+  // Bultos que se anotaron al sacar: solo se ponen a mano los que no coinciden con el reparto automático
+  Object.keys(e.prevB || {}).forEach(pid => {
+    const p = sgaPartidas.find(x => x.id === pid), el = document.getElementById('sl-bu-' + pid);
+    if (p && el && Math.abs(e.prevB[pid] - sgaBultosSalida(p, e.prev[pid])) > 0.01) el.value = String(Math.round(e.prevB[pid] * 100) / 100).replace('.', ',');
+  });
   (e.servicios || []).forEach(s => {
     const j = (window.__stockJ = (window.__stockJ || 0) + 1);
     document.getElementById('se-servicios').insertAdjacentHTML('beforeend', sgaServicioFilaHtml(j, { prod: s.producto_id, cant: String(s.cantidad).replace('.', ','), nota: s.nota || '' }));
@@ -8507,7 +8540,7 @@ function sgaSalidaSnapshot(){
   return {
     clienteId: d.clienteId, almacen: sgaSalidaWh(), fecha: d.fecha, modalidad: d.modalidad, transportista: d.transportista, matricula: d.matricula,
     observaciones: d.observaciones, destinatario: d.destinatario,
-    items: d.items.filter(x => x.n > 0).map(x => ({ pid: x.p.id, n: x.n })),
+    items: d.items.filter(x => x.n > 0).map(x => ({ pid: x.p.id, n: x.n, bt: x.bt })),
     servicios: d.servicios,
   };
 }
@@ -8548,7 +8581,7 @@ function sgaSalidaRestaurar(b, dir){
   sgaSalidaAlmacenCambio();
   set('sl-fecha', b.fecha); set('sl-transp', b.transportista); sgaMatriculaPoner('sl', b.matricula); set('sl-obs', b.observaciones);
   if (b.modalidad) sgaSalidaModalidad(b.modalidad);
-  (b.items || []).forEach(x => sgaSalidaPonerCantidad(x.pid, x.n));
+  (b.items || []).forEach(x => { sgaSalidaPonerCantidad(x.pid, x.n); const bu = document.getElementById('sl-bu-' + x.pid); if (bu && x.bt) bu.value = x.bt.replace('.', ','); });
   (b.servicios || []).forEach(s => {
     if (!s.productoId && !s.cantidadTxt) return;
     const j = (window.__stockJ = (window.__stockJ || 0) + 1);
@@ -8585,7 +8618,8 @@ function sgaSalidaGruposHtml(clienteId, ps, flags){
       ${conSitio ? `<td data-sort-value="${esc(sitios)}">${esc(sitios) || '—'}</td>` : ''}
       <td class="tf-precio" data-sort-value="${total}">${total}${bultos != null ? `<small> (${sgaNumTxt(bultos)} bultos)</small>` : ''}</td>
       <td style="text-align:right;width:110px;"><input class="sl-g" id="sl-g-${i}" data-pids="${pids}" data-total="${total}" inputmode="numeric" maxlength="6" placeholder="0" style="width:80px;text-align:right;" oninput="sgaSalidaGrupoIn(this)" onblur="sgaSalidaGruposSync()" />
-        <span style="display:none;">${g.map(p => `<input type="hidden" class="sl-in" id="sl-in-${p.id}" data-pid="${p.id}" />`).join('')}</span></td>
+        <span style="display:none;">${g.map(p => `<input type="hidden" class="sl-in" id="sl-in-${p.id}" data-pid="${p.id}" /><input type="hidden" class="sl-bu" id="sl-bu-${p.id}" data-pid="${p.id}" />`).join('')}</span></td>
+      ${conBultos ? `<td style="text-align:right;width:130px;"><input class="sl-gb" data-pids="${pids}" inputmode="decimal" maxlength="8" placeholder="auto" title="Bultos que salen. Si lo dejas vacío se calculan solos, en proporción a los palets." style="width:90px;text-align:right;" oninput="sgaSalidaGrupoBultosIn(this)" onblur="sgaSalidaGruposSync()" /></td>` : ''}
     </tr>`;
   }).join('');
 }
@@ -8597,6 +8631,28 @@ function sgaSalidaGrupoIn(el){
   el.title = n > total ? `Solo hay ${total}` : '';
   let resto = Math.min(n, total);
   ps.forEach(p => { const toma = Math.min(resto, p.actual); sgaSalidaPonerCantidad(p.id, toma); resto -= toma; });
+  const gb = el.closest('tr').querySelector('.sl-gb');
+  if (gb && gb.value.trim()) sgaSalidaGrupoBultosIn(gb);   // si ya había escrito los bultos, se reparten entre las partidas que ahora salen
+}
+// Bultos escritos a mano en la fila de un artículo agrupado: se reparten entre sus partidas según los palets que sale de cada una.
+// Vacío: vuelve al cálculo automático (proporcional a los bultos con que entró cada partida).
+function sgaSalidaGrupoBultosIn(el){
+  const ps = el.dataset.pids.split(',').map(id => sgaPartidas.find(p => p.id === id)).filter(Boolean);
+  const hid = p => document.getElementById('sl-bu-' + p.id);
+  ps.forEach(p => { const h = hid(p); if (h) h.value = ''; });
+  const txt = el.value.trim().replace(',', '.');
+  if (txt === '') return;
+  const v = Number(txt);
+  el.classList.toggle('cg-err', !isFinite(v) || v < 0);
+  if (!isFinite(v) || v < 0) return;
+  const sale = ps.map(p => ({ p, n: Number((document.getElementById('sl-in-' + p.id) || {}).value) || 0 })).filter(x => x.n > 0);
+  const tot = sale.reduce((s, x) => s + x.n, 0);
+  let resto = v;
+  sale.forEach((x, i) => {
+    const b = i === sale.length - 1 ? resto : Math.round(v * x.n / tot * 100) / 100;
+    resto = Math.round((resto - b) * 100) / 100;
+    hid(x.p).value = String(b).replace('.', ',');
+  });
 }
 // El campo visible de cada artículo enseña la suma de lo repartido (también tras «Limpiar» o al abrir una expedición ya hecha)
 function sgaSalidaGruposSync(){
@@ -8604,6 +8660,13 @@ function sgaSalidaGruposSync(){
     if (document.activeElement === el) return;
     const s = el.dataset.pids.split(',').reduce((a, id) => { const h = document.getElementById('sl-in-' + id); return a + (h && h.value ? Number(h.value) || 0 : 0); }, 0);
     el.value = s > 0 ? String(s) : ''; el.classList.remove('cg-err'); el.title = '';
+  });
+  document.querySelectorAll('.sl-gb').forEach(el => {
+    if (document.activeElement === el) return;
+    const ids = el.dataset.pids.split(',');
+    const hay = ids.some(id => { const h = document.getElementById('sl-bu-' + id); return h && h.value.trim() !== ''; });
+    el.value = hay ? String(Math.round(ids.reduce((a, id) => { const h = document.getElementById('sl-bu-' + id); return a + (h ? Number(h.value.replace(',', '.')) || 0 : 0); }, 0) * 100) / 100).replace('.', ',') : '';
+    el.classList.remove('cg-err');
   });
 }
 // Buscador sobre una tabla larga (qué sale, qué se regulariza): oculta las filas que no coinciden, sin tocar lo ya escrito en ellas
@@ -8644,7 +8707,7 @@ function sgaSalidaStockHtml(clienteId){
     ${ps.length > 8 ? sgaBuscadorFilasHtml('sl-buscar', '#sl-stock .tc-hist-box table', 'Buscar en el stock: artículo, descripción, código, sitio…') : ''}
     <div class="tc-hist-box" style="max-height:420px;">
     <table class="tf-table" style="min-width:640px;">
-      <thead><tr>${manual ? '' : thSort('Recepción','date')}${conDesc ? thSort('Código de artículo','text') : ''}${conTipo ? thSort('Tipo de carga','text') : ''}${conRef ? thSort('Descripción','text') : ''}${claves.map(f => thSort(esc(f.nombre), f.tipo === 'numero' ? 'number' : 'text')).join('')}${cfg.codigosUnicos && !agrupado ? thSort('Código','text') : ''}${conSitio ? thSort('Sitio','text') : ''}${thSort('Hay','number','style="text-align:right;"')}<th style="text-align:right;">Sale</th></tr></thead>
+      <thead><tr>${manual ? '' : thSort('Recepción','date')}${conDesc ? thSort('Código de artículo','text') : ''}${conTipo ? thSort('Tipo de carga','text') : ''}${conRef ? thSort('Descripción','text') : ''}${claves.map(f => thSort(esc(f.nombre), f.tipo === 'numero' ? 'number' : 'text')).join('')}${cfg.codigosUnicos && !agrupado ? thSort('Código','text') : ''}${conSitio ? thSort('Sitio','text') : ''}${thSort('Hay','number','style="text-align:right;"')}<th style="text-align:right;">Sale</th>${sgaClienteConBultos(clienteId) ? '<th style="text-align:right;">Bultos que salen</th>' : ''}</tr></thead>
       <tbody>${agrupado ? sgaSalidaGruposHtml(clienteId, ps, flags) : ps.map(p => `
         <tr data-pid="${p.id}">
           ${manual ? '' : `<td style="white-space:nowrap;" data-sort-value="${esc(p.fechaEntrada)}">${fmtDateDMY(p.fechaEntrada)}</td>`}
@@ -8658,6 +8721,7 @@ function sgaSalidaStockHtml(clienteId){
           <td style="text-align:right;width:110px;">${p.actual === 1 && cfg.codigosUnicos
             ? `<input type="checkbox" class="switch sl-in" id="sl-in-${p.id}" data-pid="${p.id}" onchange="sgaSalidaRefrescar()" />`
             : `<input class="sl-in" id="sl-in-${p.id}" data-pid="${p.id}" inputmode="numeric" maxlength="6" placeholder="0" style="width:80px;text-align:right;" />`}</td>
+          ${sgaClienteConBultos(clienteId) ? `<td style="text-align:right;width:130px;"><input class="sl-bu" id="sl-bu-${p.id}" data-pid="${p.id}" inputmode="decimal" maxlength="8" placeholder="auto" title="Bultos que salen. Si lo dejas vacío se calculan solos, en proporción a los palets." style="width:90px;text-align:right;" /></td>` : ''}
         </tr>`).join('')}</tbody>
     </table></div>
     <div id="sl-total" style="margin-top:10px;font-size:13px;color:var(--muted);"></div>`;
@@ -8752,6 +8816,8 @@ function sgaSalidaPonerCantidad(pid, n){
   const el = document.getElementById(`sl-in-${pid}`);
   if (!el) return;
   if (el.type === 'checkbox') el.checked = n > 0; else el.value = n > 0 ? String(n) : '';
+  const bu = document.getElementById(`sl-bu-${pid}`);
+  if (bu && !(n > 0)) bu.value = '';   // si ya no sale nada de esa partida, sus bultos escritos a mano se quitan
 }
 function sgaSalidaLimpiar(){
   document.querySelectorAll('.sl-in').forEach(el => sgaSalidaPonerCantidad(el.dataset.pid, 0));
@@ -8784,7 +8850,8 @@ function sgaSalidaLeer(){
   const items = [...document.querySelectorAll('.sl-in')].map(el => {
     const p = sgaPartidas.find(x => x.id === el.dataset.pid);
     const n = el.type === 'checkbox' ? (el.checked ? 1 : 0) : el.value.trim();
-    return { p, txt: n, n: typeof n === 'number' ? n : (n === '' ? 0 : Number(n)) };
+    const bu = document.getElementById('sl-bu-' + el.dataset.pid), bt = bu ? bu.value.trim().replace(',', '.') : '';   // bultos escritos a mano (vacío: automático)
+    return { p, txt: n, n: typeof n === 'number' ? n : (n === '' ? 0 : Number(n)), bt, bm: bt === '' ? null : Number(bt) };
   }).filter(x => x.p);
   return { clienteId: val('sl-cliente'), fecha: val('sl-fecha'), referencia: window.__slEdit ? (window.__slEdit.albaran.referencia || '') : '', modalidad: val('sl-modalidad') || 'palet', transportista: val('sl-transp'), matricula: sgaMatriculaJoin(val('sl-matr'), val('sl-matr2')), observaciones: val('sl-obs'), destinatario: val('sl-dest'), destinatarioDireccion: val('sl-destdir'), items, servicios: sgaServiciosLeer() };
 }
@@ -8813,7 +8880,7 @@ function sgaSalidaResumenHtml(d){
   if (!d.clienteId) return '<div style="color:var(--mutedFaint);font-size:12.5px;">Elige el cliente para ver lo que se le cobrará.</div>';
   const sale = d.items.filter(x => x.n > 0 && isFinite(x.n));
   const cfg = sgaClienteCfg(d.clienteId);
-  const calc = sgaCalcularEntrada({ tipo: 'salida', clienteId: d.clienteId, fecha: d.fecha, modalidad: d.modalidad, partidas: sale.map(x => ({ productoId: x.p.productoId, cantidad: x.n, bultos: sgaBultosSalida(x.p, x.n) })), servicios: d.servicios.filter(s => s.productoId && sgaNumero(s.cantidadTxt) > 0).map(s => ({ productoId: s.productoId, cantidad: sgaNumero(s.cantidadTxt) })) });
+  const calc = sgaCalcularEntrada({ tipo: 'salida', clienteId: d.clienteId, fecha: d.fecha, modalidad: d.modalidad, partidas: sale.map(x => ({ productoId: x.p.productoId, cantidad: x.n, bultos: sgaBultosSale(x) })), servicios: d.servicios.filter(s => s.productoId && sgaNumero(s.cantidadTxt) > 0).map(s => ({ productoId: s.productoId, cantidad: sgaNumero(s.cantidadTxt) })) });
   const fifo = sgaSalidaFifo(d.clienteId, d.items);
   const avisosFifo = fifo.avisos.map(a => `<div class="se-aviso">⚠ ${esc(a)}</div>`).join('');
   if (!calc.activo) return `<div style="font-size:13px;color:var(--muted);">Este cliente no está activo en el SGA a esa fecha: la expedición <b>no se cobra</b>.</div>${avisosFifo}`;
@@ -8845,6 +8912,12 @@ function sgaSalidaRefrescar(){
   const t = document.getElementById('sl-total');
   if (t) t.innerHTML = tot ? `Salen <b>${tot}</b> ${sgaUd(d.clienteId, tot)}.` : 'Todavía no has marcado nada.';
   sgaSalidaGruposSync();
+  // En los campos de bultos, lo que saldría solo (proporcional) como sugerencia mientras no se escriba nada
+  document.querySelectorAll('.sl-bu:not([type="hidden"]), .sl-gb').forEach(el => {
+    const ids = el.dataset.pids ? el.dataset.pids.split(',') : [el.dataset.pid];
+    const xs = d.items.filter(i => ids.includes(i.p.id) && i.n > 0 && isFinite(i.n));
+    el.placeholder = xs.length ? sgaNumTxt(Math.round(xs.reduce((s, i) => s + sgaBultosSalida(i.p, i.n), 0) * 100) / 100) : 'auto';
+  });
   document.querySelectorAll('#sl-stock tbody tr').forEach(tr => {
     const pids = (tr.dataset.pids || tr.dataset.pid || '').split(',');
     const x = d.items.find(i => pids.includes(i.p.id) && i.n > 0);   // en el agrupado, la fila se resalta si sale algo de cualquiera de sus partidas
@@ -8953,8 +9026,10 @@ async function sgaSalidaConfirmar(comoBorrador){
     const nombre = `${sgaProdTxt(x.p.productoId)}${x.p.referencia ? ' · ref. ' + x.p.referencia : ''}${x.p.codigo ? ' · ' + x.p.codigo : ''}`;
     if (!isFinite(x.n) || x.n < 0 || Math.floor(x.n) !== x.n) { errores.push(`${nombre}: la cantidad tiene que ser un número entero.`); return; }
     if (x.n > x.p.actual) { errores.push(`${nombre}: solo hay ${x.p.actual}.`); return; }
+    if (x.bm != null && !(isFinite(x.bm) && x.bm >= 0)) { errores.push(`${nombre}: los bultos tienen que ser un número.`); return; }
     sale.push(x);
   });
+  d.items.filter(x => x.bt !== '' && !(x.n > 0)).forEach(x => errores.push(`${sgaProdTxt(x.p.productoId)}${x.p.referencia ? ' · ref. ' + x.p.referencia : ''}: has escrito bultos pero no cuántos palets salen.`));
   if (!sale.length && !errores.length) errores.push('Marca qué sale: pide una cantidad o escribe cuántos de cada partida.');
   d.servicios.forEach((s, n) => {
     if (!s.productoId && !s.cantidadTxt) return;
@@ -8977,14 +9052,14 @@ async function sgaSalidaConfirmar(comoBorrador){
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const servicios = d.servicios.filter(s => s.productoId).map(s => ({ producto_id: s.productoId, cantidad: sgaNumero(s.cantidadTxt), nota: s.nota }));
   const fifo = sgaSalidaFifo(d.clienteId, d.items);
-  const calc = sgaCalcularEntrada({ tipo: 'salida', clienteId: d.clienteId, fecha: d.fecha, modalidad: d.modalidad, partidas: sale.map(x => ({ productoId: x.p.productoId, cantidad: x.n, bultos: sgaBultosSalida(x.p, x.n) })), servicios: servicios.map(s => ({ productoId: s.producto_id, cantidad: s.cantidad })) });
+  const calc = sgaCalcularEntrada({ tipo: 'salida', clienteId: d.clienteId, fecha: d.fecha, modalidad: d.modalidad, partidas: sale.map(x => ({ productoId: x.p.productoId, cantidad: x.n, bultos: sgaBultosSale(x) })), servicios: servicios.map(s => ({ productoId: s.producto_id, cantidad: s.cantidad })) });
   if (fifo.saltados.size && !(await appConfirm({ title: 'No se sigue el FIFO', message: fifo.avisos.join('\n') + '\nLa expedición se guardará marcada como «FIFO saltado». ¿Continuar?', confirmLabel: 'Continuar igualmente', cancelLabel: 'Revisar', tone: 'warn', icon: 'warn' }))) return;
   if (comoBorrador && window.__sgaBorradorOk === false) { errEl.textContent = 'Para guardar borradores falta ejecutar el SQL «sga-salida-borrador.sql» en Supabase.'; return; }
   const btn = { set disabled(v){ document.querySelectorAll('.sl-save').forEach(b => { b.disabled = v; }); } };   // desactiva todos los botones de guardar
   if (btn) btn.disabled = true;
   const payload = {
     albaran: { created_by: currentUserEmail(), cliente_id: d.clienteId, warehouse_id: sgaSalidaWh(), fecha: d.fecha, referencia: d.referencia, modalidad: d.modalidad, transportista: d.transportista, matricula: d.matricula, observaciones: d.observaciones, destinatario: d.destinatario, destinatario_direccion: d.destinatarioDireccion, ...(comoBorrador || (window.__slEdit && window.__slEdit.albaran.borrador) ? { borrador: comoBorrador } : {}) },
-    salidas: sale.map(x => ({ partida_id: x.p.id, cantidad: x.n, bultos: sgaBultosSalida(x.p, x.n), fifo_saltado: fifo.saltados.has(x.p.id) })),
+    salidas: sale.map(x => ({ partida_id: x.p.id, cantidad: x.n, bultos: sgaBultosSale(x), fifo_saltado: fifo.saltados.has(x.p.id) })),
     servicios, cobros: calc.activo && !comoBorrador ? calc.cobros : [],   // un borrador no cobra hasta que se confirma
   };
   const edit = window.__slEdit;
