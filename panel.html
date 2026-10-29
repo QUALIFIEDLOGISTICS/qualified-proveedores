@@ -8060,18 +8060,41 @@ function sgaEntradaPegarCodigos(){
   ta.value = '';
   appToast(`${codigos.length} código${codigos.length !== 1 ? 's' : ''} añadido${codigos.length !== 1 ? 's' : ''}.`, 'ok');
 }
+// Servicios que se pueden poner en una expedición: los de tarifa manual que ese cliente tiene creados en su tarifa
+function sgaServiciosDeCliente(clienteId){
+  const ids = new Set(almacenajeTarifas.filter(t => t.clienteId === clienteId).map(t => t.tipo));
+  return almacenajeProductos.filter(p => !p.archived && p.disparador === 'manual' && ids.has(p.id));
+}
 function sgaServicioFilaHtml(j, pre){
   pre = pre || {};
-  const prods = almacenajeProductos.filter(p => !p.archived && p.disparador === 'manual').sort((a, b) => almacenajeProductoTexto(a).localeCompare(almacenajeProductoTexto(b), 'es'));
+  const cli = window.__stockView === 'salida' ? sgaSalidaClienteId() : null;   // en expediciones solo salen los servicios del cliente; en recepciones, todos
+  let prods = almacenajeProductos.filter(p => !p.archived && p.disparador === 'manual');
+  if (cli !== null) prods = prods.filter(p => sgaServiciosDeCliente(cli).some(s => s.id === p.id) || p.id === pre.prod);   // el ya guardado se conserva aunque se haya quitado de la tarifa
+  prods.sort((a, b) => almacenajeProductoTexto(a).localeCompare(almacenajeProductoTexto(b), 'es'));
   return `
     <div class="op-row se-srow" data-j="${j}">
-      <div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><select id="ss-${j}-prod"><option value="">Elige el servicio…</option>${prods.map(p => `<option value="${p.id}" ${p.id === pre.prod ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))} (${esc((ALMACENAJE_UNIDADES[p.unidad] || '').replace('/', ''))})</option>`).join('')}</select></div>
+      <div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><select id="ss-${j}-prod"><option value="">${cli === '' ? 'Elige primero el cliente…' : 'Elige el servicio…'}</option>${prods.map(p => `<option value="${p.id}" ${p.id === pre.prod ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))} (${esc((ALMACENAJE_UNIDADES[p.unidad] || '').replace('/', ''))})</option>`).join('')}</select></div>
       <div class="field" style="width:120px;margin-bottom:0;"><input id="ss-${j}-cant" inputmode="decimal" maxlength="8" placeholder="Cantidad" value="${esc(pre.cant || '')}" /></div>
       <div class="field" style="flex:1;min-width:140px;margin-bottom:0;"><input id="ss-${j}-nota" maxlength="120" placeholder="Nota (opcional)" value="${esc(pre.nota || '')}" /></div>
       <button type="button" class="op-x" onclick="this.closest('.se-srow').remove(); sgaEntradaRefrescar();" title="Quitar este servicio">✕</button>
     </div>`;
 }
+// Al cambiar de cliente en una expedición, los servicios ya añadidos se quedan solo si también son de ese cliente
+function sgaSalidaServiciosRefrescar(){
+  const cli = sgaSalidaClienteId();
+  const ok = new Set(cli ? sgaServiciosDeCliente(cli).map(p => p.id) : []);
+  [...document.querySelectorAll('#se-servicios .se-srow')].forEach(r => {
+    const j = r.dataset.j, v = id => ((document.getElementById(`ss-${j}-${id}`) || {}).value || '');
+    const prod = v('prod');
+    r.outerHTML = sgaServicioFilaHtml(j, { prod: ok.has(prod) ? prod : '', cant: v('cant'), nota: v('nota') });
+  });
+}
 function sgaServicioAdd(){
+  if (window.__stockView === 'salida') {
+    const cli = sgaSalidaClienteId();
+    if (!cli) { appToast('Elige primero el cliente para ver sus servicios.', 'info'); return; }
+    if (!sgaServiciosDeCliente(cli).length) { appToast('Este cliente no tiene servicios creados. Se añaden en Almacén → Tarifas.', 'info'); return; }
+  }
   const j = (window.__stockJ = (window.__stockJ || 0) + 1);
   document.getElementById('se-servicios').insertAdjacentHTML('beforeend', sgaServicioFilaHtml(j, {}));
   window.__stockDirty = true;
@@ -8861,6 +8884,7 @@ function sgaSalidaCandidatos(clienteId, tipo, art, ref){
 function sgaSalidaClienteCambio(){
   const clienteId = sgaSalidaClienteId();
   sgaModalidadesRefrescar('salida', clienteId);   // solo cómo sale según su tarifa
+  sgaSalidaServiciosRefrescar();                  // y solo los servicios que tiene creados
   const alm = document.getElementById('sl-almacen');
   if (alm) {
     const ids = [...new Set(sgaStockCliente(clienteId).map(p => p.warehouseId))];
