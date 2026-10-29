@@ -241,6 +241,15 @@
   .sga-acc-s{display:block;font-size:12.5px;line-height:1.35;color:var(--muted);margin-top:2px;}
   .sga-acc-go{margin-left:auto;flex-shrink:0;color:var(--acc);opacity:.6;display:flex;transition:transform .18s,opacity .18s;}
   .sga-acc:hover .sga-acc-go{transform:translateX(3px);opacity:1;}
+  .cat-guia{padding:26px 22px;text-align:center;}
+  .cat-guia h3{font-family:var(--display);font-size:18px;margin:0 0 4px;color:var(--text);}
+  .cat-guia p{color:var(--muted);font-size:13.5px;margin:0 auto 18px;max-width:560px;}
+  .cat-guia-pasos{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;text-align:left;}
+  .cat-guia-paso{display:flex;flex-direction:column;align-items:flex-start;gap:6px;border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--panel);}
+  .cat-guia-paso b{font-size:14.5px;color:var(--text);}
+  .cat-guia-paso > span:not(.cat-guia-n){font-size:12.5px;line-height:1.4;color:var(--muted);flex:1;}
+  .cat-guia-paso > div{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;}
+  .cat-guia-n{width:24px;height:24px;border-radius:50%;background:var(--primary);color:var(--primary-text);font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;}
   .sga-tabs{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:14px;}
   .sga-tabs button{background:none;border:none;border-bottom:3px solid transparent;margin-bottom:-1px;padding:10px 16px;font-size:14px;font-weight:500;color:var(--muted);cursor:pointer;white-space:nowrap;font-family:var(--body);}
   .sga-tabs button.on{border-bottom-color:var(--primary);color:var(--primary);font-weight:700;}
@@ -5905,19 +5914,49 @@ function catOrdenar(th){
   });
   sortTableByHeader(th);
 }
+function catEnfocarCliente(msg, tipo){
+  appToast(msg, tipo || 'error');
+  const s = document.getElementById('cat-cliente'); if (s) { s.focus(); s.style.outline = '2px solid var(--primary)'; setTimeout(() => { s.style.outline = ''; }, 2500); }
+}
+// «Vacío» = el cliente (o, sin cliente elegido, ninguno) no tiene artículos ni mercancía: ahí no se ofrece «Editar» sino empezar a crear.
+function catSinNada(cid){
+  const ok = a => !a.archived && (cid ? a.clienteId === cid : !!contactos.find(c => c.id === a.clienteId && c.esClienteAlmacen && !c.archived));
+  return !sgaArticulos.some(ok) && !sgaPartidas.some(p => p.actual > 0 && (!cid || p.clienteId === cid));
+}
 function catEditarTodo(){
-  if (!catClienteSel()) {
-    appToast('Elige primero el cliente en el desplegable para editar su catálogo.', 'error');
-    const s = document.getElementById('cat-cliente'); if (s) { s.focus(); s.style.outline = '2px solid var(--primary)'; setTimeout(() => { s.style.outline = ''; }, 2500); }
-    return;
-  }
+  if (!catClienteSel()) { catEnfocarCliente('Elige primero el cliente en el desplegable para editar su catálogo.'); return; }
+  const nuevo = catSinNada(catClienteSel()) && sgaPuedeEditarStock();
   window.__catFiltro = 'todos'; window.__stockSearch = '';
   window.__catEditAll = true;
-  window.__catLocked = true;      // se abre bloqueada: hay que pulsar «Editar» para cambiar algo
+  window.__catLocked = !nuevo;    // se abre bloqueada (hay que pulsar «Editar»), salvo si no hay nada: entonces ya listo para escribir el primero
   window.__catDirty = {}; window.__catHist = null;
   window.__stockView = 'catedit';
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
+  if (nuevo) catAnadirFila();
+}
+// Inventario sin nada: en vez de una frase suelta, los pasos para empezar con un botón cada uno.
+function catGuiaVacioHtml(cid){
+  const c = cid ? contactos.find(x => x.id === cid) : null;
+  const puede = sgaPuedeEditarStock();
+  const nombre = c ? ((c.nombreComercial || '').trim() || c.nombre) : '';
+  if (!c) {
+    const hay = contactos.some(x => x.esClienteAlmacen && !x.archived);
+    return `<div class="card cat-guia"><h3>Todavía no hay nada en el inventario</h3><p>${hay ? 'Para empezar, elige el cliente al que quieres añadir artículos o mercancía.' : 'Primero hace falta un cliente de almacén. Créalo en Almacén → Clientes.'}</p>${hay ? `<button type="button" class="btn btn-primary" onclick="catEnfocarCliente('Elige aquí el cliente.', 'info')">Elegir cliente</button>` : ''}</div>`;
+  }
+  const conArt = sgaArticulos.some(a => !a.archived && a.clienteId === cid);
+  const paso = (n, t, s, btns) => `<div class="cat-guia-paso"><span class="cat-guia-n">${n}</span><b>${t}</b><span>${s}</span><div>${btns}</div></div>`;
+  const b = (cls, f, txt) => `<button type="button" class="btn ${cls}" ${cls === 'btn-ghost' ? 'style="background:var(--panel);"' : ''} onclick="${f}">${txt}</button>`;
+  if (!puede) return `<div class="card cat-guia"><h3>${esc(nombre)} todavía no tiene nada en el inventario</h3><p>Cuando se registre su primera recepción o se creen sus artículos, aparecerán aquí.</p></div>`;
+  return `<div class="card cat-guia">
+    <h3>${esc(nombre)} todavía no tiene ${conArt ? 'mercancía en el almacén' : 'nada en el inventario'}</h3>
+    <p>${conArt ? 'Ya tiene sus artículos creados. Para que aparezca stock, registra una recepción o carga lo que ya tiene.' : 'Elige por dónde empezar. Lo más cómodo es crear primero sus artículos y después registrar la mercancía.'}</p>
+    <div class="cat-guia-pasos">
+      ${conArt ? '' : paso(1, 'Crea sus artículos', 'Código, descripción, bultos por palet… Uno a uno, o pegando muchos de golpe desde Excel.', b('btn-primary', 'catEditarTodo()', '＋ Crear artículos') + b('btn-ghost', `openSgaArtRapida('${cid}')`, 'Pegar desde Excel'))}
+      ${paso(conArt ? 1 : 2, 'Ya tiene mercancía en el almacén', 'Carga lo que hay ahora mismo como stock inicial (sin cobrar recepción).', b(conArt ? 'btn-primary' : 'btn-ghost', `sgaEntradaAbrir(true,'${cid}')`, 'Cargar stock inicial'))}
+      ${paso(conArt ? 2 : 3, 'Le llega mercancía nueva', 'Registra la recepción: entra al stock y se calcula su cobro.', b('btn-ghost', `sgaEntradaAbrir(false,'${cid}')`, 'Nueva recepción'))}
+    </div>
+  </div>`;
 }
 // «Editar» desbloquea las casillas; los cambios quedan marcados y solo se escriben al pulsar «Guardar».
 function catActivarEdicion(){
@@ -6450,6 +6489,7 @@ function catPaletsHtml(cid, cols, filtro, q){
   const manual = modoSalida === 'manual';                       // sin orden de entrada: la fecha de recepción no se enseña
   const conCodigo = !!sgaClienteCfg(cid).codigosUnicos;         // la columna «Palet» solo si cada palet lleva su propio código
   window.__catExp = { modo: 'palets', cid, cols, filas, manual, conCodigo };   // lo que se ve, para poder exportarlo
+  if (!filas.length && !q && filtro === 'todos') return catGuiaVacioHtml(cid);
   const num = v => (v == null ? '' : String(v).replace('.', ','));
   const celdaNum = v => `<td style="text-align:right;white-space:nowrap;" data-sort-value="${esc(v)}">${v === '' ? vac : esc(v)}</td>`;
   const cabecera = [conCodigo ? thSort(sgaCap(sgaUnidadCfg(cid).s), 'text') : '', thSort('Artículo', 'text'), thSort('Ubicación', 'text'), manual ? '' : thSort('Entrada', 'date'),
@@ -6498,11 +6538,12 @@ function stockCatalogoBodyHtml(){
   if (filtro === 'stock') lista = lista.filter(a => catStockArticulo(a).mod > 0);
   if (filtro === 'sin') lista = lista.filter(a => catStockArticulo(a).mod === 0);
   window.__catExp = { modo: 'articulos', cid, cols, lista };   // lo que se ve, para poder exportarlo
+  if (!window.__catEditAll && !lista.length && !q && filtro === 'todos') return catGuiaVacioHtml(cid);
   // Por defecto: primero lo que más stock tiene (palets), después por cliente y nombre
   lista.sort((a, b) => (catStockArticulo(b).mod - catStockArticulo(a).mod) || (cid ? 0 : nombreDe(contactos.find(c => c.id === a.clienteId) || {}).localeCompare(nombreDe(contactos.find(c => c.id === b.clienteId) || {}), 'es')) || sgaArticuloTxt(a).localeCompare(sgaArticuloTxt(b), 'es'));
   const puede = sgaPuedeEditarStock();
   const conCliente = !cid;
-  const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${q ? 'Ningún artículo coincide con la búsqueda.' : filtro === 'stock' ? 'Ningún artículo tiene stock ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : cid ? 'Este cliente todavía no tiene artículos. Pulsa «Editar» (arriba a la derecha) para crear el primero o pegar varios desde Excel.' : 'Todavía no hay artículos. Elige un cliente y pulsa «Editar» para crear el primero.'}</div>` : '';
+  const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${q ? 'Ningún artículo coincide con la búsqueda.' : filtro === 'stock' ? 'Ningún artículo tiene stock ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : cid ? (window.__catLocked ? 'Este cliente todavía no tiene artículos. Pulsa «Editar» para crear el primero o «Pegar desde Excel».' : 'Escribe el primer artículo en la fila nueva de abajo.') : 'Todavía no hay artículos. Elige un cliente para crear el primero.'}</div>` : '';
   return `
     ${cid ? '' : `<div class="card" style="padding:11px 16px;margin-bottom:12px;font-size:13.5px;color:var(--text);border-left:4px solid var(--primary);">Estás viendo los artículos de <b>todos los clientes</b>. Para <b>crear</b> uno, elige primero el cliente en el desplegable de arriba.</div>`}
     <div class="card${window.__catEditAll ? '' : ' cg-compacta'}" style="padding:0;">
@@ -7483,7 +7524,7 @@ function tplStock(){
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
       ${seg === 'entradas' || seg === 'salidas' || seg === 'operativas' ? stockEmpresaSelectHtml(seg) + stockEstadoSelectHtml(seg) : ''}${seg === 'operativas' && sgaPuedeEditarStock() ? '<button class="btn btn-primary" style="margin-left:auto;" onclick="sgaOperativaAbrir()">+ Nueva operativa</button>' : ''}`}
-      ${seg === 'catalogo' ? `<div style="margin-left:auto;order:99;display:flex;gap:8px;"><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catExportarAbrir()" title="Descargar el inventario en Excel o PDF, eligiendo las columnas">${homeIcon(HOME_ICON_PATHS.download, 15, 'currentColor', 2)}<span>Exportar</span></button>${sgaPuedeEditarStock() ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catEditarTodo()" title="Abrir una pantalla completa para editar todo el catálogo del cliente">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>` : ''}</div>` : ''}
+      ${seg === 'catalogo' ? `<div style="margin-left:auto;order:99;display:flex;gap:8px;"><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catExportarAbrir()" title="Descargar el inventario en Excel o PDF, eligiendo las columnas">${homeIcon(HOME_ICON_PATHS.download, 15, 'currentColor', 2)}<span>Exportar</span></button>${sgaPuedeEditarStock() ? (catSinNada(catClienteSel()) ? `<button type="button" class="btn btn-primary" onclick="catEditarTodo()" title="Todavía no hay nada: empieza creando el primer artículo">＋ Crear primer artículo</button>` : `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catEditarTodo()" title="Abrir una pantalla completa para editar todo el catálogo del cliente">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>`) : ''}</div>` : ''}
       ${seg === 'liquidaciones' || seg === 'operativas' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
     </div>
     <div id="stock-body">${stockBodyHtml()}</div>
