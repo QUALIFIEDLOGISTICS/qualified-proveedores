@@ -8,5 +8,6 @@ alter table public.crm_oportunidades add column if not exists solicitud text;
 alter table public.crm_oportunidades add column if not exists oferta_validez_dias integer;
 alter table public.crm_oportunidades add column if not exists gasoil text;
 alter table public.crm_oportunidades add column if not exists plazo_pago text;
+alter table public.crm_oportunidades add column if not exists empresa_nombre text;
 alter table public.crm_prospectos add column if not exists cargo text;
 notify pgrst, 'reload schema';

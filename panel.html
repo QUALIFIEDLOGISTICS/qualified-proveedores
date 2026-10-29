@@ -20703,13 +20703,13 @@ const crmNorm = s => String(s == null ? '' : s).toLowerCase().normalize('NFD').r
 function crmOppDeFila(r){
   return { id: r.id, titulo: r.titulo || '', servicio: r.servicio || 'transporte', prospectoId: r.prospecto_id || '', contactoId: r.contacto_id || '', persona: r.persona || '', email: r.email || '', telefono: r.telefono || '',
     importe: r.importe == null ? null : Number(r.importe), importeRec: r.importe_rec == null ? 0 : Number(r.importe_rec), periodicidad: r.periodicidad || 'unico', fase: r.fase || 'cotizada', fechaCot: r.fecha_cotizacion || '', proxFecha: r.proxima_fecha || '',
-    proxAccion: r.proxima_accion || '', ultimo: r.ultimo_contacto || '', motivo: r.motivo_perdida || '', cerradaAt: r.cerrada_at || '', notas: r.notas || '', conceptos: Array.isArray(r.conceptos) ? r.conceptos : [], cargo: r.cargo || '', solicitud: r.solicitud || '', oferta: r.oferta || '', ofertaFecha: r.oferta_fecha || '', validezDias: r.oferta_validez_dias == null ? null : Number(r.oferta_validez_dias), gasoil: r.gasoil || '', plazoPago: r.plazo_pago || '', createdAt: r.created_at, updatedAt: r.updated_at };
+    proxAccion: r.proxima_accion || '', ultimo: r.ultimo_contacto || '', motivo: r.motivo_perdida || '', cerradaAt: r.cerrada_at || '', notas: r.notas || '', conceptos: Array.isArray(r.conceptos) ? r.conceptos : [], cargo: r.cargo || '', solicitud: r.solicitud || '', oferta: r.oferta || '', ofertaFecha: r.oferta_fecha || '', validezDias: r.oferta_validez_dias == null ? null : Number(r.oferta_validez_dias), gasoil: r.gasoil || '', plazoPago: r.plazo_pago || '', empresaNombre: r.empresa_nombre || '', createdAt: r.created_at, updatedAt: r.updated_at };
 }
 function crmProspectoDeFila(r){ return { id: r.id, nombre: r.nombre || '', origen: r.origen || '', notas: r.notas || '', estado: r.estado || 'activo', contactoId: r.contacto_id || '', persona: r.persona || '', cargo: r.cargo || '', telefono: r.telefono || '', email: r.email || '', servicio: r.servicio || '', potencial: r.potencial || '', interes: r.interes || '', revisar: r.revisar_el || '', createdAt: r.created_at }; }
 function crmEmpresa(o){
   if (o.contactoId) { const c = contactos.find(x => x.id === o.contactoId); return c ? ((c.nombreComercial || '').trim() || c.nombre) : '—'; }
   const p = crmS().prospectos.find(x => x.id === o.prospectoId);
-  return p ? p.nombre : '—';
+  return p ? p.nombre : (o.empresaNombre || '—');   // sin cliente ni prospecto: el nombre escrito en la cotización
 }
 const crmAbierta = o => CRM_ABIERTAS.includes(o.fase);
 /* ---- Lo que se cotiza: se elige de los mismos catálogos de Tarifas Transporte y Tarifas Almacén, para que todo sea uniforme ---- */
@@ -20929,7 +20929,7 @@ function crmVacioInicial(){
 async function crmGuardarOpp(o, cambios){
   const fila = {};
   const mapa = { titulo: 'titulo', servicio: 'servicio', prospectoId: 'prospecto_id', contactoId: 'contacto_id', persona: 'persona', email: 'email', telefono: 'telefono', importe: 'importe', importeRec: 'importe_rec', periodicidad: 'periodicidad',
-    conceptos: 'conceptos', fase: 'fase', fechaCot: 'fecha_cotizacion', proxFecha: 'proxima_fecha', proxAccion: 'proxima_accion', ultimo: 'ultimo_contacto', motivo: 'motivo_perdida', cerradaAt: 'cerrada_at', notas: 'notas', cargo: 'cargo', solicitud: 'solicitud', plazoPago: 'plazo_pago', validezDias: 'oferta_validez_dias', gasoil: 'gasoil' };
+    conceptos: 'conceptos', fase: 'fase', fechaCot: 'fecha_cotizacion', proxFecha: 'proxima_fecha', proxAccion: 'proxima_accion', ultimo: 'ultimo_contacto', motivo: 'motivo_perdida', cerradaAt: 'cerrada_at', notas: 'notas', cargo: 'cargo', solicitud: 'solicitud', plazoPago: 'plazo_pago', validezDias: 'oferta_validez_dias', gasoil: 'gasoil', empresaNombre: 'empresa_nombre' };
   Object.keys(cambios).forEach(k => { fila[mapa[k]] = cambios[k] === '' && k !== 'titulo' ? null : cambios[k]; });
   fila.updated_at = new Date().toISOString(); fila.updated_by = currentUserEmail();
   const { error } = await supabaseClient.from('crm_oportunidades').update(fila).eq('id', o.id);
@@ -21834,7 +21834,7 @@ function crmEmpresaCambio(){
   if (!h) return;
   const el = f && f.emp ? { cliente: 'Cliente existente', prospecto: 'Prospecto existente' }[f.emp.tipo] : '';
   h.className = 'crm-hint' + (el ? ' ok' : '');
-  h.textContent = el ? el + ': no se crea nada nuevo.' : !v.trim() ? 'Busca un cliente o prospecto, o escribe el nombre de una empresa nueva.' : 'Escribe y elige de la lista. Si no está, se guardará como empresa nueva (prospecto).';
+  h.textContent = el ? el + ': no se crea nada nuevo.' : !v.trim() ? 'Busca un cliente o prospecto, o escribe el nombre de una empresa nueva.' : 'Escribe y elige de la lista. Si no está, se guarda solo con este nombre en la cotización (no se crea ningún prospecto).';
 }
 // Empresa elegida o escrita; si no se ha elegido y se parece a alguna ya existente, se pregunta antes de crear otra
 function crmEmpresaResolver(texto, idOpp){
@@ -21852,8 +21852,8 @@ function crmEmpParecidasModal(texto, par, idOpp){
   window.__crmPar = { par, idOpp };
   crmModal(`<div class="crm-modal-h"><b>¿Es alguna de estas?</b><small>Hay empresas parecidas a «${esc(texto)}»</small></div>
     <div class="crm-modal-b">${par.map((c, i) => `<button type="button" class="mp-sug" style="border:1px solid var(--border);border-radius:11px;" onclick="crmEmpParecidaElegir(${i})"><span class="mp-sug-i${c.tipo === 'cliente' ? ' p' : ''}">${c.tipo === 'cliente' ? 'C' : 'P'}</span><span class="mp-sug-t"><b>${esc(c.titulo)}</b><small>${esc([c.legal, c.sub].filter(Boolean).join(' · '))}</small></span></button>`).join('')}
-      <div class="crm-hint">Elige una para no duplicarla, o crea «${esc(texto)}» como empresa nueva.</div></div>
-    <div class="crm-modal-f"><button type="button" class="btn btn-ghost" onclick="crmModalCerrar()">Cancelar</button><button type="button" class="btn btn-primary" onclick="crmEmpParecidaNueva()">Crear «${esc(texto)}» nueva</button></div>`);
+      <div class="crm-hint">Elige una para no duplicarla, o deja «${esc(texto)}» tal como lo has escrito (no se crea ninguna ficha).</div></div>
+    <div class="crm-modal-f"><button type="button" class="btn btn-ghost" onclick="crmModalCerrar()">Cancelar</button><button type="button" class="btn btn-primary" onclick="crmEmpParecidaNueva()">Usar «${esc(texto)}» tal cual</button></div>`);
   const b = document.getElementById('crm-f-ok'); if (b) b.disabled = false;
 }
 function crmEmpParecidaElegir(i){
@@ -21872,7 +21872,7 @@ const crmEur2 = n => Number(n).toLocaleString('es-ES', { minimumFractionDigits: 
 function crmFormEstado(o){
   const f = { servicio: o ? o.servicio : 'transporte', conceptos: [], tr: [], al: [], op: [], n: 0, gasoil: o ? o.gasoil : '' };
   if (o) {
-    f.emp = o.contactoId ? { tipo: 'cliente', id: o.contactoId } : { tipo: 'prospecto', id: o.prospectoId }; f.cerrada = true;
+    f.emp = o.contactoId ? { tipo: 'cliente', id: o.contactoId } : o.prospectoId ? { tipo: 'prospecto', id: o.prospectoId } : null; f.cerrada = true; f.nuevaOk = !f.emp;   // sin ficha: solo el nombre escrito
     (o.conceptos || []).forEach(x => {
       if (x.t === 'transporte') f.tr.push({ k: ++f.n, tipo: x.c || 'FTL', metros: x.metros != null ? String(x.metros).replace('.', ',') : '', o: Object.assign({ z: '', cp: '', ciudad: '' }, x.o || {}), d: Object.assign({ z: '', cp: '', ciudad: '' }, x.d || {}), precio: x.precio != null ? String(x.precio).replace('.', ',') : '', nota: x.nota || '' });
       else if (x.t === 'operativa') crmOpLineas([x]).forEach(a => f.op.push({ k: ++f.n, nombre: a.n, precio: a.precio != null ? String(a.precio).replace('.', ',') : '' }));
@@ -22270,12 +22270,8 @@ async function crmFormGuardar(id, pdf){
     const emp = crmEmpresaResolver(empNombre, id);
     if (emp === 'pregunta') return;
     let prospectoId = '', contactoId = '';
-    if (!emp) {
-      const { data, error } = await supabaseClient.from('crm_prospectos').insert({ nombre: empNombre, created_by: currentUserEmail() }).select().single();
-      if (error) throw error;
-      const p = crmProspectoDeFila(data); S.prospectos.push(p); S.prospectos.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
-      prospectoId = p.id;
-    } else if (emp.tipo === 'cliente') contactoId = emp.id; else prospectoId = emp.id;
+    // Una empresa que no está en Clientes ni en Prospectos se guarda solo con su nombre en la cotización: los prospectos se crean a mano
+    if (emp && emp.tipo === 'cliente') contactoId = emp.id; else if (emp) prospectoId = emp.id;
     const conceptos = crmConceptosDeForm(f);
     // Las cotizaciones no llevan un importe total (van a volumen): lo que se cotiza son los precios de cada línea
     const datos = { titulo, servicio: crmServicioDe(conceptos, f.servicio), persona: v('crm-f-per'), telefono: tel.value, email: mail, fechaCot: v('crm-f-fec') || today(),
@@ -22283,6 +22279,7 @@ async function crmFormGuardar(id, pdf){
     if (id) {
       const o = S.opps.find(x => x.id === id);
       if (conceptos.length || (o.conceptos || []).length) datos.conceptos = conceptos;
+      if (!emp) datos.empresaNombre = empNombre; else if (o.empresaNombre) datos.empresaNombre = '';   // el nombre suelto solo se guarda si no hay ficha
       // Validez e indexación solo se envían si se usan (o ya se usaban): así sigue funcionando aunque falte el SQL
       if (validez !== CRM_OFERTA_VALIDEZ_DIAS || o.validezDias != null) datos.validezDias = validez;
       if (f.gasoil || o.gasoil) datos.gasoil = f.gasoil || '';
@@ -22298,6 +22295,7 @@ async function crmFormGuardar(id, pdf){
     const fila = { titulo, servicio: datos.servicio, prospecto_id: prospectoId || null, contacto_id: contactoId || null, persona: datos.persona || null, email: mail || null, telefono: datos.telefono || null,
       importe: null, periodicidad: 'unico', fase: 'cotizada', fecha_cotizacion: datos.fechaCot, proxima_fecha: datos.proxFecha || null, proxima_accion: datos.proxAccion || null, notas: datos.notas || null, created_by: currentUserEmail() };
     if (conceptos.length) fila.conceptos = conceptos;
+    if (!emp) fila.empresa_nombre = empNombre;
     if (validez !== CRM_OFERTA_VALIDEZ_DIAS) fila.oferta_validez_dias = validez;
     if (f.gasoil) fila.gasoil = f.gasoil;
     if (cargo) fila.cargo = cargo;
@@ -22312,7 +22310,7 @@ async function crmFormGuardar(id, pdf){
     crmCerrarDrawer(); crmPinta();
     if (quierePdf) await crmOfertaGenerar(o.id);
   } catch (e) {
-    err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache|conceptos|importe_rec|oferta_validez_dias|gasoil|cargo|solicitud|plazo_pago/i.test((e && e.message) || '') ? 'falta ejecutar el SQL del CRM en Supabase (comercial-crm-columnas-todas.sql). Detalle: ' + ((e && e.message) || '') : ((e && e.message) || 'error desconocido'));
+    err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache|conceptos|importe_rec|oferta_validez_dias|gasoil|cargo|solicitud|plazo_pago|empresa_nombre/i.test((e && e.message) || '') ? 'falta ejecutar el SQL del CRM en Supabase (comercial-crm-columnas-todas.sql). Detalle: ' + ((e && e.message) || '') : ((e && e.message) || 'error desconocido'));
     if (btn) btn.disabled = false; if (btnPdf) btnPdf.disabled = false;
   }
 }
