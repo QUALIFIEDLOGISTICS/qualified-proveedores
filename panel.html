@@ -3047,6 +3047,7 @@ function sortTableByHeader(th){
   });
   if (dir === 'desc') rows.reverse();
   rows.forEach(r => tbody.appendChild(r));
+  if (table.closest('#sl-stock')) { rows.forEach((r, i) => { r.dataset.base = i; }); sgaSalidaSubir(); }   // expedición: el orden elegido es el de base; lo que sale sigue arriba
   ths.forEach((h, i) => {
     const arrow = h.querySelector('.th-sort-arrow');
     if (!arrow) return;
@@ -8623,6 +8624,22 @@ function sgaSalidaGruposHtml(clienteId, ps, flags){
     </tr>`;
   }).join('');
 }
+// Las filas de las que sale algo suben arriba del todo (en el orden de la tabla), para comprobar de un vistazo lo que se ha marcado.
+// Las demás conservan su orden; al quitar la cantidad, la fila vuelve a su sitio. Solo se mueven las filas que están fuera de lugar,
+// y no mientras se escribe en una casilla (se haría al salir de ella) para no cambiar de sitio lo que se está tecleando.
+function sgaSalidaSubir(){
+  const tb = document.querySelector('#sl-stock tbody');
+  if (!tb) return;
+  const rows = [...tb.children].filter(r => r.tagName === 'TR');
+  if (!rows.length) return;
+  if (rows.some(r => r.dataset.base === undefined)) rows.forEach((r, i) => { r.dataset.base = i; });
+  const sale = r => [...r.querySelectorAll('.sl-in')].some(i => i.type === 'checkbox' ? i.checked : Number(i.value) > 0);
+  const orden = rows.map(r => ({ r, s: sale(r) ? 0 : 1, b: Number(r.dataset.base) })).sort((x, y) => x.s - y.s || x.b - y.b).map(x => x.r);
+  if (orden.every((r, i) => r === rows[i])) return;
+  const foco = document.activeElement;
+  orden.forEach((r, i) => { const ref = tb.children[i]; if (ref !== r) tb.insertBefore(r, ref); });
+  if (foco && foco !== document.body && document.activeElement !== foco && document.contains(foco)) foco.focus();
+}
 function sgaSalidaGrupoIn(el){
   const ps = el.dataset.pids.split(',').map(id => sgaPartidas.find(p => p.id === id)).filter(Boolean);
   const total = ps.reduce((s, p) => s + p.actual, 0);
@@ -8912,6 +8929,8 @@ function sgaSalidaRefrescar(){
   const t = document.getElementById('sl-total');
   if (t) t.innerHTML = tot ? `Salen <b>${tot}</b> ${sgaUd(d.clienteId, tot)}.` : 'Todavía no has marcado nada.';
   sgaSalidaGruposSync();
+  const ae = document.activeElement;
+  if (!(ae && ae.tagName === 'INPUT' && ae.type !== 'checkbox' && ae.closest('#sl-stock tbody'))) sgaSalidaSubir();
   // En los campos de bultos, lo que saldría solo (proporcional) como sugerencia mientras no se escriba nada
   document.querySelectorAll('.sl-bu:not([type="hidden"]), .sl-gb').forEach(el => {
     const ids = el.dataset.pids ? el.dataset.pids.split(',') : [el.dataset.pid];
@@ -8973,7 +8992,7 @@ function tplStockSalidaPage(){
       </div>
       <div class="card deca-card">
         ${decaCardHead('box', 'Qué sale', 'Pide por cantidad (sale lo más antiguo) o marca partida a partida')}
-        <div class="deca-card-body"><div id="sl-stock"><div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div></div></div>
+        <div class="deca-card-body"><div id="sl-stock" onfocusout="setTimeout(sgaSalidaSubir, 0)"><div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div></div></div>
       </div>
       <div class="card deca-card">
         ${decaCardHead('shield', 'DeCA', 'Opcional · se vincula a esta expedición y su QR sale en el albarán')}
