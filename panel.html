@@ -1056,6 +1056,17 @@
   .crm-sol{border:1px solid var(--border);border-radius:12px;background:var(--panel2);padding:10px 13px;font-size:13px;}
   .crm-sol summary{cursor:pointer;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:800;}
   .crm-sol>div{margin-top:8px;max-height:260px;overflow-y:auto;line-height:1.5;color:var(--text);word-break:break-word;}
+  .crm-cv{display:flex;flex-direction:column;gap:6px;max-height:380px;overflow-y:auto;padding:2px;}
+  .crm-cv-d{text-align:center;font-size:11px;color:var(--mutedFaint);font-weight:700;margin:8px 0 2px;}
+  .crm-cv-m{max-width:90%;border-radius:12px;padding:8px 11px;font-size:13px;line-height:1.5;word-break:break-word;border:1px solid var(--border);}
+  .crm-cv-m.in{align-self:flex-start;background:var(--panel2);}
+  .crm-cv-m.out{align-self:flex-end;background:color-mix(in srgb,var(--primary) 12%,var(--panel));border-color:color-mix(in srgb,var(--primary) 30%,var(--border));}
+  .crm-cv-m small{display:flex;gap:6px;align-items:center;color:var(--mutedFaint);font-size:11px;font-weight:700;margin-bottom:3px;}
+  .crm-cv-m small button{border:0;background:none;color:var(--mutedFaint);cursor:pointer;font-size:12px;padding:0 0 0 4px;margin-left:auto;}
+  .crm-cv-m small button:hover{color:var(--danger);}
+  .crm-cv-comp{display:flex;flex-direction:column;gap:8px;margin-top:8px;}
+  .crm-cv-comp textarea{width:100%;resize:vertical;}
+  .crm-cv-fila{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:space-between;}
   .crm-sub{font-size:11.5px;color:var(--muted);font-weight:400;margin-top:1px;}
   .crm-trunc{display:block;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .crm-pos::before{content:var(--l,'Posponer');font-size:11.5px;color:var(--mutedFaint);margin-right:3px;}
@@ -20926,9 +20937,9 @@ async function crmGuardarOpp(o, cambios){
   Object.assign(o, cambios);
   return true;
 }
-async function crmActividad(oppId, tipo, texto){
+async function crmActividad(oppId, tipo, texto, fecha){
   const S = crmS();
-  const { data, error } = await supabaseClient.from('crm_actividades').insert({ oportunidad_id: oppId, tipo, texto: texto || null, fecha: today(), created_by: currentUserEmail() }).select().single();
+  const { data, error } = await supabaseClient.from('crm_actividades').insert({ oportunidad_id: oppId, tipo, texto: texto || null, fecha: fecha || today(), created_by: currentUserEmail() }).select().single();
   if (error) return null;
   const a = { id: data.id, tipo: data.tipo, texto: data.texto || '', fecha: data.fecha, createdAt: data.created_at, createdBy: data.created_by || '' };
   if (S.acts[oppId]) S.acts[oppId].unshift(a);
@@ -21616,16 +21627,17 @@ function crmDrawerPinta(){
 async function crmAbrir(id){
   const S = crmS();
   crmDrawerAbre({ tipo: 'detalle', id });
+  if (S.acts[id]) setTimeout(() => crmConvPinta(id), 50);   // ya cargada: baja al último mensaje
   if (!S.acts[id]) {
     const { data } = await supabaseClient.from('crm_actividades').select('*').eq('oportunidad_id', id).order('created_at', { ascending: false });
     S.acts[id] = (data || []).map(r => ({ id: r.id, tipo: r.tipo, texto: r.texto || '', fecha: r.fecha, createdAt: r.created_at, createdBy: r.created_by || '' }));
-    if (S.drawer && S.drawer.tipo === 'detalle' && S.drawer.id === id) { const e = document.getElementById('crm-acts'); if (e) e.innerHTML = crmActsHtml(id); }
+    if (S.drawer && S.drawer.tipo === 'detalle' && S.drawer.id === id) { const e = document.getElementById('crm-acts'); if (e) e.innerHTML = crmActsHtml(id); crmConvPinta(id); }
   }
 }
 function crmQuien(email){ const n = String(email || '').split('@')[0].replace(/[._-]+/g, ' ').trim(); return n ? n.charAt(0).toUpperCase() + n.slice(1) : ''; }
 function crmActsHtml(id){
-  const l = crmS().acts[id];
-  if (!l) return '<div class="crm-nada">Cargando el historial…</div>';
+  const l = (crmS().acts[id] || []).filter(a => !crmMsgDe(a));   // los mensajes del cliente van en su propia conversación
+  if (!crmS().acts[id]) return '<div class="crm-nada">Cargando el historial…</div>';
   if (!l.length) return '<div class="crm-nada">Todavía no hay nada anotado.</div>';
   return l.map(a => `<div class="crm-act"><span class="crm-act-i ${a.tipo}">${esc((CRM_ACT[a.tipo] || a.tipo).slice(0, 1))}</span><div><b>${esc(CRM_ACT[a.tipo] || a.tipo)}</b> <small>${crmFecha(a.fecha)}${a.createdBy ? ' · ' + esc(crmQuien(a.createdBy)) : ''}</small><div>${esc(a.texto).replace(/\n/g, '<br>')}</div></div></div>`).join('');
 }
@@ -21646,10 +21658,18 @@ function crmDetalleHtml(o){
         <div><small>Siguiente paso</small><b>${o.proxAccion ? esc(o.proxAccion) : '<i>Sin siguiente paso</i>'}</b><span>${o.proxFecha ? `${crmFecha(o.proxFecha)} · ${crmRel(o.proxFecha)}` : 'Sin fecha: pon una para que no se olvide'}</span></div>
         <button type="button" class="btn btn-primary" onclick="crmRegistrar('${o.id}')">✓ Registrar seguimiento</button></div>` : o.fase === 'perdida' ? `<div class="crm-perdida">Perdida${o.motivo ? ': <b>' + esc(o.motivo) + '</b>' : ''}</div>` : `<div class="crm-ganada">Ganada${o.cerradaAt ? ' el ' + crmFecha(o.cerradaAt.slice(0, 10)) : ''}</div>`}
       ${crmLineasHtml(o)}
-      ${o.solicitud ? `<details class="crm-sol" open><summary>Solicitud del cliente</summary><div>${esc(o.solicitud).replace(/\n/g, '<br>')}</div></details>` : ''}
       <div class="crm-datos">
         ${dato('Persona', esc(o.persona))}${dato('Cargo', esc(o.cargo))}${dato('Plazo de pago', esc(o.plazoPago))}${dato('Teléfono', o.telefono ? `<a href="tel:${esc(phoneTelHref(o.telefono))}">${esc(phoneFormat(o.telefono))}</a>` : '')}${dato('Correo', o.email ? `<a href="mailto:${esc(o.email)}">${esc(o.email)}</a>` : '')}
         ${dato('Cotizada el', crmFecha(o.fechaCot))}${dato('Último contacto', o.ultimo ? crmFecha(o.ultimo) + ' · ' + crmRel(o.ultimo).toLowerCase() : 'Ninguno')}${dato('Notas', esc(o.notas).replace(/\n/g, '<br>'))}
+      </div>
+      <div class="crm-sec-t" style="display:flex;justify-content:space-between;align-items:center;gap:8px;">Conversación con el cliente${o.email ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);padding:4px 10px;font-size:12px;text-transform:none;letter-spacing:0;" onclick="crmResponderCorreo('${o.id}')" title="Abre tu correo con el destinatario y el asunto ya puestos">✉ Responder por correo</button>` : ''}</div>
+      <div class="crm-cv" id="crm-cv-l">${crmConvHtml(o)}</div>
+      <div class="crm-cv-comp">
+        <div class="crm-chs sm" data-k="cvdir">${[['in', 'Mensaje del cliente'], ['out', 'Nuestra respuesta']].map(([v, t], i) => `<button type="button" class="crm-ch${i === 0 ? ' on' : ''}" data-v="${v}" onclick="crmCvChip(this)">${t}</button>`).join('')}</div>
+        <div class="crm-chs sm" data-k="cvcanal">${Object.keys(CRM_CANAL).map((v, i) => `<button type="button" class="crm-ch${i === 0 ? ' on' : ''}" data-v="${v}" onclick="crmCvChip(this)">${CRM_CANAL[v]}</button>`).join('')}</div>
+        <textarea id="crm-cv-t" rows="3" maxlength="8000" placeholder="Pega aquí el correo o el mensaje del cliente…"></textarea>
+        <div class="crm-cv-fila"><label style="font-size:12px;color:var(--muted);display:flex;gap:6px;align-items:center;">Día <input type="date" id="crm-cv-f" value="${h}" max="${h}" style="width:auto;" /></label>
+          <button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="crmCvGuardar('${o.id}')">Añadir a la conversación</button></div>
       </div>
       <div class="crm-sec-t">Historial</div>
       <div class="crm-comp">
@@ -21660,6 +21680,60 @@ function crmDetalleHtml(o){
       <div id="crm-acts">${crmActsHtml(o.id)}</div>
     </div>
     <div class="crm-dr-f"><button type="button" class="btn btn-primary" data-pdf="${o.id}" onclick="crmOfertaGenerar('${o.id}')" title="${o.oferta ? 'Vuelve a generar el PDF con el mismo número de oferta' : 'Genera el PDF para pasárselo al cliente, con su número de oferta'}">${o.oferta ? 'Descargar PDF · ' + esc(o.oferta) : 'Generar PDF de la oferta'}</button><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="crmEditar('${o.id}')">Editar</button><button type="button" class="btn btn-ghost" style="background:var(--panel);color:var(--danger);" onclick="crmEliminar('${o.id}')">Eliminar</button></div>`;
+}
+/* ---- Conversación con el cliente: mensajes día a día (correo, WhatsApp…) guardados en el historial con tipo «m:in:correo» / «m:out:correo» ---- */
+const CRM_CANAL = { correo: 'Correo', whatsapp: 'WhatsApp', llamada: 'Llamada', reunion: 'Reunión', otro: 'Otro' };
+function crmMsgDe(a){ const m = /^m:(in|out):(\w+)$/.exec((a && a.tipo) || ''); return m ? { dir: m[1], canal: m[2] } : null; }
+function crmConvHtml(o){
+  const acts = crmS().acts[o.id];
+  if (!acts) return '<div class="crm-nada">Cargando la conversación…</div>';
+  const ms = acts.filter(a => crmMsgDe(a)).map(a => ({ a, ...crmMsgDe(a) }))
+    .sort((x, y) => String(x.a.fecha).localeCompare(String(y.a.fecha)) || String(x.a.createdAt).localeCompare(String(y.a.createdAt)));
+  const lista = [...(o.solicitud ? [{ ini: true, dir: 'in', canal: '', a: { fecha: o.fechaCot || '', texto: o.solicitud, createdBy: '' } }] : []), ...ms];
+  if (!lista.length) return '<div class="crm-nada">Aquí irá la conversación con el cliente, día a día.</div>';
+  let dia = '';
+  return lista.map(m => {
+    const cab = m.a.fecha !== dia ? `<div class="crm-cv-d">${crmFecha(dia = m.a.fecha)}</div>` : '';
+    const quien = m.ini ? 'Solicitud inicial' : (m.dir === 'in' ? 'Cliente' : 'Nosotros') + ' · ' + (CRM_CANAL[m.canal] || m.canal);
+    return `${cab}<div class="crm-cv-m ${m.dir}"><small><span>${esc(quien)}${m.a.createdBy && !m.ini ? ' · ' + esc(crmQuien(m.a.createdBy)) : ''}</span>${m.ini ? '' : `<button type="button" title="Quitar este mensaje" onclick="crmCvBorrar('${m.a.id}')">✕</button>`}</small>${esc(m.a.texto).replace(/\n/g, '<br>')}</div>`;
+  }).join('');
+}
+function crmConvPinta(id){
+  const S = crmS(), o = S.opps.find(x => x.id === id), e = document.getElementById('crm-cv-l');
+  if (!o || !e || !S.drawer || S.drawer.id !== id) return;
+  e.innerHTML = crmConvHtml(o); e.scrollTop = e.scrollHeight;
+}
+function crmCvChip(b){ b.parentElement.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); }
+const crmCvSel = k => { const b = document.querySelector(`.crm-cv-comp [data-k="${k}"] .crm-ch.on`); return b ? b.dataset.v : ''; };
+async function crmCvGuardar(id){
+  const S = crmS(), o = S.opps.find(x => x.id === id); if (!o) return;
+  const t = ((document.getElementById('crm-cv-t') || {}).value || '').trim(), fecha = (document.getElementById('crm-cv-f') || {}).value || today();
+  if (!t) { appToast('Escribe o pega el mensaje.', 'error'); return; }
+  if (fecha > today()) { appToast('El día no puede ser futuro.', 'error'); return; }
+  const a = await crmActividad(id, `m:${crmCvSel('cvdir') || 'in'}:${crmCvSel('cvcanal') || 'correo'}`, t, fecha);
+  if (!a) { appToast('No se pudo guardar el mensaje.', 'error'); return; }
+  if (!o.ultimo || fecha > o.ultimo) await crmGuardarOpp(o, { ultimo: fecha });   // cuenta como contacto con el cliente
+  document.getElementById('crm-cv-t').value = '';
+  crmConvPinta(id); crmPinta();
+}
+async function crmCvBorrar(actId){
+  const S = crmS(), id = S.drawer && S.drawer.id; if (!id || !S.acts[id]) return;
+  if (!(await appConfirm({ title: 'Quitar mensaje', message: 'Se quita este mensaje de la conversación.', confirmLabel: 'Quitar', cancelLabel: 'Cancelar', tone: 'warn', icon: 'warn' }))) return;
+  const { error } = await supabaseClient.from('crm_actividades').delete().eq('id', actId);
+  if (error) { appToast('No se pudo quitar: ' + (error.message || 'error'), 'error'); return; }
+  S.acts[id] = S.acts[id].filter(a => a.id !== actId); crmConvPinta(id);
+}
+// Abre el programa de correo con el destinatario y el asunto puestos, y deja preparado el apunte de «enviado» para confirmarlo
+function crmResponderCorreo(id){
+  const o = crmS().opps.find(x => x.id === id); if (!o) return;
+  if (!o.email) { appToast('Esta cotización no tiene correo: añádelo en Editar.', 'info'); return; }
+  const asunto = o.oferta ? `Oferta ${o.oferta} · ${crmEmpresa(o)}` : `Cotización · ${crmTitulo(o)}`;
+  const saludo = o.persona ? `Buenos días ${String(o.persona).trim().split(/\s+/)[0]},` : 'Buenos días,';
+  window.location.href = `mailto:${o.email}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(`${saludo}\n\n\n\nUn saludo,\n${ocCfgEmpresa().nombre}`)}`;
+  const grupo = (k, v) => document.querySelectorAll(`.crm-cv-comp [data-k="${k}"] .crm-ch`).forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  grupo('cvdir', 'out'); grupo('cvcanal', 'correo');
+  const t = document.getElementById('crm-cv-t'); if (t && !t.value.trim()) t.value = `Correo enviado a ${o.email} · Asunto: ${asunto}`;
+  appToast(`Se abre tu correo${o.oferta ? '. Recuerda adjuntar el PDF' : ''}. Cuando lo envíes, pulsa «Añadir a la conversación» para dejarlo apuntado.`, 'info');
 }
 function crmCompTipo(b){ b.parentElement.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); }
 async function crmCompGuardar(id){
