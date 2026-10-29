@@ -17284,7 +17284,7 @@ function tdRango(){
   }
   return { d, h, ant };
 }
-const tdFechaDe = o => o.fechaPedido || (o.createdAt || '').slice(0, 10);
+const tdFechaDe = o => ocFechaCarga(o);   // por el día de carga: es el mes en que se factura
 const tdTranspKey = o => o.transportistaId || o.transportistaNombre || '';
 function tdOrdenes(d, h){
   const S = tdS();
@@ -19484,6 +19484,12 @@ async function loadOrdenesCarga(){
   const { data } = await supabaseClient.from('ordenes_carga').select('*').order('numero', { ascending: false });
   ordenesCarga = (data || []).map(ocDeFila);
 }
+// Día de carga de la orden (el de su primera carga con fecha): es el que manda para facturar, en la lista, los filtros y el dashboard.
+// Si todavía no tiene fecha de carga, se usa la del pedido.
+function ocFechaCarga(o){
+  const c = (o.cargas || []).find(p => p && p.fecha);
+  return c ? c.fecha : (o.fechaPedido || (o.createdAt || '').slice(0, 10));
+}
 function ocRef(o){ return 'OC-' + String(o.numero).padStart(4, '0'); }   // OC-0001: distinto del S0xxxxx del otro programa, para no confundirlos
 function ocPuntoResumen(p){ return p ? [p.poblacion, p.pais].filter(Boolean).join(', ') || p.empresa || '—' : '—'; }
 // Datos internos de la orden (no salen en el PDF).
@@ -19526,8 +19532,8 @@ function ocCumpleFiltro(o, F){
   if (F.servicio && o.servicio !== F.servicio) return false;
   if (sinEsp(F.carga) && !textoPuntos(o.cargas).includes(sinEsp(F.carga))) return false;
   if (sinEsp(F.descarga) && !textoPuntos(o.descargas).includes(sinEsp(F.descarga))) return false;
-  if (F.desde && !(o.fechaPedido >= F.desde)) return false;
-  if (F.hasta && !(o.fechaPedido <= F.hasta)) return false;
+  if (F.desde && !(ocFechaCarga(o) >= F.desde)) return false;
+  if (F.hasta && !(ocFechaCarga(o) <= F.hasta)) return false;
   const num = s => { const t = String(s || '').trim().replace(',', '.'); return t === '' ? null : Number(t); };
   const pmin = num(F.precioMin), pmax = num(F.precioMax);
   if (pmin !== null && isFinite(pmin) && !(o.precio != null && o.precio >= pmin)) return false;
@@ -19578,7 +19584,7 @@ function ocFiltrosPanelHtml(){
           <option value="con"${F.deca === 'con' ? ' selected' : ''}>Con DeCA</option>
           <option value="sin"${F.deca === 'sin' ? ' selected' : ''}>Sin DeCA</option>
         </select></div>
-      ${fecha('desde', 'Fecha del pedido desde')}${fecha('hasta', 'hasta')}
+      ${fecha('desde', 'Día de carga desde')}${fecha('hasta', 'hasta')}
       ${campo('precioMin', 'Contratado desde (€)', '0', 'inputmode="decimal"')}${campo('precioMax', 'Contratado hasta (€)', '', 'inputmode="decimal"')}
       ${campo('cobroMin', 'Cobramos desde (€)', '0', 'inputmode="decimal"')}${campo('cobroMax', 'Cobramos hasta (€)', '', 'inputmode="decimal"')}
     </div>
@@ -19706,14 +19712,14 @@ function ocListBodyHtml(){
     <div class="card deca-table-card"><div class="deca-table-scroll">
       <table class="deca-table oc-tabla">
         <thead><tr>
-          ${thSort('Nº', 'text')}${thSort('Ref. facturación', 'text')}${thSort('Fecha', 'date')}${thSort('Cliente', 'text')}${thSort('Transportista', 'text')}${thSort('Carga', 'text')}${thSort('Descarga', 'text')}${thSort('Servicio', 'text')}${thSort('Contratado', 'number')}${thSort('Cobramos', 'number')}${thSort('Margen', 'number')}${thSort('Estado', 'text')}<th>DeCA</th><th>Acciones</th>
+          ${thSort('Nº', 'text')}${thSort('Ref. facturación', 'text')}${thSort('Día de carga', 'date')}${thSort('Cliente', 'text')}${thSort('Transportista', 'text')}${thSort('Carga', 'text')}${thSort('Descarga', 'text')}${thSort('Servicio', 'text')}${thSort('Contratado', 'number')}${thSort('Cobramos', 'number')}${thSort('Margen', 'number')}${thSort('Estado', 'text')}<th>DeCA</th><th>Acciones</th>
         </tr></thead>
         <tbody>
           ${list.map(o => { const d = o.decaId ? decaDocuments.find(x => x.id === o.decaId) : null; return `
             <tr class="dr-row oc-r-${o.estado === 'anulada' ? 'anulada' : 'emitida'}">
               <td data-sort-value="${o.numero}" style="white-space:nowrap;"><span class="deca-code-pill" style="font-size:12px;">${esc(ocRef(o))}</span></td>
               <td style="white-space:nowrap;" data-sort-value="${esc(o.refFacturacion)}">${o.refFacturacion ? `<b>${esc(o.refFacturacion)}</b>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
-              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(o.fechaPedido)}">${fmtDateDMY(o.fechaPedido)}</td>
+              <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(ocFechaCarga(o))}" title="Día de carga (fecha del pedido: ${esc(fmtDateDMY(o.fechaPedido))})">${fmtDateDMY(ocFechaCarga(o))}</td>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(ocClienteNombre(o))}" title="${esc(ocClienteNombre(o))}">${ocClienteNombre(o) ? esc(truncateText(ocClienteNombre(o), 22)) : '<span style="color:var(--mutedFaint);">—</span>'}</td>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(o.transportistaNombre)}" title="${esc(o.transportistaNombre)}">${esc(truncateText(o.transportistaNombre, 24))}</td>
               <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(ocPuntoCodigo(o.cargas[0]))}" title="${esc(o.cargas.map(p => [p.empresa, p.poblacion, fmtDateDMY(p.fecha)].filter(Boolean).join(' · ')).join('\n'))}">${esc(ocPuntoCodigo(o.cargas[0]))}${mas(o.cargas)}</td>
