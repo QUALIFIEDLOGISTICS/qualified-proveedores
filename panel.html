@@ -7969,6 +7969,7 @@ function sgaEntradaClienteCambio(){
   const almWrap = document.getElementById('se-alm-wrap');
   if (almWrap) almWrap.style.display = sgaEntradaPorLinea() ? 'none' : '';   // stock inicial con varios almacenes: se elige en cada línea
   sgaModalidadesRefrescar('entrada', clienteId);                          // y solo cómo llega según su tarifa
+  sgaServiciosRefrescar();                                                // y solo los servicios que tiene creados
   const cont = document.getElementById('se-lineas');
   cont.innerHTML = clienteId ? sgaEntradaLineasHtml(cfg) : '<div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div>';
   const pegar = document.getElementById('se-pegar');
@@ -8065,9 +8066,14 @@ function sgaServiciosDeCliente(clienteId){
   const ids = new Set(almacenajeTarifas.filter(t => t.clienteId === clienteId).map(t => t.tipo));
   return almacenajeProductos.filter(p => !p.archived && p.disparador === 'manual' && ids.has(p.id));
 }
+// Cliente elegido en el formulario de recepción o expedición que se está viendo ('' si aún no hay), o null fuera de ellos
+function sgaServicioCliente(){
+  const v = window.__stockView;
+  return v === 'salida' ? sgaSalidaClienteId() : v === 'entrada' ? sgaEntradaClienteId() : null;
+}
 function sgaServicioFilaHtml(j, pre){
   pre = pre || {};
-  const cli = window.__stockView === 'salida' ? sgaSalidaClienteId() : null;   // en expediciones solo salen los servicios del cliente; en recepciones, todos
+  const cli = sgaServicioCliente();   // en recepciones y expediciones solo salen los servicios que el cliente tiene en su tarifa
   let prods = almacenajeProductos.filter(p => !p.archived && p.disparador === 'manual');
   if (cli !== null) prods = prods.filter(p => sgaServiciosDeCliente(cli).some(s => s.id === p.id) || p.id === pre.prod);   // el ya guardado se conserva aunque se haya quitado de la tarifa
   prods.sort((a, b) => almacenajeProductoTexto(a).localeCompare(almacenajeProductoTexto(b), 'es'));
@@ -8079,9 +8085,9 @@ function sgaServicioFilaHtml(j, pre){
       <button type="button" class="op-x" onclick="this.closest('.se-srow').remove(); sgaEntradaRefrescar();" title="Quitar este servicio">✕</button>
     </div>`;
 }
-// Al cambiar de cliente en una expedición, los servicios ya añadidos se quedan solo si también son de ese cliente
-function sgaSalidaServiciosRefrescar(){
-  const cli = sgaSalidaClienteId();
+// Al cambiar de cliente en una recepción o expedición, los servicios ya añadidos se quedan solo si también son de ese cliente
+function sgaServiciosRefrescar(){
+  const cli = sgaServicioCliente();
   const ok = new Set(cli ? sgaServiciosDeCliente(cli).map(p => p.id) : []);
   [...document.querySelectorAll('#se-servicios .se-srow')].forEach(r => {
     const j = r.dataset.j, v = id => ((document.getElementById(`ss-${j}-${id}`) || {}).value || '');
@@ -8090,8 +8096,8 @@ function sgaSalidaServiciosRefrescar(){
   });
 }
 function sgaServicioAdd(){
-  if (window.__stockView === 'salida') {
-    const cli = sgaSalidaClienteId();
+  const cli = sgaServicioCliente();
+  if (cli !== null) {
     if (!cli) { appToast('Elige primero el cliente para ver sus servicios.', 'info'); return; }
     if (!sgaServiciosDeCliente(cli).length) { appToast('Este cliente no tiene servicios creados. Se añaden en Almacén → Tarifas.', 'info'); return; }
   }
@@ -8884,7 +8890,7 @@ function sgaSalidaCandidatos(clienteId, tipo, art, ref){
 function sgaSalidaClienteCambio(){
   const clienteId = sgaSalidaClienteId();
   sgaModalidadesRefrescar('salida', clienteId);   // solo cómo sale según su tarifa
-  sgaSalidaServiciosRefrescar();                  // y solo los servicios que tiene creados
+  sgaServiciosRefrescar();                        // y solo los servicios que tiene creados
   const alm = document.getElementById('sl-almacen');
   if (alm) {
     const ids = [...new Set(sgaStockCliente(clienteId).map(p => p.warehouseId))];
