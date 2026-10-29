@@ -6225,17 +6225,54 @@ function catExportItems(){
   if (!E) return [];
   return E.modo === 'palets' ? E.filas : E.lista.map(a => ({ a, st: catStockArticulo(a) }));
 }
-function catExportElegidas(){
+// Columnas y orden elegidos se recuerdan por cliente y por vista (por artículo / palet a palet), en este navegador.
+function catExportClave(E){ return 'qualified.sga.exportOrden.' + E.modo + '.' + (E.cid || 'todos'); }
+// Todas las columnas de este inventario en el orden guardado, cada una con si sale o no. Las columnas nuevas (que aún no se habían visto) van al final, sin marcar.
+function catExportEstado(){
+  const E = window.__catExp, todas = catExportColumnas();
+  let g = null, vieja = null;
+  try { g = JSON.parse(localStorage.getItem(catExportClave(E)) || 'null'); } catch (e) { g = null; }
+  if (!g) { try { vieja = JSON.parse(localStorage.getItem('qualified.sga.exportCols.' + E.modo) || 'null'); } catch (e) { vieja = null; } }   // antes solo se recordaba qué columnas, sin orden
+  if (g && Array.isArray(g.order)) {
+    const por = new Map(todas.map(c => [c.id, c]));
+    const lista = g.order.filter(id => por.has(id)).map(id => ({ c: por.get(id), on: (g.on || []).includes(id) }));
+    todas.filter(c => !g.order.includes(c.id)).forEach(c => lista.push({ c, on: false }));
+    return lista;
+  }
+  return todas.map(c => ({ c, on: !vieja || !vieja.length || vieja.includes(c.id) }));
+}
+function catExportFilaHtml(x){
+  return `<div class="exp-fila" draggable="true" data-id="${esc(x.c.id)}" ondragstart="catExportArrastre(event)" ondragover="catExportSobre(event)" ondrop="catExportSoltar(event)" ondragend="catExportFinArrastre()">
+    <span class="exp-asa" title="Arrastra para cambiar el orden">⋮⋮</span>
+    <label class="sgc-sw" style="font-size:13px;flex:1;min-width:0;"><input type="checkbox" class="switch" data-id="${esc(x.c.id)}" ${x.on ? 'checked' : ''} /><span><b>${esc(x.c.label)}</b></span></label>
+    <button type="button" class="exp-mv" onclick="catExportMover(this, -1)" title="Subir">▲</button><button type="button" class="exp-mv" onclick="catExportMover(this, 1)" title="Bajar">▼</button>
+  </div>`;
+}
+function catExportMover(b, d){
+  const f = b.closest('.exp-fila'), otro = d < 0 ? f.previousElementSibling : f.nextElementSibling;
+  if (!otro) return;
+  if (d < 0) f.parentNode.insertBefore(f, otro); else f.parentNode.insertBefore(otro, f);
+  b.focus();
+}
+function catExportArrastre(ev){ window.__expDrag = ev.currentTarget; ev.dataTransfer.effectAllowed = 'move'; try { ev.dataTransfer.setData('text/plain', ev.currentTarget.dataset.id); } catch (e) { /* algunos navegadores lo exigen */ } setTimeout(() => ev.currentTarget.classList.add('exp-arrastrando'), 0); }
+function catExportSobre(ev){ if (window.__expDrag) ev.preventDefault(); }
+function catExportSoltar(ev){
+  const d = window.__expDrag, t = ev.currentTarget;
+  if (!d || d === t) return;
+  ev.preventDefault();
+  const r = t.getBoundingClientRect();
+  t.parentNode.insertBefore(d, ev.clientY < r.top + r.height / 2 ? t : t.nextSibling);
+}
+function catExportFinArrastre(){ document.querySelectorAll('.exp-arrastrando').forEach(f => f.classList.remove('exp-arrastrando')); window.__expDrag = null; }
+function catExportRestablecer(){
   const E = window.__catExp;
-  let guardadas = null;
-  try { guardadas = JSON.parse(localStorage.getItem('qualified.sga.exportCols.' + E.modo) || 'null'); } catch (e) { guardadas = null; }
-  const todas = catExportColumnas();
-  return todas.filter(c => !guardadas || guardadas.includes(c.id) || !guardadas.length);
+  try { localStorage.removeItem(catExportClave(E)); } catch (e) { /* sin almacenamiento: no pasa nada */ }
+  catExportarAbrir();
 }
 function catExportarAbrir(){
   const E = window.__catExp;
   if (!E || !catExportItems().length) { appToast('No hay nada que exportar con lo que se ve ahora.', 'info'); return; }
-  const todas = catExportColumnas(), elegidas = new Set(catExportElegidas().map(c => c.id));
+  const estado = catExportEstado();
   const cli = E.cid ? (contactos.find(c => c.id === E.cid) || {}) : null;
   document.getElementById('modal-slot').innerHTML = `
     <div class="modal-overlay" onclick="if(event.target===this) closeModal()">
@@ -6249,9 +6286,10 @@ function catExportarAbrir(){
         <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
           <div class="field"><label>Formato</label>
             <div class="doc-seg" id="exp-fmt"><button type="button" class="on" data-f="xlsx" onclick="catExportFormato('xlsx')">Excel</button><button type="button" data-f="pdf" onclick="catExportFormato('pdf')">PDF</button></div></div>
-          <div class="field" style="margin-bottom:6px;"><label>Columnas que aparecen <span style="font-weight:400;color:var(--mutedFaint);">· solo las de este inventario</span></label>
-            <div style="display:flex;gap:8px;margin-bottom:8px;"><button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="catExportMarcar(true)">Todas</button><button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="catExportMarcar(false)">Ninguna</button></div>
-            <div id="exp-cols" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px 16px;max-height:300px;overflow:auto;">${todas.map(c => `<label class="sgc-sw" style="font-size:13px;"><input type="checkbox" class="switch" data-id="${esc(c.id)}" ${elegidas.has(c.id) ? 'checked' : ''} /><span><b>${esc(c.label)}</b></span></label>`).join('')}</div></div>
+          <div class="field" style="margin-bottom:6px;"><label>Columnas y orden <span style="font-weight:400;color:var(--mutedFaint);">· arrastra o usa las flechas · se recuerda para ${cli ? 'este cliente' : 'esta vista'}</span></label>
+            <div style="display:flex;gap:8px;margin-bottom:8px;"><button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="catExportMarcar(true)">Todas</button><button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="catExportMarcar(false)">Ninguna</button><button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;margin-left:auto;" onclick="catExportRestablecer()" title="Vuelve al orden de siempre y a todas las columnas">Restablecer</button></div>
+            <style>.exp-fila{display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--border);border-radius:8px;background:var(--panel);} .exp-fila.exp-arrastrando{opacity:.4;} .exp-asa{cursor:grab;color:var(--mutedFaint);letter-spacing:-2px;user-select:none;} .exp-mv{border:1px solid var(--border);background:var(--panel);color:var(--muted);border-radius:6px;width:26px;height:24px;font-size:10px;cursor:pointer;padding:0;} .exp-mv:hover{color:var(--primary);border-color:var(--primary);}</style>
+            <div id="exp-cols" style="display:flex;flex-direction:column;gap:5px;max-height:340px;overflow:auto;padding-right:4px;">${estado.map(catExportFilaHtml).join('')}</div></div>
           <div id="exp-err" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;"></div>
           <div style="display:flex;gap:10px;">
             <button class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
@@ -6268,8 +6306,10 @@ async function catExportarHacer(){
   const ids = [...document.querySelectorAll('#exp-cols input:checked')].map(i => i.dataset.id);
   const fmt = (document.querySelector('#exp-fmt button.on') || {}).dataset ? document.querySelector('#exp-fmt button.on').dataset.f : 'xlsx';
   if (!ids.length) { if (err) err.textContent = 'Elige al menos una columna.'; return; }
-  try { localStorage.setItem('qualified.sga.exportCols.' + E.modo, JSON.stringify(ids)); } catch (e) { /* sin almacenamiento: no pasa nada */ }
-  const cols = catExportColumnas().filter(c => ids.includes(c.id)), items = catExportItems();
+  const orden = [...document.querySelectorAll('#exp-cols .exp-fila')].map(f => f.dataset.id);   // el orden de la lista, tal como se ha dejado
+  try { localStorage.setItem(catExportClave(E), JSON.stringify({ order: orden, on: ids })); } catch (e) { /* sin almacenamiento: no pasa nada */ }
+  const por = new Map(catExportColumnas().map(c => [c.id, c]));
+  const cols = ids.map(id => por.get(id)).filter(Boolean), items = catExportItems();
   const cli = E.cid ? (contactos.find(c => c.id === E.cid) || {}) : null;
   const nombre = cli ? ((cli.nombreComercial || '').trim() || cli.nombre) : 'todos-los-clientes';
   const fichero = `inventario-${nombre.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${today()}`;
@@ -6277,11 +6317,13 @@ async function catExportarHacer(){
   // totales de las columnas numéricas que se suman (cantidad, bultos y kilos)
   const suman = new Set(['cant', 'bul', 'kg']);
   const tot = cols.map((c, i) => suman.has(c.id) ? Math.round(filas.reduce((s, r) => s + (Number(r[i]) || 0), 0) * 100) / 100 : '');
+  const iT = Math.max(0, cols.findIndex(c => !suman.has(c.id)));   // la palabra TOTAL va en la primera columna que no se suma (con el orden libre, la primera puede ser una cantidad)
+  const filaTot = tot.map((v, i) => i === iT ? 'TOTAL' : v);
   closeModal();
   if (fmt === 'pdf') { catExportPdf(cols, filas, tot, nombre, E); return; }
   try {
     await mapaXlsxLib();
-    const aoa = [cols.map(c => c.label), ...filas.map(r => r.map((v, i) => (cols[i].num ? (v == null || v === '' ? '' : Number(v)) : (v == null ? '' : v)))), ['TOTAL', ...tot.slice(1)]];
+    const aoa = [cols.map(c => c.label), ...filas.map(r => r.map((v, i) => (cols[i].num ? (v == null || v === '' ? '' : Number(v)) : (v == null ? '' : v)))), filaTot];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws['!cols'] = cols.map((c, i) => ({ wch: Math.min(40, Math.max(c.label.length + 2, ...filas.slice(0, 200).map(r => String(r[i] == null ? '' : r[i]).length + 2))) }));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Inventario');
@@ -6289,7 +6331,7 @@ async function catExportarHacer(){
   } catch (e) {
     // sin la librería de Excel (sin conexión): se baja un CSV que Excel también abre
     const cel = x => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"';
-    const csv = '﻿' + [cols.map(c => c.label), ...filas, ['TOTAL', ...tot.slice(1)]].map(r => r.map(cel).join(';')).join('\r\n');
+    const csv = '﻿' + [cols.map(c => c.label), ...filas, filaTot].map(r => r.map(cel).join(';')).join('\r\n');
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = fichero + '.csv';
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     appToast('No se pudo cargar el generador de Excel: se ha descargado un CSV, que Excel también abre.', 'info');
@@ -6298,6 +6340,7 @@ async function catExportarHacer(){
 // PDF: se abre la ventana de impresión con la tabla (en «Destino» elige «Guardar como PDF»)
 function catExportPdf(cols, filas, tot, nombre, E){
   const apaisado = cols.length > 6;
+  const iT = Math.max(0, cols.findIndex(c => !['cant', 'bul', 'kg'].includes(c.id)));
   const celda = (c, v) => `<td${c.num ? ' class="r"' : ''}>${v == null || v === '' ? '' : esc(c.num ? sgaNumTxt(v) : v)}</td>`;
   const css = `
     @page{size:A4 ${apaisado ? 'landscape' : 'portrait'};margin:0;}
@@ -6310,7 +6353,7 @@ function catExportPdf(cols, filas, tot, nombre, E){
   const cuerpo = `<div class="head"><h1>Inventario · ${esc(nombre === 'todos-los-clientes' ? 'Todos los clientes' : nombre)}</h1><div class="gen">${esc(fmtDateDMY(today()))} · ${filas.length} fila${filas.length === 1 ? '' : 's'}</div></div>
     <table class="inv"><thead><tr>${cols.map(c => `<th${c.num ? ' class="r"' : ''}>${esc(c.label)}</th>`).join('')}</tr></thead>
     <tbody>${filas.map(r => `<tr>${cols.map((c, i) => celda(c, r[i])).join('')}</tr>`).join('')}</tbody>
-    ${tot.some(v => v !== '') ? `<tfoot><tr>${cols.map((c, i) => `<td${c.num ? ' class="r"' : ''}>${i === 0 ? 'TOTAL' : (tot[i] === '' ? '' : esc(sgaNumTxt(tot[i])))}</td>`).join('')}</tr></tfoot>` : ''}</table>`;
+    ${tot.some(v => v !== '') ? `<tfoot><tr>${cols.map((c, i) => `<td${c.num ? ' class="r"' : ''}>${i === iT ? 'TOTAL' : (tot[i] === '' ? '' : esc(sgaNumTxt(tot[i])))}</td>`).join('')}</tr></tfoot>` : ''}</table>`;
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Inventario ${esc(nombre)}</title><style>${css}${sgaPgCss(10)}</style></head><body>${sgaPgHtml(cuerpo)}</body></html>`;
   const f = document.createElement('iframe');
   f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
