@@ -5078,6 +5078,11 @@ function sgaClienteConBultos(clienteId){
   if (v === 'no') return false;
   return sgaArticulos.some(a => a.clienteId === clienteId && !a.archived && a.bultos !== 1);
 }
+// De los clientes que cuentan por bultos, ¿cobran los movimientos por bulto (lo habitual: una carpa de 3 cajas = 3 bultos) o por palet?
+// Hay quien cuenta los bultos solo para verlos en el stock (sacos de un palet) y paga por palet: campos.__cobro = 'palet'.
+function sgaClienteCobraPorBulto(clienteId){
+  return sgaClienteConBultos(clienteId) && (sgaClienteCfg(clienteId).campos || {}).__cobro !== 'palet';
+}
 function sgaPuedeConfigurar(){ return !!(PROFILE.isAdmin || PROFILE.allowedTabs.includes('almacenconfig')); }
 function tplSgaClienteCard(c){
   const cfg = sgaClienteCfg(c.id);
@@ -5105,7 +5110,7 @@ function tplSgaClienteCard(c){
         <div class="sgv-tiles">
           ${tile('clock', est.c, 'Estado del SGA', `<span class="sgv-pill"><i></i>${est.t}</span>`, est.s)}
           ${tile('tag', 'var(--primary)', 'Palets', cfg.codigosUnicos ? 'Con código propio' : 'Todos iguales', cfg.codigosUnicos ? 'Cada palet se controla uno a uno' : 'Se anotan de golpe')}
-          ${tile('box', '#B8731B', 'Bultos', conBultos ? 'Varios por palet' : '1 palet = 1 bulto', conBultos ? 'Se cobra por bulto' : 'Se cobra por palet')}
+          ${tile('box', '#B8731B', 'Bultos', conBultos ? 'Varios por palet' : '1 palet = 1 bulto', conBultos && sgaClienteCobraPorBulto(c.id) ? 'Se cobra por bulto' : 'Se cobra por palet')}
           ${tile('file', '#7C5CBF', 'Albaranes de expedición', `<span style="font-family:var(--mono);letter-spacing:.3px;">${esc(pref)}</span><span style="color:var(--muted);font-weight:500;">·fecha-orden</span>`, `Ej. ${esc(sgaAlbaranEjemplo(pref))}`)}
         </div>
         <div class="sgv-sec">
@@ -5239,8 +5244,10 @@ function sgacActivacion(v){
 }
 function sgacTile(grupo, valor){
   if (grupo === 'act') return sgacActivacion(valor);
-  const cb = document.getElementById(grupo === 'codigos' ? 'sgac-codigos' : 'sgac-bultos');
+  if (grupo === 'cobro') { const h = document.getElementById('sgac-cobro'); if (h) h.value = valor ? '1' : '0'; }
+  const cb = grupo === 'cobro' ? null : document.getElementById(grupo === 'codigos' ? 'sgac-codigos' : 'sgac-bultos');
   if (cb) cb.checked = !!valor;
+  if (grupo === 'bultos') { const r = document.getElementById('sgac-cobro-row'); if (r) r.style.display = valor ? '' : 'none'; }
   document.querySelectorAll(`.sgac-sg[data-g="${grupo}"] button, .sgac-h[data-g="${grupo}"] span`).forEach(t => t.classList.toggle('on', (t.dataset.v === '1') === !!valor));
   if (grupo === 'bultos') { const al = document.getElementById('sgac-alb'); if (al) al.innerHTML = sgacAlbaranHtml(); }
 }
@@ -5383,9 +5390,15 @@ function tplSgaClientePage(c){
             ${sgacHintHtml('codigos', cfg.codigosUnicos ? 1 : 0, [[0, 'No', 'Se anotan de golpe («26 palets»).'], [1, 'Sí', 'Cada palet entra con su código (P-001, P-002…).']])}
           </div>
           <div class="sgac-row">
-            <div class="sgac-rq">¿Un palet lleva varias cajas y se cobra por caja?</div>
+            <div class="sgac-rq">¿Un palet lleva varios bultos (cajas, sacos…)?</div>
             ${sgacSegHtml('bultos', sgaClienteConBultos(c.id) ? 1 : 0, [[0, 'No'], [1, 'Sí']])}
-            ${sgacHintHtml('bultos', sgaClienteConBultos(c.id) ? 1 : 0, [[0, 'No', '1 palet = 1 bulto.'], [1, 'Sí', 'Ej. carpa de 3 cajas: cuenta 1 palet en el stock y se cobran 3 bultos.']])}
+            ${sgacHintHtml('bultos', sgaClienteConBultos(c.id) ? 1 : 0, [[0, 'No', '1 palet = 1 bulto.'], [1, 'Sí', 'Se anotan los palets y los bultos de cada línea (ej. 20 palets, 480 sacos) y el stock enseña las dos cifras.']])}
+          </div>
+          <div class="sgac-row" id="sgac-cobro-row" style="display:${sgaClienteConBultos(c.id) ? '' : 'none'};">
+            <input type="hidden" id="sgac-cobro" value="${sgaClienteCobraPorBulto(c.id) ? '1' : '0'}" />
+            <div class="sgac-rq">¿Cómo se cobran los movimientos?</div>
+            ${sgacSegHtml('cobro', sgaClienteCobraPorBulto(c.id) ? 1 : 0, [[1, 'Por bulto'], [0, 'Por palet']])}
+            ${sgacHintHtml('cobro', sgaClienteCobraPorBulto(c.id) ? 1 : 0, [[1, 'Por bulto', 'Ej. carpa de 3 cajas: se cobran 3 bultos.'], [0, 'Por palet', 'Los bultos solo se cuentan para verlos; el precio es por palet.']])}
           </div>
           <div class="sgac-row">
             <input type="hidden" id="sgac-salida" value="${sgaClienteSalida(c.id)}" />
@@ -5456,6 +5469,8 @@ async function submitSgaCliente(){
   campos.__donde = (window.__sgacCampos || {}).__donde || '';   // dónde se pide cada dato a este cliente (catálogo o al recibir)
   campos.__unico = (window.__sgacCampos || {}).__unico || '';   // qué distingue a un artículo de otro, además de su código
   campos.__bultos = document.getElementById('sgac-bultos').checked ? 'si' : 'no';
+  campos.__cobro = campos.__bultos === 'si' && (document.getElementById('sgac-cobro') || {}).value === '0' ? 'palet' : 'bulto';   // solo cuenta si hay bultos
+  const cobroAntes = sgaClienteCobraPorBulto(id);
   campos.__salida = (document.getElementById('sgac-salida') || {}).value || 'fifo';
   const udS = ((document.getElementById('sgac-ud-s') || {}).value || '').trim().toLowerCase(), udP = ((document.getElementById('sgac-ud-p') || {}).value || '').trim().toLowerCase();
   campos.__unidad = udS ? udS + '|' + (udP || sgaUdPlural(udS)) : '';   // vacío = «palet / palets»
@@ -5476,6 +5491,7 @@ async function submitSgaCliente(){
   if ((previa.campos.__donde || '') !== campos.__donde) dif.push('dónde se piden los datos (catálogo o al recibir)');
   if ((previa.campos.__unico || '') !== campos.__unico) dif.push('qué distingue a un artículo de otro');
   if (bultosAntes !== (campos.__bultos === 'si')) dif.push(`bultos por palet ${campos.__bultos === 'si' ? 'sí' : 'no'}`);
+  if (bultosAntes && campos.__bultos === 'si' && cobroAntes !== (campos.__cobro !== 'palet')) dif.push(`movimientos cobrados ${campos.__cobro === 'palet' ? 'por palet' : 'por bulto'}`);
   if (unidadAntes !== campos.__unidad) dif.push(campos.__unidad ? `unidad «${campos.__unidad.split('|')[0]} / ${campos.__unidad.split('|')[1]}»` : 'unidad «palet»');
   if (salidaAntes !== campos.__salida) dif.push(`salida de la mercancía a ${(SGA_SALIDA_MODOS[campos.__salida] || {}).nombre}`);
   if (dif.length) await logContactoHistorial(id, `SGA · ha cambiado ${dif.join(', ')}.`);
@@ -7445,7 +7461,7 @@ function sgaCalcularEntrada(d){
   if (!porAlbaran) {
     const grupos = {};
     // Un cliente que cuenta por bultos («Se cobra por bulto» en su ficha SGA) paga cada movimiento por bulto; si no, solo si el producto lo es
-    const porBulto = pe => pe.unidad === 'bulto' || sgaClienteConBultos(d.clienteId);
+    const porBulto = pe => pe.unidad === 'bulto' || sgaClienteCobraPorBulto(d.clienteId);
     let sinTipo = 0;
     const sinTipoPs = [];
     d.partidas.forEach(p => {
