@@ -21874,7 +21874,7 @@ function crmFormEstado(o){
   if (o) {
     f.emp = o.contactoId ? { tipo: 'cliente', id: o.contactoId } : { tipo: 'prospecto', id: o.prospectoId }; f.cerrada = true;
     (o.conceptos || []).forEach(x => {
-      if (x.t === 'transporte') f.tr.push({ k: ++f.n, tipo: x.c || 'FTL', metros: x.metros != null ? String(x.metros).replace('.', ',') : '', o: Object.assign({ z: '', cp: '', ciudad: '' }, x.o || {}), d: Object.assign({ z: '', cp: '', ciudad: '' }, x.d || {}), precio: x.precio != null ? String(x.precio).replace('.', ',') : '' });
+      if (x.t === 'transporte') f.tr.push({ k: ++f.n, tipo: x.c || 'FTL', metros: x.metros != null ? String(x.metros).replace('.', ',') : '', o: Object.assign({ z: '', cp: '', ciudad: '' }, x.o || {}), d: Object.assign({ z: '', cp: '', ciudad: '' }, x.d || {}), precio: x.precio != null ? String(x.precio).replace('.', ',') : '', nota: x.nota || '' });
       else if (x.t === 'operativa') crmOpLineas([x]).forEach(a => f.op.push({ k: ++f.n, nombre: a.n, precio: a.precio != null ? String(a.precio).replace('.', ',') : '' }));
       else f.al.push({ k: ++f.n, prod: x.c, cantidad: x.cantidad != null ? String(x.cantidad).replace('.', ',') : '', precio: x.precio != null ? String(x.precio).replace('.', ',') : '', nota: x.nota || '' });
     });
@@ -21898,7 +21898,8 @@ function crmProdSelectHtml(l){
 }
 function crmClienteIdForm(){ const f = crmS().form; return f && f.emp && f.emp.tipo === 'cliente' ? f.emp.id : ''; }
 /* ---- Transporte ---- */
-function crmTrNuevo(f){ return { k: ++f.n, tipo: 'FTL', metros: '', o: { z: '', cp: '', ciudad: '' }, d: { z: '', cp: '', ciudad: '' }, precio: '' }; }
+function crmTrNuevo(f){ return { k: ++f.n, tipo: 'FTL', metros: '', o: { z: '', cp: '', ciudad: '' }, d: { z: '', cp: '', ciudad: '' }, precio: '', nota: '' }; }
+function crmTrNota(k, v){ const l = crmS().form.tr.find(x => x.k === k); if (l) l.nota = v; }
 function crmTrAdd(){ const f = crmS().form; f.tr.push(crmTrNuevo(f)); crmLineasPinta(); }
 function crmTrDel(k){ const f = crmS().form; f.tr = f.tr.filter(l => l.k !== k); crmLineasPinta(); }
 function crmTrSet(k, campo, v){
@@ -22000,6 +22001,7 @@ function crmTrHtml(l, i){
       <label class="crm-precio-l">${precioTxt}<span class="crm-eur"><input id="crm-p-${l.k}" inputmode="decimal" maxlength="9" placeholder="0,00" value="${esc(l.precio)}" oninput="crmTrSet(${l.k}, 'precio', this.value)" /><i>€${l.tipo === 'GRANEL' ? '/t' : l.tipo === 'GRUA' ? '/h' : ''}</i></span></label>
       <div id="crm-sug-${l.k}" class="crm-sug"></div>
     </div>
+    <div class="field" style="margin-top:8px;"><label>Comentario <small style="font-weight:400;color:var(--mutedFaint);">· saldrá bajo esta ruta en la oferta (opcional)</small></label><textarea id="crm-tn-${l.k}" rows="2" maxlength="300" placeholder="Ej. Carga y descarga incluidas; 2 horas de espera sin coste" oninput="crmTrNota(${l.k}, this.value)">${esc(l.nota || '')}</textarea></div>
     <datalist id="crm-zonas-dl">${zonas.map(z => `<option value="${esc(z)}" label="${esc(tarifaZonaHint(z))}">`).join('')}</datalist></div>`;
 }
 // ¿Los precios de transporte llevan indexación de gasoil? Va en la oferta en PDF; «Sin indicar» no escribe nada
@@ -22130,7 +22132,7 @@ async function crmCatalogosRefrescar(){
 // Lo que se guarda de cada línea (todo lo necesario para reconstruirla)
 function crmConceptosDeForm(f){
   const out = [];
-  f.tr.forEach(l => out.push({ t: 'transporte', c: l.tipo, n: CRM_TIPOS_TRANSPORTE[l.tipo] || l.tipo, metros: l.tipo === 'LTL' ? crmNumTxt(l.metros) : null, o: { z: l.o.z, cp: l.o.cp, ciudad: l.o.ciudad }, d: { z: l.d.z, cp: l.d.cp, ciudad: l.d.ciudad }, precio: crmNumTxt(l.precio) }));
+  f.tr.forEach(l => out.push({ t: 'transporte', c: l.tipo, n: CRM_TIPOS_TRANSPORTE[l.tipo] || l.tipo, metros: l.tipo === 'LTL' ? crmNumTxt(l.metros) : null, o: { z: l.o.z, cp: l.o.cp, ciudad: l.o.ciudad }, d: { z: l.d.z, cp: l.d.cp, ciudad: l.d.ciudad }, precio: crmNumTxt(l.precio), ...((l.nota || '').trim() ? { nota: l.nota.trim() } : {}) }));
   f.al.forEach(l => { const p = crmProdInfo(l.prod); if (p) out.push({ t: p.t, c: p.c, n: p.n, unidad: p.unidad, cat: crmCatClave(p), cantidad: crmNumTxt(l.cantidad), precio: crmNumTxt(l.precio), ...((l.nota || '').trim() ? { nota: l.nota.trim() } : {}) }); });
   f.op.forEach(l => { const n = l.nombre.trim(); if (n) out.push({ t: 'operativa', c: crmNorm(n), n, unidad: 'operativa', cat: 'operativa', cantidad: null, precio: crmNumTxt(l.precio) }); });
   return out;
@@ -22492,7 +22494,9 @@ async function crmOfertaPdfBytes(o, num){
   if (tr.length) {
     seccion('Transporte');
     tabla([{ t: 'Servicio', w: 0.19, b: true }, { t: 'Origen', w: 0.27 }, { t: 'Destino', w: 0.27 }, { t: 'Precio', w: 0.27, a: 'r', b: true }],
-      tr.map(x => [x.n + (x.metros ? ` · ${String(x.metros).replace('.', ',')} m` : ''), lugar(x.o), lugar(x.d), x.precio == null ? 'A consultar' : crmEur2(x.precio) + (x.c === 'GRANEL' ? ' por tonelada' : x.c === 'GRUA' ? ' por hora' : '')]));
+      tr.map(x => { const fila = [x.n + (x.metros ? ` · ${String(x.metros).replace('.', ',')} m` : ''), lugar(x.o), lugar(x.d), x.precio == null ? 'A consultar' : crmEur2(x.precio) + (x.c === 'GRANEL' ? ' por tonelada' : x.c === 'GRUA' ? ' por hora' : '')];
+        if (x.nota) fila.nota = x.nota;
+        return fila; }));
   }
   // ---- Almacén ----
   const al = (o.conceptos || []).filter(x => x.t !== 'transporte' && x.t !== 'operativa');
@@ -22545,7 +22549,7 @@ function crmLineasHtml(o){
   const tr = cs.filter(x => x.t === 'transporte'), al = cs.filter(x => x.t !== 'transporte' && x.t !== 'operativa'), op = cs.filter(x => x.t === 'operativa');
   const lugar = z => z && (z.ciudad || z.z) ? esc([z.ciudad, z.z ? '(' + z.z + ')' : ''].filter(Boolean).join(' ')) : '—';
   return `<div class="crm-lns">
-    ${tr.length ? `<div class="crm-lns-t">Transporte</div>${tr.map(x => `<div class="crm-lns-r"><div><b>${esc(x.n)}${x.metros ? ' · ' + String(x.metros).replace('.', ',') + ' m' : ''}</b><span>${lugar(x.o)} → ${lugar(x.d)}</span></div><b class="crm-lns-p">${x.precio != null ? esc(crmEur2(x.precio) + (x.c === 'GRANEL' ? '/t' : x.c === 'GRUA' ? '/h' : '')) : '—'}</b></div>`).join('')}` : ''}
+    ${tr.length ? `<div class="crm-lns-t">Transporte</div>${tr.map(x => `<div class="crm-lns-r"><div><b>${esc(x.n)}${x.metros ? ' · ' + String(x.metros).replace('.', ',') + ' m' : ''}</b><span>${lugar(x.o)} → ${lugar(x.d)}</span>${x.nota ? `<span style="white-space:pre-line;">${esc(x.nota)}</span>` : ''}</div><b class="crm-lns-p">${x.precio != null ? esc(crmEur2(x.precio) + (x.c === 'GRANEL' ? '/t' : x.c === 'GRUA' ? '/h' : '')) : '—'}</b></div>`).join('')}` : ''}
     ${op.length ? `<div class="crm-lns-t">Operativas</div>${crmOpLineas(op).map(x => `<div class="crm-lns-r"><div><b>${esc(x.n)}</b></div><b class="crm-lns-p">${x.precio != null ? esc(crmEur2(x.precio)) : 'sin precio'}</b></div>`).join('')}` : ''}
     ${al.length ? `<div class="crm-lns-t">Almacén</div>${al.map(x => { const u = CRM_UNIDAD_AL[x.unidad]; return `<div class="crm-lns-r"><div><b>${esc(x.n)} ${crmCatChip(x)}</b><span>${x.cantidad != null ? String(x.cantidad).replace('.', ',') + (x.unidad === 'operativa' ? ' × ' : ' × ') : ''}${x.precio != null ? esc(crmEur2(x.precio)) + (u ? ' ' + u.txt : x.unidad === 'operativa' ? ' por operación' : '') : 'sin precio'}</span>${x.nota ? `<span style="white-space:pre-line;">${esc(x.nota)}</span>` : ''}</div></div>`; }).join('')}` : ''}</div>`;
 }
