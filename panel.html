@@ -21802,7 +21802,7 @@ function crmFormEstado(o){
     (o.conceptos || []).forEach(x => {
       if (x.t === 'transporte') f.tr.push({ k: ++f.n, tipo: x.c || 'FTL', metros: x.metros != null ? String(x.metros).replace('.', ',') : '', o: Object.assign({ z: '', cp: '', ciudad: '' }, x.o || {}), d: Object.assign({ z: '', cp: '', ciudad: '' }, x.d || {}), precio: x.precio != null ? String(x.precio).replace('.', ',') : '' });
       else if (x.t === 'operativa') crmOpLineas([x]).forEach(a => f.op.push({ k: ++f.n, nombre: a.n, precio: a.precio != null ? String(a.precio).replace('.', ',') : '' }));
-      else f.al.push({ k: ++f.n, prod: x.c, cantidad: x.cantidad != null ? String(x.cantidad).replace('.', ',') : '', precio: x.precio != null ? String(x.precio).replace('.', ',') : '' });
+      else f.al.push({ k: ++f.n, prod: x.c, cantidad: x.cantidad != null ? String(x.cantidad).replace('.', ',') : '', precio: x.precio != null ? String(x.precio).replace('.', ',') : '', nota: x.nota || '' });
     });
   }
   f.sec = { tr: f.tr.length > 0, al: f.al.length > 0, op: f.op.length > 0 };   // qué partes se enseñan: las que ya tienen líneas
@@ -22024,6 +22024,7 @@ function crmAlHtml(l, i){
     <div class="field">${crmProdSelectHtml(l)}</div>
     ${p ? `<div class="crm-rt-p crm-al-p">
       <label class="crm-precio-l">Precio ${p.unidad === 'operativa' ? 'por operación' : esc(u.txt)}<span class="crm-eur"><input id="crm-ap-${l.k}" inputmode="decimal" maxlength="9" placeholder="0,00" value="${esc(l.precio)}" oninput="crmAlSet(${l.k}, 'precio', this.value)" /><i>€</i></span></label></div>
+      <div class="field" style="margin-top:8px;"><label>Comentario <small style="font-weight:400;color:var(--mutedFaint);">· saldrá bajo este producto en la oferta (opcional)</small></label><textarea id="crm-an-${l.k}" rows="2" maxlength="300" placeholder="Ej. Incluye 30 días de almacenaje; mínimo facturable 10 palets" oninput="crmAlSet(${l.k}, 'nota', this.value)">${esc(l.nota || '')}</textarea></div>
       ${t ? `<div class="crm-sug">Tarifa vigente de este cliente: <b>${esc(crmEur2(t.precio))}</b>${t.subtipo ? ' · ' + esc(t.subtipo) : ''} (${fmtDateDMY(t.fecha)}) <button type="button" class="crm-link" onclick="crmUsarTarifaAl(${l.k}, ${t.precio})">Usar este precio</button></div>` : ''}` : ''}</div>`;
 }
 function crmLineasPinta(){
@@ -22039,7 +22040,7 @@ function crmLineasPinta(){
   crmSecPinta();
 }
 /* ---- Almacén ---- */
-function crmAlAdd(){ const f = crmS().form; f.al.push({ k: ++f.n, prod: '', cantidad: '', precio: '' }); crmLineasPinta(); }
+function crmAlAdd(){ const f = crmS().form; f.al.push({ k: ++f.n, prod: '', cantidad: '', precio: '', nota: '' }); crmLineasPinta(); }
 function crmAlDel(k){ const f = crmS().form; f.al = f.al.filter(l => l.k !== k); crmLineasPinta(); }
 function crmAlSet(k, campo, v){
   const f = crmS().form, l = f.al.find(x => x.k === k); if (!l) return;
@@ -22056,7 +22057,7 @@ async function crmCatalogosRefrescar(){
 function crmConceptosDeForm(f){
   const out = [];
   f.tr.forEach(l => out.push({ t: 'transporte', c: l.tipo, n: CRM_TIPOS_TRANSPORTE[l.tipo] || l.tipo, metros: l.tipo === 'LTL' ? crmNumTxt(l.metros) : null, o: { z: l.o.z, cp: l.o.cp, ciudad: l.o.ciudad }, d: { z: l.d.z, cp: l.d.cp, ciudad: l.d.ciudad }, precio: crmNumTxt(l.precio) }));
-  f.al.forEach(l => { const p = crmProdInfo(l.prod); if (p) out.push({ t: p.t, c: p.c, n: p.n, unidad: p.unidad, cat: crmCatClave(p), cantidad: crmNumTxt(l.cantidad), precio: crmNumTxt(l.precio) }); });
+  f.al.forEach(l => { const p = crmProdInfo(l.prod); if (p) out.push({ t: p.t, c: p.c, n: p.n, unidad: p.unidad, cat: crmCatClave(p), cantidad: crmNumTxt(l.cantidad), precio: crmNumTxt(l.precio), ...((l.nota || '').trim() ? { nota: l.nota.trim() } : {}) }); });
   f.op.forEach(l => { const n = l.nombre.trim(); if (n) out.push({ t: 'operativa', c: crmNorm(n), n, unidad: 'operativa', cat: 'operativa', cantidad: null, precio: crmNumTxt(l.precio) }); });
   return out;
 }
@@ -22085,7 +22086,7 @@ function crmSecSelectorHtml(f){
 // Línea vacía con la que empieza cada parte al marcarla
 function crmSecLineaNueva(f, k){
   if (k === 'tr') return crmTrNuevo(f);
-  if (k === 'al') return { k: ++f.n, prod: '', cantidad: '', precio: '' };
+  if (k === 'al') return { k: ++f.n, prod: '', cantidad: '', precio: '', nota: '' };
   return { k: ++f.n, nombre: '', precio: '' };
 }
 const crmSecTieneDatos = (f, k) => f[k].some(l => k === 'tr' ? (l.o.z || l.d.z || l.precio) : k === 'al' ? (l.prod || l.precio) : (l.nombre.trim() || l.precio));
@@ -22363,12 +22364,15 @@ async function crmOfertaPdfBytes(o, num){
     cab();
     filas.forEach(r => {
       const ls = r.map((v, i) => wrap(v, cols[i].b ? bold : font, fs, CW * cols[i].w - px * 2));
-      const h = Math.max(...ls.map(l => l.length)) * lh + py * 2 - 3;
+      const nl = r.nota ? r.nota.split(/\r?\n/).flatMap(p => wrap(p, font, 7.8, CW * 0.85 - px * 2)) : [];   // comentario bajo la fila, en letra pequeña
+      const h = Math.max(...ls.map(l => l.length)) * lh + py * 2 - 3 + (nl.length ? nl.length * 9.6 + 2 : 0);
       if (y - h < BOTTOM) { nueva(false); cab(); }
       ls.forEach((lines, i) => lines.forEach((ln, k) => {
         const f = cols[i].b ? bold : font, yy = y - py - fs + 2 - k * lh;
         if (cols[i].a === 'r') derecha(ln, xs[i] + CW * cols[i].w - px, yy, fs, f, ln === 'A consultar' ? AMBER : INK); else txt(ln, xs[i] + px, yy, fs, f, INK);
       }));
+      const yn = y - py - Math.max(...ls.map(l => l.length)) * lh + 2;
+      nl.forEach((ln, k) => txt(ln, xs[0] + px, yn - 7.8 - k * 9.6, 7.8, font, MUTED));
       y -= h;
       page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.5, color: LINE });
     });
@@ -22429,7 +22433,9 @@ async function crmOfertaPdfBytes(o, num){
     seccion('Almacén');
     tabla([{ t: 'Apartado', w: 0.2 }, { t: 'Concepto', w: 0.45, b: true }, { t: 'Tarifa', w: 0.35, a: 'r', b: true }],
       al.map(x => { const u = CRM_UNIDAD_AL[x.unidad], cat = CRM_CAT_AL[x.cat || crmCatClave(x)];
-        return [cat ? cat[0] : '—', x.n, x.precio == null ? 'A consultar' : eur(x.precio) + (x.unidad === 'operativa' ? ' por operación' : u ? ' ' + u.txt : '')]; }));
+        const fila = [cat ? cat[0] : '—', x.n, x.precio == null ? 'A consultar' : eur(x.precio) + (x.unidad === 'operativa' ? ' por operación' : u ? ' ' + u.txt : '')];
+        if (x.nota) fila.nota = x.nota;
+        return fila; }));
   }
   // ---- Observaciones y condiciones ----
   const obs = (o.titulo || '').trim();
@@ -22467,7 +22473,7 @@ function crmLineasHtml(o){
   return `<div class="crm-lns">
     ${tr.length ? `<div class="crm-lns-t">Transporte</div>${tr.map(x => `<div class="crm-lns-r"><div><b>${esc(x.n)}${x.metros ? ' · ' + String(x.metros).replace('.', ',') + ' m' : ''}</b><span>${lugar(x.o)} → ${lugar(x.d)}</span></div><b class="crm-lns-p">${x.precio != null ? esc(crmEur2(x.precio) + (x.c === 'GRANEL' ? '/t' : x.c === 'GRUA' ? '/h' : '')) : '—'}</b></div>`).join('')}` : ''}
     ${op.length ? `<div class="crm-lns-t">Operativas</div>${crmOpLineas(op).map(x => `<div class="crm-lns-r"><div><b>${esc(x.n)}</b></div><b class="crm-lns-p">${x.precio != null ? esc(crmEur2(x.precio)) : 'sin precio'}</b></div>`).join('')}` : ''}
-    ${al.length ? `<div class="crm-lns-t">Almacén</div>${al.map(x => { const u = CRM_UNIDAD_AL[x.unidad]; return `<div class="crm-lns-r"><div><b>${esc(x.n)} ${crmCatChip(x)}</b><span>${x.cantidad != null ? String(x.cantidad).replace('.', ',') + (x.unidad === 'operativa' ? ' × ' : ' × ') : ''}${x.precio != null ? esc(crmEur2(x.precio)) + (u ? ' ' + u.txt : x.unidad === 'operativa' ? ' por operación' : '') : 'sin precio'}</span></div></div>`; }).join('')}` : ''}</div>`;
+    ${al.length ? `<div class="crm-lns-t">Almacén</div>${al.map(x => { const u = CRM_UNIDAD_AL[x.unidad]; return `<div class="crm-lns-r"><div><b>${esc(x.n)} ${crmCatChip(x)}</b><span>${x.cantidad != null ? String(x.cantidad).replace('.', ',') + (x.unidad === 'operativa' ? ' × ' : ' × ') : ''}${x.precio != null ? esc(crmEur2(x.precio)) + (u ? ' ' + u.txt : x.unidad === 'operativa' ? ' por operación' : '') : 'sin precio'}</span>${x.nota ? `<span style="white-space:pre-line;">${esc(x.nota)}</span>` : ''}</div></div>`; }).join('')}` : ''}</div>`;
 }
 async function crmEliminar(id){
   const S = crmS(), o = S.opps.find(x => x.id === id);
