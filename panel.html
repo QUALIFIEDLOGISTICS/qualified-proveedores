@@ -7760,18 +7760,34 @@ function sgaZonasActivas(wid){ return sgaZonas.filter(z => z.warehouseId === (wi
 function sgaProductosStock(){ return almacenajeProductos.filter(p => !p.archived && p.disparador === 'stock_dia').sort((a, b) => almacenajeProductoTexto(a).localeCompare(almacenajeProductoTexto(b), 'es')); }
 // Tipos de carga de stock que ese cliente tiene creados en su tarifa (más el que ya tuviera elegido, para no perderlo al editar).
 // Sin cliente, ninguno.
-function sgaProductosCliente(clienteId, incluir){
-  return sgaProductosStock().filter(p => p.id === incluir || (clienteId && almacenajeTarifas.some(t => t.clienteId === clienteId && t.tipo === p.id)));
+// Productos de movimiento (entrada y salida) que cobra un tipo de carga: los enlazados en su ficha («Al entrar / Al salir se cobra») o, si no, los de su familia
+function sgaCobrosDeTipo(p){
+  const ids = [];
+  [['cobroEntrada', 'entrada'], ['cobroSalida', 'salida']].forEach(([k, dir]) => {
+    const e = almacenajeProducto(p[k]);
+    const m = e && !e.archived ? e : (p.familia ? almacenajeProductos.find(x => !x.archived && almacenajeCobraEn(x, dir) && x.familia === p.familia) : null);
+    if (m) ids.push(m.id);
+  });
+  return ids;
+}
+// ¿El cliente tiene tarifa para este tipo de carga? Con la del propio tipo (almacenaje por palet) o, si va por m², con la de su entrada o su salida
+function sgaTipoTarifado(clienteId, p, soloStock){
+  return almacenajeTarifas.some(t => t.clienteId === clienteId && (t.tipo === p.id || (!soloStock && sgaCobrosDeTipo(p).includes(t.tipo))));
+}
+// soloStock: solo los tipos con tarifa de almacenaje por palet (los que obligan a elegir tipo al recibir)
+function sgaProductosCliente(clienteId, incluir, soloStock){
+  return sgaProductosStock().filter(p => p.id === incluir || (clienteId && sgaTipoTarifado(clienteId, p, soloStock)));
 }
 // Los clientes que cobran por m² no tienen tipos de carga en su tarifa de palet: para ellos la recepción va sin tipo.
 function sgaEntradaConTipo(clienteId){ return sgaProductosCliente(clienteId, '').length > 0 || !!(window.__seEdit && window.__seEdit.partidas.some(p => p.productoId)); }
 function sgaEntradaClienteId(){ const el = document.getElementById('se-cliente'); return el ? el.value : ''; }
 // Solo los tipos de carga que este cliente tiene en su tarifa (un tipo sin tarifa no se podría cobrar).
 function sgaProdOptionsHtml(clienteId, sel){
-  const prods = sgaProductosStock().filter(p => almacenajeTarifas.some(t => t.clienteId === clienteId && t.tipo === p.id));
+  const prods = sgaProductosCliente(clienteId, sel);
   if (!prods.length) return '<option value="">Este cliente no tiene tarifa de stock</option>';
   const elegido = sel || (prods.length === 1 ? prods[0].id : '');
-  return `<option value=""${elegido ? '' : ' selected'}>Elige el tipo…</option>${prods.map(p => `<option value="${p.id}" ${p.id === elegido ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}`;
+  const obligatorio = sgaProductosCliente(clienteId, '', true).length > 0;   // un cliente que va por m² puede recibir sin tipo (solo sirve para elegir su tarifa de entrada y salida)
+  return `<option value=""${elegido ? '' : ' selected'}>${obligatorio ? 'Elige el tipo…' : 'Tipo de carga (opcional)'}</option>${prods.map(p => `<option value="${p.id}" ${p.id === elegido ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}`;
 }
 function sgaZonaOptionsHtml(sel, wid){
   const zs = sgaZonasActivas(wid);
@@ -8687,7 +8703,7 @@ async function sgaEntradaConfirmar(){
     const vacia = !l.productoId && !l.articuloId && !l.codigo && !l.cantidadTxt && sgaCamposEntrada().every(c => !l[c.id]);
     if (vacia && d.lineas.length > 1) return;
     if (conArt && !l.articuloId && !cfg.codigosUnicos) { errores.push(`${f}: elige el artículo.`); return; }   // con código propio por palet, el artículo es opcional (palet único)
-    if (!l.productoId && sgaEntradaConTipo(d.clienteId)) { errores.push(`${f}: elige el tipo de carga.`); return; }
+    if (!l.productoId && sgaProductosCliente(d.clienteId, '', true).length > 0) { errores.push(`${f}: elige el tipo de carga.`); return; }
     let cantidad = 1;
     if (cfg.codigosUnicos) {
       if (!l.codigo) { errores.push(`${f}: falta ${sgaUdCodigo(d.clienteId).toLowerCase()}.`); return; }
