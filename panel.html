@@ -7765,15 +7765,9 @@ function sgaZonasActivas(wid){ return sgaZonas.filter(z => z.warehouseId === (wi
 function sgaProductosStock(){ return almacenajeProductos.filter(p => !p.archived && p.disparador === 'stock_dia').sort((a, b) => almacenajeProductoTexto(a).localeCompare(almacenajeProductoTexto(b), 'es')); }
 // Tipos de carga de stock que ese cliente tiene creados en su tarifa (más el que ya tuviera elegido, para no perderlo al editar).
 // Sin cliente, ninguno.
-// Productos de movimiento (entrada y salida) que cobra un tipo de carga: los enlazados en su ficha («Al entrar / Al salir se cobra») o, si no, los de su familia
+// Productos de movimiento (entrada y salida) que cobra un tipo de carga: los enlazados en su ficha («Al entrar / Al salir se cobra»)
 function sgaCobrosDeTipo(p){
-  const ids = [];
-  [['cobroEntrada', 'entrada'], ['cobroSalida', 'salida']].forEach(([k, dir]) => {
-    const e = almacenajeProducto(p[k]);
-    const m = e && !e.archived ? e : (p.familia ? almacenajeProductos.find(x => !x.archived && almacenajeCobraEn(x, dir) && x.familia === p.familia) : null);
-    if (m) ids.push(m.id);
-  });
-  return ids;
+  return [p.cobroEntrada, p.cobroSalida].map(id => almacenajeProducto(id)).filter(e => e && !e.archived).map(e => e.id);
 }
 // ¿El cliente tiene tarifa para este tipo de carga? Con la del propio tipo (almacenaje por palet) o, si va por m², con la de su entrada o su salida
 function sgaTipoTarifado(clienteId, p, soloStock){
@@ -7781,7 +7775,10 @@ function sgaTipoTarifado(clienteId, p, soloStock){
 }
 // soloStock: solo los tipos con tarifa de almacenaje por palet (los que obligan a elegir tipo al recibir)
 function sgaProductosCliente(clienteId, incluir, soloStock){
-  return sgaProductosStock().filter(p => p.id === incluir || (clienteId && sgaTipoTarifado(clienteId, p, soloStock)));
+  const propios = sgaProductosStock().filter(p => p.id === incluir || (clienteId && sgaTipoTarifado(clienteId, p, true)));
+  // Un cliente con tarifa de almacenaje por palet solo ve los tipos que tiene en su tarifa; solo si va por m² (sin ninguno) se ofrecen los de su entrada y salida
+  if (soloStock || !clienteId || sgaProductosStock().some(p => sgaTipoTarifado(clienteId, p, true))) return propios;
+  return sgaProductosStock().filter(p => p.id === incluir || sgaTipoTarifado(clienteId, p, false));
 }
 // Los clientes que cobran por m² no tienen tipos de carga en su tarifa de palet: para ellos la recepción va sin tipo.
 function sgaEntradaConTipo(clienteId){ return sgaProductosCliente(clienteId, '').length > 0 || !!(window.__seEdit && window.__seEdit.partidas.some(p => p.productoId)); }
