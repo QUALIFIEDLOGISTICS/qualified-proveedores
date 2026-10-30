@@ -7691,8 +7691,21 @@ function sgaCalcularEntrada(d){
     // no se puede saber cuál toca y se avisa; si no tiene ninguna, no cobrarla es lo normal.
     const prodsMov = [...new Set(almacenajeTarifas.filter(t => t.clienteId === d.clienteId).map(t => almacenajeProducto(t.tipo)).filter(pr => pr && !pr.archived && almacenajeCobraEn(pr, salida ? 'salida' : 'entrada')))];
     const cobraMov = prodsMov.length > 0;
-    if (sinTipo > 0 && prodsMov.length === 1) {
-      const pe = prodsMov[0];
+    // Con varias tarifas de movimiento y mercancía sin tipo de carga, se elige la que es solo de este movimiento (el producto «Salida palet» gana al
+    // que se cobra en recepción y expedición); si no, la única cuyo nombre habla de este movimiento («Salida palet», no «Entrada palet»)
+    let candidatos = prodsMov;
+    if (sinTipo > 0 && candidatos.length > 1) {
+      const exactos = candidatos.filter(pr => pr.disparador === (salida ? 'salida' : 'entrada'));
+      if (exactos.length === 1) candidatos = exactos;
+      else {
+        const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+        const esta = salida ? 'salida' : 'entrada', otra = salida ? 'entrada' : 'salida';
+        const porNombre = candidatos.filter(pr => { const n = norm(almacenajeProductoTexto(pr)); return n.includes(esta) && !n.includes(otra); });
+        if (porNombre.length === 1) candidatos = porNombre;
+      }
+    }
+    if (sinTipo > 0 && candidatos.length === 1) {
+      const pe = candidatos[0];
       grupos[pe.id] = (grupos[pe.id] || 0) + sinTipoPs.reduce((s, p) => s + (porBulto(pe) ? (p.bultos != null ? p.bultos : p.cantidad) : p.cantidad), 0);
     } else if (sinTipo > 0 && cobraMov) res.avisos.push(`${sgaUdN(d.clienteId, sinTipo)} sin tipo de carga: sin él no se puede aplicar una tarifa de ${palabra} y no se cobra. Si este cliente cobra solo por m², es normal; si no, a esa mercancía le falta el tipo de carga (se asigna en el catálogo del cliente o al recibirla) y su tarifa de ${salida ? 'salida' : 'entrada'} en Almacén → Configuración → Productos.`);
     Object.keys(grupos).forEach(id => {
