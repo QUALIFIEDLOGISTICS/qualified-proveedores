@@ -5780,20 +5780,21 @@ function stockBodyHtml(){
     const lista = sgaAlbaranes.filter(a => (!wid || a.warehouseId === wid) && (!emp || a.clienteId === emp) && (!est || sgaAlbaranEstadoClave(a) === est) && (esSal ? a.tipo === 'salida' : a.tipo !== 'salida' && a.tipo !== 'actividad')).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && (okCli(c) || (q && ((esSal && (a.destinatario || '').toLowerCase().includes(q)) || (a.referencia || '').toLowerCase().includes(q) || sgaLineasAlb(a).some(l => (l.nombre + ' ' + l.desc).toLowerCase().includes(q))))); });
     if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q || emp || est ? 'Ningún albarán coincide con la búsqueda o el filtro.' : esSal ? 'Todavía no hay expediciones. Registra la primera con «Nueva expedición».' : 'Todavía no hay recepciones. Registra la primera con «Nueva recepción».'}</div>`;
     // Solo se enseñan las columnas que tienen algo: las que no tienen dato en ninguna fila de la lista se ocultan
-    const conDR = lista.some(a => esSal ? a.destinatario : a.referencia), conMerc = lista.some(a => sgaMercanciaResumen(a));
+    const conDR = lista.some(a => esSal ? a.destinatario : a.referencia), conRefSal = esSal && lista.some(a => a.referencia), conMerc = lista.some(a => sgaMercanciaResumen(a));
     const conModal = lista.some(a => a.tipo === 'regularizacion' || a.tipo === 'apertura' || (a.modalidad && a.modalidad !== 'palet'));
     // Cada cliente llama a su unidad como quiere (palets, carpas, jumbos…): el título de la columna es ese nombre si todos los de la lista
     // coinciden; si se mezclan, «Palets» y cada cifra lleva el nombre de la suya
     const unidades = [...new Set(lista.map(a => sgaCap(sgaUnidadCfg(a.clienteId).p)))];
     const udTit = unidades.length === 1 ? unidades[0] : 'Palets';
     return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
-      <thead><tr>${thSort('Nº','number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Almacén','text')}${conDR ? (esSal ? thSort('Destinatario','text') : thSort('Referencia','text')) : ''}${conMerc ? thSort('Mercancía','text') : ''}${conModal ? thSort('Modalidad','text') : ''}${thSort(udTit,'number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
+      <thead><tr>${thSort('Nº','number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Almacén','text')}${conRefSal ? thSort('Albarán del cliente','text') : ''}${conDR ? (esSal ? thSort('Destinatario','text') : thSort('Referencia','text')) : ''}${conMerc ? thSort('Mercancía','text') : ''}${conModal ? thSort('Modalidad','text') : ''}${thSort(udTit,'number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
       <tbody>${lista.map(a => { const c = contactos.find(x => x.id === a.clienteId); return `
         <tr data-alb="${a.id}">
           <td data-sort-value="${a.numero}"><b>${esc(sgaNumAlbaran(a))}</b></td>
           <td style="white-space:nowrap;" data-sort-value="${esc(a.fecha)}">${fmtDateDMY(a.fecha)}</td>
           <td data-sort-value="${esc(c ? c.nombre : '')}">${esc(c ? ((c.nombreComercial || '').trim() || c.nombre) : '—')}</td>
           <td data-sort-value="${esc(whNombre(a.warehouseId))}">${esc(whNombre(a.warehouseId))}</td>
+          ${conRefSal ? `<td style="font-family:var(--mono);font-size:12.5px;" data-sort-value="${esc(a.referencia)}">${esc(a.referencia) || '—'}</td>` : ''}
           ${!conDR ? '' : esSal ? `<td data-sort-value="${esc(a.destinatario)}" title="${esc(a.destinatarioDireccion)}">${esc(a.destinatario) || '—'}</td>` : `<td data-sort-value="${esc(a.referencia)}">${esc(a.referencia) || '—'}</td>`}
           ${conMerc ? `<td class="sga-merc" data-sort-value="${esc(sgaMercanciaResumen(a))}"${sgaLineasAlb(a).length ? ` data-tip="${esc(sgaMercanciaDetalle(a))}"` : ''}>${sgaMercanciaResumen(a) ? esc(sgaMercanciaResumen(a)) : '<span style="color:var(--mutedFaint);">—</span>'}</td>` : ''}
           ${conModal ? `<td data-sort-value="${esc(a.modalidad)}">${a.tipo === 'regularizacion' ? 'Regularización' : a.tipo === 'apertura' ? 'Stock inicial' : a.modalidad === 'palet' ? esc(sgaCap(sgaUnidadCfg(a.clienteId).p)) : esc(SGA_MODALIDADES[a.modalidad] || a.modalidad)}</td>` : ''}
@@ -9013,7 +9014,7 @@ function sgaSalidaRellenar(){
   const alm = document.getElementById('sl-almacen');
   if (alm) alm.value = a.warehouseId;
   sgaSalidaAlmacenCambio();
-  set('sl-fecha', e.confirmar ? today() : a.fecha); set('sl-transp', a.transportista); sgaMatriculaPoner('sl', a.matricula); set('sl-obs', a.observaciones);
+  set('sl-fecha', e.confirmar ? today() : a.fecha); set('sl-ref', a.referencia); set('sl-transp', a.transportista); sgaMatriculaPoner('sl', a.matricula); set('sl-obs', a.observaciones);
   if (a.modalidad) sgaSalidaModalidad(a.modalidad);
   set('sl-dest', a.destinatario);
   if (sgaDireccionPorNombre(a.destinatario)) sgaSalidaDestinatarioCambio(); else { set('sl-destdir', a.destinatarioDireccion); sgaSalidaDestinatarioCambio(); }   // destinatario escrito a mano: se conserva su dirección
@@ -9037,7 +9038,7 @@ function sgaSalidaPuedeCrearDireccion(){ return !!(PROFILE.isAdmin || sectionAll
 function sgaSalidaSnapshot(){
   const d = sgaSalidaLeer();
   return {
-    clienteId: d.clienteId, almacen: sgaSalidaWh(), fecha: d.fecha, modalidad: d.modalidad, transportista: d.transportista, matricula: d.matricula,
+    clienteId: d.clienteId, almacen: sgaSalidaWh(), fecha: d.fecha, referencia: d.referencia, modalidad: d.modalidad, transportista: d.transportista, matricula: d.matricula,
     observaciones: d.observaciones, destinatario: d.destinatario,
     items: d.items.filter(x => x.n > 0).map(x => ({ pid: x.p.id, n: x.n, bt: x.bt })),
     servicios: d.servicios,
@@ -9078,7 +9079,7 @@ function sgaSalidaRestaurar(b, dir){
   const alm = document.getElementById('sl-almacen');
   if (alm && b.almacen) alm.value = b.almacen;
   sgaSalidaAlmacenCambio();
-  set('sl-fecha', b.fecha); set('sl-transp', b.transportista); sgaMatriculaPoner('sl', b.matricula); set('sl-obs', b.observaciones);
+  set('sl-fecha', b.fecha); set('sl-ref', b.referencia); set('sl-transp', b.transportista); sgaMatriculaPoner('sl', b.matricula); set('sl-obs', b.observaciones);
   if (b.modalidad) sgaSalidaModalidad(b.modalidad);
   (b.items || []).forEach(x => { sgaSalidaPonerCantidad(x.pid, x.n); const bu = document.getElementById('sl-bu-' + x.pid); if (bu && x.bt) bu.value = x.bt.replace('.', ','); });
   (b.servicios || []).forEach(s => {
@@ -9383,7 +9384,7 @@ function sgaSalidaLeer(){
     const bu = document.getElementById('sl-bu-' + el.dataset.pid), bt = bu ? bu.value.trim().replace(',', '.') : '';   // bultos escritos a mano (vacío: automático)
     return { p, txt: n, n: typeof n === 'number' ? n : (n === '' ? 0 : Number(n)), bt, bm: bt === '' ? null : Number(bt) };
   }).filter(x => x.p);
-  return { clienteId: val('sl-cliente'), fecha: val('sl-fecha'), referencia: window.__slEdit ? (window.__slEdit.albaran.referencia || '') : '', modalidad: val('sl-modalidad') || 'palet', transportista: val('sl-transp'), matricula: sgaMatriculaJoin(val('sl-matr'), val('sl-matr2')), observaciones: val('sl-obs'), destinatario: val('sl-dest'), destinatarioDireccion: val('sl-destdir'), items, servicios: sgaServiciosLeer() };
+  return { clienteId: val('sl-cliente'), fecha: val('sl-fecha'), referencia: val('sl-ref'), modalidad: val('sl-modalidad') || 'palet', transportista: val('sl-transp'), matricula: sgaMatriculaJoin(val('sl-matr'), val('sl-matr2')), observaciones: val('sl-obs'), destinatario: val('sl-dest'), destinatarioDireccion: val('sl-destdir'), items, servicios: sgaServiciosLeer() };
 }
 // FIFO (o LIFO, según el cliente) dentro de cada tipo de carga + referencia: no se puede sacar de una partida más nueva (o más antigua,
 // en LIFO) si hay otra anterior sin vaciar. En «manual» no se avisa de nada.
@@ -9495,6 +9496,7 @@ function tplStockSalidaPage(){
             <div class="field" style="flex:1;min-width:190px;"><label>Almacén de expedición <span class="dc-req">*</span></label><select id="sl-almacen" onchange="sgaSalidaAlmacenCambio()"><option value="">Elige primero el cliente</option></select></div>
             <div class="field" style="flex:1;min-width:150px;"><label>Fecha de expedición <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="sl-fecha" type="date" value="${today()}" />`)}</div>
             <div class="field" style="flex:1;min-width:190px;"><label>Nº de albarán <small style="color:var(--mutedFaint);font-weight:400;">· lo asigna el programa</small></label>${decaInputIcon('file', `<input id="sl-num" readonly placeholder="Elige el cliente" style="font-family:var(--mono);font-weight:700;" />`)}</div>
+            <div class="field" style="flex:1;min-width:190px;"><label>Nº de albarán del cliente <small style="color:var(--mutedFaint);font-weight:400;">· si te manda el suyo</small></label>${decaInputIcon('tag', `<input id="sl-ref" maxlength="60" autocomplete="off" placeholder="Opcional" style="font-family:var(--mono);" />`)}</div>
           </div>
           <input type="hidden" id="sl-modalidad" value="palet" />
           <div id="sl-mod-wrap" style="display:none;">
