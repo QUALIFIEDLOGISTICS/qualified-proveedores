@@ -5882,15 +5882,25 @@ function catArticulosVirtuales(clienteId){
 function catColumnas(clienteId){
   const arts = clienteId ? sgaArticulosDe(clienteId, true) : sgaArticulos;
   const cfg = clienteId ? sgaClienteCfg(clienteId) : null;
+  const maestro = clienteId && sgaUnicoSinCodigo(clienteId) ? (sgaUnicoCampos(clienteId)[0] || null) : null;
   return {
     referencia: !cfg || cfg.campos.referencia !== 'no' || arts.some(a => a.referencia),
     tipo: clienteId ? (sgaProductosCliente(clienteId, '').length > 0 || arts.some(a => a.productoId)) : true,   // «Tipo de carga» solo si el cliente tiene tipos en su tarifa de palet (si cobra por m² no hay)
     ml: arts.some(a => a.metrosLineales != null) || (!!clienteId && sgaClienteUsaMl(clienteId)),   // con valores, o si el cliente lo usa (ficha SGA)
     peso: !cfg || cfg.campos.peso !== 'no' || arts.some(a => a.peso != null),
     medidas: cfg ? (cfg.campos.medidas !== 'no' || arts.some(a => a.medidas)) : arts.some(a => a.medidas),   // «Medidas» si el cliente las usa (ficha SGA) o algún artículo las tiene
-    x: clienteId ? sgaCamposArticulo(clienteId) : [],   // campos propios del artículo que usa este cliente
+    maestro,   // dato que manda en este cliente (p. ej. el nº de serie) cuando el código de artículo no cuenta: es la primera columna
+    x: clienteId ? sgaCamposArticulo(clienteId).filter(f => !maestro || f.id !== maestro.id) : [],   // campos propios del artículo que usa este cliente (sin el que manda, que es la primera columna)
+    xTodos: clienteId ? sgaCamposArticulo(clienteId) : [],   // todos, para la vista palet a palet (que no cambia su primera columna)
     bultos: clienteId ? sgaClienteConBultos(clienteId) : arts.some(a => a.bultos !== 1),   // solo si sus palets llevan varios bultos
   };
+}
+// Primera columna del catálogo: el código de artículo o, si en este cliente el código no cuenta, el dato que manda (p. ej. el nº de serie)
+function catPrincipalTit(cols){ return cols.maestro ? cols.maestro.label : 'Código de artículo'; }
+function catPrincipalVal(a, cols){
+  if (!cols.maestro) return a.nombre;
+  const v = a.atributos ? a.atributos[cols.maestro.id] : null;
+  return v != null && v !== '' ? String(sgaCampoMostrar(cols.maestro, v)) : a.nombre;
 }
 // Celda editable de un campo propio del artículo (se guarda al salir de la celda)
 function catCeldaCampo(a, f){
@@ -5914,9 +5924,19 @@ async function catGuardarCeldaCampo(el){
   const extra = sgaArticuloExtra(a.clienteId, atributos);
   const upd = { atributos };
   if (extra || a.claveExtra) upd.clave_extra = extra;   // sin datos que distingan, no se toca la columna
+  // Si este dato es el que manda (primera columna, sin código de artículo), el artículo se llama igual que él, salvo que ya tuviera un nombre propio distinto
+  let nuevoNombre = '';
+  if (sgaUnicoSinCodigo(a.clienteId) && (sgaUnicoCampos(a.clienteId)[0] || {}).id === f.id) {
+    const antes = (a.atributos || {})[f.id];
+    const antesTxt = antes != null && antes !== '' ? String(sgaCampoMostrar(f, antes)).trim().toUpperCase() : '';
+    nuevoNombre = sgaArticuloNombreAuto(a.clienteId, atributos);
+    if (nuevoNombre && a.nombre && a.nombre.toUpperCase() !== antesTxt) nuevoNombre = '';
+    if (nuevoNombre) upd.nombre = nuevoNombre;
+  }
   const { error } = await supabaseClient.from('sga_articulos').update(upd).eq('id', a.id);
   if (error) { appToast('No se pudo guardar: ' + sgaArticuloErrorTxt(error, a.clienteId), 'error'); if (!window.__catLote) renderTab(); return false; }
   a.atributos = atributos; a.claveExtra = extra;
+  if (nuevoNombre) a.nombre = nuevoNombre;
   el.classList.add('cg-ok'); setTimeout(() => el.classList.remove('cg-ok'), 900);
   return true;
 }
@@ -6177,10 +6197,11 @@ function catFilaHtml(a, cols, conCliente){
     const v = a.atributos ? a.atributos[f.id] : null;
     return edit ? catCeldaCampo(a, f) : `<td class="cg-trunc" data-sort-value="${esc(v == null ? '' : v)}">${v != null && v !== '' ? esc(sgaCampoMostrar(f, v)) : vacio}</td>`;
   };
+  const principal = catPrincipalVal(a, cols);   // el código de artículo o, si en este cliente no cuenta, el dato que manda (nº de serie…)
   const nombreCelda = edit
-    ? `<td class="cg-prod">${catCeldaInput(a, 'nombre', a.nombre, 'data-mayusc style="min-width:220px;text-transform:uppercase;"')}</td>${cols.referencia ? `<td>${catCeldaInput(a, 'referencia', a.referencia, 'data-mayusc style="min-width:130px;text-transform:uppercase;"')}</td>` : ''}`
-    : `<td class="cg-prod" data-sort-value="${esc(a.nombre)}">
-        ${st.mod > 0 ? `<button type="button" class="cg-nom cg-nom-b" onclick="catAbrirDonde('${a.id}')" title="Ver dónde está">${abierto ? '▾' : '▸'} ${esc(a.nombre)}</button>` : `<span class="cg-nom">${esc(a.nombre)}</span>`}${a.virtual && !sgaClienteCfg(a.clienteId).codigosUnicos ? ' <span class="cg-sinart" title="Esta mercancía no tiene artículo en el catálogo">Sin artículo</span>' : ''}
+    ? `${cols.maestro ? catCeldaCampo(a, cols.maestro).replace('<td>', '<td class="cg-prod">') : `<td class="cg-prod">${catCeldaInput(a, 'nombre', a.nombre, 'data-mayusc style="min-width:220px;text-transform:uppercase;"')}</td>`}${cols.referencia ? `<td>${catCeldaInput(a, 'referencia', a.referencia, 'data-mayusc style="min-width:130px;text-transform:uppercase;"')}</td>` : ''}`
+    : `<td class="cg-prod" data-sort-value="${esc(principal)}">
+        ${st.mod > 0 ? `<button type="button" class="cg-nom cg-nom-b" onclick="catAbrirDonde('${a.id}')" title="Ver dónde está">${abierto ? '▾' : '▸'} ${esc(principal)}</button>` : `<span class="cg-nom">${esc(principal)}</span>`}${a.virtual && !sgaClienteCfg(a.clienteId).codigosUnicos ? ' <span class="cg-sinart" title="Esta mercancía no tiene artículo en el catálogo">Sin artículo</span>' : ''}
         ${cols.referencia && a.referencia ? `<div class="cg-ref">${esc(a.referencia)}</div>` : ''}
         ${abierto ? catDondeHtml(a) : ''}
       </td>`;
@@ -6262,7 +6283,7 @@ function catExportColumnasTodas(){
       cols.ml ? col('ml', 'M. lineales', it => it.a.metrosLineales, true) : null,
       cols.peso ? col('peso', 'Peso por ' + u.s + ' (kg)', it => catPesoPalet(it.a, it.p), true) : null,
       cols.medidas ? col('med', 'Medidas', it => catMedidasPalet(it.a, it.p)) : null,
-      ...cols.x.map(f => col('x:' + f.id, f.label, extra(f))),
+      ...cols.xTodos.map(f => col('x:' + f.id, f.label, extra(f))),
       col('cant', sgaCap(u.p), it => it.p ? it.p.actual : 0, true),
       cols.bultos ? col('bul', 'Bultos', it => it.p ? (it.p.bultos != null ? sgaBultosSalida(it.p, it.p.actual) : it.p.actual * (it.a.bultos || 1)) : 0, true) : null,
       cols.peso ? col('kg', 'Kilos', it => it.p ? kilosDe({ peso: catPesoPalet(it.a, it.p) }, it.p.actual) : null, true) : null,
@@ -6271,7 +6292,7 @@ function catExportColumnasTodas(){
   }
   return [
     !cid ? col('cli', 'Cliente', it => nombreCli(it.a)) : null,
-    col('art', 'Código de artículo', it => it.a.nombre),
+    col('art', catPrincipalTit(cols), it => catPrincipalVal(it.a, cols)),
     cols.referencia ? col('ref', 'Descripción', it => it.a.referencia || '') : null,
     cols.tipo ? col('tipo', 'Tipo de carga', it => prodTxt(it.a)) : null,
     cols.bultos ? col('bpp', 'Bultos / ' + u.s, it => it.a.bultos, true) : null,
@@ -6520,7 +6541,7 @@ function catPaletsHtml(cid, cols, filtro, q){
   const celdaNum = v => `<td style="text-align:right;white-space:nowrap;" data-sort-value="${esc(v)}">${v === '' ? vac : esc(v)}</td>`;
   const cabecera = [conCodigo ? thSort(sgaCap(sgaUnidadCfg(cid).s), 'text') : '', thSort('Artículo', 'text'), thSort('Ubicación', 'text'), manual ? '' : thSort('Entrada', 'date'),
     cols.tipo ? thSort('Tipo de carga', 'text') : '', cols.bultos ? thSort('Bultos / palet', 'number', 'style="text-align:right;"') : '', cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : '', cols.peso ? thSort('Peso', 'number', 'style="text-align:right;"') : '', cols.medidas ? thSort('Medidas', 'text') : '',
-    ...cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')), thSort('Estado', 'text')].join('');
+    ...cols.xTodos.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')), thSort('Estado', 'text')].join('');
   const fila = ({ a, p }) => {
     const prod = a.productoId ? almacenajeProducto(a.productoId) : null, prodTxt = prod ? almacenajeProductoTexto(prod) : '';
     const sitio = p ? sgaSitioTxt(p) : '—';
@@ -6533,14 +6554,14 @@ function catPaletsHtml(cid, cols, filtro, q){
       ${cols.tipo ? `<td data-sort-value="${esc(prodTxt)}">${prodTxt ? `<span class="cg-chip" title="${esc(prodTxt)}">${esc(prodTxt.replace(/\s*·\s*sin subtipo definido/i, ''))}</span>` : vac}</td>` : ''}
       ${cols.bultos ? celdaNum(num(a.bultos)) : ''}${cols.ml ? celdaNum(num(a.metrosLineales)) : ''}${cols.peso ? celdaNum(num(catPesoPalet(a, p))) : ''}
       ${cols.medidas ? catMedidasCeldaHtml(catMedidasPalet(a, p), vac) : ''}
-      ${cols.x.map(f => { const v = p ? sgaValorCampo(f, p) : (a.atributos ? a.atributos[f.id] : null); return `<td class="cg-trunc" data-sort-value="${esc(v == null ? '' : v)}">${v != null && v !== '' ? esc(sgaCampoMostrar(f, v)) : vac}</td>`; }).join('')}
+      ${cols.xTodos.map(f => { const v = p ? sgaValorCampo(f, p) : (a.atributos ? a.atributos[f.id] : null); return `<td class="cg-trunc" data-sort-value="${esc(v == null ? '' : v)}">${v != null && v !== '' ? esc(sgaCampoMostrar(f, v)) : vac}</td>`; }).join('')}
       <td class="cg-stock" data-sort-value="${p ? 1 : 0}">${p ? `<span class="cg-st ok"><i></i>En almacén${p.actual > 1 ? ` · ${p.actual} ${sgaUd(cid, p.actual)}` : ''}</span>${cols.bultos ? `<div class="cg-ref">${sgaNumTxt(p.bultos != null ? sgaBultosSalida(p, p.actual) : p.actual * (a.bultos || 1))} bultos</div>` : ''}` : '<span class="cg-st no"><i></i>Sin stock</span>'}</td>
     </tr>`;
   };
   const vacio = !filas.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${q ? 'Ningún ' + sgaUnidadCfg(cid).s + ' coincide con la búsqueda.' : filtro === 'stock' ? 'No hay ' + sgaUnidadCfg(cid).p + ' en el almacén ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : 'Este cliente todavía no tiene mercancía registrada.'}</div>` : '';
   // fila de totales, continuación de la tabla: suma de palets (y bultos) en Estado y de kilos en Peso
   const tTot = catSumas(conPalet.map(f => ({ pal: f.p.actual, bul: f.p.bultos != null ? sgaBultosSalida(f.p, f.p.actual) : f.p.actual, pesoU: catPesoPalet(f.a, f.p) != null ? Number(catPesoPalet(f.a, f.p)) : null })));
-  const ordenTot = [...(conCodigo ? ['cod'] : []), 'art', 'ubic', ...(manual ? [] : ['ent']), ...(cols.tipo ? ['tipo'] : []), ...(cols.bultos ? ['bul'] : []), ...(cols.ml ? ['ml'] : []), ...(cols.peso ? ['peso'] : []), ...(cols.medidas ? ['med'] : []), ...cols.x.map(() => 'x'), 'estado'];
+  const ordenTot = [...(conCodigo ? ['cod'] : []), 'art', 'ubic', ...(manual ? [] : ['ent']), ...(cols.tipo ? ['tipo'] : []), ...(cols.bultos ? ['bul'] : []), ...(cols.ml ? ['ml'] : []), ...(cols.peso ? ['peso'] : []), ...(cols.medidas ? ['med'] : []), ...cols.xTodos.map(() => 'x'), 'estado'];
   const tfoot = tTot.pal ? `<tfoot><tr class="cg-tot">${ordenTot.map((k, i) => `<td>${k === 'peso' ? catCeldaKilos(tTot) : k === 'estado' ? catCeldaPalets(tTot, !!cols.bultos, cid) : i === 0 ? 'TOTAL' : ''}</td>`).join('')}</tr></tfoot>` : '';
   return `
     <div class="card cg-compacta" style="padding:0;">
@@ -6575,7 +6596,7 @@ function stockCatalogoBodyHtml(){
     <div class="card${window.__catEditAll ? '' : ' cg-compacta'}" style="padding:0;">
       <div class="tc-hist-box" style="max-height:${window.__catEditAll ? 'calc(100vh - 290px)' : '660px'};min-height:${window.__catEditAll ? '320px' : '0'};border:none;border-radius:10px;">
         <table class="tf-table cg-tabla${window.__catEditAll ? ' cg-todo' : ''}">
-          <thead><tr>${window.__catEditAll ? `${thSortCat('Código de artículo', 'text')}${cols.referencia ? thSortCat('Descripción', 'text') : ''}${cols.tipo ? thSortCat('Tipo de carga', 'text') : ''}${cols.bultos ? thSortCat('Bultos / palet', 'number') : ''}${cols.ml ? thSortCat('M. lineales', 'number') : ''}${cols.peso ? thSortCat(sgaPesoLabel(), 'number') : ''}${cols.medidas ? thSortCat('Medidas', 'text') : ''}${cols.x.map(f => thSortCat(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSortCat('Stock actual', 'number')}` : `${conCliente ? thSort('Cliente', 'text') : ''}${thSort('Código de artículo', 'text')}${cols.tipo ? thSort('Tipo de carga', 'text') : ''}${cols.bultos ? thSort('Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thSort(sgaPesoLabel(), 'number', 'style="text-align:right;"') : ''}${cols.medidas ? thSort('Medidas', 'text') : ''}${cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSort('Stock actual', 'number')}`}</tr></thead>
+          <thead><tr>${window.__catEditAll ? `${thSortCat(catPrincipalTit(cols), 'text')}${cols.referencia ? thSortCat('Descripción', 'text') : ''}${cols.tipo ? thSortCat('Tipo de carga', 'text') : ''}${cols.bultos ? thSortCat('Bultos / palet', 'number') : ''}${cols.ml ? thSortCat('M. lineales', 'number') : ''}${cols.peso ? thSortCat(sgaPesoLabel(), 'number') : ''}${cols.medidas ? thSortCat('Medidas', 'text') : ''}${cols.x.map(f => thSortCat(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSortCat('Stock actual', 'number')}` : `${conCliente ? thSort('Cliente', 'text') : ''}${thSort(catPrincipalTit(cols), 'text')}${cols.tipo ? thSort('Tipo de carga', 'text') : ''}${cols.bultos ? thSort('Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thSort(sgaPesoLabel(), 'number', 'style="text-align:right;"') : ''}${cols.medidas ? thSort('Medidas', 'text') : ''}${cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSort('Stock actual', 'number')}`}</tr></thead>
           <tbody>
             ${lista.map(a => catFilaHtml(a, cols, conCliente)).join('')}
           </tbody>
@@ -6645,7 +6666,7 @@ function catFilaNuevaHtml(cid){
   const num = (campo, ph) => `<td><input class="cg-in" data-n="${campo}" inputmode="decimal" maxlength="10" ${ph ? `placeholder="${ph}"` : ''} ${campo === 'bultos' ? 'value="1"' : ''} ${k} /></td>`;
   return `
     <tr class="cg-row cg-edit cg-new" data-new="1">
-      <td class="cg-prod"><input class="cg-in" data-n="nombre" data-mayusc maxlength="150" placeholder="${sgaUnicoSinCodigo(cid) ? 'Código (opcional)…' : 'Código de artículo nuevo…'}" style="min-width:220px;text-transform:uppercase;" ${k} /></td>
+      <td class="cg-prod">${cols.maestro ? sgaCampoControl(cols.maestro, '', `class="cg-in" data-n="x:${cols.maestro.id}" style="min-width:220px;" placeholder="${esc(cols.maestro.label)} nuevo…" ${k}`) : `<input class="cg-in" data-n="nombre" data-mayusc maxlength="150" placeholder="Código de artículo nuevo…" style="min-width:220px;text-transform:uppercase;" ${k} />`}</td>
       ${cols.referencia ? `<td><input class="cg-in" data-n="referencia" data-mayusc maxlength="80" style="min-width:130px;text-transform:uppercase;" ${k} /></td>` : ''}
       ${cols.tipo ? `<td><select class="cg-in" data-n="productoId" ${k}><option value="">—</option>${prods.map(p => `<option value="${p.id}" ${prods.length === 1 ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></td>` : ''}
       ${cols.bultos ? num('bultos') : ''}
@@ -6834,10 +6855,11 @@ async function catGuardarFilaNueva(tr){
     if (r.valor == null) { if (sgaClienteCfg(cid).campos[f.id] === 'obligatorio') return marcar('x:' + f.id, `Falta «${f.label}».`); }
     else atributos[f.id] = r.valor;
   }
-  if (sgaArticuloFaltaClave(cid, atributos)) return marcar('nombre', sgaArticuloFaltaClave(cid, atributos));
+  const casillaClave = sgaUnicoSinCodigo(cid) ? 'x:' + ((sgaUnicoCampos(cid)[0] || {}).id) : 'nombre';   // la casilla de la primera columna
+  if (sgaArticuloFaltaClave(cid, atributos)) return marcar(casillaClave, sgaArticuloFaltaClave(cid, atributos));
   if (!nombre) nombre = sgaArticuloNombreAuto(cid, atributos);   // sin código: se llama como el dato que manda
-  if (!nombre) return marcar('nombre', 'Escribe el código de artículo en la fila nueva.');
-  if (sgaArticuloRepetido(cid, nombre, atributos)) return marcar('nombre', sgaArticuloRepetidoTxt(cid));
+  if (!nombre) return marcar(casillaClave, 'Escribe el código de artículo en la fila nueva.');
+  if (sgaArticuloRepetido(cid, nombre, atributos)) return marcar(casillaClave, sgaArticuloRepetidoTxt(cid));
   const claveExtra = sgaArticuloExtra(cid, atributos);
   const row = { cliente_id: cid, nombre, referencia: referencia || null, producto_id: g('productoId') || null, bultos_por_unidad: bultos, metros_lineales: ml, peso, medidas: medidas || null };
   if (Object.keys(atributos).length) row.atributos = atributos;
