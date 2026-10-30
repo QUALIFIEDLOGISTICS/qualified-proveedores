@@ -225,7 +225,7 @@
   .doc-seg button{border:none;border-radius:6px;padding:6px 13px;font-size:13px;cursor:pointer;background:transparent;color:var(--muted);font-weight:500;font-family:var(--body);white-space:nowrap;}
   .doc-seg button.on{background:var(--primary);color:var(--primary-text);font-weight:600;}
   /* Control Stock SGA: tres accesos (entrada, salida, regularizar): compactos, con su dibujo y de un clic */
-  .sga-acc-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:14px;}
+  .sga-acc-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px;}
   .sga-acc{position:relative;display:flex;align-items:center;gap:14px;text-align:left;min-height:84px;padding:12px 16px 12px 12px;background:var(--panel);border:1px solid color-mix(in srgb,var(--acc) 26%,var(--border));border-radius:14px;cursor:pointer;font-family:var(--body);color:var(--text);box-shadow:0 1px 2px rgba(20,30,50,.05);transition:box-shadow .18s,transform .18s,border-color .18s,background .18s;}
   .sga-acc:hover{background:color-mix(in srgb,var(--acc) 5%,var(--panel));border-color:var(--acc);box-shadow:0 8px 20px -8px color-mix(in srgb,var(--acc) 55%,transparent);transform:translateY(-2px);}
   .sga-acc:active{transform:translateY(0) scale(.99);}
@@ -253,6 +253,7 @@
   .sga-tabs{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:14px;}
   .sga-tabs button{background:none;border:none;border-bottom:3px solid transparent;margin-bottom:-1px;padding:10px 16px;font-size:14px;font-weight:500;color:var(--muted);cursor:pointer;white-space:nowrap;font-family:var(--body);}
   .sga-tabs button.on{border-bottom-color:var(--primary);color:var(--primary);font-weight:700;}
+  @media (max-width:1180px){ .sga-acc-grid{grid-template-columns:repeat(2,minmax(0,1fr));} }
   @media (max-width:760px){ .sga-acc-grid{grid-template-columns:1fr;} }
   /* Ficha SGA del cliente: preguntas compactas (una línea + frase de ayuda) */
   .sgac-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;padding:11px 0;border-top:1px solid var(--border);}
@@ -3956,6 +3957,7 @@ function computeBreadcrumbSegments(){
   if (currentTab === 'stock' && window.__stockView === 'salida') return [{label:'Control Stock SGA', onclick:'sgaSalidaCancelar()'}, {label: window.__slEdit ? 'Editar salida' : 'Nueva salida', onclick:null}];
   if (currentTab === 'stock' && window.__stockView === 'catedit') return [{label:'Inventario', onclick:'catEditarSalir()'}, {label:'Editar catálogo', onclick:null}];
   if (currentTab === 'stock' && window.__stockView === 'operativa') return [{label:'Control Stock SGA', onclick:'sgaOperativaCancelar()'}, {label: (window.__opForm && window.__opForm.id) ? 'Editar operativa' : 'Nueva operativa', onclick:null}];
+  if (currentTab === 'stock' && window.__stockView === 'actividad') return [{label:'Control Stock SGA', onclick:'sgaActividadCancelar()'}, {label:'Nueva actividad', onclick:null}];
   if (currentTab === 'stock' && window.__stockView === 'regul') return [{label:'Control Stock SGA', onclick:'sgaRegulCancelar()'}, {label:'Regularizar stock', onclick:null}];
   if (currentTab === ALMACEN_CONFIG_TAB) {
     if (window.__sgaPage && window.__sgaPage.kind === 'campo') {
@@ -5587,6 +5589,21 @@ async function loadSgaStock(){
       Object.values(window.__sgaLineasAlb).forEach(l => l.sort((a, b) => (b.cantidad - a.cantidad) || a.nombre.localeCompare(b.nombre, 'es')));
     } catch (e) { window.__sgaLineasAlb = {}; }
   }
+  // Actividades: lo que se hizo (servicios) y lo que se cobra, para verlo en su lista
+  window.__sgaActividades = {};
+  try {
+    const actIds = sgaAlbaranes.filter(x => x.tipo === 'actividad').map(x => x.id);
+    for (let i = 0; i < actIds.length; i += 80) {
+      const trozo = actIds.slice(i, i + 80);
+      const [s, c] = await Promise.all([
+        supabaseClient.from('sga_servicios').select('albaran_id,producto_id,cantidad,nota').in('albaran_id', trozo),
+        supabaseClient.from('sga_cobros').select('albaran_id,importe').in('albaran_id', trozo),
+      ]);
+      const de = id => (window.__sgaActividades[id] = window.__sgaActividades[id] || { servicios: [], importe: 0 });
+      (s.data || []).forEach(r => de(r.albaran_id).servicios.push({ productoId: r.producto_id, cantidad: Number(r.cantidad), nota: r.nota || '' }));
+      (c.data || []).forEach(r => { de(r.albaran_id).importe += Number(r.importe); });
+    }
+  } catch (e) { window.__sgaActividades = {}; }
   await loadSgaOperativasHechas();
 }
 // Mercancía de una recepción, expedición o regularización, para el listado: resumen («12 × CARPA +2 más») y detalle completo (globo al pasar el ratón)
@@ -5613,7 +5630,7 @@ function sgaSitioTxt(p){
   const z = sgaZonaDe(p.zonaId), u = sgaUbicDe(p.ubicacionId);
   return z ? sgaZonaNombre(z) + (u ? ' · ' + u.codigo : '') : '—';
 }
-function stockSeg(){ return ['catalogo', 'entradas', 'salidas', 'operativas', 'liquidaciones'].includes(window.__stockSeg) ? window.__stockSeg : 'catalogo'; }   // «Stock» se fusionó con el catálogo
+function stockSeg(){ return ['catalogo', 'entradas', 'salidas', 'actividades', 'operativas', 'liquidaciones'].includes(window.__stockSeg) ? window.__stockSeg : 'catalogo'; }   // «Stock» se fusionó con el catálogo
 
 /* ---- Pantalla principal: stock por cliente y recepciones ---- */
 function whNombre(id){ const w = allWarehouses.find(x => x.id === id); return w ? w.name : '—'; }
@@ -5723,13 +5740,14 @@ function stockBodyHtml(){
   if (stockSeg() === 'catalogo') return stockCatalogoBodyHtml();
   if (stockSeg() === 'liquidaciones') return sgaLiqBodyHtml();
   if (stockSeg() === 'operativas') return stockOperativasBodyHtml();
+  if (stockSeg() === 'actividades') return stockActividadesBodyHtml();
   const q = (window.__stockSearch || '').trim().toLowerCase();
   const wid = window.__stockAlm || '';
   const okCli = c => !q || c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q);
   if (stockSeg() !== 'stock') {
     const esSal = stockSeg() === 'salidas';
     const emp = stockEmpActual(stockSeg()), est = window.__stockEstado || '';
-    const lista = sgaAlbaranes.filter(a => (!wid || a.warehouseId === wid) && (!emp || a.clienteId === emp) && (!est || sgaAlbaranEstadoClave(a) === est) && (esSal ? a.tipo === 'salida' : a.tipo !== 'salida')).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && (okCli(c) || (q && ((esSal && (a.destinatario || '').toLowerCase().includes(q)) || (a.referencia || '').toLowerCase().includes(q) || sgaLineasAlb(a).some(l => (l.nombre + ' ' + l.desc).toLowerCase().includes(q))))); });
+    const lista = sgaAlbaranes.filter(a => (!wid || a.warehouseId === wid) && (!emp || a.clienteId === emp) && (!est || sgaAlbaranEstadoClave(a) === est) && (esSal ? a.tipo === 'salida' : a.tipo !== 'salida' && a.tipo !== 'actividad')).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && (okCli(c) || (q && ((esSal && (a.destinatario || '').toLowerCase().includes(q)) || (a.referencia || '').toLowerCase().includes(q) || sgaLineasAlb(a).some(l => (l.nombre + ' ' + l.desc).toLowerCase().includes(q))))); });
     if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q || emp || est ? 'Ningún albarán coincide con la búsqueda o el filtro.' : esSal ? 'Todavía no hay expediciones. Registra la primera con «Nueva expedición».' : 'Todavía no hay recepciones. Registra la primera con «Nueva recepción».'}</div>`;
     // Solo se enseñan las columnas que tienen algo: las que no tienen dato en ninguna fila de la lista se ocultan
     const conDR = lista.some(a => esSal ? a.destinatario : a.referencia), conMerc = lista.some(a => sgaMercanciaResumen(a));
@@ -6853,6 +6871,16 @@ const SGA_ACC_ARTE = {
     </g>
     <circle cx="124" cy="86" r="11" fill="rgba(255,255,255,.95)" stroke="none"/><path d="M118.5 86l4 4 7.5-8" stroke="var(--acc)" stroke-width="3"/>
   </svg>`,
+  // Actividad: la hoja de tareas con lo que se ha hecho marcado
+  actividad: `<svg class="sga-acc-art" viewBox="0 0 160 108" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <g class="art-mv art-tilt" style="transform-origin:80px 100px;transform-box:view-box;">
+      <rect x="44" y="12" width="72" height="88" rx="7" fill="rgba(255,255,255,.2)"/>
+      <rect x="64" y="5" width="32" height="14" rx="4" fill="rgba(255,255,255,.9)" stroke="none"/>
+      <path d="M56 36l5 5 9-10"/><path d="M78 36h26" opacity=".75"/>
+      <path d="M56 58l5 5 9-10"/><path d="M78 58h26" opacity=".75"/>
+      <rect x="56" y="76" width="14" height="14" rx="3" opacity=".6"/><path d="M78 83h18" opacity=".45"/>
+    </g>
+  </svg>`,
 };
 /* ---- SGA · Operativas realizadas ----
    Una operativa (de Comercial → Tarifas Almacén → Operativas) es un servicio con precio cerrado: apartados fijos que suman el
@@ -7448,7 +7476,7 @@ function tplAlmacenDashboard(){
 // Filtro por empresa (cliente) de las listas de Recepciones y Expediciones: solo salen las empresas que tienen albaranes de ese tipo.
 function stockEmpresasConAlbaran(seg){
   const esSal = seg === 'salidas';
-  const ids = new Set(seg === 'operativas' ? sgaOperativasHechas.map(o => o.clienteId) : sgaAlbaranes.filter(a => esSal ? a.tipo === 'salida' : a.tipo !== 'salida').map(a => a.clienteId));
+  const ids = new Set(seg === 'operativas' ? sgaOperativasHechas.map(o => o.clienteId) : sgaAlbaranes.filter(a => seg === 'actividades' ? a.tipo === 'actividad' : esSal ? a.tipo === 'salida' : a.tipo !== 'salida' && a.tipo !== 'actividad').map(a => a.clienteId));
   return contactos.filter(c => ids.has(c.id))
     .sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es'));
 }
@@ -7485,6 +7513,7 @@ function tplStock(){
   if (window.__stockView === 'entrada') return tplStockEntradaPage();
   if (window.__stockView === 'salida') return tplStockSalidaPage();
   if (window.__stockView === 'regul') return tplStockRegulPage();
+  if (window.__stockView === 'actividad') return tplStockActividadPage();
   if (window.__stockView === 'operativa') return tplStockOperativaPage();
   if (window.__stockView === 'catedit') return tplCatEditPage();
   if (window.__stockView === 'articulo') { const c = contactos.find(x => x.id === (window.__sgaArtForm || {}).clienteId); return c ? tplSgaArticuloPage(c) : ''; }
@@ -7506,8 +7535,9 @@ function tplStock(){
       ${acc('#1B3A6B', 'entrada', 'Nueva recepción', 'Recibir mercancía de un cliente', 'sgaEntradaAbrir()', 'Registrar la mercancía que llega al almacén')}
       ${acc('#C0721A', 'salida', 'Nueva expedición', 'Sacar mercancía y emitir albarán', 'sgaSalidaAbrir()', 'Sacar mercancía del almacén y generar el albarán')}
       ${acc('#2F7F86', 'regul', 'Regularizar', 'Ajustar el stock a lo contado', 'sgaRegulAbrir()', 'Ajustar el stock a lo que hay de verdad')}
+      ${acc('#7A4FA3', 'actividad', 'Nueva actividad', 'Un trabajo que se cobra, sin mover stock', 'sgaActividadAbrir()', 'Anotar un trabajo hecho para un cliente (verificación de inventario, recuento…) y cobrarlo')}
     </div>`}
-    ${seg === 'operativas' ? '' : `<div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('liquidaciones', 'Liquidaciones')}</div>`}
+    ${seg === 'operativas' ? '' : `<div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('actividades', 'Actividades')}${segBtn('liquidaciones', 'Liquidaciones')}</div>`}
     <div class="card deca-toolbar">
       ${seg === 'catalogo' ? `
       <select id="cat-cliente" onchange="catElegirCliente(this.value)" style="width:auto;flex:0 0 210px;min-width:0;"><option value="">Todos los clientes</option>${contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es')).map(c => `<option value="${c.id}" ${c.id === catClienteSel() ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
@@ -7523,7 +7553,7 @@ function tplStock(){
         <input placeholder="${seg === 'catalogo' ? 'Buscar cliente o artículo…' : 'Buscar cliente por nombre o NIF…'}" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      ${seg === 'entradas' || seg === 'salidas' || seg === 'operativas' ? stockEmpresaSelectHtml(seg) + stockEstadoSelectHtml(seg) : ''}${seg === 'operativas' && sgaPuedeEditarStock() ? '<button class="btn btn-primary" style="margin-left:auto;" onclick="sgaOperativaAbrir()">+ Nueva operativa</button>' : ''}`}
+      ${seg === 'entradas' || seg === 'salidas' || seg === 'actividades' || seg === 'operativas' ? stockEmpresaSelectHtml(seg) + stockEstadoSelectHtml(seg) : ''}${seg === 'operativas' && sgaPuedeEditarStock() ? '<button class="btn btn-primary" style="margin-left:auto;" onclick="sgaOperativaAbrir()">+ Nueva operativa</button>' : ''}`}
       ${seg === 'catalogo' ? `<div style="margin-left:auto;order:99;display:flex;gap:8px;"><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catExportarAbrir()" title="Descargar el inventario en Excel o PDF, eligiendo las columnas">${homeIcon(HOME_ICON_PATHS.download, 15, 'currentColor', 2)}<span>Exportar</span></button>${sgaPuedeEditarStock() ? (catSinNada(catClienteSel()) ? `<button type="button" class="btn btn-primary" onclick="catEditarTodo()" title="Todavía no hay nada: empieza creando el primer artículo">＋ Crear primer artículo</button>` : `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catEditarTodo()" title="Abrir una pantalla completa para editar todo el catálogo del cliente">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>`) : ''}</div>` : ''}
       ${seg === 'liquidaciones' || seg === 'operativas' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
     </div>
@@ -8069,8 +8099,10 @@ function sgaServiciosDeCliente(clienteId){
 // Cliente elegido en el formulario de recepción o expedición que se está viendo ('' si aún no hay), o null fuera de ellos
 function sgaServicioCliente(){
   const v = window.__stockView;
-  return v === 'salida' ? sgaSalidaClienteId() : v === 'entrada' ? sgaEntradaClienteId() : null;
+  return v === 'salida' ? sgaSalidaClienteId() : v === 'entrada' ? sgaEntradaClienteId() : v === 'actividad' ? sgaActividadClienteId() : null;
 }
+// Tras quitar o cambiar un servicio: se recalcula lo que se cobra en el formulario que esté abierto
+function sgaServiciosCambio(){ if (window.__stockView === 'actividad') sgaActividadRefrescar(); else sgaEntradaRefrescar(); }
 function sgaServicioFilaHtml(j, pre){
   pre = pre || {};
   const cli = sgaServicioCliente();   // en recepciones y expediciones solo salen los servicios que el cliente tiene en su tarifa
@@ -8079,10 +8111,10 @@ function sgaServicioFilaHtml(j, pre){
   prods.sort((a, b) => almacenajeProductoTexto(a).localeCompare(almacenajeProductoTexto(b), 'es'));
   return `
     <div class="op-row se-srow" data-j="${j}">
-      <div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><select id="ss-${j}-prod"><option value="">${cli === '' ? 'Elige primero el cliente…' : 'Elige el servicio…'}</option>${prods.map(p => `<option value="${p.id}" ${p.id === pre.prod ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))} (${esc((ALMACENAJE_UNIDADES[p.unidad] || '').replace('/', ''))})</option>`).join('')}</select></div>
+      <div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><select id="ss-${j}-prod"><option value="">${cli === '' ? 'Elige primero el cliente…' : window.__stockView === 'actividad' ? 'Elige la actividad…' : 'Elige el servicio…'}</option>${prods.map(p => `<option value="${p.id}" ${p.id === pre.prod ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))} (${esc((ALMACENAJE_UNIDADES[p.unidad] || '').replace('/', ''))})</option>`).join('')}</select></div>
       <div class="field" style="width:120px;margin-bottom:0;"><input id="ss-${j}-cant" inputmode="decimal" maxlength="8" placeholder="Cantidad" value="${esc(pre.cant || '')}" /></div>
       <div class="field" style="flex:1;min-width:140px;margin-bottom:0;"><input id="ss-${j}-nota" maxlength="120" placeholder="Nota (opcional)" value="${esc(pre.nota || '')}" /></div>
-      <button type="button" class="op-x" onclick="this.closest('.se-srow').remove(); sgaEntradaRefrescar();" title="Quitar este servicio">✕</button>
+      <button type="button" class="op-x" onclick="this.closest('.se-srow').remove(); sgaServiciosCambio();" title="Quitar este servicio">✕</button>
     </div>`;
 }
 // Al cambiar de cliente en una recepción o expedición, los servicios ya añadidos se quedan solo si también son de ese cliente
@@ -8099,7 +8131,7 @@ function sgaServicioAdd(){
   const cli = sgaServicioCliente();
   if (cli !== null) {
     if (!cli) { appToast('Elige primero el cliente para ver sus servicios.', 'info'); return; }
-    if (!sgaServiciosDeCliente(cli).length) { appToast('Este cliente no tiene servicios creados. Se añaden en Almacén → Tarifas.', 'info'); return; }
+    if (!sgaServiciosDeCliente(cli).length) { appToast('Este cliente no tiene servicios con precio. Se añaden en Comercial → Tarifas Almacén.', 'info'); return; }
   }
   const j = (window.__stockJ = (window.__stockJ || 0) + 1);
   document.getElementById('se-servicios').insertAdjacentHTML('beforeend', sgaServicioFilaHtml(j, {}));
@@ -10924,7 +10956,7 @@ function sgaAnularAbrir(id){
           <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
         </div>
         <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
-          <div style="font-size:13px;color:var(--muted);margin-bottom:12px;">${a.tipo === 'salida' ? 'La mercancía vuelve al stock.' : 'Se retira del stock la mercancía de esta recepción (solo se puede si no ha salido nada de ella).'} Sus cobros quedan anulados y el albarán se conserva marcado como «Anulado».</div>
+          <div style="font-size:13px;color:var(--muted);margin-bottom:12px;">${a.tipo === 'actividad' ? 'Se anula la actividad: no mueve stock.' : a.tipo === 'salida' ? 'La mercancía vuelve al stock.' : 'Se retira del stock la mercancía de esta recepción (solo se puede si no ha salido nada de ella).'} Sus cobros quedan anulados y el albarán se conserva marcado como «Anulado».</div>
           <div class="field"><label>Motivo <span class="dc-req">*</span></label>${decaInputIcon('file', `<input id="anu-motivo" maxlength="200" placeholder="Ej. Error al teclear las cantidades" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaAnularConfirmar(); }" />`)}</div>
           <div id="anu-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
           <div style="display:flex;gap:10px;">
@@ -11114,6 +11146,170 @@ async function sgaRegulConfirmar(){
   appToast('Regularización registrada.', 'ok');
   window.__stockSeg = 'entradas';
   stockVolver();
+}
+
+/* ---- Actividades: un trabajo hecho para un cliente que no es recepción ni expedición (verificación de inventario, recuento…) ----
+   Se guarda como un albarán numerado de tipo «actividad», sin mover stock. Lo que se hace se elige entre los servicios que el cliente
+   tiene en su tarifa (los mismos de «Servicios» en recepciones y expediciones); su cobro entra en la liquidación del mes. */
+function sgaActividadClienteId(){ const el = document.getElementById('ac-cliente'); return el ? el.value : ''; }
+function sgaActividadAbrir(){
+  window.__stockView = 'actividad';
+  window.__stockDirty = false;
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
+}
+async function sgaActividadCancelar(){
+  if (window.__stockDirty && !(await appConfirm({ title: 'Descartar la actividad', message: 'Has empezado a rellenar esta actividad. Si sales, se pierde lo escrito.', confirmLabel: 'Descartar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
+  stockVolver();
+}
+function sgaActividadLeer(){
+  const val = id => ((document.getElementById(id) || {}).value || '').trim();
+  return { clienteId: val('ac-cliente'), almacenId: val('ac-almacen'), fecha: val('ac-fecha'), referencia: val('ac-ref'), observaciones: val('ac-obs'), servicios: sgaServiciosLeer() };
+}
+function sgaActividadCalculo(d){
+  return sgaCalcularEntrada({ tipo: 'entrada', clienteId: d.clienteId, fecha: d.fecha, modalidad: 'palet', partidas: [], servicios: d.servicios.filter(s => s.productoId && sgaNumero(s.cantidadTxt) > 0).map(s => ({ productoId: s.productoId, cantidad: sgaNumero(s.cantidadTxt) })) });
+}
+function sgaActividadResumenHtml(d){
+  if (!d.clienteId) return '<div style="color:var(--mutedFaint);font-size:12.5px;">Elige el cliente para ver lo que se le cobrará.</div>';
+  if (!d.fecha) return '<div style="color:var(--mutedFaint);font-size:12.5px;">Indica la fecha para calcular el precio con la tarifa de ese día.</div>';
+  const cfg = sgaClienteCfg(d.clienteId);
+  const calc = sgaActividadCalculo(d);
+  if (!calc.activo) return `<div style="font-size:13px;color:var(--muted);">${cfg.activoDesde ? `Este cliente se activa en el SGA el ${esc(fmtDateDMY(cfg.activoDesde))}: una actividad anterior a esa fecha <b>no se cobra</b>.` : 'Este cliente todavía no está activo en el SGA: <b>no se cobra</b>. Se activa en su ficha → Gestión de stock (SGA).'}</div>`;
+  const total = sgaR2(calc.cobros.reduce((s, c) => s + c.importe, 0));
+  return `
+    ${calc.cobros.length ? `<div class="op-lines">${calc.cobros.map(c => `<div class="op-line"><span>${esc(sgaProdTxt(c.producto_id))}${c.cantidad !== 1 ? ` × ${esc(String(c.cantidad))}` : ''} <small style="color:var(--mutedFaint);">${esc(eurPrecio(c.precio))}</small></span><span class="op-dots"></span><b>${esc(eur2(c.importe))}</b></div>`).join('')}</div>
+    <div class="op-total-row" style="margin-top:10px;"><span>Total de la actividad</span><b>${esc(eur2(total))}</b></div>` : '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay nada que cobrar. Elige la actividad y la cantidad.</div>'}
+    ${calc.avisos.map(a => `<div class="se-aviso">⚠ ${esc(a)}</div>`).join('')}`;
+}
+function sgaActividadRefrescar(){
+  const el = document.getElementById('ac-resumen');
+  if (el) el.innerHTML = sgaActividadResumenHtml(sgaActividadLeer());
+}
+function sgaActividadClienteCambio(){
+  const clienteId = sgaActividadClienteId();
+  const alm = document.getElementById('ac-almacen');
+  if (alm) alm.innerHTML = sgaAlmacenOptionsHtml(clienteId, alm.value);   // solo los almacenes de este cliente
+  sgaServiciosRefrescar();                                                // los ya puestos se quedan solo si también son de este cliente
+  const hay = !!clienteId && sgaServiciosDeCliente(clienteId).length > 0;
+  const add = document.getElementById('ac-add'); if (add) add.style.display = hay ? '' : 'none';
+  const aviso = document.getElementById('ac-aviso');
+  if (aviso) aviso.innerHTML = !clienteId ? 'Elige primero el cliente.' : hay ? '' : 'Este cliente no tiene actividades con precio. Créalas en Almacén → Configuración → Productos (con cobro «manual») y ponles su precio en Comercial → Tarifas Almacén.';
+  const cont = document.getElementById('se-servicios');
+  if (hay && cont && !cont.querySelector('.se-srow')) sgaServicioAdd();   // ya sale la primera línea lista para elegir
+  window.__stockDirty = true;
+  sgaActividadRefrescar();
+}
+function tplStockActividadPage(){
+  const clientes = sgaClientesAlmacenLista();
+  return `
+    <div style="--bn-accent:#7A4FA3;">
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.clock, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 260px;">
+        <div class="deca-banner-title">Nueva actividad</div>
+        <div class="deca-banner-sub">Un trabajo que haces para un cliente y no es una recepción ni una expedición (verificación de inventario, recuento, etiquetado…): se anota y se cobra con su tarifa.</div>
+      </div>
+    </div>
+    <div class="deca-form" oninput="window.__stockDirty=true; sgaActividadRefrescar();" onchange="sgaActividadRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
+      <div class="card deca-card">
+        ${decaCardHead('file', 'Datos de la actividad', 'Para qué cliente, dónde y cuándo')}
+        <div class="deca-card-body">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <div class="field" style="flex:2;min-width:240px;"><label>Cliente <span class="dc-req">*</span></label>
+              <select id="ac-cliente" onchange="sgaActividadClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos en el SGA'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
+            <div class="field" style="flex:1;min-width:190px;"><label>Almacén <span class="dc-req">*</span></label><select id="ac-almacen">${sgaAlmacenOptionsHtml('', '')}</select></div>
+            <div class="field" style="flex:1;min-width:150px;"><label>Fecha <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="ac-fecha" type="date" value="${today()}" />`)}</div>
+          </div>
+          <div class="field" style="margin-bottom:0;"><label>Referencia <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></label>${decaInputIcon('file', `<input id="ac-ref" maxlength="60" placeholder="Ej. Inventario pedido por Marta" />`)}</div>
+        </div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('clock', 'Qué se ha hecho', 'Una línea por actividad; puedes poner varias', `<button type="button" id="ac-add" class="btn btn-ghost" style="background:var(--panel);display:none;" onclick="sgaServicioAdd()">+ Actividad</button>`)}
+        <div class="deca-card-body">
+          <div id="ac-aviso" style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div>
+          <div id="se-servicios"></div>
+        </div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('tag', 'Lo que se cobrará', 'Calculado con la tarifa del cliente a la fecha de la actividad')}
+        <div class="deca-card-body"><div id="ac-resumen">${sgaActividadResumenHtml({ clienteId: '' })}</div></div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('file', 'Observaciones', 'Opcional')}
+        <div class="deca-card-body"><textarea id="ac-obs" rows="3" maxlength="600" placeholder="Quién lo pidió, qué se revisó…" style="width:100%;resize:vertical;"></textarea></div>
+      </div>
+    </div>
+    <div class="deca-actions" style="max-width:1180px;">
+      <div id="ac-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
+      <div class="deca-actions-row">
+        <button class="btn btn-ghost deca-cancel" onclick="sgaActividadCancelar()">Cancelar</button>
+        <button class="btn btn-primary deca-submit ac-save" onclick="sgaActividadConfirmar()">Confirmar actividad</button>
+      </div>
+    </div>
+    </div>`;
+}
+async function sgaActividadConfirmar(){
+  const errEl = document.getElementById('ac-error');
+  errEl.textContent = '';
+  const d = sgaActividadLeer();
+  const errores = [];
+  if (!d.clienteId) errores.push('Elige el cliente.');
+  else if (!d.almacenId) errores.push(sgaAlmacenesCliente(d.clienteId).length ? 'Elige el almacén.' : 'Este cliente no tiene ningún almacén asignado. Asígnaselo en su ficha de cliente.');
+  if (!d.fecha) errores.push('Indica la fecha.');
+  const servicios = [];
+  d.servicios.forEach((s, n) => {
+    if (!s.productoId && !s.cantidadTxt) return;
+    if (!s.productoId || !(sgaNumero(s.cantidadTxt) > 0)) { errores.push(`Actividad ${n + 1}: elige la actividad y una cantidad mayor que 0.`); return; }
+    servicios.push({ producto_id: s.productoId, cantidad: sgaNumero(s.cantidadTxt), nota: s.nota });
+  });
+  if (!servicios.length && !errores.length) errores.push('Añade al menos una actividad.');
+  if (errores.length) { errEl.textContent = errores.join('\n'); return; }
+  const calc = sgaActividadCalculo(d);
+  if (!calc.activo) { const cfg = sgaClienteCfg(d.clienteId); errEl.textContent = cfg.activoDesde ? `Este cliente se activa en el SGA el ${fmtDateDMY(cfg.activoDesde)}: no se puede anotar una actividad anterior.` : 'Este cliente todavía no está activo en el SGA.'; return; }
+  if (calc.cobros.length < servicios.length) { errEl.textContent = (calc.avisos.length ? calc.avisos.join('\n') : 'Alguna actividad no tiene precio en la tarifa del cliente.') + '\nSin precio no se podría cobrar.'; return; }
+  const btn = document.querySelector('.ac-save');
+  if (btn) btn.disabled = true;
+  const payload = { albaran: { created_by: currentUserEmail(), cliente_id: d.clienteId, warehouse_id: d.almacenId, fecha: d.fecha, referencia: d.referencia, observaciones: d.observaciones }, servicios, cobros: calc.cobros };
+  const { error } = await supabaseClient.rpc('sga_confirmar_actividad', { p: payload });
+  if (error) {
+    const m = error.message || 'error desconocido.';
+    errEl.textContent = 'No se pudo guardar: ' + (/function .*sga_confirmar_actividad|sga_albaranes_tipo_check|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL «sga-actividades.sql» en Supabase.' : m);
+    if (btn) btn.disabled = false;
+    return;
+  }
+  await loadSgaStock();
+  appToast('Actividad registrada.', 'ok');
+  window.__stockSeg = 'actividades';
+  stockVolver();
+}
+// Lista de actividades: una fila por actividad con lo que se hizo y lo que se cobra
+function sgaActividadTxt(a){
+  const s = ((window.__sgaActividades || {})[a.id] || {}).servicios || [];
+  return s.map(x => `${sgaNumTxt(x.cantidad)} × ${sgaProdTxt(x.productoId)}${x.nota ? ' (' + x.nota + ')' : ''}`);
+}
+function stockActividadesBodyHtml(){
+  const q = (window.__stockSearch || '').trim().toLowerCase();
+  const wid = window.__stockAlm || '';
+  const emp = stockEmpActual('actividades'), est = window.__stockEstado || '';
+  const okCli = c => !q || c.nombre.toLowerCase().includes(q) || (c.nombreComercial || '').toLowerCase().includes(q) || (c.nif || '').toLowerCase().includes(q);
+  const lista = sgaAlbaranes.filter(a => a.tipo === 'actividad' && (!wid || a.warehouseId === wid) && (!emp || a.clienteId === emp) && (!est || sgaAlbaranEstadoClave(a) === est))
+    .filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && (okCli(c) || (q && ((a.referencia || '').toLowerCase().includes(q) || sgaActividadTxt(a).join(' ').toLowerCase().includes(q)))); });
+  if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q || emp || est ? 'Ninguna actividad coincide con la búsqueda o el filtro.' : 'Todavía no hay actividades. Anota la primera con «Nueva actividad».'}</div>`;
+  const conRef = lista.some(a => a.referencia);
+  return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
+    <thead><tr>${thSort('Nº','number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Almacén','text')}${conRef ? thSort('Referencia','text') : ''}${thSort('Actividad','text')}${thSort('Importe','number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
+    <tbody>${lista.map(a => { const c = contactos.find(x => x.id === a.clienteId), ls = sgaActividadTxt(a), imp = ((window.__sgaActividades || {})[a.id] || {}).importe; return `
+      <tr data-alb="${a.id}">
+        <td data-sort-value="${a.numero}"><b>${esc(sgaNumAlbaran(a))}</b></td>
+        <td style="white-space:nowrap;" data-sort-value="${esc(a.fecha)}">${fmtDateDMY(a.fecha)}</td>
+        <td data-sort-value="${esc(c ? c.nombre : '')}">${esc(c ? ((c.nombreComercial || '').trim() || c.nombre) : '—')}</td>
+        <td data-sort-value="${esc(whNombre(a.warehouseId))}">${esc(whNombre(a.warehouseId))}</td>
+        ${conRef ? `<td data-sort-value="${esc(a.referencia)}">${esc(a.referencia) || '—'}</td>` : ''}
+        <td class="sga-merc" data-sort-value="${esc(ls.join(' '))}"${ls.length ? ` data-tip="${esc(ls.join('\n'))}"` : ''}>${ls.length ? esc(ls[0]) + (ls.length > 1 ? ` +${ls.length - 1} más` : '') : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+        <td class="tf-precio" data-sort-value="${imp || 0}">${imp == null ? '—' : esc(eur2(imp))}</td>
+        <td data-sort-value="${esc(a.estado)}">${sgaAlbEstadoHtml(a)}</td>
+        <td style="text-align:right;white-space:nowrap;">${sgaAlbAccionesHtml(a)}</td>
+      </tr>`; }).join('')}</tbody></table></div>`;
 }
 
 /* ---- Almacenes: historial de cambios (quién cambió qué y cuándo) ---- */
