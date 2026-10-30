@@ -7648,19 +7648,62 @@ function stockVolver(){
 function sgaNormSub(s){ return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase(); }
 function sgaTarifaEn(clienteId, productoId, fecha, subtipo){
   const sub = subtipo ? sgaNormSub(subtipo) : '';
-  const l = almacenajeTarifas.filter(t => t.clienteId === clienteId && t.tipo === productoId && t.fecha <= fecha && (!sub || sgaNormSub(t.subtipo) === sub))
+  const p = sub ? almacenajeProducto(productoId) : null;
+  const lineas = sub ? (p ? sgaMovFamilia(clienteId, p).filter(e => e.prod.id === productoId && sgaNormSub(e.label) === sub).map(e => e.t) : []) : almacenajeTarifas.filter(t => t.clienteId === clienteId && t.tipo === productoId);
+  const l = lineas.filter(t => t.fecha <= fecha)
     .sort((a, b) => b.fecha.localeCompare(a.fecha) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
   return l[0] || null;
 }
-// Subtipos de las líneas de movimiento (entrada y salida) del cliente, p. ej. [«Normal», «Especial»]: cada palet que entra tiene que decir cuál es
+// Productos de entrada o salida que el cliente tiene en su tarifa
+function sgaMovProductos(clienteId){
+  const ids = new Set(almacenajeTarifas.filter(t => t.clienteId === clienteId).map(t => t.tipo));
+  return almacenajeProductos.filter(p => ids.has(p.id) && !p.archived && (almacenajeCobraEn(p, 'entrada') || almacenajeCobraEn(p, 'salida')));
+}
+// Los «tipos de palet» de un producto de movimiento. Un tipo puede estar escrito de tres maneras en la tarifa del cliente:
+//  · en el campo «Subtipo» de la línea («Entrada palet» con subtipo «Especial»); la línea sin subtipo es entonces el «Normal»
+//  · en un producto con subtipo fijo («Entrada palet · Normal» y «Entrada palet · Especial»)
+//  · en productos aparte cuyo nombre empieza igual («Entrada palet» y «Entrada palet Especial»): el corto es el «Normal»
+// Devuelve una entrada por línea de tarifa: { label, prod, t } (label vacío = este producto no distingue tipos)
+function sgaMovFamilia(clienteId, p){
+  const pal = q => almacenajeProductoTexto(q).replace(/[·.,\-]/g, ' ').split(/\s+/).filter(Boolean);
+  const dir = q => (almacenajeCobraEn(q, 'entrada') ? 'e' : '') + (almacenajeCobraEn(q, 'salida') ? 's' : '');
+  const empieza = (largo, corto) => corto.length > 0 && largo.length > corto.length && corto.every((w, k) => sgaNormSub(w) === sgaNormSub(largo[k]));
+  const fijo = q => (q.usaSubtipo && q.subtipoValor) || '';
+  const otros = sgaMovProductos(clienteId).filter(q => q.id !== p.id && dir(q) === dir(p));
+  let miembros;
+  if (fijo(p)) miembros = [{ prod: p, label: fijo(p) }].concat(otros.filter(q => fijo(q) && sgaNormSub(q.nombre) === sgaNormSub(p.nombre)).map(q => ({ prod: q, label: fijo(q) })));
+  else {
+    const todos = otros.concat([p]);
+    const base = todos.filter(q => q.id !== p.id && empieza(pal(p), pal(q))).sort((a, b) => pal(b).length - pal(a).length)[0];
+    const raiz = base || p;
+    const derivados = todos.filter(q => q.id !== raiz.id && empieza(pal(q), pal(raiz)));
+    miembros = [{ prod: raiz, label: derivados.length ? 'Normal' : '' }].concat(derivados.map(q => ({ prod: q, label: pal(q).slice(pal(raiz).length).join(' ') })));
+  }
+  const res = [];
+  miembros.forEach(m => {
+    const ls = almacenajeTarifas.filter(t => t.clienteId === clienteId && t.tipo === m.prod.id);
+    const conSub = ls.some(t => t.subtipo);
+    ls.forEach(t => res.push({ label: t.subtipo || m.label || (conSub ? 'Normal' : ''), prod: m.prod, t }));
+  });
+  return res;
+}
+// Tipos de palet del producto de movimiento que se cobra: [«Normal», «Especial»]; vacío si no distingue
+function sgaTiposDe(clienteId, p){
+  const vistos = new Map();
+  sgaMovFamilia(clienteId, p).forEach(e => { if (e.label && !vistos.has(sgaNormSub(e.label))) vistos.set(sgaNormSub(e.label), e.label); });
+  return [...vistos.values()];
+}
+// Producto de esa misma familia que cobra ese tipo («Entrada palet» → «Entrada palet Especial»)
+function sgaProdConTipo(clienteId, p, tipo){
+  const e = sgaMovFamilia(clienteId, p).find(x => sgaNormSub(x.label) === sgaNormSub(tipo));
+  return e ? e.prod : p;
+}
+// Tipos de palet de las líneas de movimiento (entrada y salida) del cliente, p. ej. [«Normal», «Especial»]: cada palet que entra tiene que decir cuál es
 // para que, al salir, se cobre con el precio que le toca
 function sgaSubtiposMov(clienteId){
   if (!clienteId) return [];
   const vistos = new Map();
-  almacenajeTarifas.filter(t => t.clienteId === clienteId && t.subtipo).forEach(t => {
-    const p = almacenajeProducto(t.tipo);
-    if (p && !p.archived && (almacenajeCobraEn(p, 'entrada') || almacenajeCobraEn(p, 'salida')) && !vistos.has(sgaNormSub(t.subtipo))) vistos.set(sgaNormSub(t.subtipo), t.subtipo);
-  });
+  sgaMovProductos(clienteId).forEach(p => sgaTiposDe(clienteId, p).forEach(s => { if (!vistos.has(sgaNormSub(s))) vistos.set(sgaNormSub(s), s); }));
   return [...vistos.values()].sort((a, b) => a.localeCompare(b, 'es'));
 }
 // Tipo de palet de una partida: el que se anotó al recibirla o, si no lo tiene, el de su artículo del catálogo
@@ -7711,11 +7754,14 @@ function sgaCalcularEntrada(d){
     let sinTipo = 0, faltaSub = 0;
     const sinTipoPs = [];
     // Un producto con líneas por subtipo («Normal» / «Especial») se cobra con la línea del subtipo de cada palet; sin subtipo no se sabe cuál toca
-    const subsDe = id => [...new Set(almacenajeTarifas.filter(t => t.clienteId === d.clienteId && t.tipo === id && t.subtipo).map(t => t.subtipo))];
     const sumar = (pe, p, cant) => {
-      const subs = subsDe(pe.id);
+      const subs = sgaTiposDe(d.clienteId, pe);
       let sub = '';
-      if (subs.length) { sub = subs.find(s => sgaNormSub(s) === sgaNormSub(p.subtipo)) || ''; if (!sub) { faltaSub += p.cantidad; return; } }
+      if (subs.length) {
+        sub = subs.find(s => sgaNormSub(s) === sgaNormSub(p.subtipo)) || '';
+        if (!sub) { faltaSub += p.cantidad; return; }
+        pe = sgaProdConTipo(d.clienteId, pe, sub);   // «Entrada palet» o «Entrada palet Especial», según el tipo de palet
+      }
       const k = pe.id + '|' + sub;
       grupos[k] = (grupos[k] || 0) + cant;
     };
@@ -7736,6 +7782,8 @@ function sgaCalcularEntrada(d){
     // Con varias tarifas de movimiento y mercancía sin tipo de carga, se elige la que es solo de este movimiento (el producto «Salida palet» gana al
     // que se cobra en recepción y expedición); si no, la única cuyo nombre habla de este movimiento («Salida palet», no «Entrada palet»)
     let candidatos = prodsMov;
+    // «Entrada palet» y «Entrada palet Especial» son el mismo producto con dos tipos: cuentan como uno (el tipo de palet decide cuál se cobra)
+    if (sinTipo > 0 && candidatos.length > 1) candidatos = [...new Map(candidatos.map(pr => { const r = sgaProdConTipo(d.clienteId, pr, 'Normal'); return [r.id, r.id !== pr.id && sgaTiposDe(d.clienteId, r).length ? r : pr]; })).values()];
     if (sinTipo > 0 && candidatos.length > 1) {
       const exactos = candidatos.filter(pr => pr.disparador === (salida ? 'salida' : 'entrada'));
       if (exactos.length === 1) candidatos = exactos;
