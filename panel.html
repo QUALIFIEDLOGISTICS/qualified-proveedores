@@ -247,6 +247,12 @@
   .se-art-b small{color:var(--muted);}
   .se-art-b .se-art-ph{color:var(--mutedFaint);}
   .se-art-ch{margin-left:auto;color:var(--muted);font-size:11px;flex-shrink:0;}
+  .ap-barra{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 28px;flex-shrink:0;border-bottom:1px solid var(--border);background:var(--panel);}
+  .ap-n{margin-left:auto;font-size:13px;font-weight:600;color:var(--muted);}
+  .ap-scroll{flex:1;overflow:auto;padding:0 28px 12px;}
+  .ap-scroll thead th{position:sticky;top:0;z-index:2;}
+  .ap-ya{color:var(--muted);font-weight:400;}
+  .ap-tabla tr.ap-fila.on td{background:color-mix(in srgb,var(--primary) 12%,var(--panel)) !important;}
   .ap-tabla tr.ap-fila{cursor:pointer;}
   .ap-tabla tr.ap-fila:hover td{background:color-mix(in srgb,var(--primary) 9%,var(--panel)) !important;}
   .cat-resumen{margin:0 2px 10px;font-size:13.5px;color:var(--muted);}
@@ -7814,38 +7820,96 @@ function sgaArtPickerFilas(){
   P.visibles = lista.map(x => x.a.id);
   const sin = P.cfg.codigosUnicos && !q ? `<tr class="ap-fila" onclick="sgaArtPickerElegir('')"><td colspan="${P.nCols}" style="color:var(--muted);">Sin artículo (palet único)</td></tr>` : '';
   if (!lista.length) return sin + `<tr><td colspan="${P.nCols}" style="text-align:center;color:var(--mutedFaint);padding:22px;">${q ? 'Ningún artículo coincide con la búsqueda.' : 'Este cliente todavía no tiene artículos.'}</td></tr>`;
-  return sin + lista.map(({ a, c }) => `<tr class="ap-fila" onclick="sgaArtPickerElegir('${a.id}')">${c.map(x => `<td${x.r ? ' style="text-align:right;white-space:nowrap;"' : ''} data-sort-value="${esc(x.v != null ? x.v : x.t)}">${x.t === '' ? '<span style="color:var(--mutedFaint);">—</span>' : x.b ? `<b>${esc(x.t)}</b>` : esc(x.t)}</td>`).join('')}</tr>`).join('');
+  return sin + lista.map(({ a, c }) => `<tr class="ap-fila${P.sel.has(a.id) ? ' on' : ''}" data-id="${a.id}" onclick="sgaArtPickerMarcar('${a.id}')">
+    <td style="width:34px;text-align:center;" data-sort-value="${P.sel.has(a.id) ? 0 : 1}"><input type="checkbox" class="ap-chk" ${P.sel.has(a.id) ? 'checked' : ''} tabindex="-1" style="pointer-events:none;" /></td>
+    ${c.map((x, k) => `<td${x.r ? ' style="text-align:right;white-space:nowrap;"' : ''} data-sort-value="${esc(x.v != null ? x.v : x.t)}">${x.t === '' ? '<span style="color:var(--mutedFaint);">—</span>' : x.b ? `<b>${esc(x.t)}</b>` : esc(x.t)}${k === 0 && P.usados.has(a.id) ? ' <small class="ap-ya">· ya está en otra línea</small>' : ''}</td>`).join('')}</tr>`).join('');
+}
+function sgaArtPickerContador(){
+  const P = window.__apick; if (!P) return;
+  const n = P.sel.size;
+  const c = document.getElementById('ap-n'); if (c) c.textContent = n ? `${n} seleccionado${n === 1 ? '' : 's'}` : 'Ninguno seleccionado';
+  const b = document.getElementById('ap-ok'); if (b) { b.disabled = !n; b.textContent = n ? `Añadir ${n} artículo${n === 1 ? '' : 's'}` : 'Añadir'; }
 }
 function sgaArtPickerAbrir(i){
   const cid = sgaEntradaClienteId();
   if (!cid) { appToast('Elige primero el cliente.', 'info'); return; }
   const cols = catColumnas(cid), cfg = sgaClienteCfg(cid);
   const lista = sgaArticulosDe(cid).slice().sort((a, b) => catPrincipalVal(a, cols).localeCompare(catPrincipalVal(b, cols), 'es', { numeric: true }));
-  const heads = [thSort(catPrincipalTit(cols), 'text'), ...(cols.referencia ? [thSort('Descripción', 'text')] : []), ...(cols.tipo ? [thSort('Tipo de carga', 'text')] : []),
+  const usados = new Set([...document.querySelectorAll('.se-row')].filter(tr => tr.dataset.i !== String(i)).map(tr => (document.getElementById(`se-${tr.dataset.i}-art`) || {}).value).filter(Boolean));
+  const heads = ['<th style="width:34px;"></th>', thSort(catPrincipalTit(cols), 'text'), ...(cols.referencia ? [thSort('Descripción', 'text')] : []), ...(cols.tipo ? [thSort('Tipo de carga', 'text')] : []),
     ...(cols.bultos ? [thSort('Bultos / palet', 'number', 'style="text-align:right;"')] : []), ...(cols.ml ? [thSort('M. lineales', 'number', 'style="text-align:right;"')] : []),
     ...(cols.peso ? [thSort(sgaPesoLabel(), 'number', 'style="text-align:right;"')] : []), ...(cols.medidas ? [thSort('Medidas', 'text')] : []),
     ...cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')), thSort('Stock', 'number', 'style="text-align:right;"')];
-  window.__apick = { i, cols, cfg, lista, q: '', nCols: heads.length, visibles: [] };
+  window.__apick = { i, cols, cfg, lista, usados, sel: new Set(), q: '', nCols: heads.length, visibles: [] };
   document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box" style="max-width:1040px;width:96vw;padding:0;border-radius:14px;overflow:hidden;">
+    <div class="modal-overlay op-full-ov">
+      <div class="op-full">
         <div class="deca-view-head pri">
           <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.search, 21, '#fff', 1.8)}</span>
-          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Elige el artículo</div>
-            <div class="deca-banner-sub" style="margin-top:1px;">Escribe para buscar por ${esc(catPrincipalTit(cols).toLowerCase())} (o cualquier otro dato) y pulsa el artículo: la línea se rellena sola.</div></div>
+          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Elige los artículos</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">Busca por ${esc(catPrincipalTit(cols).toLowerCase())} (o cualquier otro dato), marca los que lleguen y pulsa «Añadir»: cada uno crea su línea ya rellena.</div></div>
           <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
         </div>
-        <div class="deca-view-body" style="padding:14px 16px;">
-          <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
-            <div class="deca-search" style="flex:1 1 280px;"><input id="ap-buscar" autocomplete="off" placeholder="Buscar por ${esc(catPrincipalTit(cols).toLowerCase())}…" oninput="window.__apick.q = this.value; document.getElementById('ap-body').innerHTML = sgaArtPickerFilas();" onkeydown="if(event.key==='Enter'){ event.preventDefault(); const v = (window.__apick.visibles || [])[0]; if (v) sgaArtPickerElegir(v); }" /><span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span></div>
-            <button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="closeModal(); sgaArtNuevoRapido(${i});">+ Artículo nuevo</button>
-          </div>
-          <div class="tc-hist-box" style="max-height:min(60vh,520px);"><table class="tf-table ap-tabla"><thead><tr>${heads.join('')}</tr></thead><tbody id="ap-body">${sgaArtPickerFilas()}</tbody></table></div>
+        <div class="ap-barra">
+          <div class="deca-search" style="flex:1 1 280px;max-width:520px;"><input id="ap-buscar" autocomplete="off" placeholder="Buscar por ${esc(catPrincipalTit(cols).toLowerCase())}…" oninput="window.__apick.q = this.value; document.getElementById('ap-body').innerHTML = sgaArtPickerFilas();" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaArtPickerEnter(); }" /><span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span></div>
+          <button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="sgaArtPickerTodo()" title="Marca todos los artículos que se ven (con el buscador, solo los que coinciden)">Seleccionar todo</button>
+          <button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="sgaArtPickerNinguno()">Quitar selección</button>
+          <button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="closeModal(); sgaArtNuevoRapido(${i});">+ Artículo nuevo</button>
+          <span id="ap-n" class="ap-n">Ninguno seleccionado</span>
+        </div>
+        <div class="ap-scroll"><table class="tf-table ap-tabla"><thead><tr>${heads.join('')}</tr></thead><tbody id="ap-body">${sgaArtPickerFilas()}</tbody></table></div>
+        <div class="op-foot" style="display:flex;gap:10px;justify-content:flex-end;align-items:center;">
+          <button type="button" class="btn btn-ghost deca-cancel" onclick="closeModal()">Cancelar</button>
+          <button type="button" id="ap-ok" class="btn btn-primary deca-submit" disabled onclick="sgaArtPickerAnadir()">Añadir</button>
         </div>
       </div>
     </div>`;
   setTimeout(() => { const el = document.getElementById('ap-buscar'); if (el) el.focus(); }, 0);
 }
+function sgaArtPickerMarcar(id){
+  const P = window.__apick; if (!P) return;
+  if (P.sel.has(id)) P.sel.delete(id); else P.sel.add(id);
+  const tr = document.querySelector(`#ap-body tr[data-id="${id}"]`);
+  if (tr) { tr.classList.toggle('on', P.sel.has(id)); const c = tr.querySelector('.ap-chk'); if (c) c.checked = P.sel.has(id); }
+  sgaArtPickerContador();
+}
+// «Seleccionar todo» marca lo que se ve ahora (con el buscador, solo lo que coincide) y se salta lo que ya está en otra línea
+function sgaArtPickerTodo(){
+  const P = window.__apick; if (!P) return;
+  P.visibles.filter(id => !P.usados.has(id)).forEach(id => P.sel.add(id));
+  document.getElementById('ap-body').innerHTML = sgaArtPickerFilas();
+  sgaArtPickerContador();
+}
+function sgaArtPickerNinguno(){
+  const P = window.__apick; if (!P) return;
+  P.sel.clear();
+  document.getElementById('ap-body').innerHTML = sgaArtPickerFilas();
+  sgaArtPickerContador();
+}
+// Intro en el buscador: añade lo marcado o, si no hay nada marcado, el primero de la lista
+function sgaArtPickerEnter(){
+  const P = window.__apick; if (!P) return;
+  if (!P.sel.size && P.visibles[0]) P.sel.add(P.visibles[0]);
+  sgaArtPickerAnadir();
+}
+// Cada artículo marcado rellena una línea: el primero la línea desde la que se abrió y los demás, líneas nuevas
+function sgaArtPickerAnadir(){
+  const P = window.__apick; if (!P || !P.sel.size) return;
+  const ids = P.lista.map(a => a.id).filter(id => P.sel.has(id));
+  closeModal();
+  let primera = null;
+  ids.forEach((id, k) => {
+    const li = k === 0 ? P.i : sgaEntradaAddFila();
+    const sel = document.getElementById(`se-${li}-art`);
+    if (!sel) return;
+    sel.value = id;
+    sgaEntradaArticuloCambio(li);
+    if (primera === null) primera = li;
+  });
+  if (primera !== null) setTimeout(() => { const c = document.getElementById(`se-${primera}-cant`) || document.getElementById(`se-${primera}-codigo`); if (c) { c.focus(); if (c.select) c.select(); } }, 60);
+  if (ids.length > 1) appToast(`${ids.length} líneas añadidas: rellena ahora las cantidades.`, 'ok');
+}
+// «Sin artículo (palet único)»
 function sgaArtPickerElegir(id){
   const P = window.__apick; if (!P) return;
   const sel = document.getElementById(`se-${P.i}-art`);
@@ -7853,7 +7917,6 @@ function sgaArtPickerElegir(id){
   if (!sel) return;
   sel.value = id;
   sgaEntradaArticuloCambio(P.i);
-  setTimeout(() => { const c = document.getElementById(`se-${P.i}-cant`) || document.getElementById(`se-${P.i}-codigo`); if (c) { c.focus(); if (c.select) c.select(); } }, 60);
 }
 function sgaArticuloOptionsHtml(clienteId, sel){
   // Primero los artículos con más stock ahora mismo y, hacia abajo, los que menos (los que no tienen, al final por orden alfabético)
