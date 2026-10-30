@@ -51,6 +51,8 @@
   #sl-stock table.tf-table tbody tr.sl-sale td:first-child{box-shadow:inset 4px 0 0 var(--success);}
   #sl-stock table.tf-table tbody tr.sl-sale input:not([type=checkbox]):not([type=hidden]){font-weight:800;border-color:var(--success);}
   #sl-stock table.tf-table tbody tr.sl-oculta{display:none;}
+  .se-fill{border:1px solid var(--border);background:var(--panel);color:var(--primary);border-radius:5px;font-size:11px;line-height:1;padding:2px 5px;cursor:pointer;}
+  .se-fill:hover{border-color:var(--primary);}
   #cg-fill{position:fixed;width:7px;height:7px;background:var(--primary);border:1px solid var(--panel);border-radius:1px;cursor:crosshair;z-index:60;display:none;}
   body.cg-filling{user-select:none;cursor:crosshair;}
   td.cg-fill-sel{outline:2px dashed var(--primary);outline-offset:-2px;background:color-mix(in srgb,var(--primary) 10%,transparent);}
@@ -8226,6 +8228,9 @@ function sgaEntradaArticuloCambio(i){
     if (sub && subArt) { const o = [...sub.options].find(x => sgaNormSub(x.value) === sgaNormSub(subArt)); if (o) sub.value = o.value; }   // el tipo de palet sale solo, del catálogo
     const zona =document.getElementById(`se-${i}-zona`);
     if (art.zonaId && [...zona.options].some(o => o.value === art.zonaId)) { zona.value = art.zonaId; sgaEntradaZonaCambio(i); }
+    // Cliente cuyo artículo es único (p. ej. por su nº de serie): cada línea es 1 unidad, así que la cantidad sale ya puesta
+    const cant = document.getElementById(`se-${i}-cant`);
+    if (cant && !cant.value.trim() && sgaUnicoSinCodigo(art.clienteId)) cant.value = '1';
     const b = document.getElementById(`se-${i}-bultos`);
     if (b) delete b.dataset.manual;
     sgaEntradaBultosAuto(i);
@@ -8253,10 +8258,33 @@ function sgaEntradaBultosAuto(i){
   const n = c ? parseInt(c.value, 10) : 1;
   b.value = n > 0 ? String(Math.round(n * art.bultos * 100) / 100).replace('.', ',') : '';
 }
+// «⇩» de la cabecera: copia lo de la primera línea en las demás que tengan esa casilla vacía (las ya rellenas no se tocan)
+function sgaEntradaRellenarCol(col){
+  const filas = [...document.querySelectorAll('.se-row')];
+  const el0 = filas.length ? document.getElementById(`se-${filas[0].dataset.i}-${col}`) : null;
+  if (!el0 || String(el0.value).trim() === '') { appToast('Rellena primero esa casilla en la primera línea: su valor se copia en las demás.', 'info'); return; }
+  const val = el0.value;
+  let n = 0;
+  filas.slice(1).forEach(tr => {
+    const i = tr.dataset.i, el = document.getElementById(`se-${i}-${col}`);
+    if (!el || el.disabled || String(el.value).trim() !== '') return;
+    if (el.tagName === 'SELECT' && ![...el.options].some(o => o.value === val)) return;
+    el.value = val; n++;
+    if (col === 'zona') sgaEntradaZonaCambio(i);
+    if (col === 'cant') sgaEntradaBultosAuto(i);
+  });
+  if (!n) { appToast('Todas las demás líneas ya tienen algo en esa casilla.', 'info'); return; }
+  window.__stockDirty = true;
+  sgaEntradaRefrescar();
+  appToast(`Copiado en ${n} línea${n === 1 ? '' : 's'}.`, 'ok');
+}
 function sgaEntradaLineasHtml(cfg, pre){
   const conArt = sgaClienteConArticulos(sgaEntradaClienteId());
   const campos = sgaCamposLinea(cfg, conArt);
   window.__stockN = 0;
+  // «⇩» en la cabecera de una columna: copia el valor de la primera línea en las líneas que tienen esa casilla vacía
+  const fill = col => `<button type="button" class="se-fill" onclick="sgaEntradaRellenarCol('${col}')" title="Copiar el valor de la primera línea en todas las líneas vacías de esta columna">⇩</button>`;
+  const unicos = sgaUnicoCampos(sgaEntradaClienteId()).map(f => f.id);   // lo que identifica a cada artículo no se repite: sin «⇩»
   return `
     <div style="overflow-x:auto;">
     <table class="qr-table" style="width:100%;min-width:${620 + campos.length * 120 + (conArt ? 320 : 0) + (sgaEntradaPorLinea() ? 150 : 0)}px;">
@@ -8264,12 +8292,12 @@ function sgaEntradaLineasHtml(cfg, pre){
         <th style="padding:6px 4px;text-align:right;">#</th>
         ${sgaEntradaPorLinea() ? '<th style="padding:6px 4px;">Almacén</th>' : ''}
         ${conArt ? '<th style="padding:6px 4px;">Artículo</th>' : ''}
-        ${sgaEntradaConTipo(sgaEntradaClienteId()) ? '<th style="padding:6px 4px;">Tipo de carga</th>' : ''}
-        ${sgaSubtiposMov(sgaEntradaClienteId()).length ? '<th style="padding:6px 4px;">Tipo de palet <span class="dc-req">*</span></th>' : ''}
-        <th style="padding:6px 4px;">${cfg.codigosUnicos ? 'Código' : sgaCap(sgaUnidadCfg(sgaEntradaClienteId()).p)}</th>
+        ${sgaEntradaConTipo(sgaEntradaClienteId()) ? `<th style="padding:6px 4px;white-space:nowrap;">Tipo de carga ${fill('prod')}</th>` : ''}
+        ${sgaSubtiposMov(sgaEntradaClienteId()).length ? `<th style="padding:6px 4px;white-space:nowrap;">Tipo de palet <span class="dc-req">*</span> ${fill('sub')}</th>` : ''}
+        <th style="padding:6px 4px;white-space:nowrap;">${cfg.codigosUnicos ? 'Código' : sgaCap(sgaUnidadCfg(sgaEntradaClienteId()).p) + ' ' + fill('cant')}</th>
         ${conArt && sgaClienteConBultos(sgaEntradaClienteId()) ? '<th style="padding:6px 4px;">Bultos</th>' : ''}
-        ${campos.map(f => `<th style="padding:6px 4px;">${esc(f.label)}${cfg.campos[f.id] === 'obligatorio' ? ' <span class="dc-req">*</span>' : ''}</th>`).join('')}
-        <th style="padding:6px 4px;">Zona</th>
+        ${campos.map(f => `<th style="padding:6px 4px;white-space:nowrap;">${esc(f.label)}${cfg.campos[f.id] === 'obligatorio' ? ' <span class="dc-req">*</span>' : ''}${unicos.includes(f.id) || ['serie', 'codigo'].includes(f.id) ? '' : ' ' + fill(f.id)}</th>`).join('')}
+        <th style="padding:6px 4px;white-space:nowrap;">Zona ${fill('zona')}</th>
         <th style="padding:6px 4px;">Ubicación</th>
         <th></th>
       </tr></thead>
