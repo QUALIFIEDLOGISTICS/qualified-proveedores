@@ -5010,6 +5010,14 @@ function sgaArticuloFaltaClave(clienteId, atributos){
   if (!sgaUnicoSinCodigo(clienteId) || sgaArticuloExtra(clienteId, atributos)) return '';
   return `Escribe ${sgaUnicoCampos(clienteId).map(f => '«' + f.nombre + '»').join(' o ')}: en este cliente es lo que identifica al artículo.`;
 }
+// En un cliente donde el código no cuenta (manda un dato como «El maestro»), el código de artículo no se pide: si se deja vacío,
+// el artículo se llama como ese dato. La base de datos necesita siempre un nombre.
+function sgaArticuloNombreAuto(clienteId, atributos){
+  if (!sgaUnicoSinCodigo(clienteId)) return '';
+  const at = atributos || {};
+  const f = sgaUnicoCampos(clienteId).find(x => at[x.id] != null && String(at[x.id]).trim() !== '');
+  return f ? String(sgaCampoMostrar(f, at[f.id])).trim().toUpperCase() : '';
+}
 function sgaArticuloRepetidoTxt(clienteId){
   const u = sgaUnicoCampos(clienteId).map(f => f.nombre.toLowerCase());
   if (u.length && sgaUnicoSinCodigo(clienteId)) return `Este cliente ya tiene un artículo con ${u.length > 1 ? 'esos mismos' : 'el mismo'} ${u.join(' y ')}.`;
@@ -6605,7 +6613,11 @@ async function catGuardarCelda(el){
   const volver = msg => { appToast(msg, 'error'); if (!window.__catLote) renderTab(); return false; };
   const campos = { nombre: 'nombre', referencia: 'referencia', productoId: 'producto_id', zonaId: 'zona_id', bultos: 'bultos_por_unidad', metrosLineales: 'metros_lineales', peso: 'peso', medidas: 'medidas' };
   let valor = v;
-  if (f === 'nombre' && !v) return volver('El código de artículo no puede quedar vacío.');
+  if (f === 'nombre' && !v) {
+    valor = sgaArticuloNombreAuto(a.clienteId, a.atributos);   // sin código: se llama como el dato que manda
+    if (!valor) return volver('El código de artículo no puede quedar vacío.');
+    el.value = valor;
+  }
   if (f === 'medidas' && !v && sgaClienteCfg(a.clienteId).campos.medidas === 'obligatorio') return volver('Las medidas son obligatorias para este cliente.');
   if (['bultos', 'metrosLineales', 'peso'].includes(f)) {
     if (v === '' && f === 'bultos') return volver('Los bultos por palet tienen que ser un número mayor que 0.');
@@ -6613,7 +6625,7 @@ async function catGuardarCelda(el){
     if (valor !== null && !isFinite(valor)) return volver('Escribe un número.');
     if (f === 'bultos' && !(valor > 0)) return volver('Los bultos por palet tienen que ser un número mayor que 0.');
   }
-  if (f === 'nombre' && sgaArticuloRepetido(a.clienteId, v, a.atributos, a.id)) return volver(sgaArticuloRepetidoTxt(a.clienteId));
+  if (f === 'nombre' && sgaArticuloRepetido(a.clienteId, valor, a.atributos, a.id)) return volver(sgaArticuloRepetidoTxt(a.clienteId));
   if (a[f] === valor || (a[f] === '' && valor === '')) return true;
   const dbVal = (['productoId', 'zonaId', 'referencia', 'medidas'].includes(f) && v === '') ? null : valor;
   const { error } = await supabaseClient.from('sga_articulos').update({ [campos[f]]: dbVal }).eq('id', a.id);
@@ -6633,7 +6645,7 @@ function catFilaNuevaHtml(cid){
   const num = (campo, ph) => `<td><input class="cg-in" data-n="${campo}" inputmode="decimal" maxlength="10" ${ph ? `placeholder="${ph}"` : ''} ${campo === 'bultos' ? 'value="1"' : ''} ${k} /></td>`;
   return `
     <tr class="cg-row cg-edit cg-new" data-new="1">
-      <td class="cg-prod"><input class="cg-in" data-n="nombre" data-mayusc maxlength="150" placeholder="Código de artículo nuevo…" style="min-width:220px;text-transform:uppercase;" ${k} /></td>
+      <td class="cg-prod"><input class="cg-in" data-n="nombre" data-mayusc maxlength="150" placeholder="${sgaUnicoSinCodigo(cid) ? 'Código (opcional)…' : 'Código de artículo nuevo…'}" style="min-width:220px;text-transform:uppercase;" ${k} /></td>
       ${cols.referencia ? `<td><input class="cg-in" data-n="referencia" data-mayusc maxlength="80" style="min-width:130px;text-transform:uppercase;" ${k} /></td>` : ''}
       ${cols.tipo ? `<td><select class="cg-in" data-n="productoId" ${k}><option value="">—</option>${prods.map(p => `<option value="${p.id}" ${prods.length === 1 ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></td>` : ''}
       ${cols.bultos ? num('bultos') : ''}
@@ -6803,8 +6815,9 @@ async function catGuardarFilaNueva(tr){
   const vacia = campos.every(el => el.tagName === 'SELECT' ? el.selectedIndex <= 0 || el.options.length === 2 : el.value.trim() === '');
   if (vacia) { tr.remove(); return true; }
   const marcar = (n, msg) => { appToast(msg, 'error'); const el = tr.querySelector(`[data-n="${n}"]`); if (el) { el.classList.add('cg-err'); } return false; };
-  const nombre = g('nombre').toUpperCase(), referencia = g('referencia').toUpperCase();
-  if (!nombre) return marcar('nombre', 'Escribe el código de artículo en la fila nueva.');
+  let nombre = g('nombre').toUpperCase();
+  const referencia = g('referencia').toUpperCase();
+  if (!nombre && !sgaUnicoSinCodigo(cid)) return marcar('nombre', 'Escribe el código de artículo en la fila nueva.');
   const num = n => { const t = g(n); return t === '' ? null : Number(t.replace(',', '.')); };
   const bultos = num('bultos') == null ? 1 : num('bultos');
   if (!isFinite(bultos) || bultos <= 0) return marcar('bultos', 'Los bultos por palet tienen que ser un número mayor que 0.');
@@ -6822,6 +6835,8 @@ async function catGuardarFilaNueva(tr){
     else atributos[f.id] = r.valor;
   }
   if (sgaArticuloFaltaClave(cid, atributos)) return marcar('nombre', sgaArticuloFaltaClave(cid, atributos));
+  if (!nombre) nombre = sgaArticuloNombreAuto(cid, atributos);   // sin código: se llama como el dato que manda
+  if (!nombre) return marcar('nombre', 'Escribe el código de artículo en la fila nueva.');
   if (sgaArticuloRepetido(cid, nombre, atributos)) return marcar('nombre', sgaArticuloRepetidoTxt(cid));
   const claveExtra = sgaArticuloExtra(cid, atributos);
   const row = { cliente_id: cid, nombre, referencia: referencia || null, producto_id: g('productoId') || null, bultos_por_unidad: bultos, metros_lineales: ml, peso, medidas: medidas || null };
@@ -9393,7 +9408,7 @@ function tplSgaArticuloPage(c){
         ${decaCardHead('tag', 'Identificación', 'Cómo se llama y cómo se reconoce')}
         <div class="deca-card-body">
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <div class="field" style="flex:2;min-width:240px;"><label>Código de artículo <span class="dc-req">*</span></label>${decaInputIcon('tag', `<input id="sgaa-nombre" data-mayusc maxlength="150" placeholder="Ej. CARPA GREEN 9.15x20x4.5" value="${esc(a ? a.nombre : '')}" />`)}</div>
+            <div class="field" style="flex:2;min-width:240px;"><label>Código de artículo ${sgaUnicoSinCodigo(pg.clienteId) ? '<small style="color:var(--mutedFaint);font-weight:400;">· opcional</small>' : '<span class="dc-req">*</span>'}</label>${decaInputIcon('tag', `<input id="sgaa-nombre" data-mayusc maxlength="150" placeholder="${sgaUnicoSinCodigo(pg.clienteId) ? 'Opcional: si lo dejas vacío, se usa el dato que manda' : 'Ej. CARPA GREEN 9.15x20x4.5'}" value="${esc(a ? a.nombre : '')}" />`)}</div>
             <div class="field" style="flex:1;min-width:180px;"><label>Descripción</label>${decaInputIcon('file', `<input id="sgaa-ref" data-mayusc maxlength="80" placeholder="Ej. MODELO 306515RG" value="${esc(a ? a.referencia : '')}" />`)}</div>
           </div>
         </div>
@@ -9440,11 +9455,12 @@ async function submitSgaArticulo(){
   const errEl = document.getElementById('sgaa-error');
   errEl.textContent = '';
   const val = id => document.getElementById(id).value.trim();
-  const nombre = val('sgaa-nombre').toUpperCase(), referencia = val('sgaa-ref').toUpperCase();
+  let nombre = val('sgaa-nombre').toUpperCase();
+  const referencia = val('sgaa-ref').toUpperCase();
   const productoId = val('sgaa-prod'), zonaId = val('sgaa-zona'), medidas = val('sgaa-medidas');
   const numero = id => { const t = val(id); return t === '' ? null : Number(t.replace(',', '.')); };
   const bultos = numero('sgaa-bultos'), ml = numero('sgaa-ml'), peso = numero('sgaa-peso');
-  if (!nombre) { errEl.textContent = 'Escribe el nombre del producto.'; return; }
+  if (!nombre && !sgaUnicoSinCodigo(pg.clienteId)) { errEl.textContent = 'Escribe el nombre del producto.'; return; }
   if (bultos == null || !isFinite(bultos) || bultos <= 0) { errEl.textContent = 'Indica cuántos bultos lleva cada palet (un número mayor que 0).'; return; }
   if ((ml != null && !isFinite(ml)) || (peso != null && !isFinite(peso))) { errEl.textContent = 'Los metros lineales y el peso tienen que ser números.'; return; }
   // Datos adicionales (campos propios del artículo): se conservan los de campos archivados o que este cliente ya no usa
@@ -9459,6 +9475,8 @@ async function submitSgaArticulo(){
   }
   // Lo único es el código de artículo (la descripción puede repetirse) y, si el cliente lo ha elegido así, también los datos que lo distinguen (p. ej. el lote)
   if (sgaArticuloFaltaClave(pg.clienteId, atributos)) { errEl.textContent = sgaArticuloFaltaClave(pg.clienteId, atributos); return; }
+  if (!nombre) nombre = sgaArticuloNombreAuto(pg.clienteId, atributos);   // sin código: se llama como el dato que manda
+  if (!nombre) { errEl.textContent = 'Escribe el nombre del producto.'; return; }
   if (sgaArticuloRepetido(pg.clienteId, nombre, atributos, pg.id)) { errEl.textContent = sgaArticuloRepetidoTxt(pg.clienteId); return; }
   const claveExtra = sgaArticuloExtra(pg.clienteId, atributos);
   const btn = document.querySelector('.sgaa-save');
