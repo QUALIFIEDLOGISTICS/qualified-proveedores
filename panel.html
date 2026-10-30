@@ -270,7 +270,8 @@
   .sga-tabs button{background:none;border:none;border-bottom:3px solid transparent;margin-bottom:-1px;padding:10px 16px;font-size:14px;font-weight:500;color:var(--muted);cursor:pointer;white-space:nowrap;font-family:var(--body);}
   .sga-tabs button.on{border-bottom-color:var(--primary);color:var(--primary);font-weight:700;}
   @media (max-width:1180px){ .sga-acc-grid{grid-template-columns:repeat(2,minmax(0,1fr));} }
-  @media (max-width:760px){ .sga-acc-grid{grid-template-columns:1fr;} }
+  .sga-acc-grid.dos{grid-template-columns:repeat(2,minmax(0,1fr));max-width:940px;}
+  @media (max-width:760px){ .sga-acc-grid,.sga-acc-grid.dos{grid-template-columns:1fr;} }
   /* Ficha SGA del cliente: preguntas compactas (una línea + frase de ayuda) */
   .sgac-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;padding:11px 0;border-top:1px solid var(--border);}
   .sgac-row:first-child{border-top:none;padding-top:2px;}
@@ -3963,7 +3964,8 @@ function computeBreadcrumbSegments(){
     }
     return [{label: comercialSection() === 'tarifas' ? 'Tarifas Transporte' : 'Clientes', onclick:null}];
   }
-  if (currentTab === 'stock' && window.__stockView === 'entrada') return [{label:'Control Stock SGA', onclick:'sgaEntradaCancelar()'}, {label: window.__seEdit ? 'Editar recepción' : window.__seInicial ? 'Stock inicial' : 'Nueva recepción', onclick:null}];
+  if (currentTab === 'stock' && window.__stockView === 'entrada') return [{label:'Control Stock SGA', onclick:'sgaEntradaCancelar()'}, ...(window.__seInicial && !window.__seEdit ? [{label:'Ajustes de stock', onclick:"sgaEntradaAAjustes('ajustes')"}] : []), {label: window.__seEdit ? 'Editar recepción' : window.__seInicial ? 'Alta de stock inicial' : 'Nueva recepción', onclick:null}];
+  if (currentTab === 'stock' && window.__stockView === 'ajustes') return [{label:'Control Stock SGA', onclick:'stockVolver()'}, {label:'Ajustes de stock', onclick:null}];
   if (currentTab === 'stock' && (window.__stockView === 'articulo' || window.__stockView === 'rapida')) {
     const pg = window.__stockView === 'articulo' ? window.__sgaArtForm : window.__sgaArtRapida;
     const cl = pg ? contactos.find(x => x.id === pg.clienteId) : null;
@@ -3974,7 +3976,7 @@ function computeBreadcrumbSegments(){
   if (currentTab === 'stock' && window.__stockView === 'catedit') return [{label:'Inventario', onclick:'catEditarSalir()'}, {label:'Editar catálogo', onclick:null}];
   if (currentTab === 'stock' && window.__stockView === 'operativa') return [{label:'Control Stock SGA', onclick:'sgaOperativaCancelar()'}, {label: (window.__opForm && window.__opForm.id) ? 'Editar operativa' : 'Nueva operativa', onclick:null}];
   if (currentTab === 'stock' && window.__stockView === 'actividad') return [{label:'Control Stock SGA', onclick:'sgaActividadCancelar()'}, {label:'Nueva actividad', onclick:null}];
-  if (currentTab === 'stock' && window.__stockView === 'regul') return [{label:'Control Stock SGA', onclick:'sgaRegulCancelar()'}, {label:'Regularizar stock', onclick:null}];
+  if (currentTab === 'stock' && window.__stockView === 'regul') return [{label:'Control Stock SGA', onclick:'sgaRegulCancelar()'}, {label:'Ajustes de stock', onclick:'sgaRegulAAjustes()'}, {label:'Regularización de inventario', onclick:null}];
   if (currentTab === ALMACEN_CONFIG_TAB) {
     if (window.__sgaPage && window.__sgaPage.kind === 'campo') {
       const cp = window.__sgaPage.id ? sgaCampos.find(x => x.id === window.__sgaPage.id) : null;
@@ -7578,6 +7580,7 @@ function tplStock(){
   if (window.__stockView === 'entrada') return tplStockEntradaPage();
   if (window.__stockView === 'salida') return tplStockSalidaPage();
   if (window.__stockView === 'regul') return tplStockRegulPage();
+  if (window.__stockView === 'ajustes') return tplStockAjustesPage();
   if (window.__stockView === 'actividad') return tplStockActividadPage();
   if (window.__stockView === 'operativa') return tplStockOperativaPage();
   if (window.__stockView === 'catedit') return tplCatEditPage();
@@ -7599,7 +7602,7 @@ function tplStock(){
     ${seg === 'operativas' ? '' : `<div class="sga-acc-grid">
       ${acc('#1B3A6B', 'entrada', 'Nueva recepción', 'Recibir mercancía de un cliente', 'sgaEntradaAbrir()', 'Registrar la mercancía que llega al almacén')}
       ${acc('#C0721A', 'salida', 'Nueva expedición', 'Sacar mercancía y emitir albarán', 'sgaSalidaAbrir()', 'Sacar mercancía del almacén y generar el albarán')}
-      ${acc('#2F7F86', 'regul', 'Regularizar', 'Ajustar el stock a lo contado', 'sgaRegulAbrir()', 'Ajustar el stock a lo que hay de verdad')}
+      ${acc('#2F7F86', 'regul', 'Ajustes de stock', 'Stock inicial y regularización', 'sgaAjustesAbrir()', 'Dar de alta la mercancía que ya hay en el almacén o ajustar las existencias a lo contado')}
       ${acc('#7A4FA3', 'actividad', 'Nueva actividad', 'Un trabajo que se cobra, sin mover stock', 'sgaActividadAbrir()', 'Anotar un trabajo hecho para un cliente (verificación de inventario, recuento…) y cobrarlo')}
     </div>`}
     ${seg === 'operativas' ? '' : `<div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('actividades', 'Actividades')}${segBtn('liquidaciones', 'Liquidaciones')}</div>`}
@@ -8198,8 +8201,17 @@ async function sgaArtNuevoGuardar(){
   }
   appToast('Artículo creado y elegido.', 'ok');
 }
+// Alta de stock inicial de un cliente que ya tiene mercancía en el SGA: aviso suave por si lo que quería era regularizar
+function sgaEntradaIniAviso(){
+  const el = document.getElementById('se-ini-aviso'); if (!el) return;
+  const cid = sgaEntradaClienteId();
+  const n = window.__seInicial && !window.__seEdit && cid ? sgaStockCliente(cid).reduce((s, p) => s + p.actual, 0) : 0;
+  el.style.display = n ? '' : 'none';
+  el.innerHTML = n ? `⚠ Este cliente ya tiene <b>${n}</b> ${esc(sgaUd(cid, n))} en el almacén. Si lo que quieres es corregir cantidades, usa <a href="#" onclick="event.preventDefault(); sgaEntradaAAjustes('regul')">Regularización de inventario</a>; si llega mercancía nueva, haz una recepción.` : '';
+}
 function sgaEntradaClienteCambio(){
   const clienteId = sgaEntradaClienteId();
+  sgaEntradaIniAviso();
   const cfg = sgaClienteCfg(clienteId);
   const alm = document.getElementById('se-almacen');
   if (alm) alm.innerHTML = sgaAlmacenOptionsHtml(clienteId, alm.value);   // solo los almacenes de este cliente
@@ -8573,9 +8585,10 @@ function tplStockEntradaPage(){
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.box, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
-        <div class="deca-banner-title">${window.__seEdit ? (ini ? 'Editar stock inicial ' : 'Editar recepción ') + esc(sgaNumAlbaran(window.__seEdit.albaran)) : ini ? 'Stock inicial' : 'Nueva recepción'}</div>
+        <div class="deca-banner-title">${window.__seEdit ? (ini ? 'Editar stock inicial ' : 'Editar recepción ') + esc(sgaNumAlbaran(window.__seEdit.albaran)) : ini ? 'Alta de stock inicial' : 'Nueva recepción'}</div>
         <div class="deca-banner-sub">${window.__seEdit ? 'Cambia lo que necesites: al guardar se recalculan el stock y lo que se cobra. De una línea de la que ya ha salido mercancía no se pueden quitar palets de más.' : ini ? 'Alta de la mercancía que un cliente ya tiene en el almacén (viene de Excel).' : 'La mercancía que llega a un cliente; eliges en cuál de sus almacenes se queda.'}</div>
       </div>
+      ${ini && !window.__seEdit ? `<div class="deca-banner-actions"><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="sgaEntradaAAjustes('ajustes')" title="Volver a elegir entre alta de stock inicial y regularización">← Cambiar de opción</button></div>` : ''}
       ${window.__seEdit && (window.__seNavIds || []).length > 1 && (window.__seNavIds || []).includes(window.__seEdit.id) ? (() => {
         const ids = window.__seNavIds, idx = ids.indexOf(window.__seEdit.id);
         const arrow = (offset, title, ch) => `<button onclick="sgaEntradaNavGoto(${offset})" title="${title}" style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 11px;cursor:pointer;color:var(--muted);font-size:13px;">${ch}</button>`;
@@ -8586,7 +8599,7 @@ function tplStockEntradaPage(){
       <div class="card deca-card">
         ${ini ? decaCardHead('file', 'Cliente y fecha', 'De quién es el stock y desde cuándo lo tiene en el almacén') : decaCardHead('file', 'Datos de la recepción', 'Quién la trae y cuándo')}
         <div class="deca-card-body">
-          ${ini ? `<div class="se-ini-nota">Da de alta lo que el cliente <b>ya tiene en el almacén</b> y que hasta ahora llevabas en Excel. No genera cobro de recepción: el almacenaje se cobra desde la fecha de recepción original de cada línea.</div>` : ''}
+          ${ini ? `<div class="se-ini-nota">Da de alta lo que el cliente <b>ya tiene en el almacén</b> y que hasta ahora llevabas en Excel. No genera cobro de recepción: el almacenaje se cobra desde la fecha de recepción original de cada línea.</div><div id="se-ini-aviso" class="se-aviso" style="display:none;margin-bottom:10px;"></div>` : ''}
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
             <div class="field" style="flex:2;min-width:240px;"><label>Cliente <span class="dc-req">*</span></label>
               <select id="se-cliente" onchange="sgaEntradaClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos en el SGA'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
@@ -11203,7 +11216,43 @@ async function sgaAnularConfirmar(){
   appToast('Albarán anulado.', 'ok');
   renderTab();
 }
-/* ---- Regularizar stock: se escribe lo que realmente hay y el SGA calcula la diferencia ---- */
+/* ---- Ajustes de stock: la puerta de entrada de «Alta de stock inicial» y «Regularización de inventario» ---- */
+function sgaAjustesAbrir(){
+  window.__seEdit = null; window.__seInicial = false;
+  window.__stockView = 'ajustes';
+  window.__stockDirty = false;
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
+}
+function tplStockAjustesPage(){
+  const card = (color, arte, titulo, texto, onclick) => `<button type="button" class="sga-acc" style="--acc:${color};" onclick="${onclick}"><span class="sga-acc-ico">${SGA_ACC_ARTE[arte]}</span><div style="min-width:0;"><span class="sga-acc-t">${titulo}</span><span class="sga-acc-s">${texto}</span></div><span class="sga-acc-go">${homeIcon(HOME_ICON_PATHS.arrow, 18, 'currentColor', 2.2)}</span></button>`;
+  return `
+    <div style="--bn-accent:var(--primary);">
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.edit, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 260px;">
+        <div class="deca-banner-title">Ajustes de stock</div>
+        <div class="deca-banner-sub">Alta de mercancía existente o corrección de existencias.</div>
+      </div>
+    </div>
+    <div class="sga-acc-grid dos">
+      ${card('#1B3A6B', 'entrada', 'Alta de stock inicial', 'Registra la mercancía que el cliente ya tiene en el almacén. No genera cobro de recepción.', 'sgaEntradaAbrir(true)')}
+      ${card('#2F7F86', 'regul', 'Regularización de inventario', 'Ajusta las existencias del SGA a las unidades contadas. Queda registrada con su motivo.', 'sgaRegulAbrir()')}
+    </div>
+    <div class="deca-actions" style="max-width:940px;"><div class="deca-actions-row"><button class="btn btn-ghost deca-cancel" onclick="stockVolver()">Volver</button></div></div>
+    </div>`;
+}
+// Desde un formulario de ajuste, volver a elegir entre stock inicial y regularización (avisando si hay algo escrito)
+async function sgaRegulAAjustes(){
+  if (window.__stockDirty && !(await appConfirm({ title: 'Cambiar de opción', message: 'Has empezado a rellenar esta regularización. Si cambias de opción, se pierde lo escrito.', confirmLabel: 'Cambiar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
+  sgaAjustesAbrir();
+}
+async function sgaEntradaAAjustes(destino){
+  if (window.__stockDirty && !(await appConfirm({ title: 'Cambiar de opción', message: 'Has empezado a rellenar esta pantalla. Si cambias de opción, se pierde lo escrito.', confirmLabel: 'Cambiar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
+  window.__stockDirty = false;
+  if (destino === 'regul') { window.__seInicial = false; sgaRegulAbrir(); } else sgaAjustesAbrir();
+}
+/* ---- Regularización de inventario: se escribe lo que realmente hay y el SGA calcula la diferencia ---- */
 function sgaRegulAbrir(){
   window.__stockView = 'regul';
   window.__stockDirty = false;
@@ -11232,7 +11281,7 @@ function sgaRegulAlmacenCambio(){
   if (!clienteId || !wid) { cont.innerHTML = `<div style="color:var(--mutedFaint);font-size:12.5px;">${!clienteId ? 'Elige primero el cliente.' : 'Elige el almacén.'}</div>`; sgaRegulRefrescar(); return; }
   const ps = sgaStockCliente(clienteId, wid);
   if (!ps.length) {
-    cont.innerHTML = `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);"><span>Este cliente no tiene stock en el SGA en este almacén. Si lo llevabas en Excel, carga lo que tiene como <b>stock inicial</b>.</span><button type="button" class="btn btn-primary" onclick="sgaRegulAInicial()">Cargar stock inicial</button></div>`;
+    cont.innerHTML = `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);"><span>Este cliente no tiene stock en el SGA en este almacén. Si lo llevabas en Excel, dalo de alta como <b>stock inicial</b>.</span><button type="button" class="btn btn-primary" onclick="sgaRegulAInicial()">Alta de stock inicial</button></div>`;
     sgaRegulRefrescar();
     return;
   }
@@ -11290,10 +11339,10 @@ function tplStockRegulPage(){
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.edit, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
-        <div class="deca-banner-title">Regularizar stock</div>
+        <div class="deca-banner-title">Regularización de inventario</div>
         <div class="deca-banner-sub">Cuando lo que hay en el almacén no coincide con el SGA: escribe lo que hay de verdad y queda anotado con su motivo.</div>
       </div>
-      <div class="deca-banner-actions"><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="sgaRegulAInicial()" title="Para un cliente que llevabas en Excel: da de alta la mercancía que ya tiene en el almacén">Cargar stock inicial</button></div>
+      <div class="deca-banner-actions"><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="sgaRegulAAjustes()" title="Volver a elegir entre alta de stock inicial y regularización">← Cambiar de opción</button></div>
     </div>
     <div class="deca-form" oninput="window.__stockDirty=true; sgaRegulRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
       <div class="card deca-card">
