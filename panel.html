@@ -50,7 +50,7 @@
   #sl-stock table.tf-table tbody tr.sl-sale:hover td{background:color-mix(in srgb,var(--success) 23%,var(--panel));}
   #sl-stock table.tf-table tbody tr.sl-sale td:first-child{box-shadow:inset 4px 0 0 var(--success);}
   #sl-stock table.tf-table tbody tr.sl-sale input:not([type=checkbox]):not([type=hidden]){font-weight:800;border-color:var(--success);}
-  #sl-stock table.tf-table tbody tr.sl-sale-fin td{border-bottom:2px solid var(--success);}
+  #sl-stock table.tf-table tbody tr.sl-oculta{display:none;}
   table.tf-table td.tf-precio{text-align:right;font-weight:700;font-size:14.5px;white-space:nowrap;font-variant-numeric:tabular-nums;}
   table.tf-table td.tf-precio small{font-weight:500;font-size:11.5px;color:var(--muted);}
   table.tf-table.tf-hist td{color:var(--muted);}
@@ -3086,7 +3086,6 @@ function sortTableByHeader(th){
   });
   if (dir === 'desc') rows.reverse();
   rows.forEach(r => tbody.appendChild(r));
-  if (table.closest('#sl-stock')) { rows.forEach((r, i) => { r.dataset.base = i; }); sgaSalidaSubir(); }   // expedición: el orden elegido es el de base; lo que sale sigue arriba
   ths.forEach((h, i) => {
     const arrow = h.querySelector('.th-sort-arrow');
     if (!arrow) return;
@@ -9123,21 +9122,13 @@ function sgaSalidaGruposHtml(clienteId, ps, flags){
     </tr>`;
   }).join('');
 }
-// Las filas de las que sale algo suben arriba del todo (en el orden de la tabla), para comprobar de un vistazo lo que se ha marcado.
-// Las demás conservan su orden; al quitar la cantidad, la fila vuelve a su sitio. Solo se mueven las filas que están fuera de lugar,
-// y no mientras se escribe en una casilla (se haría al salir de ella) para no cambiar de sitio lo que se está tecleando.
-function sgaSalidaSubir(){
-  const tb = document.querySelector('#sl-stock tbody');
-  if (!tb) return;
-  const rows = [...tb.children].filter(r => r.tagName === 'TR');
-  if (!rows.length) return;
-  if (rows.some(r => r.dataset.base === undefined)) rows.forEach((r, i) => { r.dataset.base = i; });
-  const sale = r => [...r.querySelectorAll('.sl-in')].some(i => i.type === 'checkbox' ? i.checked : Number(i.value) > 0);
-  const orden = rows.map(r => ({ r, s: sale(r) ? 0 : 1, b: Number(r.dataset.base) })).sort((x, y) => x.s - y.s || x.b - y.b).map(x => x.r);
-  if (orden.every((r, i) => r === rows[i])) return;
-  const foco = document.activeElement;
-  orden.forEach((r, i) => { const ref = tb.children[i]; if (ref !== r) tb.insertBefore(r, ref); });
-  if (foco && foco !== document.body && document.activeElement !== foco && document.contains(foco)) foco.focus();
+// «Ver solo lo que sale»: oculta las filas de las que no sale nada. Se aplica al pulsar el botón (no al teclear), así ninguna fila desaparece mientras se escribe.
+function sgaSalidaSoloSale(){
+  const b = document.getElementById('sl-solo-b');
+  const activar = !(b && b.classList.contains('on'));
+  sgaSalidaRefrescar();
+  document.querySelectorAll('#sl-stock tbody tr').forEach(tr => tr.classList.toggle('sl-oculta', activar && !tr.classList.contains('sl-sale')));
+  if (b) { b.classList.toggle('on', activar); b.textContent = activar ? 'Ver todo el stock' : 'Ver solo lo que sale'; }
 }
 function sgaSalidaGrupoIn(el){
   const ps = el.dataset.pids.split(',').map(id => sgaPartidas.find(p => p.id === id)).filter(Boolean);
@@ -9219,6 +9210,7 @@ function sgaSalidaStockHtml(clienteId){
       <div class="field" style="width:110px;margin-bottom:0;"><label>${!conTipo && !conDesc && !conRef ? 'Cantidad a expedir' : 'Cantidad'}</label><input id="sl-q-cant" inputmode="numeric" maxlength="6" placeholder="Nº" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaSalidaRepartir(); }" /></div>`}
       ${manual ? '<div style="flex:1;min-width:200px;font-size:13px;color:var(--muted);"><b>Sin orden de entrada</b> · el stock sale junto, agrupado por artículo: indica abajo cuántos ' + sgaUnidadCfg(clienteId).p + ' salen de cada uno.</div>' : `<button type="button" class="btn btn-ghost" onclick="sgaSalidaRepartir()" title="${modo === 'lifo' ? 'Reparte la cantidad entre las partidas más recientes' : 'Reparte la cantidad entre las partidas más antiguas'}">Repartir (${modo === 'lifo' ? 'más reciente' : 'más antiguo'} primero)</button>`}
       <button type="button" class="btn btn-ghost" onclick="sgaSalidaLimpiar()">Vaciar selección</button>
+      <button type="button" id="sl-solo-b" class="btn btn-ghost" onclick="sgaSalidaSoloSale()" title="Deja a la vista solo las filas de las que sale algo, para comprobarlas de un vistazo">Ver solo lo que sale</button>
     </div>
     ${ps.length > 8 ? sgaBuscadorFilasHtml('sl-buscar', '#sl-stock .tc-hist-box table', 'Buscar en el stock: artículo, descripción, código, sitio…') : ''}
     <div class="tc-hist-box" style="max-height:420px;">
@@ -9460,8 +9452,6 @@ function sgaSalidaRefrescar(){
     const nSel = document.getElementById('sl-n-sel');
     if (nSel) nSel.textContent = tot ? `${tot} ${sgaUd(d.clienteId, tot)} a expedir` : 'Nada seleccionado';
     sgaSalidaGruposSync();
-    const ae = document.activeElement;
-    if (!(ae && ae.tagName === 'INPUT' && ae.type !== 'checkbox' && ae.closest('#sl-stock tbody'))) sgaSalidaSubir();
     const porPid = new Map(d.items.map(i => [i.p.id, i]));   // por id: sin recorrer todas las partidas por cada casilla
     // En los campos de bultos, lo que saldría solo (proporcional) como sugerencia mientras no se escriba nada
     document.querySelectorAll('.sl-bu:not([type="hidden"]), .sl-gb').forEach(el => {
@@ -9470,16 +9460,12 @@ function sgaSalidaRefrescar(){
       el.placeholder = xs.length ? sgaNumTxt(Math.round(xs.reduce((s, i) => s + sgaBultosSalida(i.p, i.n), 0) * 100) / 100) : 'auto';
     });
     const filas = [...document.querySelectorAll('#sl-stock tbody tr')];
-    let ultSale = null;
+    // Las filas no se mueven nunca solas: lo que sale se marca en color (y «Ver solo lo que sale» deja solo esas)
     filas.forEach(tr => {
       const pids = (tr.dataset.pids || tr.dataset.pid || '').split(',');
       const sale = pids.some(id => { const i = porPid.get(id); return i && i.n > 0; });   // en el agrupado, la fila se resalta si sale algo de cualquiera de sus partidas
       tr.classList.toggle('sl-sale', sale);
-      tr.classList.remove('sl-sale-fin');
-      if (sale) ultSale = tr;
     });
-    // la última fila de las que salen lleva una línea más marcada: separa «lo que sale» del resto del stock
-    if (ultSale && ultSale !== filas[filas.length - 1]) ultSale.classList.add('sl-sale-fin');
   } finally { window.__slCache = null; }
 }
 function tplStockSalidaPage(){
@@ -9531,7 +9517,7 @@ function tplStockSalidaPage(){
       </div>
       <div class="card deca-card" id="sl-card-stock">
         ${decaCardHead('box', 'Mercancía a expedir', 'Reparto automático por cantidad (según el FIFO del cliente) o selección partida a partida', `<span id="sl-n-sel" class="sl-n-sel">Nada seleccionado</span><button type="button" id="sl-pant-b" class="btn btn-primary" onclick="sgaSalidaPantalla()" title="Ver y elegir la mercancía a pantalla completa">⤢ Pantalla completa</button>`)}
-        <div class="deca-card-body"><div id="sl-stock" onfocusout="setTimeout(sgaSalidaSubir, 0)"><div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div></div></div>
+        <div class="deca-card-body"><div id="sl-stock"><div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div></div></div>
       </div>
       <div class="card deca-card">
         ${decaCardHead('shield', 'DeCA', 'Opcional · se vincula a esta expedición y su QR sale en el albarán')}
