@@ -51,6 +51,9 @@
   #sl-stock table.tf-table tbody tr.sl-sale td:first-child{box-shadow:inset 4px 0 0 var(--success);}
   #sl-stock table.tf-table tbody tr.sl-sale input:not([type=checkbox]):not([type=hidden]){font-weight:800;border-color:var(--success);}
   #sl-stock table.tf-table tbody tr.sl-oculta{display:none;}
+  #cg-fill{position:fixed;width:7px;height:7px;background:var(--primary);border:1px solid var(--panel);border-radius:1px;cursor:crosshair;z-index:60;display:none;}
+  body.cg-filling{user-select:none;cursor:crosshair;}
+  td.cg-fill-sel{outline:2px dashed var(--primary);outline-offset:-2px;background:color-mix(in srgb,var(--primary) 10%,transparent);}
   table.tf-table td.tf-precio{text-align:right;font-weight:700;font-size:14.5px;white-space:nowrap;font-variant-numeric:tabular-nums;}
   table.tf-table td.tf-precio small{font-weight:500;font-size:11.5px;color:var(--muted);}
   table.tf-table.tf-hist td{color:var(--muted);}
@@ -6837,6 +6840,135 @@ document.addEventListener('keydown', e => {
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
   if (el.select && el.tagName === 'INPUT') el.select();
+});
+/* ---- Rellenar arrastrando (como en Excel) ----
+   Al pinchar en una casilla de «Editar catálogo» aparece un cuadrito en su esquina: se arrastra hacia abajo (o hacia arriba) y el valor se copia
+   en las casillas de esa misma columna por las que pasa. Es un solo paso del historial (Ctrl+Z lo deshace entero). No sale en las columnas
+   que identifican al artículo (código, nº de serie…): no se pueden repetir. */
+(function(){
+  let asa = null, src = null, drag = null;
+  const activo = () => !!window.__catEditAll && window.__stockView === 'catedit' && !window.__catLocked;
+  const enTabla = el => !!(el && el.closest && el.matches && el.matches('input, select, textarea') && el.closest('#stock-body table.cg-tabla') && el.closest('tr.cg-row'));
+  const unico = k => { const cid = catClienteSel(); return k === 'nombre' || (!!cid && sgaUnicoCampos(cid).some(f => 'x:' + f.id === k)); };
+  function elAsa(){
+    if (asa) return asa;
+    asa = document.createElement('div');
+    asa.id = 'cg-fill'; asa.title = 'Arrastra hacia abajo para copiar este valor en las filas de debajo';
+    asa.addEventListener('mousedown', empezar);
+    document.body.appendChild(asa);
+    return asa;
+  }
+  function ocultar(){ if (asa) asa.style.display = 'none'; }
+  function colocar(){
+    const a = elAsa();
+    if (drag) return;
+    a.style.display = 'none';
+    if (!activo() || !src || !src.isConnected) return;
+    const td = src.closest('td');
+    if (!td) return;
+    const r = td.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > window.innerHeight || r.right < 0 || r.left > window.innerWidth) return;
+    const x = r.right - 6, y = r.bottom - 6, quien = document.elementFromPoint(x, y);
+    if (!quien || quien.closest('td') !== td) return;   // tapada por otra cosa (cabecera fija, borde del recuadro…)
+    a.style.left = (x - 3) + 'px'; a.style.top = (y - 3) + 'px'; a.style.display = 'block';
+  }
+  function filasEntre(trA, trB, tbody){
+    const f = [...tbody.querySelectorAll('tr.cg-row')], i = f.indexOf(trA), j = f.indexOf(trB);
+    if (i < 0 || j < 0 || i === j) return [];
+    return j > i ? f.slice(i + 1, j + 1) : f.slice(j, i);
+  }
+  function marcar(){
+    document.querySelectorAll('td.cg-fill-sel').forEach(t => t.classList.remove('cg-fill-sel'));
+    if (!drag) return;
+    drag.rows.forEach(tr => { const td = tr.cells[drag.idx]; if (td) td.classList.add('cg-fill-sel'); });
+  }
+  function empezar(e){
+    e.preventDefault(); e.stopPropagation();
+    if (!src || !src.isConnected) return;
+    const tr = src.closest('tr');
+    drag = { src, idx: src.closest('td').cellIndex, tr, tbody: tr.parentNode, rows: [] };
+    asa.style.pointerEvents = 'none';
+    document.body.classList.add('cg-filling');
+    document.addEventListener('mousemove', mover);
+    document.addEventListener('mouseup', soltar, { once: true });
+  }
+  function mover(e){
+    if (!drag) return;
+    const t = document.elementFromPoint(e.clientX, e.clientY), tr = t && t.closest ? t.closest('tr.cg-row') : null;
+    if (tr && tr.parentNode === drag.tbody) drag.rows = filasEntre(drag.tr, tr, drag.tbody);
+    marcar();
+  }
+  function soltar(){
+    document.removeEventListener('mousemove', mover);
+    document.body.classList.remove('cg-filling');
+    const d = drag; drag = null;
+    if (asa) asa.style.pointerEvents = '';
+    marcar();
+    if (!d || !d.rows.length || !d.src.isConnected) { colocar(); return; }
+    const val = d.src.value, antes = new Map();
+    let n = 0, omitidas = 0;
+    window.__catPegando = true;   // las casillas no anotan su propio paso: todo el relleno es uno solo
+    d.rows.forEach(tr => {
+      const td = tr.cells[d.idx], ctl = td ? td.querySelector('input, select, textarea') : null;
+      if (!ctl || ctl.disabled || ctl.readOnly || (ctl.tagName === 'SELECT' && ![...ctl.options].some(o => o.value === val))) { omitidas++; return; }
+      if (!antes.has(ctl)) antes.set(ctl, ctl.value);
+      ctl.value = val;
+      ctl.dispatchEvent(new Event('input', { bubbles: true }));
+      ctl.dispatchEvent(new Event('change', { bubbles: true }));
+      n++;
+    });
+    window.__catPegando = false;
+    catActualizarContador();
+    const grupo = [...antes].map(([c, a]) => ({ el: c, antes: a, despues: c.value })).filter(x => x.antes !== x.despues);
+    if (grupo.length) { const h = catHist(); h.u.push({ grupo, creadas: [], tbody: d.tbody }); if (h.u.length > 300) h.u.shift(); h.r = []; catHistRefrescar(); }
+    appToast(n ? `Copiado en ${n} fila${n === 1 ? '' : 's'}.${omitidas ? ` ${omitidas} no se ${omitidas === 1 ? 'pudo' : 'pudieron'} rellenar (el valor no está disponible en esa casilla).` : ''} Con Ctrl+Z se deshace. Revisa y pulsa «Guardar».` : 'Ese valor no se puede copiar en esas filas.', omitidas || !n ? 'info' : 'ok');
+    colocar();
+  }
+  document.addEventListener('focusin', e => {
+    if (drag) return;
+    if (activo() && enTabla(e.target) && !unico(catClaveCelda(e.target))) { src = e.target; colocar(); } else { src = null; ocultar(); }
+  });
+  document.addEventListener('focusout', () => { setTimeout(() => { if (!drag && !(document.activeElement && enTabla(document.activeElement))) { src = null; ocultar(); } }, 0); });
+  window.addEventListener('scroll', () => { if (src && !drag) colocar(); }, true);
+  window.addEventListener('resize', () => { if (src && !drag) colocar(); });
+})();
+/* ---- Moverse por «Editar catálogo» con las flechas, como en una cuadrícula ----
+   ↑ ↓ pasan a la casilla de arriba o de abajo (misma columna) y ← → a la de al lado; al llegar el texto queda seleccionado: se escribe encima
+   para cambiarlo. En una casilla de texto, ← → solo saltan cuando el cursor está al borde del texto (si no, mueven el cursor); con Ctrl
+   saltan siempre. Con una lista desplegada, las flechas siguen eligiendo opción. */
+document.addEventListener('keydown', e => {
+  if (!e.key || e.key.indexOf('Arrow') !== 0 || e.altKey || e.shiftKey || e.metaKey) return;
+  if (!window.__catEditAll || window.__stockView !== 'catedit' || window.__catLocked) return;
+  const el = e.target;
+  if (!el || !el.matches || !el.matches('input, select') || !el.closest('#stock-body table.cg-tabla') || !el.closest('tr.cg-row')) return;
+  const panel = document.getElementById('combo-panel');
+  if (panel && panel.style.display !== 'none' && Combo.input === el) return;   // lista desplegada: las flechas eligen opción
+  if (el.dataset.combo && !e.ctrlKey) return;
+  const vert = e.key === 'ArrowUp' || e.key === 'ArrowDown', izq = e.key === 'ArrowLeft';
+  if (vert && !e.ctrlKey && el.type === 'date') return;   // en una fecha, ↑ ↓ cambian la fecha
+  if (!vert && !e.ctrlKey && el.tagName === 'INPUT') {
+    const a = el.selectionStart, b = el.selectionEnd;
+    if (a == null) return;
+    const n = el.value.length, todo = a === 0 && b === n;
+    if (izq ? !(todo || (a === 0 && b === 0)) : !(todo || (a === n && b === n))) return;
+  }
+  const control = c => c.querySelector('input:not([type=hidden]):not([type=checkbox]), select, textarea');
+  const td = el.closest('td'), tr = el.closest('tr');
+  let destino = null;
+  if (vert) {
+    let r = tr;
+    do { r = e.key === 'ArrowDown' ? r.nextElementSibling : r.previousElementSibling; } while (r && !(r.classList.contains('cg-row') && r.offsetParent !== null && r.cells[td.cellIndex] && control(r.cells[td.cellIndex])));
+    if (r) destino = control(r.cells[td.cellIndex]);
+  } else {
+    let c = td;
+    do { c = izq ? c.previousElementSibling : c.nextElementSibling; } while (c && !control(c));
+    if (c) destino = control(c);
+  }
+  if (!destino) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  destino.focus();
+  destino.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  if (destino.tagName === 'INPUT' && destino.select) destino.select();
 });
 // Elimina un artículo del catálogo, solo si nunca ha tenido entradas ni salidas (cualquier partida suya, aunque ya esté agotada, lo impide)
 async function catEliminarArticulo(id){
