@@ -1751,6 +1751,19 @@
   .sgs-nh{display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:15px;} .sgs-nh .sgn-res{margin-left:auto;}
   .sgs-cols{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;}
   .sgs-list{flex:1 1 280px;max-width:380px;display:flex;flex-direction:column;gap:6px;}
+  .sgv-n{border:1px solid var(--border);border-radius:14px;background:var(--panel2);padding:10px 12px 12px;}
+  .sgv-nh{display:flex;align-items:center;gap:10px;margin-bottom:10px;font-size:14px;} .sgv-nh>span:last-child{margin-left:auto;font-size:12px;color:var(--muted);}
+  .sgt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;}
+  .sgt{display:flex;flex-direction:column;gap:6px;text-align:left;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--panel);cursor:pointer;font:inherit;color:inherit;}
+  .sgt:hover{border-color:var(--primary);box-shadow:0 4px 14px color-mix(in srgb,var(--primary) 14%,transparent);}
+  .sgt.suelo{border-style:dashed;}
+  .sgt-h{display:flex;align-items:center;justify-content:space-between;gap:8px;} .sgt-h b{font-size:13.5px;overflow-wrap:anywhere;}
+  .sgt-s{font-size:11.5px;color:var(--muted);}
+  .sgt-mapa{display:flex;flex-direction:column;gap:5px;margin-top:2px;}
+  .sgt-p{display:flex;align-items:flex-start;gap:6px;} .sgt-p i{font-style:normal;font-size:9.5px;font-weight:700;color:var(--mutedFaint);width:12px;flex:0 0 auto;padding-top:0;line-height:7px;}
+  .sgt-g{display:grid;gap:2px;flex:1;min-width:0;}
+  .sgt-g b{height:7px;border-radius:1.5px;background:color-mix(in srgb,var(--primary) 55%,var(--panel));} .sgt-g b.a{background:var(--border);opacity:.7;} .sgt-g s{height:7px;}
+  .sgt-vacio,.sgt-suelo{font-size:12px;color:var(--mutedFaint);padding:6px 0 2px;}
   .zg{margin-top:10px;padding:10px 12px;border:1px dashed var(--border);border-radius:12px;background:var(--panel2);}
   .zg-t{font-size:12px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;color:var(--muted);} .zg-ayuda{font-size:11.5px;color:var(--mutedFaint);margin:3px 0 8px;}
   .zg-tabla{width:100%;border-collapse:collapse;background:var(--panel);}
@@ -4936,33 +4949,62 @@ function sgaZonasGrupos(wid, verArch){
 }
 const sgaNUb = zs => zs.reduce((s, z) => s + (z.tipo === 'estanteria' ? sgaUbicacionesDe(z.id).length : 0), 0);
 const sgaTxtN = (n, s, p) => n === 1 ? '1 ' + s : n + ' ' + p;
-// Ficha del almacén: solo lectura. Para cambiar algo, «Editar» abre la pantalla completa.
+// Plano en pequeño de una zona de estantería: cada ubicación es un cuadradito, agrupadas por pasillo (columnas × niveles). 300 ubicaciones caben en un bloque pequeño.
+function sgaMiniMapaHtml(zonaId){
+  const todas = sgaUbicacionesDe(zonaId, true);
+  if (!todas.length) return '<div class="sgt-vacio">Sin ubicaciones todavía</div>';
+  const pas = {}, otras = [];
+  todas.forEach(u => {
+    const m = sgaUbicParse(u.codigo);
+    if (!m) { otras.push(u); return; }
+    const g = pas[m.p] = pas[m.p] || { cols: new Set(), nivs: new Set(), cel: {} };
+    g.cols.add(m.c); g.nivs.add(m.n); g.cel[m.c + '|' + m.n] = u;
+  });
+  const cel = u => `<b${u.archived ? ' class="a"' : ''}></b>`;
+  const bloques = Object.keys(pas).sort((a, b) => a.localeCompare(b, 'es', { numeric: true })).map(k => {
+    const g = pas[k], cols = [...g.cols].sort((a, b) => a - b), nivs = [...g.nivs].sort((a, b) => b - a);
+    let h = '';
+    nivs.forEach(n => cols.forEach(c => { const u = g.cel[c + '|' + n]; h += u ? cel(u) : '<s></s>'; }));
+    return `<div class="sgt-p"><i>${esc(k)}</i><div class="sgt-g" style="grid-template-columns:repeat(${cols.length},minmax(0,1fr));">${h}</div></div>`;
+  }).join('');
+  const sueltas = otras.length ? `<div class="sgt-p"><i>·</i><div class="sgt-g" style="grid-template-columns:repeat(auto-fill,minmax(9px,1fr));">${otras.map(cel).join('')}</div></div>` : '';
+  return `<div class="sgt-mapa">${bloques}${sueltas}</div>`;
+}
+function sgaZonaTesela(z, wid){
+  const esEst = z.tipo === 'estanteria', us = esEst ? sgaUbicacionesDe(z.id) : [];
+  const pasillos = new Set(us.map(u => { const m = sgaUbicParse(u.codigo); return m ? m.p : null; }).filter(Boolean)).size;
+  const sub = esEst ? (us.length ? [sgaTxtN(us.length, 'ubicación', 'ubicaciones'), pasillos ? sgaTxtN(pasillos, 'pasillo', 'pasillos') : ''].filter(Boolean).join(' · ') : 'Sin ubicaciones') : 'Mercancía a suelo';
+  return `<button type="button" class="sgt${esEst ? '' : ' suelo'}" data-wid="${esc(wid)}" data-k="${esc((z.nave || '').trim().toLowerCase())}" data-z="${esc(z.id)}" onclick="openSgaZonasEditor(this.dataset.wid, this.dataset.k, this.dataset.z)" title="Abrir en el editor">
+    <div class="sgt-h"><b>${esc(z.nombre)}</b><span class="sga-tipo ${esEst ? 'est' : ''}">${esc(SGA_ZONA_TIPOS[z.tipo] || z.tipo)}</span></div>
+    <div class="sgt-s">${sub}</div>
+    ${esEst ? sgaMiniMapaHtml(z.id) : '<div class="sgt-suelo">Zona de suelo</div>'}
+  </button>`;
+}
+// Ficha del almacén: un plano con una tarjeta por zona (nave → zonas) y, dentro, sus ubicaciones como cuadraditos. Para cambiar algo, «Editar».
 function whZonasViewCardHtml(w){
   const activas = sgaZonas.filter(z => z.warehouseId === w.id && !z.archived && z.nombre);   // la fila «solo nave» no es una zona
   const grupos = sgaZonasGrupos(w.id, false).filter(g => g.zs.length || sgaZonas.some(z => z.warehouseId === w.id && !z.archived && (z.nave || '').trim().toLowerCase() === g.k));   // sin las naves recién creadas aún sin guardar
   const naves = grupos.filter(g => g.nave).length, totUb = sgaNUb(activas);
   const sub = activas.length ? [naves ? sgaTxtN(naves, 'nave', 'naves') : '', sgaTxtN(activas.length, 'zona', 'zonas'), totUb ? sgaTxtN(totUb, 'ubicación', 'ubicaciones') : ''].filter(Boolean).join(' · ') : 'Cómo está organizado este almacén';
-  const fila = (z, enNave) => {
-    const esEst = z.tipo === 'estanteria', n = esEst ? sgaUbicacionesDe(z.id).length : 0;
-    return `<div class="sgz-ro"><b>${esc(z.nombre)}</b><span>${esEst ? sgaTxtN(n, 'ubicación', 'ubicaciones') : 'A suelo'}</span><em class="sga-tipo ${esEst ? 'est' : ''}">${esc(SGA_ZONA_TIPOS[z.tipo] || z.tipo)}</em></div>`;
-  };
-  const arbol = grupos.map(g => g.nave
-    ? `<div class="sgn"><div class="sgn-head" style="cursor:default;"><span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 16, 'currentColor', 1.8)}</span><b>${esc(g.nave)}</b><span class="sgn-res">${sgaTxtN(g.zs.length, 'zona', 'zonas')}${sgaNUb(g.zs) ? ' · ' + sgaTxtN(sgaNUb(g.zs), 'ubicación', 'ubicaciones') : ''}</span></div><div class="sgn-body">${g.zs.length ? g.zs.map(z => fila(z, true)).join('') : '<div style="color:var(--mutedFaint);font-size:12.5px;padding:2px 4px;">Todavía sin zonas.</div>'}</div></div>`
-    : g.zs.map(z => fila(z, false)).join('')).join('');
+  const arbol = grupos.map(g => {
+    const tiles = g.zs.length ? `<div class="sgt-grid">${g.zs.map(z => sgaZonaTesela(z, w.id)).join('')}</div>` : '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía sin zonas.</div>';
+    if (!g.nave) return (grupos.length > 1 ? '<div class="sgv-nh"><b>Sin nave</b></div>' : '') + tiles;
+    return `<div class="sgv-n"><div class="sgv-nh"><span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 16, 'currentColor', 1.8)}</span><b>${esc(g.nave)}</b><span>${sgaTxtN(g.zs.length, 'zona', 'zonas')}${sgaNUb(g.zs) ? ' · ' + sgaTxtN(sgaNUb(g.zs), 'ubicación', 'ubicaciones') : ''}</span></div>${tiles}</div>`;
+  }).join('');
   return `
     <div class="card deca-card" style="margin-top:16px;--dc-accent:var(--primary);">
       ${decaCardHead('pin', 'Zonas y ubicaciones', sub, `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaZonasEditor('${w.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>`)}
-      <div class="deca-card-body" style="display:flex;flex-direction:column;gap:8px;">
+      <div class="deca-card-body" style="display:flex;flex-direction:column;gap:14px;">
         ${activas.length ? arbol : '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay naves ni zonas. Pulsa «Editar» para crearlas.</div>'}
       </div>
     </div>`;
 }
 /* ---- Pantalla completa: editar las naves, zonas y ubicaciones de un almacén ----
    Se elige primero la nave, luego la zona, y en la zona se crean sus ubicaciones: todo en una pantalla, sin listas larguísimas. */
-function openSgaZonasEditor(wid){
+function openSgaZonasEditor(wid, k, zonaId){   // k y zonaId: entrar ya con esa nave y zona elegidas (desde una tarjeta de la ficha)
   window.__sgaPagePrev = null;
   window.__sgaPage = { kind: 'zonas', warehouseId: wid };
-  window.__sgaSelNave = null; window.__sgaSelZona = null; window.__sgaZonasArch = false; window.__sgaNaveRen = null; window.__sgaNavesNuevas = [];
+  window.__sgaSelNave = k != null && k !== '' ? k : (zonaId ? '' : null); window.__sgaSelZona = zonaId || null; window.__sgaZonasArch = false; window.__sgaNaveRen = null; window.__sgaNavesNuevas = [];
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
 }
