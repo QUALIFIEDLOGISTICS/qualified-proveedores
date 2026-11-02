@@ -14129,6 +14129,8 @@ async function loadFlota(){
     itvVence: v.itv_vence || '', seguroVence: v.seguro_vence || '', tacografoVence: v.tacografo_vence || '',
     numeroFlota: v.numero_flota || '', bastidor: v.numero_bastidor || '', propietario: v.propietario || '', archived: !!v.archived,
     segAseguradora: v.seguro_aseguradora || '', segPoliza: v.seguro_poliza || '', segCobertura: v.seguro_cobertura || '', segPrima: v.seguro_prima == null ? '' : String(v.seguro_prima), segTelefono: v.seguro_telefono || '', segNotas: v.seguro_notas || '',
+    regimen: v.regimen || 'propiedad', rentEmpresa: v.renting_empresa || '', rentContrato: v.renting_contrato || '', rentInicio: v.renting_inicio || '', rentFin: v.renting_fin || '',
+    rentCuota: v.renting_cuota == null ? '' : String(v.renting_cuota), rentCuotaFinal: v.renting_cuota_final == null ? '' : String(v.renting_cuota_final), rentKm: v.renting_km == null ? '' : String(v.renting_km), rentNotas: v.renting_notas || '',
   }));
 }
 const FLOTA_PROPIETARIOS = ['QUALIFIED', 'LA LOGISTICA ORGANIZADA SANT RAMON 95 SL', 'OBRES I SERVEIS BALSARENY'];
@@ -14376,12 +14378,14 @@ const FLOTA_FIELD_LABELS = {
   itvVence: 'ITV', seguroVence: 'Seguro', tacografoVence: 'Tacógrafo',
   numeroFlota: 'Número de flota', bastidor: 'Nº de bastidor', propietario: 'Propietario',
   segAseguradora: 'Aseguradora', segPoliza: 'Nº de póliza', segCobertura: 'Cobertura del seguro', segPrima: 'Prima del seguro (€/año)', segTelefono: 'Teléfono de la aseguradora', segNotas: 'Notas del seguro',
+  regimen: 'Régimen', rentEmpresa: 'Empresa de renting/leasing', rentContrato: 'Nº de contrato', rentInicio: 'Inicio del contrato', rentFin: 'Fin del contrato',
+  rentCuota: 'Cuota mensual (€)', rentCuotaFinal: 'Cuota final (€)', rentKm: 'Km incluidos al año', rentNotas: 'Notas del contrato',
 };
 function buildFlotaChangeSummary(before, after){
   const lines = [];
   Object.keys(FLOTA_FIELD_LABELS).forEach(key => {
-    const isDate = /Vence$/.test(key);
-    const show = v => !v ? '—' : isDate ? fmtDateY(v) : key === 'tipo' ? (FLOTA_TIPOS[v]||v) : v;
+    const isDate = /(Vence|Inicio|Fin)$/.test(key);
+    const show = v => !v ? '—' : isDate ? fmtDateY(v) : key === 'tipo' ? (FLOTA_TIPOS[v]||v) : key === 'regimen' ? (FLOTA_REGIMENES[v]||v) : v;
     if ((before[key]||'') !== (after[key]||'')) lines.push(`${FLOTA_FIELD_LABELS[key]}: "${show(before[key])}" → "${show(after[key])}"`);
   });
   return lines;
@@ -14474,6 +14478,31 @@ function onFlotaTipoChange(){
   const f = document.getElementById('fl-tacografo-field');
   if (f) f.style.display = document.getElementById('fl-tipo').value === 'tractora' ? '' : 'none';
 }
+const FLOTA_REGIMENES = { propiedad: 'En propiedad', renting: 'Renting', leasing: 'Leasing' };
+const flotaNum = x => (x === '' || x == null || !isFinite(Number(x))) ? null : Number(x);
+// Lo que se lee del formulario del contrato. Si el vehículo pasa a «En propiedad» los datos del contrato se conservan (solo se ocultan).
+function flotaRentingPayload(){
+  const val = id => ((document.getElementById(id) || {}).value || '').trim();
+  const reg = FLOTA_REGIMENES[val('fl-regimen')] ? val('fl-regimen') : 'propiedad';
+  return { regimen: reg, renting_empresa: val('fl-rent-empresa') || null, renting_contrato: val('fl-rent-contrato').toUpperCase() || null,
+    renting_inicio: val('fl-rent-inicio') || null, renting_fin: val('fl-rent-fin') || null,
+    renting_cuota: flotaNum(val('fl-rent-cuota')), renting_cuota_final: flotaNum(val('fl-rent-cuota-final')),
+    renting_km: flotaNum(val('fl-rent-km')) == null ? null : Math.round(flotaNum(val('fl-rent-km'))), renting_notas: val('fl-rent-notas') || null };
+}
+function flotaRegimenCambio(){
+  const el = document.getElementById('fl-rent-campos'), r = document.getElementById('fl-regimen');
+  if (el && r) { el.style.display = r.value === 'propiedad' ? 'none' : ''; const l = document.getElementById('fl-rent-tit'); if (l) l.textContent = r.value === 'leasing' ? 'Contrato de leasing' : 'Contrato de renting'; }
+}
+// Resumen aproximado del contrato: meses totales, transcurridos y por pagar (por meses de 30,4 días).
+function flotaRentingResumen(v){
+  if (!v.rentInicio || !v.rentFin) return null;
+  const MES = 86400000 * 30.4375, d = s => new Date(s + 'T00:00:00');
+  const total = Math.max(0, Math.round((d(v.rentFin) - d(v.rentInicio)) / MES));
+  const pasados = Math.min(total, Math.max(0, Math.round((d(today()) - d(v.rentInicio)) / MES)));
+  const quedan = total - pasados, cuota = flotaNum(v.rentCuota) || 0, final = flotaNum(v.rentCuotaFinal) || 0;
+  const acabado = d(today()) > d(v.rentFin);
+  return { total, pasados, quedan, acabado, empezado: d(today()) >= d(v.rentInicio), pendiente: acabado ? 0 : quedan * cuota + final, totalContrato: total * cuota + final };
+}
 const FLOTA_COBERTURAS = ['Terceros', 'Terceros ampliado', 'Todo riesgo con franquicia', 'Todo riesgo sin franquicia'];
 function tplFlotaViewCard(v){
   const stSeg = flotaVencStatus(v.seguroVence), eurSeg = v.segPrima !== '' && v.segPrima != null ? eur(Number(v.segPrima)) : '';
@@ -14488,6 +14517,30 @@ function tplFlotaViewCard(v){
       ${contactoFieldBlock('Teléfono de la aseguradora', v.segTelefono ? esc(v.segTelefono) : '—')}
     </div>
     ${v.segNotas ? `<div style="margin-top:16px;">${contactoFieldBlock('Notas del seguro', `<span style="white-space:pre-line;">${esc(v.segNotas)}</span>`)}</div>` : ''}`;
+  const regimen = v.regimen || 'propiedad', rs = regimen !== 'propiedad' ? flotaRentingResumen(v) : null, stRent = flotaVencStatus(v.rentFin);
+  const eurN = x => x !== '' && x != null ? eur(Number(x)) : '—';
+  const contrato = regimen === 'propiedad' ? `
+    <div style="font-family:var(--display);text-transform:uppercase;font-size:12px;color:var(--muted);letter-spacing:.4px;margin:22px 0 12px;">Propiedad</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">${contactoFieldBlock('Régimen', FLOTA_REGIMENES.propiedad)}</div>` : `
+    <div style="font-family:var(--display);text-transform:uppercase;font-size:12px;color:var(--muted);letter-spacing:.4px;margin:22px 0 12px;">${regimen === 'leasing' ? 'Contrato de leasing' : 'Contrato de renting'}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">
+      ${contactoFieldBlock('Régimen', esc(FLOTA_REGIMENES[regimen]))}
+      ${contactoFieldBlock('Empresa', v.rentEmpresa ? esc(v.rentEmpresa) : '—')}
+      ${contactoFieldBlock('Nº de contrato', v.rentContrato ? esc(v.rentContrato) : '—')}
+      ${contactoFieldBlock('Inicio', v.rentInicio ? esc(fmtDateY(v.rentInicio)) : '—')}
+      ${contactoFieldBlock('Fin', v.rentFin ? `<span style="color:${stRent.color};">${esc(stRent.text)}</span>` : '—')}
+      ${contactoFieldBlock('Cuota mensual', eurN(v.rentCuota))}
+      ${contactoFieldBlock('Cuota final', eurN(v.rentCuotaFinal))}
+      ${contactoFieldBlock('Km incluidos al año', v.rentKm !== '' ? esc(Number(v.rentKm).toLocaleString('es-ES')) : '—')}
+    </div>
+    ${rs ? `<div style="margin-top:16px;padding:14px 16px;border:1px solid var(--border);border-radius:12px;background:var(--panel2);">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:13px;margin-bottom:8px;"><b>${rs.acabado ? 'Contrato terminado' : !rs.empezado ? 'Todavía no ha empezado' : `Quedan ${rs.quedan} ${rs.quedan === 1 ? 'mes' : 'meses'}`}</b><span style="color:var(--muted);">${rs.pasados} de ${rs.total} meses</span></div>
+      <div style="height:8px;border-radius:999px;background:var(--border);overflow:hidden;"><div style="height:100%;width:${rs.total ? Math.round(rs.pasados / rs.total * 100) : 0}%;background:var(--primary);"></div></div>
+      <div style="display:flex;gap:26px;flex-wrap:wrap;margin-top:12px;font-size:13px;">
+        <span><span style="color:var(--muted);">Pendiente de pagar (aprox.)</span><br><b>${eur(rs.pendiente)}</b></span>
+        <span><span style="color:var(--muted);">Total del contrato (aprox.)</span><br><b>${eur(rs.totalContrato)}</b></span>
+      </div></div>` : ''}
+    ${v.rentNotas ? `<div style="margin-top:16px;">${contactoFieldBlock('Notas del contrato', `<span style="white-space:pre-line;">${esc(v.rentNotas)}</span>`)}</div>` : ''}`;
   const venc = flotaVencimientosDe(v).filter(([k]) => k !== 'seguroVence').map(([k, label]) => {
     const st = flotaVencStatus(v[k]);
     return contactoFieldBlock(label, `<span style="color:${st.color};">${esc(st.text)}</span>`);
@@ -14504,7 +14557,7 @@ function tplFlotaViewCard(v){
       ${contactoFieldBlock('Nº de bastidor', v.bastidor ? esc(v.bastidor) : '—')}
       ${contactoFieldBlock('Propietario', v.propietario ? esc(v.propietario) : '—')}
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">${venc}</div>${seguro}`;
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">${venc}</div>${seguro}${contrato}`;
 }
 function tplFlotaFormPage(){
   const editId = window.__flotaFormId;
@@ -14596,6 +14649,27 @@ function tplFlotaFormPage(){
       </div>
       <div class="field"><label>Teléfono de la aseguradora</label><input id="fl-seg-telefono" maxlength="40" placeholder="Asistencia en carretera / siniestros" value="${esc(v.segTelefono||'')}" /></div>
       <div class="field"><label>Notas del seguro</label><textarea id="fl-seg-notas" rows="3" maxlength="600" placeholder="Franquicia, conductores autorizados, condiciones…">${esc(v.segNotas||'')}</textarea></div>
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12px;color:var(--muted);letter-spacing:.4px;margin:16px 0 10px;">Propiedad del vehículo</div>
+      <div class="field" style="max-width:320px;"><label>Régimen</label>
+        <select id="fl-regimen" onchange="flotaRegimenCambio()">${Object.entries(FLOTA_REGIMENES).map(([k, l]) => `<option value="${k}" ${(v.regimen||'propiedad')===k?'selected':''}>${l}</option>`).join('')}</select></div>
+      <div id="fl-rent-campos" style="${(v.regimen||'propiedad')==='propiedad'?'display:none;':''}">
+        <div id="fl-rent-tit" style="font-size:12.5px;color:var(--muted);margin:2px 0 8px;">${v.regimen==='leasing'?'Contrato de leasing':'Contrato de renting'}</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <div class="field" style="flex:2;min-width:220px;"><label>Empresa de renting / leasing</label><input id="fl-rent-empresa" maxlength="80" placeholder="Ej. Ayvens, ALD, Arval…" value="${esc(v.rentEmpresa||'')}" /></div>
+          <div class="field" style="flex:1;min-width:180px;"><label>Nº de contrato</label><input id="fl-rent-contrato" maxlength="40" style="text-transform:uppercase;" oninput="uppercaseInput(this)" value="${esc(v.rentContrato||'')}" /></div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          ${dateField('fl-rent-inicio', 'Inicio del contrato', v.rentInicio, 'style="flex:1;min-width:180px;"')}
+          ${dateField('fl-rent-fin', 'Fin del contrato', v.rentFin, 'style="flex:1;min-width:180px;"')}
+          <div class="field" style="flex:1;min-width:160px;"><label>Km incluidos al año</label><input id="fl-rent-km" type="number" min="0" step="1000" value="${esc(v.rentKm||'')}" /></div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <div class="field" style="flex:1;min-width:180px;"><label>Cuota mensual (€)</label><input id="fl-rent-cuota" type="number" min="0" step="0.01" value="${esc(v.rentCuota||'')}" /></div>
+          <div class="field" style="flex:1;min-width:180px;"><label>Cuota final / opción de compra (€)</label><input id="fl-rent-cuota-final" type="number" min="0" step="0.01" value="${esc(v.rentCuotaFinal||'')}" /></div>
+        </div>
+        <div class="field"><label>Notas del contrato</label><textarea id="fl-rent-notas" rows="3" maxlength="600" placeholder="Mantenimiento incluido, penalización por km de más, condiciones de devolución…">${esc(v.rentNotas||'')}</textarea></div>
+      </div>
+
     </div>
     <div id="fl-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
@@ -14637,6 +14711,7 @@ async function submitFlotaForm(editId){
     seguro_aseguradora: val('fl-seg-aseguradora') || null, seguro_poliza: val('fl-seg-poliza').toUpperCase() || null, seguro_cobertura: val('fl-seg-cobertura') || null,
     seguro_prima: val('fl-seg-prima') !== '' && isFinite(Number(val('fl-seg-prima'))) ? Number(val('fl-seg-prima')) : null,
     seguro_telefono: val('fl-seg-telefono') || null, seguro_notas: val('fl-seg-notas') || null,
+    ...flotaRentingPayload(),
   };
   const btns = [...document.querySelectorAll('.fl-submit-btn')];
   btns.forEach(b => b.disabled = true);
@@ -14648,6 +14723,7 @@ async function submitFlotaForm(editId){
     const msg = (res.error && res.error.message) || '';
     const dup = res.error && (res.error.code === '23505' || /duplicate|unique/i.test(msg));
     const missingColumn = /numero_flota|numero_bastidor|propietario|schema cache|column/i.test(msg);
+    if (/renting_|regimen/.test(msg)) { showFormError(errEl, 'Falta ejecutar en Supabase el SQL del renting (archivo flota-renting.sql). Detalle: ' + msg); btns.forEach(b => b.disabled = false); return; }
     if (/seguro_/.test(msg)) { showFormError(errEl, 'Falta ejecutar en Supabase el SQL de los datos del seguro (archivo flota-seguro.sql). Detalle: ' + msg); btns.forEach(b => b.disabled = false); return; }
     showFormError(errEl, dup ? 'Ya existe un vehículo con esa matrícula.'
       : missingColumn ? 'Falta ejecutar en Supabase el SQL de Número de flota, Nº de bastidor y Propietario (archivo flota-numero-bastidor-propietario-schema.sql). Detalle: ' + msg
@@ -14656,7 +14732,8 @@ async function submitFlotaForm(editId){
     return;
   }
   const after = { tipo, matricula, marca: payload.marca || '', modelo: payload.modelo || '', itvVence: payload.itv_vence || '', seguroVence: payload.seguro_vence || '', tacografoVence: payload.tacografo_vence || '', numeroFlota: payload.numero_flota || '', bastidor: payload.numero_bastidor || '', propietario: payload.propietario || '',
-    segAseguradora: payload.seguro_aseguradora || '', segPoliza: payload.seguro_poliza || '', segCobertura: payload.seguro_cobertura || '', segPrima: payload.seguro_prima == null ? '' : String(payload.seguro_prima), segTelefono: payload.seguro_telefono || '', segNotas: payload.seguro_notas || '' };
+    segAseguradora: payload.seguro_aseguradora || '', segPoliza: payload.seguro_poliza || '', segCobertura: payload.seguro_cobertura || '', segPrima: payload.seguro_prima == null ? '' : String(payload.seguro_prima), segTelefono: payload.seguro_telefono || '', segNotas: payload.seguro_notas || '',
+    regimen: payload.regimen || 'propiedad', rentEmpresa: payload.renting_empresa || '', rentContrato: payload.renting_contrato || '', rentInicio: payload.renting_inicio || '', rentFin: payload.renting_fin || '', rentCuota: payload.renting_cuota == null ? '' : String(payload.renting_cuota), rentCuotaFinal: payload.renting_cuota_final == null ? '' : String(payload.renting_cuota_final), rentKm: payload.renting_km == null ? '' : String(payload.renting_km), rentNotas: payload.renting_notas || '' };
   const changeLines = before ? buildFlotaChangeSummary(before, after) : ['Vehículo creado.'];
   const savedId = editId || res.data[0].id;
   if (changeLines.length) await logFlotaHistorial(savedId, changeLines.join('\n'));
