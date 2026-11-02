@@ -14128,6 +14128,7 @@ async function loadFlota(){
     id: v.id, tipo: v.tipo || 'tractora', matricula: v.matricula, marca: v.marca || '', modelo: v.modelo || '',
     itvVence: v.itv_vence || '', seguroVence: v.seguro_vence || '', tacografoVence: v.tacografo_vence || '',
     numeroFlota: v.numero_flota || '', bastidor: v.numero_bastidor || '', propietario: v.propietario || '', archived: !!v.archived,
+    segAseguradora: v.seguro_aseguradora || '', segPoliza: v.seguro_poliza || '', segCobertura: v.seguro_cobertura || '', segPrima: v.seguro_prima == null ? '' : String(v.seguro_prima), segTelefono: v.seguro_telefono || '', segNotas: v.seguro_notas || '',
   }));
 }
 const FLOTA_PROPIETARIOS = ['QUALIFIED', 'LA LOGISTICA ORGANIZADA SANT RAMON 95 SL', 'OBRES I SERVEIS BALSARENY'];
@@ -14374,6 +14375,7 @@ const FLOTA_FIELD_LABELS = {
   tipo: 'Tipo', matricula: 'Matrícula', marca: 'Marca', modelo: 'Modelo',
   itvVence: 'ITV', seguroVence: 'Seguro', tacografoVence: 'Tacógrafo',
   numeroFlota: 'Número de flota', bastidor: 'Nº de bastidor', propietario: 'Propietario',
+  segAseguradora: 'Aseguradora', segPoliza: 'Nº de póliza', segCobertura: 'Cobertura del seguro', segPrima: 'Prima del seguro (€/año)', segTelefono: 'Teléfono de la aseguradora', segNotas: 'Notas del seguro',
 };
 function buildFlotaChangeSummary(before, after){
   const lines = [];
@@ -14472,8 +14474,21 @@ function onFlotaTipoChange(){
   const f = document.getElementById('fl-tacografo-field');
   if (f) f.style.display = document.getElementById('fl-tipo').value === 'tractora' ? '' : 'none';
 }
+const FLOTA_COBERTURAS = ['Terceros', 'Terceros ampliado', 'Todo riesgo con franquicia', 'Todo riesgo sin franquicia'];
 function tplFlotaViewCard(v){
-  const venc = flotaVencimientosDe(v).map(([k, label]) => {
+  const stSeg = flotaVencStatus(v.seguroVence), eurSeg = v.segPrima !== '' && v.segPrima != null ? eur(Number(v.segPrima)) : '';
+  const seguro = `
+    <div style="font-family:var(--display);text-transform:uppercase;font-size:12px;color:var(--muted);letter-spacing:.4px;margin:22px 0 12px;">Seguro</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">
+      ${contactoFieldBlock('Aseguradora', v.segAseguradora ? esc(v.segAseguradora) : '—')}
+      ${contactoFieldBlock('Nº de póliza', v.segPoliza ? esc(v.segPoliza) : '—')}
+      ${contactoFieldBlock('Cobertura', v.segCobertura ? esc(v.segCobertura) : '—')}
+      ${contactoFieldBlock('Vencimiento', `<span style="color:${stSeg.color};">${esc(stSeg.text)}</span>`)}
+      ${contactoFieldBlock('Prima anual', eurSeg || '—')}
+      ${contactoFieldBlock('Teléfono de la aseguradora', v.segTelefono ? esc(v.segTelefono) : '—')}
+    </div>
+    ${v.segNotas ? `<div style="margin-top:16px;">${contactoFieldBlock('Notas del seguro', `<span style="white-space:pre-line;">${esc(v.segNotas)}</span>`)}</div>` : ''}`;
+  const venc = flotaVencimientosDe(v).filter(([k]) => k !== 'seguroVence').map(([k, label]) => {
     const st = flotaVencStatus(v[k]);
     return contactoFieldBlock(label, `<span style="color:${st.color};">${esc(st.text)}</span>`);
   }).join('');
@@ -14489,7 +14504,7 @@ function tplFlotaViewCard(v){
       ${contactoFieldBlock('Nº de bastidor', v.bastidor ? esc(v.bastidor) : '—')}
       ${contactoFieldBlock('Propietario', v.propietario ? esc(v.propietario) : '—')}
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">${venc}</div>`;
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">${venc}</div>${seguro}`;
 }
 function tplFlotaFormPage(){
   const editId = window.__flotaFormId;
@@ -14566,9 +14581,21 @@ function tplFlotaFormPage(){
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12px;color:var(--muted);letter-spacing:.4px;margin:6px 0 10px;">Vencimientos</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         ${dateField('fl-itv', 'ITV', v.itvVence, 'style="flex:1;min-width:180px;"')}
-        ${dateField('fl-seguro', 'Seguro', v.seguroVence, 'style="flex:1;min-width:180px;"')}
         <div id="fl-tacografo-field" style="flex:1;min-width:180px;${v.tipo==='tractora'?'':'display:none;'}">${dateField('fl-tacografo', 'Tacógrafo', v.tacografoVence, '')}</div>
       </div>
+      <div style="font-family:var(--display);text-transform:uppercase;font-size:12px;color:var(--muted);letter-spacing:.4px;margin:16px 0 10px;">Seguro</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:2;min-width:220px;"><label>Aseguradora</label><input id="fl-seg-aseguradora" maxlength="80" placeholder="Ej. Mapfre" value="${esc(v.segAseguradora||'')}" /></div>
+        <div class="field" style="flex:1;min-width:180px;"><label>Nº de póliza</label><input id="fl-seg-poliza" maxlength="40" style="text-transform:uppercase;" oninput="uppercaseInput(this)" value="${esc(v.segPoliza||'')}" /></div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:220px;"><label>Cobertura</label>
+          <select id="fl-seg-cobertura"><option value="">— Elige la cobertura —</option>${FLOTA_COBERTURAS.map(c => `<option value="${esc(c)}" ${v.segCobertura===c?'selected':''}>${esc(c)}</option>`).join('')}${v.segCobertura && !FLOTA_COBERTURAS.includes(v.segCobertura) ? `<option value="${esc(v.segCobertura)}" selected>${esc(v.segCobertura)}</option>` : ''}</select></div>
+        ${dateField('fl-seguro', 'Vencimiento', v.seguroVence, 'style="flex:1;min-width:180px;"')}
+        <div class="field" style="flex:1;min-width:160px;"><label>Prima anual (€)</label><input id="fl-seg-prima" type="number" min="0" step="0.01" value="${esc(v.segPrima||'')}" /></div>
+      </div>
+      <div class="field"><label>Teléfono de la aseguradora</label><input id="fl-seg-telefono" maxlength="40" placeholder="Asistencia en carretera / siniestros" value="${esc(v.segTelefono||'')}" /></div>
+      <div class="field"><label>Notas del seguro</label><textarea id="fl-seg-notas" rows="3" maxlength="600" placeholder="Franquicia, conductores autorizados, condiciones…">${esc(v.segNotas||'')}</textarea></div>
     </div>
     <div id="fl-error" style="color:var(--danger);font-size:12.5px;margin:12px 0 8px;"></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
@@ -14607,6 +14634,9 @@ async function submitFlotaForm(editId){
     tacografo_vence: tipo === 'tractora' ? (val('fl-tacografo') || null) : null,
     numero_flota: val('fl-numero-flota') || null, numero_bastidor: val('fl-bastidor').toUpperCase() || null,
     propietario: val('fl-propietario') || null,
+    seguro_aseguradora: val('fl-seg-aseguradora') || null, seguro_poliza: val('fl-seg-poliza').toUpperCase() || null, seguro_cobertura: val('fl-seg-cobertura') || null,
+    seguro_prima: val('fl-seg-prima') !== '' && isFinite(Number(val('fl-seg-prima'))) ? Number(val('fl-seg-prima')) : null,
+    seguro_telefono: val('fl-seg-telefono') || null, seguro_notas: val('fl-seg-notas') || null,
   };
   const btns = [...document.querySelectorAll('.fl-submit-btn')];
   btns.forEach(b => b.disabled = true);
@@ -14618,13 +14648,15 @@ async function submitFlotaForm(editId){
     const msg = (res.error && res.error.message) || '';
     const dup = res.error && (res.error.code === '23505' || /duplicate|unique/i.test(msg));
     const missingColumn = /numero_flota|numero_bastidor|propietario|schema cache|column/i.test(msg);
+    if (/seguro_/.test(msg)) { showFormError(errEl, 'Falta ejecutar en Supabase el SQL de los datos del seguro (archivo flota-seguro.sql). Detalle: ' + msg); btns.forEach(b => b.disabled = false); return; }
     showFormError(errEl, dup ? 'Ya existe un vehículo con esa matrícula.'
       : missingColumn ? 'Falta ejecutar en Supabase el SQL de Número de flota, Nº de bastidor y Propietario (archivo flota-numero-bastidor-propietario-schema.sql). Detalle: ' + msg
       : 'No se pudo guardar: ' + (msg || 'sin permiso o error desconocido.'));
     btns.forEach(b => b.disabled = false);
     return;
   }
-  const after = { tipo, matricula, marca: payload.marca || '', modelo: payload.modelo || '', itvVence: payload.itv_vence || '', seguroVence: payload.seguro_vence || '', tacografoVence: payload.tacografo_vence || '', numeroFlota: payload.numero_flota || '', bastidor: payload.numero_bastidor || '', propietario: payload.propietario || '' };
+  const after = { tipo, matricula, marca: payload.marca || '', modelo: payload.modelo || '', itvVence: payload.itv_vence || '', seguroVence: payload.seguro_vence || '', tacografoVence: payload.tacografo_vence || '', numeroFlota: payload.numero_flota || '', bastidor: payload.numero_bastidor || '', propietario: payload.propietario || '',
+    segAseguradora: payload.seguro_aseguradora || '', segPoliza: payload.seguro_poliza || '', segCobertura: payload.seguro_cobertura || '', segPrima: payload.seguro_prima == null ? '' : String(payload.seguro_prima), segTelefono: payload.seguro_telefono || '', segNotas: payload.seguro_notas || '' };
   const changeLines = before ? buildFlotaChangeSummary(before, after) : ['Vehículo creado.'];
   const savedId = editId || res.data[0].id;
   if (changeLines.length) await logFlotaHistorial(savedId, changeLines.join('\n'));
