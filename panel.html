@@ -4675,7 +4675,8 @@ function sgaZonaCardHtml(z){
       <div style="display:flex;gap:2px;flex-shrink:0;">
         ${esEst && !z.archived ? `<button class="btn btn-ghost" style="padding:5px 10px;font-size:12px;" onclick="openSgaUbicacionesModal('${z.id}')">Ubicaciones</button>` : ''}
         <button class="deca-act" onclick="openSgaZonaModal('${z.id}')" title="Editar la zona">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button>
-        <button class="btn btn-ghost" style="padding:5px 10px;font-size:12px;" onclick="setSgaZonaArchivada('${z.id}', ${!z.archived})">${z.archived ? 'Restaurar' : 'Archivar'}</button>
+        ${z.archived ? `<button class="btn btn-ghost" style="padding:5px 10px;font-size:12px;" onclick="setSgaZonaArchivada('${z.id}', false)">Restaurar</button>` : ''}
+        <button class="btn btn-ghost" style="padding:5px 10px;font-size:12px;color:var(--danger,#c0392b);" onclick="sgaZonaEliminar('${z.id}')">Eliminar</button>
       </div>
     </div>`;
 }
@@ -4798,14 +4799,37 @@ async function submitSgaZona(){
     if (btn) btn.disabled = false;
   }
 }
-async function setSgaZonaArchivada(id, archivar){
+async function setSgaZonaArchivada(id, archivar, yaConfirmado){
   const z = sgaZonas.find(x => x.id === id);
   if (!z) return;
-  if (archivar && !(await appConfirm({ title: 'Archivar zona', name: sgaZonaNombre(z), message: 'Dejará de ofrecerse al hacer recepciones. La mercancía que ya esté en ella sigue donde está.', confirmLabel: 'Archivar', tone: 'warn', icon: 'warn' }))) return;
+  if (archivar && !yaConfirmado && !(await appConfirm({ title: 'Archivar zona', name: sgaZonaNombre(z), message: 'Dejará de ofrecerse al hacer recepciones. La mercancía que ya esté en ella sigue donde está.', confirmLabel: 'Archivar', tone: 'warn', icon: 'warn' }))) return;
   const { error } = await supabaseClient.from('sga_zonas').update({ archived: archivar }).eq('id', id);
   if (error) { appToast('No se pudo guardar: ' + error.message, 'error'); return; }
   z.archived = archivar;
   await logWarehouseHistorial(z.warehouseId, `ha ${archivar ? 'archivado' : 'restaurado'} la zona ${sgaZonaNombre(z)}.`);
+  renderTab();
+}
+// Borra la zona y sus ubicaciones de verdad. Si tiene o ha tenido mercancía (o es la zona habitual de un artículo)
+// la base de datos lo rechaza y se ofrece archivarla.
+async function sgaZonaEliminar(id){
+  const z = sgaZonas.find(x => x.id === id);
+  if (!z) return;
+  const n = sgaUbicacionesDe(id, true).length;
+  const msg = `Se borrará para siempre${n ? ` junto con ${n === 1 ? 'su ubicación' : 'sus ' + n + ' ubicaciones'}` : ''}. Si tiene o ha tenido mercancía no se podrá borrar.`;
+  if (!(await appConfirm({ title: 'Eliminar zona', name: sgaZonaNombre(z), message: msg, confirmLabel: 'Eliminar', tone: 'danger', icon: 'trash' }))) return;
+  const { error } = await supabaseClient.rpc('sga_zona_eliminar', { p_id: id });
+  if (error) {
+    if (/ZONA_EN_USO/.test(error.message || '')) {
+      const archivar = !z.archived && await appConfirm({ title: 'No se puede eliminar', name: sgaZonaNombre(z), message: 'Tiene o ha tenido mercancía, o es la zona habitual de algún artículo. ¿La archivo para que deje de ofrecerse?', confirmLabel: 'Archivar', tone: 'warn', icon: 'warn' });
+      if (archivar) await setSgaZonaArchivada(id, true, true);
+      else if (z.archived) appToast('No se puede eliminar: tiene o ha tenido mercancía, o es zona habitual de un artículo.', 'error');
+    } else appToast('No se pudo eliminar: ' + (error.message || 'error desconocido.'), 'error');
+    return;
+  }
+  sgaZonas = sgaZonas.filter(x => x.id !== id);
+  sgaUbicaciones = sgaUbicaciones.filter(u => u.zonaId !== id);
+  await logWarehouseHistorial(z.warehouseId, `ha eliminado la zona ${sgaZonaNombre(z)}.`);
+  appToast(`Zona «${sgaZonaNombre(z)}» eliminada.`, 'ok');
   renderTab();
 }
 /* ---- Ubicaciones de una zona de estantería ---- */
