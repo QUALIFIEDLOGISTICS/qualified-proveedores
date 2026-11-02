@@ -53,6 +53,12 @@
   #sl-stock table.tf-table tbody tr.sl-oculta{display:none;}
   .se-fill{border:1px solid var(--border);background:var(--panel);color:var(--primary);border-radius:5px;font-size:11px;line-height:1;padding:2px 5px;cursor:pointer;}
   .se-fill:hover{border-color:var(--primary);}
+  #stock-body table.tf-table thead th{user-select:none;}
+  body.cg-colsel-drag{cursor:col-resize;user-select:none;}
+  #stock-body table.tf-table .cg-col-sel{background:color-mix(in srgb,var(--primary) 13%,var(--panel)) !important;}
+  #stock-body table.tf-table thead th.cg-col-sel{background:color-mix(in srgb,var(--primary) 24%,var(--panel)) !important;box-shadow:inset 0 -3px 0 var(--primary);}
+  #cg-colbar{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:70;display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:8px 12px;box-shadow:0 8px 28px rgba(0,0,0,.22);font-size:13px;}
+  #cg-colbar small{color:var(--mutedFaint);}
   #cg-fill{position:fixed;width:7px;height:7px;background:var(--primary);border:1px solid var(--panel);border-radius:1px;cursor:crosshair;z-index:60;display:none;}
   body.cg-filling{user-select:none;cursor:crosshair;}
   td.cg-fill-sel{outline:2px dashed var(--primary);outline-offset:-2px;background:color-mix(in srgb,var(--primary) 10%,transparent);}
@@ -6972,6 +6978,116 @@ document.addEventListener('keydown', e => {
   destino.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   if (destino.tagName === 'INPUT' && destino.select) destino.select();
 });
+/* ---- Seleccionar columnas enteras y copiarlas (Inventario, Catálogo y demás tablas de Stock) ----
+   Se arrastra por las cabeceras (de una a otra) para marcar varias columnas; Ctrl+clic en una cabecera añade o quita una columna y Mayús+clic
+   marca hasta ella desde la última. Un clic normal en la cabecera sigue ordenando. Ctrl+C (o el botón «Copiar» de la barra) copia las columnas
+   marcadas, con sus cabeceras y solo las filas visibles, separadas por tabuladores: se pegan en Excel en sus columnas. Esc las suelta. */
+(function(){
+  let sel = null, drag = null, suprimir = false, timer = null;
+  const tablaDe = th => (th && th.closest) ? th.closest('#stock-body table.tf-table') : null;
+  const enCabecera = th => !!(th && th.closest && th.closest('thead'));
+  const nCols = t => (t.tHead && t.tHead.rows[0]) ? t.tHead.rows[0].cells.length : 0;
+  function pintar(){
+    document.querySelectorAll('.cg-col-sel').forEach(e => e.classList.remove('cg-col-sel'));
+    if (!sel || !sel.table.isConnected || !sel.table.tHead) return;
+    const n = nCols(sel.table);
+    [...sel.table.tHead.rows[0].cells].forEach((c, i) => { if (sel.cols.has(i)) c.classList.add('cg-col-sel'); });
+    [...sel.table.tBodies].forEach(tb => [...tb.rows].forEach(tr => { if (tr.cells.length === n) sel.cols.forEach(i => tr.cells[i].classList.add('cg-col-sel')); }));
+  }
+  function barra(){
+    let b = document.getElementById('cg-colbar');
+    if (!sel || !sel.cols.size || !sel.table.isConnected) {
+      if (b) b.remove();
+      if (timer) { clearInterval(timer); timer = null; }
+      return;
+    }
+    if (!b) { b = document.createElement('div'); b.id = 'cg-colbar'; document.body.appendChild(b); }
+    const n = sel.cols.size;
+    b.innerHTML = `<span><b>${n}</b> columna${n === 1 ? '' : 's'} seleccionada${n === 1 ? '' : 's'}</span><button type="button" class="btn btn-primary" data-a="copiar">Copiar</button><button type="button" class="btn btn-ghost" data-a="quitar">Quitar</button><small>o pulsa Ctrl+C</small>`;
+    if (!timer) timer = setInterval(() => { if (sel && !sel.table.isConnected) quitar(); }, 800);   // la tabla se volvió a pintar: la selección ya no vale
+  }
+  function quitar(){ sel = null; pintar(); barra(); }
+  function celdaTxt(c){
+    const x = c.querySelector('select, input:not([type=hidden]):not([type=checkbox])');
+    const t = x ? (x.tagName === 'SELECT' ? ((x.options[x.selectedIndex] || {}).text || '') : x.value) : c.textContent;
+    return t.replace(/[⇅▲▼]/g, '').replace(/[\t\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^—$/, '');
+  }
+  function tsv(){
+    const cols = [...sel.cols].sort((a, b) => a - b), n = nCols(sel.table);
+    const lineas = [cols.map(i => celdaTxt(sel.table.tHead.rows[0].cells[i])).join('\t')];
+    [...sel.table.tBodies].forEach(tb => [...tb.rows].forEach(tr => {
+      if (tr.cells.length !== n || tr.style.display === 'none' || tr.classList.contains('sl-oculta')) return;
+      lineas.push(cols.map(i => celdaTxt(tr.cells[i])).join('\t'));
+    }));
+    return { texto: lineas.join('\n'), filas: lineas.length - 1, cols: cols.length };
+  }
+  async function copiar(){
+    if (!sel || !sel.table.isConnected) return;
+    const r = tsv();
+    try { await navigator.clipboard.writeText(r.texto); }
+    catch (err) {
+      const ta = document.createElement('textarea');
+      ta.value = r.texto; ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (x) { /* sin portapapeles */ }
+      ta.remove();
+    }
+    appToast(`Copiado: ${r.cols} columna${r.cols === 1 ? '' : 's'} × ${r.filas} fila${r.filas === 1 ? '' : 's'}. Pégalo en Excel.`, 'ok');
+  }
+  document.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    const th = e.target.closest ? e.target.closest('th') : null, t = tablaDe(th);
+    if (sel && !(t && t === sel.table) && !(e.target.closest && e.target.closest('#cg-colbar'))) quitar();   // clic fuera de las cabeceras: se suelta
+    if (!t || !enCabecera(th)) { drag = null; return; }
+    drag = { table: t, start: th.cellIndex, moved: false };
+  }, true);
+  document.addEventListener('mousemove', e => {
+    if (!drag) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY), th = el && el.closest ? el.closest('th') : null;
+    if (!th || tablaDe(th) !== drag.table || !enCabecera(th)) return;
+    const i = th.cellIndex;
+    if (!drag.moved && i === drag.start) return;
+    drag.moved = true;
+    document.body.classList.add('cg-colsel-drag');
+    const cols = new Set();
+    for (let k = Math.min(drag.start, i); k <= Math.max(drag.start, i); k++) cols.add(k);
+    sel = { table: drag.table, cols, anchor: drag.start };
+    pintar(); barra();
+  });
+  document.addEventListener('mouseup', () => {
+    document.body.classList.remove('cg-colsel-drag');
+    if (drag && drag.moved) { suprimir = true; setTimeout(() => { suprimir = false; }, 60); }
+    drag = null;
+  }, true);
+  document.addEventListener('click', e => {
+    const bt = e.target.closest ? e.target.closest('#cg-colbar button') : null;
+    if (bt) { e.preventDefault(); if (bt.dataset.a === 'copiar') copiar(); else quitar(); return; }
+    if (suprimir) { e.stopPropagation(); e.preventDefault(); return; }   // al soltar un arrastre no se ordena la columna
+    const th = e.target.closest ? e.target.closest('th') : null, t = tablaDe(th);
+    if (!t || !enCabecera(th)) return;
+    const i = th.cellIndex;
+    if (e.ctrlKey || e.metaKey) {
+      e.stopPropagation(); e.preventDefault();
+      if (!sel || sel.table !== t) sel = { table: t, cols: new Set(), anchor: i };
+      if (sel.cols.has(i)) sel.cols.delete(i); else { sel.cols.add(i); sel.anchor = i; }
+      pintar(); barra();
+    } else if (e.shiftKey && sel && sel.table === t) {
+      e.stopPropagation(); e.preventDefault();
+      for (let k = Math.min(sel.anchor, i); k <= Math.max(sel.anchor, i); k++) sel.cols.add(k);
+      pintar(); barra();
+    } else if (sel) quitar();   // clic normal: ordena como siempre y suelta la selección
+  }, true);
+  document.addEventListener('keydown', e => {
+    if (!sel) return;
+    if (e.key === 'Escape') { quitar(); return; }
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && String(e.key).toLowerCase() === 'c') {
+      const a = document.activeElement;
+      if (a && a.matches && a.matches('input, textarea') && a.selectionStart !== a.selectionEnd) return;   // texto marcado en una casilla: copia normal
+      if (String(window.getSelection()).trim()) return;
+      e.preventDefault(); copiar();
+    }
+  });
+})();
 // Elimina un artículo del catálogo, solo si nunca ha tenido entradas ni salidas (cualquier partida suya, aunque ya esté agotada, lo impide)
 async function catEliminarArticulo(id){
   const a = sgaArticulos.find(x => x.id === id);
