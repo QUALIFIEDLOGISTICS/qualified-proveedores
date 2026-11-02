@@ -1742,6 +1742,10 @@
   .sgz-ro{display:flex;align-items:center;gap:12px;padding:8px 14px;border:1px solid var(--border);border-radius:10px;background:var(--panel);font-size:13px;}
   .sgz-ro b{flex:1;min-width:0;overflow-wrap:anywhere;} .sgz-ro span{color:var(--muted);font-size:12px;} .sgz-ro em{font-style:normal;}
   .sgn-ren{width:auto;flex:1;min-width:120px;max-width:260px;padding:4px 8px;}
+  .sgs-nlist{display:flex;flex-direction:column;gap:6px;max-width:640px;}
+  .sgs-nrow{display:flex;align-items:center;gap:10px;padding:6px 10px;border:1px solid var(--border);border-radius:10px;background:var(--panel);}
+  .sgs-nrow .sgn-res{margin-left:auto;font-size:12px;color:var(--muted);white-space:nowrap;}
+  .sgs-nrow.sgn-add input{flex:1;max-width:none;}
   .sgs-chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
   .sgs-chip{display:inline-flex;align-items:center;gap:7px;padding:8px 14px;border-radius:999px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:13.5px;font-weight:600;cursor:pointer;}
   .sgs-chip small{font-size:11px;font-weight:600;color:var(--muted);background:var(--panel2);border-radius:999px;padding:1px 7px;}
@@ -4881,7 +4885,7 @@ function sgaNaveNueva(el){
   nuevas.push({ wid, k, nave });
   window.__sgaSelNave = k; window.__sgaSelZona = null; window.__sgaZonasArch = false;
   renderTab();
-  const nuevo = document.querySelector('.sgs-list .zg-n');
+  const nuevo = window.__sgaNavesEdit ? document.querySelector('.sgs-nlist .sgn-add input') : document.querySelector('.sgs-list .zg-n');
   if (nuevo) nuevo.focus();
 }
 // Eliminar una nave = eliminar sus zonas (las que tienen o han tenido mercancía no se pueden borrar: se avisa).
@@ -4931,8 +4935,8 @@ async function sgaNaveRenombrarGuardar(inp){
   const antes = zs.length ? zs[0].nave : (temp ? temp.nave : nuevo);
   zs.forEach(z => { z.nave = nuevo; });
   if (temp) { temp.nave = nuevo; temp.k = nuevo.toLowerCase(); }
-  if (!zs.length) { window.__sgaSelNave = nuevo.toLowerCase(); window.__sgaNaveRen = null; renderTab(); return; }
-  window.__sgaSelNave = nuevo.toLowerCase();
+  if (!zs.length) { if (window.__sgaSelNave === k) window.__sgaSelNave = nuevo.toLowerCase(); window.__sgaNaveRen = null; renderTab(); return; }
+  if (window.__sgaSelNave === k) window.__sgaSelNave = nuevo.toLowerCase();
   window.__sgaNaveRen = null;
   await logWarehouseHistorial(wid, `ha cambiado el nombre de la nave ${antes} a ${nuevo}.`);
   renderTab();
@@ -5004,9 +5008,21 @@ function whZonasViewCardHtml(w){
 function openSgaZonasEditor(wid, k, zonaId){   // k y zonaId: entrar ya con esa nave y zona elegidas (desde una tarjeta de la ficha)
   window.__sgaPagePrev = null;
   window.__sgaPage = { kind: 'zonas', warehouseId: wid };
-  window.__sgaSelNave = k != null && k !== '' ? k : (zonaId ? '' : null); window.__sgaSelZona = zonaId || null; window.__sgaZonasArch = false; window.__sgaNaveRen = null; window.__sgaNavesNuevas = [];
+  window.__sgaSelNave = k != null && k !== '' ? k : (zonaId ? '' : null); window.__sgaSelZona = zonaId || null; window.__sgaNavesEdit = false; window.__sgaZonasArch = false; window.__sgaNaveRen = null; window.__sgaNavesNuevas = [];
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
+}
+// Editar naves: una fila por nave con su nombre editable (se guarda al salir del campo o con Enter) y su botón Eliminar, más crear una nueva.
+function sgaNavesEditorHtml(wid, naves){
+  const filas = naves.map(x => `<div class="sgs-nrow" data-k="${esc(x.key)}">
+      <span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 16, 'currentColor', 1.8)}</span>
+      <input class="sgn-ren" data-mayus maxlength="60" value="${esc(x.nave)}" title="Cambiar el nombre de la nave" onchange="sgaNaveRenombrarGuardar(this)" onkeydown="if(event.key==='Enter'){ event.preventDefault(); this.blur(); } else if(event.key==='Escape'){ this.value=this.defaultValue; this.blur(); }" />
+      <span class="sgn-res">${sgaTxtN(x.zs.length, 'zona', 'zonas')}${sgaNUb(x.zs) ? ' · ' + sgaTxtN(sgaNUb(x.zs), 'ubicación', 'ubicaciones') : ''}</span>
+      <button type="button" class="btn btn-ghost" style="padding:4px 12px;font-size:12px;color:var(--danger,#c0392b);" onclick="sgaNaveEliminar(this.closest('[data-k]').dataset.k)">Eliminar</button>
+    </div>`).join('');
+  return `<div class="sgs-nlist">${filas || '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay naves.</div>'}
+    <div class="sgn-add sgs-nrow" data-wh="${esc(wid)}"><input data-mayus maxlength="60" placeholder="+ Nueva nave — escribe el nombre y pulsa Enter" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaNaveNueva(this); }" /><button type="button" class="btn btn-primary" style="padding:5px 14px;font-size:12.5px;" onclick="sgaNaveNueva(this)">+ Añadir nave</button></div>
+  </div>`;
 }
 function sgaNaveSel(k){ window.__sgaSelNave = k; window.__sgaSelZona = null; window.__sgaNaveRen = null; renderTab(); }
 function sgaZonaSel(id){ window.__sgaSelZona = id; window.__sgaGenFoco = false; renderTab(); }
@@ -5101,7 +5117,7 @@ function tplSgaZonasEditorPage(){
   const g = grupos.find(x => x.k === window.__sgaSelNave) || grupos[0] || null;
   const zs = g ? g.zs : [];
   const z = zs.find(x => x.id === window.__sgaSelZona) || zs.find(x => x.nombre) || zs[0] || null;
-  const ren = g && window.__sgaNaveRen === g.key;
+  const navesEdit = !verArch && !!window.__sgaNavesEdit;
   const navesN = sgaZonasGrupos(wid, false).filter(x => x.nave).length;
   const chips = grupos.map(x => `<button type="button" class="sgs-chip${g && x.k === g.k ? ' on' : ''}" data-k="${esc(x.k)}" onclick="sgaNaveSel(this.dataset.k)">${x.nave ? homeIcon(HOME_ICON_PATHS.home, 14, 'currentColor', 1.8) : ''}<span>${esc(x.nave || 'Sin nave')}</span><small>${x.zs.length}</small></button>`).join('');
   const lista = zs.map(x => {
@@ -5116,11 +5132,8 @@ function tplSgaZonasEditorPage(){
       </div>
     </div>`;
   }).join('');
-  const cabNave = g && g.nave ? `<div class="sgs-nh" data-k="${esc(g.key)}">
-      <span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 18, 'currentColor', 1.8)}</span>
-      ${ren
-        ? `<input class="sgn-ren" data-mayus maxlength="60" value="${esc(g.nave)}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaNaveRenombrarGuardar(this); } else if(event.key==='Escape'){ window.__sgaNaveRen=null; renderTab(); }" /><button type="button" class="btn btn-primary" style="padding:4px 12px;font-size:12px;" onclick="sgaNaveRenombrarGuardar(this.previousElementSibling)">Guardar</button><button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="window.__sgaNaveRen=null; renderTab();">Cancelar</button>`
-        : `<b>${esc(g.nave)}</b><button class="deca-act" title="Cambiar el nombre de la nave" onclick="sgaNaveRenombrar(this.closest('[data-k]').dataset.k)">${homeIcon(HOME_ICON_PATHS.edit, 14, 'currentColor', 2)}</button><button class="btn btn-ghost" style="padding:3px 10px;font-size:11.5px;color:var(--danger,#c0392b);" onclick="sgaNaveEliminar(this.closest('[data-k]').dataset.k)">Eliminar nave</button>`}
+  const cabNave = g && g.nave ? `<div class="sgs-nh">
+      <span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 18, 'currentColor', 1.8)}</span><b>${esc(g.nave)}</b>
       <span class="sgn-res">${sgaTxtN(g.zs.length, 'zona', 'zonas')}${sgaNUb(g.zs) ? ' · ' + sgaTxtN(sgaNUb(g.zs), 'ubicación', 'ubicaciones') : ''}</span>
     </div>` : '';
   const panel = g ? `${cabNave}
@@ -5149,12 +5162,12 @@ function tplSgaZonasEditorPage(){
     </div>
     <div class="deca-form" style="max-width:1000px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
       <div class="card deca-card">
-        ${decaCardHead('home', verArch ? 'Zonas archivadas' : 'Naves', verArch ? 'Se pueden restaurar o eliminar' : '1. Elige la nave (o crea una nueva)')}
+        ${decaCardHead('home', verArch ? 'Zonas archivadas' : 'Naves', verArch ? 'Se pueden restaurar o eliminar' : (navesEdit ? 'Cambia el nombre, elimina o crea naves' : '1. Elige la nave'), verArch ? '' : `<button class="btn btn-ghost" style="background:var(--panel);" onclick="window.__sgaNavesEdit=${!navesEdit}; renderTab();">${navesEdit ? '<span>Listo</span>' : `${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar naves</span>`}</button>`)}
         <div class="deca-card-body">
-          <div class="sgs-chips">
+          ${navesEdit ? sgaNavesEditorHtml(wid, grupos.filter(x => x.nave)) : `<div class="sgs-chips">
             ${chips}
             ${verArch ? '' : `<div class="sgn-add sgs-nueva" data-wh="${esc(wid)}"><input data-mayus maxlength="60" placeholder="+ Nueva nave" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaNaveNueva(this); }" /><button type="button" class="btn btn-ghost" style="padding:5px 12px;font-size:12px;" onclick="sgaNaveNueva(this)">Crear</button></div>`}
-          </div>
+          </div>`}
         </div>
       </div>
       <div class="card deca-card">
