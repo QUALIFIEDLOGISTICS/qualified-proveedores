@@ -1739,6 +1739,10 @@
   .sgn-ico{color:var(--primary);display:inline-flex;} .sgn-res{margin-left:auto;font-size:12px;color:var(--muted);}
   .sgn-body{display:flex;flex-direction:column;gap:8px;padding:0 10px 10px;} .sgn.closed .sgn-body{display:none;}
   .sgn .sgz-chev{transition:transform .15s;transform:rotate(90deg);} .sgn.closed>.sgn-head .sgz-chev{transform:none;}
+  .sgn-add{display:flex;gap:8px;align-items:center;padding:6px 4px 0;}
+  .sgn-add input{flex:1;min-width:0;border:1px dashed var(--border);background:var(--panel);}
+  .sgn-add input:focus{border-style:solid;}
+  .sgn-add select{width:auto;flex:0 0 auto;}
   .sgz{border:1px solid var(--border);border-radius:12px;background:var(--panel);}
   .sgz.arch{opacity:.65;}
   .sgz-head{display:flex;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;flex-wrap:wrap;}
@@ -4761,6 +4765,33 @@ function sgaZonaFilaHtml(z, enNave){
       <div class="sgz-body">${cuerpo}</div>
     </div>`;
 }
+// Crear una zona dentro de una nave sin salir de la ficha: se escribe el nombre y Enter (o «+ Añadir»). El cursor se queda ahí para la siguiente.
+function sgaZonaRapidaHtml(wid, nave){
+  const tipo = window.__sgaZonaRapidaTipo === 'estanteria' ? 'estanteria' : 'suelo';
+  return `<div class="sgn-add" data-wh="${esc(wid)}" data-nave="${esc(nave)}">
+    <input data-mayus maxlength="60" placeholder="+ Nueva zona en ${esc(nave)} — escribe el nombre y pulsa Enter" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaZonaRapida(this); }" />
+    <select onchange="window.__sgaZonaRapidaTipo=this.value" title="Cómo se guarda en esta zona">
+      <option value="suelo"${tipo === 'suelo' ? ' selected' : ''}>Suelo</option><option value="estanteria"${tipo === 'estanteria' ? ' selected' : ''}>Estantería</option>
+    </select>
+    <button type="button" class="btn btn-primary" style="padding:6px 14px;font-size:12.5px;" onclick="sgaZonaRapida(this)">+ Añadir</button>
+  </div>`;
+}
+async function sgaZonaRapida(el){
+  const box = el.closest('.sgn-add'), inp = box.querySelector('input'), nombre = inp.value.trim();
+  const nave = box.dataset.nave, wid = box.dataset.wh, tipo = box.querySelector('select').value === 'estanteria' ? 'estanteria' : 'suelo';
+  if (!nombre) { inp.focus(); return; }
+  if (sgaZonas.some(z => z.warehouseId === wid && (z.nave || '').toLowerCase() === nave.toLowerCase() && (z.nombre || '').toLowerCase() === nombre.toLowerCase())) { appToast('Ya existe esa zona en ' + nave + '.', 'error'); inp.select(); return; }
+  box.querySelectorAll('input,select,button').forEach(x => { x.disabled = true; });
+  const { data, error } = await supabaseClient.from('sga_zonas').insert({ warehouse_id: wid, nave, nombre, tipo }).select().single();
+  if (error || !data) { box.querySelectorAll('input,select,button').forEach(x => { x.disabled = false; }); appToast('No se pudo crear: ' + ((error && error.message) || 'error desconocido.'), 'error'); return; }
+  sgaZonas.push({ id: data.id, warehouseId: wid, nave, nombre, tipo, orden: data.orden || 0, archived: false });
+  if (tipo === 'estanteria') (window.__sgaZonasAbiertas || (window.__sgaZonasAbiertas = new Set())).add(data.id);
+  await logWarehouseHistorial(wid, `ha creado ${sgaZonaNombre({ nave, nombre })} (${SGA_ZONA_TIPOS[tipo].toLowerCase()}).`);
+  renderTab();
+  const nuevo = [...document.querySelectorAll('.sgn-add')].find(b => b.dataset.wh === wid && b.dataset.nave === nave);
+  if (nuevo) nuevo.querySelector('input').focus();
+  appToast(`Zona «${nombre}» creada en ${nave}.`, 'ok');
+}
 function sgaZonaToggle(id){
   const s = window.__sgaZonasAbiertas || (window.__sgaZonasAbiertas = new Set());
   const abrir = !s.has(id);
@@ -4796,7 +4827,7 @@ function whZonasViewCardHtml(w){
   const cerradas = window.__sgaNavesCerradas || new Set();
   let arbol = '';
   grupos.forEach((g, k) => {
-    if (!g.nave || (g.zs.length === 1 && !g.zs[0].nombre)) { arbol += g.zs.map(z => sgaZonaFilaHtml(z, false)).join(''); return; }
+    if (!g.nave) { arbol += g.zs.map(z => sgaZonaFilaHtml(z, false)).join(''); return; }
     const key = w.id + '|' + k, ub = nUb(g.zs);
     arbol += `
       <div class="sgn${cerradas.has(key) ? ' closed' : ''}" data-k="${esc(key)}">
@@ -4806,7 +4837,7 @@ function whZonasViewCardHtml(w){
           <b>${esc(g.nave)}</b>
           <span class="sgn-res">${g.zs.length === 1 ? '1 zona' : g.zs.length + ' zonas'}${ub ? ` · ${ub === 1 ? '1 ubicación' : ub + ' ubicaciones'}` : ''}</span>
         </div>
-        <div class="sgn-body">${g.zs.map(z => sgaZonaFilaHtml(z, true)).join('')}</div>
+        <div class="sgn-body">${g.zs.map(z => sgaZonaFilaHtml(z, true)).join('')}${verArch ? '' : sgaZonaRapidaHtml(w.id, g.nave)}</div>
       </div>`;
   });
   const stat = (n, t) => `<div class="sgz-stat"><b>${n}</b><span>${t}</span></div>`;
