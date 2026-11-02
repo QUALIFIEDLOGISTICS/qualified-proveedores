@@ -876,6 +876,11 @@
   .crm-dsub{display:flex;flex-direction:column;gap:6px;max-height:210px;overflow-y:auto;}
   .crm-dsub-r{display:flex;align-items:center;gap:10px;padding:7px 10px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);}
   .crm-dsub-r .crm-di{width:32px;height:32px;font-size:10px;}
+  .fl-docs{display:flex;flex-direction:column;gap:8px;border:1px dashed transparent;border-radius:12px;} .fl-docs.drop{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 6%,var(--panel));}
+  .fl-docs-v{padding:14px;text-align:center;font-size:12.5px;color:var(--mutedFaint);}
+  .fl-doc{display:flex;align-items:center;gap:12px;padding:9px 12px;border:1px solid var(--border);border-radius:12px;background:var(--panel);flex-wrap:wrap;}
+  .fl-doc-t{flex:1;min-width:160px;display:flex;flex-direction:column;} .fl-doc-t b{font-size:13.5px;overflow-wrap:anywhere;} .fl-doc-t small{font-size:11.5px;color:var(--muted);}
+  .fl-doc-a{display:flex;gap:6px;flex-wrap:wrap;} .fl-doc-a .btn{padding:5px 12px;font-size:12px;}
   .crm-dsub-r>span:not(.crm-di){flex:1;min-width:0;display:flex;flex-direction:column;}
   .crm-dsub-r b{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .crm-dsub-r small{font-size:11px;color:var(--muted);}
@@ -14404,6 +14409,7 @@ function openFlotaForm(editId, keepNav){
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
   if (editId) {
+    flotaDocsCargar(editId);
     loadFlotaHistorial(editId).then(list => {
       flotaHistorialCache[editId] = list;
       if (window.__administracionView === 'flotaForm' && window.__flotaFormId === editId) {
@@ -14570,6 +14576,7 @@ function tplFlotaFormPage(){
       <button class="btn btn-primary fl-submit-btn" onclick="submitFlotaForm('${editId||''}')">${submitLabel}</button>
     </div>
     `}
+    ${flotaDocsCardHtml(editing)}
     </div>
     <div class="card" style="flex:1;min-width:280px;max-height:75vh;overflow-y:auto;">
       <div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;margin-bottom:12px;">Historial de cambios</div>
@@ -14637,12 +14644,121 @@ async function deleteVehiculo(id){
   const v = flota.find(x=>x.id===id);
   if (!v || !(await appConfirm({ title: 'Eliminar vehículo', name: v.matricula, message: 'Se eliminará definitivamente. Esta acción no se puede deshacer.', confirmLabel: 'Eliminar', tone: 'danger', icon: 'trash' }))) return;
   const errEl = document.getElementById('fl-error');
+  const docs = await supabaseClient.from('flota_documentos').select('storage_path').eq('vehiculo_id', id);   // sus archivos se borran también del almacenamiento (si aún no existe la tabla, no hay nada que borrar)
   const { error } = await supabaseClient.from('flota').delete().eq('id', id);
   if (error) { if (errEl) errEl.textContent = 'No se pudo eliminar: ' + error.message; return; }
+  const rutas = (docs.data || []).map(d => d.storage_path).filter(Boolean);
+  if (rutas.length) await supabaseClient.storage.from(DOCS_BUCKET).remove(rutas);
+  delete flotaDocs[id];
   await loadFlota();
   window.__flotaFormDirty = false;
   window.__administracionView = 'flota';
   renderHeader(); renderTab();
+}
+
+/* ---- Flota: documentos de cada vehículo (ITV, seguro, permiso de circulación…) ----
+   Se suben y se borran al momento, sin esperar al botón «Guardar» del vehículo; por eso solo se repinta esta tarjeta y no la página. */
+const FLOTA_DOC_CATS = { itv: 'ITV', seguro: 'Seguro', tacografo: 'Tacógrafo', permiso: 'Permiso de circulación', ficha: 'Ficha técnica', otro: 'Otro' };
+let flotaDocs = {};   // por vehículo: { list } o { error }; sin entrada = aún cargando
+async function flotaDocsCargar(vid){
+  const { data, error } = await supabaseClient.from('flota_documentos').select('*').eq('vehiculo_id', vid).order('created_at', { ascending: false });
+  flotaDocs[vid] = error
+    ? { error: /relation|does not exist|schema cache/i.test(error.message || '') ? 'Falta ejecutar en Supabase el SQL de los documentos de flota (archivo flota-documentos.sql).' : (error.message || 'No se pudieron cargar los documentos.') }
+    : { list: (data || []).map(d => ({ id: d.id, nombre: d.nombre, archivo: d.archivo || d.nombre, categoria: d.categoria || 'otro', path: d.storage_path, tamano: d.tamano, createdAt: d.created_at, por: d.created_by || '' })) };
+  flotaDocsPinta(vid);
+}
+function flotaDocsPinta(vid){
+  if (window.__administracionView !== 'flotaForm' || window.__flotaFormId !== vid) return;
+  const el = document.getElementById('fl-docs-body'); if (el) el.innerHTML = flotaDocsBodyHtml(vid);
+}
+function flotaDocsHistorialPinta(vid){
+  if (window.__administracionView !== 'flotaForm' || window.__flotaFormId !== vid) return;
+  const h = document.getElementById('fl-historial-body');
+  if (h) { window.__flotaHistorial = flotaHistorialCache[vid] || window.__flotaHistorial; h.innerHTML = flotaHistorialBodyHtml(); }
+}
+function flotaDocsBodyHtml(vid){
+  const s = flotaDocs[vid];
+  if (!s) return '<div class="fl-docs-v">Cargando documentos…</div>';
+  if (s.error) return `<div class="fl-docs-v" style="color:var(--danger);">${esc(s.error)}</div>`;
+  if (s.subiendo) return '<div class="fl-docs-v">Subiendo…</div>';
+  if (!s.list.length) return '<div class="fl-docs-v">Todavía no hay documentos. Pulsa «+ Añadir documento» o arrastra aquí los archivos.</div>';
+  return s.list.map(d => `<div class="fl-doc">${crmDocIcono(d.archivo)}
+      <div class="fl-doc-t"><b title="${esc(d.archivo)}">${esc(d.nombre)}</b><small>${esc(FLOTA_DOC_CATS[d.categoria] || 'Otro')} · ${esc(fmtDateDMY((d.createdAt || '').slice(0, 10)))}${d.tamano ? ' · ' + attachmentSizeTxt(d.tamano) : ''}${d.por ? ' · ' + esc(d.por) : ''}</small></div>
+      <div class="fl-doc-a"><button type="button" class="btn btn-ghost" onclick="flotaDocAbrir('${vid}','${d.id}')">Abrir</button><button type="button" class="btn btn-ghost" onclick="flotaDocDescargar('${vid}','${d.id}')">Descargar</button><button type="button" class="btn btn-ghost" style="color:var(--danger);" onclick="flotaDocEliminar('${vid}','${d.id}')">Eliminar</button></div>
+    </div>`).join('');
+}
+function flotaDocsCardHtml(v){
+  const cab = '<div style="font-family:var(--display);text-transform:uppercase;font-size:12.5px;color:var(--muted);letter-spacing:.4px;">Documentos</div>';
+  if (!v) return `<div class="card" style="margin-top:20px;">${cab}<div class="fl-docs-v">Guarda primero el vehículo para poder añadirle documentos.</div></div>`;
+  return `<div class="card" style="margin-top:20px;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">${cab}
+      <div style="margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <select id="fl-doc-cat" title="De qué tipo son los documentos que vas a añadir" style="width:auto;flex:0 0 auto;max-width:200px;padding:6px 10px;font-size:12.5px;">${Object.entries(FLOTA_DOC_CATS).map(([k, l]) => `<option value="${k}"${(window.__flotaDocCat || 'otro') === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
+        <button type="button" class="btn btn-primary" style="padding:7px 14px;font-size:12.5px;width:auto;flex:0 0 auto;text-transform:none;letter-spacing:0;" onclick="document.getElementById('fl-doc-file').click()">+ Añadir documento</button>
+        <input type="file" id="fl-doc-file" multiple hidden accept=".${CRM_DOC_EXT.join(',.')}" onchange="flotaDocsElegir(this.files, '${v.id}'); this.value='';" />
+      </div></div>
+    <div id="fl-docs-body" class="fl-docs" ondragover="event.preventDefault(); this.classList.add('drop')" ondragleave="this.classList.remove('drop')" ondrop="event.preventDefault(); this.classList.remove('drop'); flotaDocsElegir(event.dataTransfer.files, '${v.id}')">${flotaDocsBodyHtml(v.id)}</div>
+  </div>`;
+}
+async function flotaDocsElegir(fileList, vid){
+  const s = flotaDocs[vid];
+  if (!s || s.error) { appToast((s && s.error) || 'Espera a que carguen los documentos.', 'error'); return; }
+  if (s.subiendo) return;
+  const catSel = document.getElementById('fl-doc-cat'), cat = catSel && FLOTA_DOC_CATS[catSel.value] ? catSel.value : 'otro';
+  window.__flotaDocCat = cat;
+  const ok = [];
+  Array.from(fileList || []).forEach(f => {
+    if (!CRM_DOC_EXT.includes(crmDocExt(f.name))) { appToast(`«${f.name}» no es de un tipo admitido (PDF, Excel, Word, imagen…).`, 'error'); return; }
+    if (f.size > CRM_DOC_MAX_MB * 1024 * 1024) { appToast(`«${f.name}» pesa demasiado (${attachmentSizeTxt(f.size)}; máximo ${CRM_DOC_MAX_MB} MB).`, 'error'); return; }
+    ok.push(f);
+  });
+  if (!ok.length) return;
+  s.subiendo = true; flotaDocsPinta(vid);
+  let bien = 0, mal = '';
+  for (const f of ok) {
+    const limpio = f.name.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9._-]+/g, '_');
+    const path = `flota/${vid}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${limpio}`;
+    const up = await supabaseClient.storage.from(DOCS_BUCKET).upload(path, f, { contentType: f.type || undefined });
+    if (up.error) { mal = `«${f.name}»: ${up.error.message || 'no se pudo subir'}`; break; }
+    const ins = await supabaseClient.from('flota_documentos').insert({ vehiculo_id: vid, nombre: f.name.replace(/\.[^.]+$/, ''), archivo: f.name, categoria: cat, storage_path: path, tipo: f.type || null, tamano: f.size, created_by: currentUserEmail() });
+    if (ins.error) {
+      await supabaseClient.storage.from(DOCS_BUCKET).remove([path]);
+      mal = /relation|does not exist|schema cache/i.test(ins.error.message || '') ? 'falta ejecutar el SQL de los documentos de flota (flota-documentos.sql).' : (ins.error.message || 'no se pudo guardar');
+      break;
+    }
+    bien++;
+    await logFlotaHistorial(vid, `Documento añadido: «${f.name}» (${FLOTA_DOC_CATS[cat]}).`);
+  }
+  await flotaDocsCargar(vid);
+  flotaDocsHistorialPinta(vid);
+  if (mal) appToast((bien ? `Se subieron ${bien}, pero ` : 'No se pudo subir: ') + mal, 'error');
+  else appToast(`${bien} documento${bien === 1 ? '' : 's'} guardado${bien === 1 ? '' : 's'}.`, 'ok');
+}
+const flotaDocBuscar = (vid, id) => ((flotaDocs[vid] || {}).list || []).find(x => x.id === id);
+async function flotaDocAbrir(vid, id){
+  const d = flotaDocBuscar(vid, id); if (!d) return;
+  const w = window.open('', '_blank');
+  const url = await signedUrl(d.path);
+  if (!url) { if (w) w.close(); appToast('No se pudo abrir el documento.', 'error'); return; }
+  if (w) w.location = url; else window.location.href = url;
+}
+async function flotaDocDescargar(vid, id){
+  const d = flotaDocBuscar(vid, id); if (!d) return;
+  const { data } = await supabaseClient.storage.from(DOCS_BUCKET).createSignedUrl(d.path, 300, { download: d.archivo });
+  if (!data || !data.signedUrl) { appToast('No se pudo descargar el documento.', 'error'); return; }
+  const a = document.createElement('a'); a.href = data.signedUrl; a.download = d.archivo;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+async function flotaDocEliminar(vid, id){
+  const d = flotaDocBuscar(vid, id); if (!d) return;
+  if (!(await appConfirm({ title: 'Eliminar documento', name: d.nombre, message: 'Se elimina de este vehículo. No se puede deshacer.', confirmLabel: 'Eliminar', tone: 'danger', icon: 'trash' }))) return;
+  const { error } = await supabaseClient.from('flota_documentos').delete().eq('id', id);
+  if (error) { appToast('No se pudo eliminar: ' + (error.message || 'error'), 'error'); return; }
+  await supabaseClient.storage.from(DOCS_BUCKET).remove([d.path]);
+  await logFlotaHistorial(vid, `Documento eliminado: «${d.archivo}».`);
+  flotaDocs[vid].list = flotaDocs[vid].list.filter(x => x.id !== id);
+  flotaDocsPinta(vid); flotaDocsHistorialPinta(vid);
+  appToast('Documento eliminado.', 'ok');
 }
 
 /* ---- Contactos: datos ---- */
