@@ -4836,7 +4836,7 @@ async function sgaZonaEliminar(id){
 function sgaUbicacionesListaHtml(zonaId){
   const lista = sgaUbicacionesDe(zonaId, true);
   if (!lista.length) return '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay ubicaciones. Añádelas debajo.</div>';
-  return lista.map(u => `<span class="sga-ub${u.archived ? ' arch' : ''}">${esc(u.codigo)}<button type="button" title="${u.archived ? 'Restaurar' : 'Archivar esta ubicación'}" onclick="setSgaUbicacionArchivada('${u.id}', ${!u.archived})">${u.archived ? '↺' : '✕'}</button></span>`).join('');
+  return lista.map(u => `<span class="sga-ub${u.archived ? ' arch' : ''}">${esc(u.codigo)}${u.archived ? `<button type="button" title="Restaurar" onclick="setSgaUbicacionArchivada('${u.id}', false)">↺</button>` : ''}<button type="button" title="Eliminar esta ubicación" onclick="sgaUbicacionEliminar('${u.id}')">✕</button></span>`).join('');
 }
 /* ---- Pantalla completa: ubicaciones de una zona de estantería ---- */
 function openSgaUbicacionesModal(zonaId){ openSgaUbicacionesForm(zonaId); }
@@ -4866,7 +4866,7 @@ function tplSgaUbicacionesPage(){
     </div>
     <div class="deca-form" style="max-width:760px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
       <div class="card deca-card">
-        ${decaCardHead('list', 'Las que ya hay', 'Un hueco por palet. La ✕ archiva una ubicación (no se borra)')}
+        ${decaCardHead('list', 'Las que ya hay', 'Un hueco por palet. La ✕ elimina una ubicación (si tiene o ha tenido mercancía, se archiva)')}
         <div class="deca-card-body"><div id="sgaub-lista" class="sga-ubs">${sgaUbicacionesListaHtml(z.id)}</div></div>
       </div>
       <div class="card deca-card">
@@ -4932,6 +4932,27 @@ async function submitSgaUbicaciones(){
   const nEl = document.getElementById('sgaub-n'); if (nEl) nEl.textContent = sgaUbicacionesDe(zonaId).length;
   appToast(`${nuevos.length === 1 ? '1 ubicación añadida' : nuevos.length + ' ubicaciones añadidas'}.`, 'ok');
   if (btn) btn.disabled = false;
+}
+function sgaUbicacionesRefrescar(zonaId){
+  const lista = document.getElementById('sgaub-lista');
+  if (lista) lista.innerHTML = sgaUbicacionesListaHtml(zonaId);
+  const nEl = document.getElementById('sgaub-n'); if (nEl) nEl.textContent = sgaUbicacionesDe(zonaId).length;
+}
+// Borra la ubicación. Si tiene o ha tenido mercancía la base de datos lo rechaza (clave ajena) y se ofrece archivarla.
+async function sgaUbicacionEliminar(id){
+  const u = sgaUbicaciones.find(x => x.id === id);
+  if (!u) return;
+  if (!(await appConfirm({ title: 'Eliminar ubicación', name: u.codigo, message: 'Se borrará para siempre. Si tiene o ha tenido mercancía no se podrá borrar.', confirmLabel: 'Eliminar', tone: 'danger', icon: 'trash' }))) return;
+  const { error } = await supabaseClient.from('sga_ubicaciones').delete().eq('id', id);
+  if (error) {
+    if (error.code === '23503' || /foreign key|violates/i.test(error.message || '')) {
+      if (!u.archived && await appConfirm({ title: 'No se puede eliminar', name: u.codigo, message: 'Tiene o ha tenido mercancía. ¿La archivo para que deje de ofrecerse?', confirmLabel: 'Archivar', tone: 'warn', icon: 'warn' })) await setSgaUbicacionArchivada(id, true);
+      else if (u.archived) appToast('No se puede eliminar: tiene o ha tenido mercancía.', 'error');
+    } else appToast('No se pudo eliminar: ' + (error.message || 'error desconocido.'), 'error');
+    return;
+  }
+  sgaUbicaciones = sgaUbicaciones.filter(x => x.id !== id);
+  sgaUbicacionesRefrescar(u.zonaId);
 }
 async function setSgaUbicacionArchivada(id, archivar){
   const u = sgaUbicaciones.find(x => x.id === id);
