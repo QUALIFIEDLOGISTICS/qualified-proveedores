@@ -1739,6 +1739,9 @@
   .sgn-ico{color:var(--primary);display:inline-flex;} .sgn-res{margin-left:auto;font-size:12px;color:var(--muted);}
   .sgn-body{display:flex;flex-direction:column;gap:8px;padding:0 10px 10px;} .sgn.closed .sgn-body{display:none;}
   .sgn .sgz-chev{transition:transform .15s;transform:rotate(90deg);} .sgn.closed>.sgn-head .sgz-chev{transform:none;}
+  .sgz-ro{display:flex;align-items:center;gap:12px;padding:8px 14px;border:1px solid var(--border);border-radius:10px;background:var(--panel);font-size:13px;}
+  .sgz-ro b{flex:1;min-width:0;overflow-wrap:anywhere;} .sgz-ro span{color:var(--muted);font-size:12px;} .sgz-ro em{font-style:normal;}
+  .sgn-ren{width:auto;flex:1;min-width:120px;max-width:260px;padding:4px 8px;}
   .sgn-add{display:flex;gap:8px;align-items:center;padding:6px 4px 0;}
   .sgn-add input{flex:1;min-width:0;border:1px dashed var(--border);background:var(--panel);}
   .sgn-add input:focus{border-style:solid;}
@@ -4032,8 +4035,9 @@ function computeBreadcrumbSegments(){
       const pg = window.__sgaPage;
       const whp = allWarehouses.find(w => w.id === pg.warehouseId);
       const zp = pg.kind === 'ubic' ? sgaZonas.find(x => x.id === pg.zonaId) : (pg.id ? sgaZonas.find(x => x.id === pg.id) : null);
-      const ultimo = pg.kind === 'ubic' ? `${zp ? sgaZonaNombre(zp) + ' · ' : ''}Ubicaciones` : (zp ? sgaZonaNombre(zp) : 'Nueva nave o zona');
-      return [{label:'Almacenes', onclick:'backToWarehouses()'}, {label: whp ? whp.name : 'Almacén', onclick:'sgaCerrarPagina()'}, {label: ultimo, onclick:null}];
+      const ultimo = pg.kind === 'zonas' ? 'Zonas y ubicaciones' : pg.kind === 'ubic' ? `${zp ? sgaZonaNombre(zp) + ' · ' : ''}Ubicaciones` : (zp ? sgaZonaNombre(zp) : 'Nueva nave o zona');
+      const desdeEditor = window.__sgaPagePrev && window.__sgaPagePrev.kind === 'zonas';
+      return [{label:'Almacenes', onclick:'backToWarehouses()'}, {label: whp ? whp.name : 'Almacén', onclick: desdeEditor ? 'sgaCerrarPaginaTodo()' : 'sgaCerrarPagina()'}, ...(desdeEditor ? [{label:'Zonas y ubicaciones', onclick:'sgaCerrarPagina()'}] : []), {label: ultimo, onclick:null}];
     }
     if (window.__apView === 'form') {
       const p = window.__apFormId ? almacenajeProducto(window.__apFormId) : null;
@@ -4232,6 +4236,7 @@ function backToWarehouses(){
   window.__whFormDirty = false;
   window.__whView = 'list';
   window.__whEditMode = false;
+  window.__sgaPage = null; window.__sgaPagePrev = null;   // si estabas en una pantalla de zonas, el camino «Almacenes» también sale de ella
   renderHeader(); renderTab();
 }
 function warehousesFilteredList(){
@@ -4304,7 +4309,7 @@ function tplAlmacenConfigTabsHtml(){
   return `<div class="doc-seg" style="margin-bottom:16px;">${btn('almacenes', 'Almacenes')}${btn('productos', 'Productos')}${btn('campos', 'Datos de mercancía')}</div>`;
 }
 function tplAlmacenConfig(){
-  if (window.__sgaPage) return window.__sgaPage.kind === "ubic" ? tplSgaUbicacionesPage() : window.__sgaPage.kind === 'campo' ? tplSgaCampoFormPage() : tplSgaZonaFormPage();
+  if (window.__sgaPage) return window.__sgaPage.kind === "ubic" ? tplSgaUbicacionesPage() : window.__sgaPage.kind === 'campo' ? tplSgaCampoFormPage() : window.__sgaPage.kind === 'zonas' ? tplSgaZonasEditorPage() : tplSgaZonaFormPage();
   if (window.__whView === 'form') return tplWarehouseFormPage();
   if (window.__apView === 'form') return tplAlmacenajeProductoFormPage();
   const sec = almacenConfigSection();
@@ -4765,11 +4770,11 @@ function sgaZonaFilaHtml(z, enNave){
       <div class="sgz-body">${cuerpo}</div>
     </div>`;
 }
-// Crear una zona dentro de una nave sin salir de la ficha: se escribe el nombre y Enter (o «+ Añadir»). El cursor se queda ahí para la siguiente.
+// Crear una zona dentro de una nave sin salir de la pantalla: se escribe el nombre y Enter (o «+ Añadir»). El cursor se queda ahí para la siguiente.
 function sgaZonaRapidaHtml(wid, nave){
   const tipo = window.__sgaZonaRapidaTipo === 'estanteria' ? 'estanteria' : 'suelo';
   return `<div class="sgn-add" data-wh="${esc(wid)}" data-nave="${esc(nave)}">
-    <input data-mayus maxlength="60" placeholder="+ Nueva zona en ${esc(nave)} — escribe el nombre y pulsa Enter" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaZonaRapida(this); }" />
+    <input data-mayus maxlength="60" placeholder="+ Nueva zona ${nave ? 'en ' + esc(nave) : '(sin nave)'} — escribe el nombre y pulsa Enter" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaZonaRapida(this); }" />
     <select onchange="window.__sgaZonaRapidaTipo=this.value" title="Cómo se guarda en esta zona">
       <option value="suelo"${tipo === 'suelo' ? ' selected' : ''}>Suelo</option><option value="estanteria"${tipo === 'estanteria' ? ' selected' : ''}>Estantería</option>
     </select>
@@ -4780,17 +4785,54 @@ async function sgaZonaRapida(el){
   const box = el.closest('.sgn-add'), inp = box.querySelector('input'), nombre = inp.value.trim();
   const nave = box.dataset.nave, wid = box.dataset.wh, tipo = box.querySelector('select').value === 'estanteria' ? 'estanteria' : 'suelo';
   if (!nombre) { inp.focus(); return; }
-  if (sgaZonas.some(z => z.warehouseId === wid && (z.nave || '').toLowerCase() === nave.toLowerCase() && (z.nombre || '').toLowerCase() === nombre.toLowerCase())) { appToast('Ya existe esa zona en ' + nave + '.', 'error'); inp.select(); return; }
+  if (sgaZonas.some(z => z.warehouseId === wid && (z.nave || '').toLowerCase() === nave.toLowerCase() && (z.nombre || '').toLowerCase() === nombre.toLowerCase())) { appToast('Ya existe esa zona' + (nave ? ' en ' + nave : '') + '.', 'error'); inp.select(); return; }
   box.querySelectorAll('input,select,button').forEach(x => { x.disabled = true; });
-  const { data, error } = await supabaseClient.from('sga_zonas').insert({ warehouse_id: wid, nave, nombre, tipo }).select().single();
+  const { data, error } = await supabaseClient.from('sga_zonas').insert({ warehouse_id: wid, nave: nave || null, nombre, tipo }).select().single();
   if (error || !data) { box.querySelectorAll('input,select,button').forEach(x => { x.disabled = false; }); appToast('No se pudo crear: ' + ((error && error.message) || 'error desconocido.'), 'error'); return; }
   sgaZonas.push({ id: data.id, warehouseId: wid, nave, nombre, tipo, orden: data.orden || 0, archived: false });
   if (tipo === 'estanteria') (window.__sgaZonasAbiertas || (window.__sgaZonasAbiertas = new Set())).add(data.id);
   await logWarehouseHistorial(wid, `ha creado ${sgaZonaNombre({ nave, nombre })} (${SGA_ZONA_TIPOS[tipo].toLowerCase()}).`);
   renderTab();
-  const nuevo = [...document.querySelectorAll('.sgn-add')].find(b => b.dataset.wh === wid && b.dataset.nave === nave);
+  const nuevo = [...document.querySelectorAll('.sgn-add')].find(b => b.dataset.wh === wid && b.dataset.nave === nave && b.querySelector('select'));
   if (nuevo) nuevo.querySelector('input').focus();
-  appToast(`Zona «${nombre}» creada en ${nave}.`, 'ok');
+  appToast(`Zona «${nombre}» creada${nave ? ' en ' + nave : ''}.`, 'ok');
+}
+// Una nave existe porque tiene al menos una fila en sga_zonas: al crearla se guarda como «nave completa» y ya se pueden añadir zonas dentro.
+async function sgaNaveNueva(el){
+  const box = el.closest('.sgn-add'), inp = box.querySelector('input'), nave = inp.value.trim(), wid = box.dataset.wh;
+  if (!nave) { inp.focus(); return; }
+  if (sgaZonas.some(z => z.warehouseId === wid && (z.nave || '').trim().toLowerCase() === nave.toLowerCase())) { appToast('Ya existe esa nave.', 'error'); inp.select(); return; }
+  box.querySelectorAll('input,button').forEach(x => { x.disabled = true; });
+  const { data, error } = await supabaseClient.from('sga_zonas').insert({ warehouse_id: wid, nave, nombre: null, tipo: 'suelo' }).select().single();
+  if (error || !data) { box.querySelectorAll('input,button').forEach(x => { x.disabled = false; }); appToast('No se pudo crear: ' + ((error && error.message) || 'error desconocido.'), 'error'); return; }
+  sgaZonas.push({ id: data.id, warehouseId: wid, nave, nombre: null, tipo: 'suelo', orden: data.orden || 0, archived: false });
+  await logWarehouseHistorial(wid, `ha creado la nave ${nave}.`);
+  renderTab();
+  const nuevo = [...document.querySelectorAll('.sgn-add')].find(b => b.dataset.wh === wid && b.dataset.nave === nave && b.querySelector('select'));
+  if (nuevo) nuevo.querySelector('input').focus();
+  appToast(`Nave «${nave}» creada. Escribe debajo las zonas que tiene.`, 'ok');
+}
+function sgaNaveRenombrar(key){
+  window.__sgaNaveRen = key;
+  renderTab();
+  const i = document.querySelector('.sgn-ren'); if (i) { i.focus(); i.select(); }
+}
+async function sgaNaveRenombrarGuardar(inp){
+  const cab = inp.closest('.sgn'), key = cab.dataset.k, p = key.indexOf('|'), wid = key.slice(0, p), k = key.slice(p + 1);
+  const nuevo = inp.value.trim();
+  const zs = sgaZonas.filter(z => z.warehouseId === wid && (z.nave || '').trim().toLowerCase() === k);
+  if (!nuevo) { inp.focus(); return; }
+  if (zs.every(z => z.nave === nuevo)) { window.__sgaNaveRen = null; renderTab(); return; }
+  if (sgaZonas.some(z => z.warehouseId === wid && !zs.includes(z) && (z.nave || '').trim().toLowerCase() === nuevo.toLowerCase())) { appToast('Ya existe otra nave con ese nombre.', 'error'); inp.select(); return; }
+  inp.disabled = true;
+  const { error } = await supabaseClient.from('sga_zonas').update({ nave: nuevo }).in('id', zs.map(z => z.id));
+  if (error) { inp.disabled = false; appToast('No se pudo cambiar el nombre: ' + (error.code === '23505' ? 'ya hay una zona con ese nombre en esa nave.' : (error.message || 'error desconocido.')), 'error'); return; }
+  const antes = zs[0].nave;
+  zs.forEach(z => { z.nave = nuevo; });
+  (window.__sgaNavesCerradas || new Set()).delete(key);
+  window.__sgaNaveRen = null;
+  await logWarehouseHistorial(wid, `ha cambiado el nombre de la nave ${antes} a ${nuevo}.`);
+  renderTab();
 }
 function sgaZonaToggle(id){
   const s = window.__sgaZonasAbiertas || (window.__sgaZonasAbiertas = new Set());
@@ -4810,59 +4852,122 @@ function sgaTodoPlegar(abrir, wid){
   sgaZonas.filter(z => z.warehouseId === wid).forEach(z => { if (abrir) s.add(z.id); else s.delete(z.id); });
   document.querySelectorAll('.sgz').forEach(el => el.classList.toggle('open', abrir));
 }
-// Tarjeta «Zonas y ubicaciones» dentro de la ficha de cada almacén (Configuración → Almacenes).
-function whZonasViewCardHtml(w){
-  const verArch = !!window.__sgaZonasArch;
-  const todas = sgaZonas.filter(z => z.warehouseId === w.id);
-  const activas = todas.filter(z => !z.archived);
-  const archivadas = todas.length - activas.length;
-  const nUb = zs => zs.reduce((s, z) => s + (z.tipo === 'estanteria' ? sgaUbicacionesDe(z.id).length : 0), 0);
-  const totUb = nUb(activas);
-  const naves = new Set(activas.filter(z => z.nave).map(z => z.nave.trim().toLowerCase())).size;
-  const sub = activas.length ? `${activas.length === 1 ? '1 zona' : activas.length + ' zonas'}${totUb ? ` · ${totUb === 1 ? '1 ubicación' : totUb + ' ubicaciones'}` : ''}` : 'Cómo está organizado este almacén';
-  const lista = (verArch ? todas.filter(z => z.archived) : activas)
+// Zonas de un almacén agrupadas por nave (las que no tienen nave, primero y sin cabecera).
+function sgaZonasGrupos(wid, verArch){
+  const lista = sgaZonas.filter(z => z.warehouseId === wid && !!z.archived === verArch)
     .sort((a, b) => (a.nave || '').localeCompare(b.nave || '', 'es', { numeric: true }) || (a.orden - b.orden) || sgaZonaNombre(a).localeCompare(sgaZonaNombre(b), 'es', { numeric: true }));
   const grupos = new Map();
-  lista.forEach(z => { const k = (z.nave || '').trim().toLowerCase(); if (!grupos.has(k)) grupos.set(k, { nave: z.nave || '', zs: [] }); grupos.get(k).zs.push(z); });
-  const cerradas = window.__sgaNavesCerradas || new Set();
-  let arbol = '';
-  grupos.forEach((g, k) => {
-    if (!g.nave) { arbol += g.zs.map(z => sgaZonaFilaHtml(z, false)).join(''); return; }
-    const key = w.id + '|' + k, ub = nUb(g.zs);
-    arbol += `
-      <div class="sgn${cerradas.has(key) ? ' closed' : ''}" data-k="${esc(key)}">
-        <div class="sgn-head" onclick="sgaNaveToggle(this.parentNode.dataset.k)">
-          <span class="sgz-chev">▸</span>
-          <span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 16, 'currentColor', 1.8)}</span>
-          <b>${esc(g.nave)}</b>
-          <span class="sgn-res">${g.zs.length === 1 ? '1 zona' : g.zs.length + ' zonas'}${ub ? ` · ${ub === 1 ? '1 ubicación' : ub + ' ubicaciones'}` : ''}</span>
-        </div>
-        <div class="sgn-body">${g.zs.map(z => sgaZonaFilaHtml(z, true)).join('')}${verArch ? '' : sgaZonaRapidaHtml(w.id, g.nave)}</div>
-      </div>`;
-  });
-  const stat = (n, t) => `<div class="sgz-stat"><b>${n}</b><span>${t}</span></div>`;
-  const resumen = !verArch && activas.length ? `<div class="sgz-stats">${naves ? stat(naves, naves === 1 ? 'Nave' : 'Naves') : ''}${stat(activas.length, activas.length === 1 ? 'Zona' : 'Zonas')}${totUb ? stat(totUb, 'Ubicaciones') : ''}</div>` : '';
+  lista.forEach(z => { const k = (z.nave || '').trim().toLowerCase(); if (!grupos.has(k)) grupos.set(k, { k, key: wid + '|' + k, nave: z.nave || '', zs: [] }); grupos.get(k).zs.push(z); });
+  return [...grupos.values()];
+}
+const sgaNUb = zs => zs.reduce((s, z) => s + (z.tipo === 'estanteria' ? sgaUbicacionesDe(z.id).length : 0), 0);
+const sgaTxtN = (n, s, p) => n === 1 ? '1 ' + s : n + ' ' + p;
+// Ficha del almacén: solo lectura. Para cambiar algo, «Editar» abre la pantalla completa.
+function whZonasViewCardHtml(w){
+  const activas = sgaZonas.filter(z => z.warehouseId === w.id && !z.archived);
+  const grupos = sgaZonasGrupos(w.id, false);
+  const naves = grupos.filter(g => g.nave).length, totUb = sgaNUb(activas);
+  const sub = activas.length ? [naves ? sgaTxtN(naves, 'nave', 'naves') : '', sgaTxtN(activas.length, 'zona', 'zonas'), totUb ? sgaTxtN(totUb, 'ubicación', 'ubicaciones') : ''].filter(Boolean).join(' · ') : 'Cómo está organizado este almacén';
+  const fila = (z, enNave) => {
+    const esEst = z.tipo === 'estanteria', n = esEst ? sgaUbicacionesDe(z.id).length : 0;
+    return `<div class="sgz-ro"><b>${esc(enNave ? (z.nombre || 'Nave completa') : (z.nombre || z.nave))}</b><span>${esEst ? sgaTxtN(n, 'ubicación', 'ubicaciones') : 'A suelo'}</span><em class="sga-tipo ${esEst ? 'est' : ''}">${esc(SGA_ZONA_TIPOS[z.tipo] || z.tipo)}</em></div>`;
+  };
+  const arbol = grupos.map(g => g.nave
+    ? `<div class="sgn"><div class="sgn-head" style="cursor:default;"><span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 16, 'currentColor', 1.8)}</span><b>${esc(g.nave)}</b><span class="sgn-res">${sgaTxtN(g.zs.length, 'zona', 'zonas')}${sgaNUb(g.zs) ? ' · ' + sgaTxtN(sgaNUb(g.zs), 'ubicación', 'ubicaciones') : ''}</span></div><div class="sgn-body">${g.zs.map(z => fila(z, true)).join('')}</div></div>`
+    : g.zs.map(z => fila(z, false)).join('')).join('');
   return `
     <div class="card deca-card" style="margin-top:16px;--dc-accent:var(--primary);">
-      ${decaCardHead('pin', 'Zonas y ubicaciones', sub, `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaZonaModal(null, '${w.id}')">+ Zona</button>`)}
+      ${decaCardHead('pin', 'Zonas y ubicaciones', sub, `<button class="btn btn-ghost" style="background:var(--panel);" onclick="openSgaZonasEditor('${w.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>`)}
       <div class="deca-card-body" style="display:flex;flex-direction:column;gap:8px;">
-        ${resumen}
-        ${lista.length > 1 ? `<div style="display:flex;gap:12px;justify-content:flex-end;"><button type="button" class="tl-chg" onclick="sgaTodoPlegar(true, '${w.id}')">Desplegar todo</button><button type="button" class="tl-chg" onclick="sgaTodoPlegar(false, '${w.id}')">Plegar todo</button></div>` : ''}
-        ${lista.length ? arbol : `<div style="color:var(--mutedFaint);font-size:12.5px;">${verArch ? 'No hay zonas archivadas.' : 'Todavía no hay zonas. Crea la primera con «+ Zona»: de suelo, o de estantería si tiene ubicaciones con código.'}</div>`}
-        ${archivadas || verArch ? `<button type="button" class="tl-chg" style="margin-top:4px;" onclick="window.__sgaZonasArch=${!verArch}; renderTab();">${verArch ? 'Ver las activas' : `Ver archivadas (${archivadas})`}</button>` : ''}
+        ${activas.length ? arbol : '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay naves ni zonas. Pulsa «Editar» para crearlas.</div>'}
       </div>
+    </div>`;
+}
+/* ---- Pantalla completa: editar las naves, zonas y ubicaciones de un almacén ---- */
+function openSgaZonasEditor(wid){
+  window.__sgaPagePrev = null;
+  window.__sgaPage = { kind: 'zonas', warehouseId: wid };
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
+}
+function tplSgaZonasEditorPage(){
+  const pg = window.__sgaPage || {}, wid = pg.warehouseId;
+  const w = allWarehouses.find(x => x.id === wid) || {};
+  const verArch = !!window.__sgaZonasArch;
+  const todas = sgaZonas.filter(z => z.warehouseId === wid), activas = todas.filter(z => !z.archived), archivadas = todas.length - activas.length;
+  const grupos = sgaZonasGrupos(wid, verArch);
+  const cerradas = window.__sgaNavesCerradas || new Set(), ren = window.__sgaNaveRen;
+  const hayNaves = activas.some(z => z.nave);
+  let arbol = '';
+  grupos.forEach(g => {
+    if (!g.nave) { arbol += g.zs.map(z => sgaZonaFilaHtml(z, false)).join(''); return; }
+    const editando = ren === g.key;
+    arbol += `
+      <div class="sgn${cerradas.has(g.key) ? ' closed' : ''}" data-k="${esc(g.key)}">
+        <div class="sgn-head" onclick="${editando ? '' : 'sgaNaveToggle(this.parentNode.dataset.k)'}">
+          <span class="sgz-chev">▸</span>
+          <span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 16, 'currentColor', 1.8)}</span>
+          ${editando
+            ? `<input class="sgn-ren" data-mayus maxlength="60" value="${esc(g.nave)}" onclick="event.stopPropagation()" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaNaveRenombrarGuardar(this); } else if(event.key==='Escape'){ window.__sgaNaveRen=null; renderTab(); }" /><button type="button" class="btn btn-primary" style="padding:4px 12px;font-size:12px;" onclick="event.stopPropagation(); sgaNaveRenombrarGuardar(this.previousElementSibling)">Guardar</button><button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="event.stopPropagation(); window.__sgaNaveRen=null; renderTab();">Cancelar</button>`
+            : `<b>${esc(g.nave)}</b><button class="deca-act" title="Cambiar el nombre de la nave" onclick="event.stopPropagation(); sgaNaveRenombrar(this.closest('.sgn').dataset.k)">${homeIcon(HOME_ICON_PATHS.edit, 14, 'currentColor', 2)}</button>`}
+          <span class="sgn-res">${sgaTxtN(g.zs.length, 'zona', 'zonas')}${sgaNUb(g.zs) ? ' · ' + sgaTxtN(sgaNUb(g.zs), 'ubicación', 'ubicaciones') : ''}</span>
+        </div>
+        <div class="sgn-body">${g.zs.map(z => sgaZonaFilaHtml(z, true)).join('')}${verArch ? '' : sgaZonaRapidaHtml(wid, g.nave)}</div>
+      </div>`;
+  });
+  if (!verArch && (!hayNaves || grupos.some(g => !g.nave))) arbol += sgaZonaRapidaHtml(wid, '');
+  return `
+    <div style="--bn-accent:var(--primary);">
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.pin, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 260px;">
+        <div class="deca-banner-title">Zonas y ubicaciones</div>
+        <div class="deca-banner-sub">${esc(w.name || '')} · naves, zonas y huecos donde se guarda la mercancía</div>
+      </div>
+      <div class="deca-banner-actions">
+        <div class="deca-stat"><b>${new Set(activas.filter(z => z.nave).map(z => z.nave.trim().toLowerCase())).size}</b><span>Naves</span></div>
+        <div class="deca-stat"><b>${activas.length}</b><span>Zonas</span></div>
+        <div class="deca-stat"><b>${sgaNUb(activas)}</b><span>Ubicaciones</span></div>
+      </div>
+    </div>
+    <div class="deca-form" style="max-width:900px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
+      ${verArch ? '' : `<div class="card deca-card">
+        ${decaCardHead('home', 'Nueva nave', 'Escribe el nombre y pulsa Enter; después añade sus zonas dentro')}
+        <div class="deca-card-body"><div class="sgn-add" data-wh="${esc(wid)}">
+          <input data-mayus maxlength="60" placeholder="Ej. Nave 2" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaNaveNueva(this); }" />
+          <button type="button" class="btn btn-primary" style="padding:6px 14px;font-size:12.5px;" onclick="sgaNaveNueva(this)">+ Añadir nave</button>
+        </div></div>
+      </div>`}
+      <div class="card deca-card">
+        ${decaCardHead('pin', verArch ? 'Zonas archivadas' : 'Naves y zonas', verArch ? 'Se pueden restaurar o eliminar' : 'Pulsa una zona para ver sus ubicaciones')}
+        <div class="deca-card-body" style="display:flex;flex-direction:column;gap:8px;">
+          ${grupos.length > 1 || (grupos[0] && grupos[0].zs.length > 1) ? `<div style="display:flex;gap:12px;justify-content:flex-end;"><button type="button" class="tl-chg" onclick="sgaTodoPlegar(true, '${esc(wid)}')">Desplegar todo</button><button type="button" class="tl-chg" onclick="sgaTodoPlegar(false, '${esc(wid)}')">Plegar todo</button></div>` : ''}
+          ${arbol || `<div style="color:var(--mutedFaint);font-size:12.5px;">${verArch ? 'No hay zonas archivadas.' : 'Todavía no hay nada. Crea la primera nave arriba, o escribe una zona sin nave.'}</div>`}
+          ${archivadas || verArch ? `<button type="button" class="tl-chg" style="margin-top:4px;" onclick="window.__sgaZonasArch=${!verArch}; renderTab();">${verArch ? 'Ver las activas' : `Ver archivadas (${archivadas})`}</button>` : ''}
+        </div>
+      </div>
+    </div>
+    <div class="deca-actions" style="max-width:900px;">
+      <div class="deca-actions-row">
+        <button class="btn btn-primary deca-submit" onclick="sgaCerrarPagina()">Listo</button>
+      </div>
+    </div>
     </div>`;
 }
 /* ---- Pantalla completa: nueva nave o zona (se llega desde la ficha del almacén) ----
    Se puede crear solo una nave (sin zona), solo una zona (sin nave) o las dos: lo que se rellene es el sitio donde
    se guarda la mercancía. */
 function sgaCerrarPagina(){
-  window.__sgaPage = null;
+  window.__sgaPage = window.__sgaPagePrev || null;
+  window.__sgaPagePrev = null;
+  window.__sgaNaveRen = null;
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
 }
+function sgaCerrarPaginaTodo(){ window.__sgaPagePrev = null; sgaCerrarPagina(); }
 function openSgaZonaModal(id, warehouseId){ openSgaZonaForm(id, warehouseId); }
 function openSgaZonaForm(id, warehouseId){
+  window.__sgaPagePrev = window.__sgaPage && window.__sgaPage.kind === 'zonas' ? window.__sgaPage : null;
   const z = id ? sgaZonas.find(x => x.id === id) : null;
   window.__sgaPage = { kind: 'zona', id: id || null, warehouseId: z ? z.warehouseId : (warehouseId || window.__whFormId || (allWarehouses.find(w => !w.archived) || {}).id), tipo: z ? z.tipo : 'suelo' };
   renderHeader(); renderTab();
@@ -4998,6 +5103,7 @@ function openSgaUbicacionesForm(zonaId){
   const z = sgaZonas.find(x => x.id === zonaId);
   if (!z) return;
   window.__sgaUbZona = zonaId;
+  window.__sgaPagePrev = window.__sgaPage && window.__sgaPage.kind === 'zonas' ? window.__sgaPage : null;
   window.__sgaPage = { kind: 'ubic', zonaId, warehouseId: z.warehouseId };
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
