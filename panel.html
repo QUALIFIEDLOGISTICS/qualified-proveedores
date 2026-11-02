@@ -1742,6 +1742,7 @@
   .sgz-ro{display:flex;align-items:center;gap:12px;padding:8px 14px;border:1px solid var(--border);border-radius:10px;background:var(--panel);font-size:13px;}
   .sgz-ro b{flex:1;min-width:0;overflow-wrap:anywhere;} .sgz-ro span{color:var(--muted);font-size:12px;} .sgz-ro em{font-style:normal;}
   .sgn-ren{width:auto;flex:1;min-width:120px;max-width:260px;padding:4px 8px;}
+  .sgn-tp{font-style:normal;margin-left:2px;} .sgn-alm{width:auto;flex:0 0 auto;padding:4px 8px;font-size:12.5px;}
   .sgs-nlist{display:flex;flex-direction:column;gap:6px;max-width:640px;}
   .sgs-nrow{display:flex;align-items:center;gap:10px;padding:6px 10px;border:1px solid var(--border);border-radius:10px;background:var(--panel);}
   .sgs-nrow.on{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary);}
@@ -4686,6 +4687,7 @@ async function sgaCampoMaterializar(f, cambios){
    estanterías tienen ubicaciones (un hueco por palet, con su código: pasillo-columna-nivel). */
 let sgaZonas = [];
 let sgaUbicaciones = [];
+let sgaNaves = [];   // naves registradas (con cómo se almacena en ellas); las que no estén aquí cuentan como «ambas»
 /* ---- m² contratados por cliente, con histórico ----
    Cada cambio es una fila nueva con su fecha «desde» (tabla sga_m2_contrato). Para cada mes, la liquidación usa los m² escritos a mano
    ese mes (si los hay) y, si no, los vigentes a fin de mes según este histórico. */
@@ -4733,13 +4735,14 @@ async function sgaM2ContratoGuardar(){
   appToast(`m² guardados: ${sgaNumTxt(n)} m² desde el ${fmtDateDMY(desde)}.`, 'ok');
 }
 async function loadSgaConfig(){
-  const [z, u, cl, ar, cp, m2c] = await Promise.all([
+  const [z, u, cl, ar, cp, m2c, nv] = await Promise.all([
     supabaseClient.from('sga_zonas').select('*').order('orden', { ascending: true }).order('nombre', { ascending: true }),
     supabaseClient.from('sga_ubicaciones').select('*').order('codigo', { ascending: true }),
     supabaseClient.from('sga_clientes').select('*'),
     supabaseClient.from('sga_articulos').select('*').order('nombre', { ascending: true }),
     supabaseClient.from('sga_campos').select('*').order('orden', { ascending: true }).order('created_at', { ascending: true }),
     supabaseClient.from('sga_m2_contrato').select('*'),
+    supabaseClient.from('sga_naves').select('*'),   // si falta el SQL «sga-naves.sql» simplemente no hay naves registradas
   ]);
   sgaCampos = sgaCamposCompletar((cp && cp.data || []).map(r => ({ id: r.id, clave: r.clave, nombre: r.nombre, tipo: r.tipo, unidad: r.unidad || '', opciones: Array.isArray(r.opciones) ? r.opciones : [], ambito: r.ambito, enAlbaran: !!r.en_albaran, enStock: r.en_stock !== false, orden: r.orden || 0, archived: !!r.archived })));
   sgaArticulos = (ar.data || []).map(sgaArticuloDeFila);
@@ -4747,6 +4750,8 @@ async function loadSgaConfig(){
   sgaClientes = {};
   (cl.data || []).forEach(r => { sgaClientes[r.cliente_id] = { activoDesde: r.activo_desde || '', codigosUnicos: !!r.codigos_unicos, campos: Object.assign({ referencia: 'opcional', descripcion: 'opcional', lote: 'no', peso: 'no', unidades: 'no', proveedor: 'no', serie: 'no', medidas: 'no' }, r.campos || {}), observaciones: r.observaciones || '', prefijo: r.prefijo || '' }; });
   Object.keys(sgaClientes).forEach(id => { const cc = sgaClientes[id].campos; if (cc.finalidad === undefined && sgaArticulos.some(a => a.clienteId === id && sgaFinalidad(a))) cc.finalidad = 'opcional'; });
+  window.__sgaNavesTabla = !!(nv && !nv.error);
+  sgaNaves = (nv && !nv.error ? nv.data || [] : []).map(r => ({ id: r.id, warehouseId: r.warehouse_id, nombre: r.nombre, almacenaje: r.almacenaje }));
   sgaZonas = (z.data || []).map(r => ({ id: r.id, warehouseId: r.warehouse_id, nave: r.nave || '', nombre: r.nombre, tipo: r.tipo, orden: r.orden, archived: !!r.archived }));
   sgaUbicaciones = (u.data || []).map(r => ({ id: r.id, zonaId: r.zona_id, codigo: r.codigo, archived: !!r.archived }));
 }
@@ -4813,28 +4818,31 @@ function sgaZgContador(){
   const c = document.getElementById('zg-ncambios'); if (c) c.textContent = n ? `${n} ${n === 1 ? 'cambio' : 'cambios'} sin guardar` : '';
   const b = document.getElementById('zg-guardar'); if (b) b.disabled = !n;
 }
-function sgaZgOpcionesTipo(tipo){ return `<option value="suelo"${tipo === 'estanteria' ? '' : ' selected'}>Suelo</option><option value="estanteria"${tipo === 'estanteria' ? ' selected' : ''}>Estantería</option>`; }
-function sgaZgFilaHtml(nombre, tipo, naveTxt){
+function sgaZgOpcionesTipo(tipo, alm){ const op = (v, t) => `<option value="${v}"${tipo === v ? ' selected' : ''}>${t}</option>`; return (alm === 'estanteria' ? '' : op('suelo', 'Suelo')) + (alm === 'suelo' ? '' : op('estanteria', 'Estantería')); }// Tipo que llevan las filas nuevas: el de la nave si solo admite uno; si admite los dos, el último que hayas usado.function sgaZgTipoDef(alm){ return alm === 'suelo' || alm === 'estanteria' ? alm : (window.__sgaZonaRapidaTipo === 'estanteria' ? 'estanteria' : 'suelo'); }
+// Tipo que llevan las filas nuevas: el de la nave si solo admite uno; si admite los dos, el último que hayas usado.
+function sgaZgTipoDef(alm){ return alm === 'suelo' || alm === 'estanteria' ? alm : (window.__sgaZonaRapidaTipo === 'estanteria' ? 'estanteria' : 'suelo'); }
+function sgaZgFilaHtml(nombre, tipo, naveTxt, alm){
+  if (alm === 'suelo' || alm === 'estanteria') tipo = alm;
   return `<tr class="zg-r${nombre ? ' dirty' : ''}"><td class="zg-nv">${esc(naveTxt || '')}</td><td><input class="zg-n" data-mayus maxlength="60" placeholder="Nombre de la zona" value="${esc(nombre || '')}" oninput="sgaZgInput(this)" onkeydown="sgaZgTecla(event, this)" onpaste="sgaZgPegar(event, this)" /></td>
-    <td><select class="zg-s" onchange="window.__sgaZonaRapidaTipo=this.value; sgaZgInput(this)">${sgaZgOpcionesTipo(tipo)}</select></td><td colspan="2"></td></tr>`;
+    <td><select class="zg-s"${alm === 'suelo' || alm === 'estanteria' ? ' disabled title="Esta nave solo admite este tipo"' : ''} onchange="window.__sgaZonaRapidaTipo=this.value; sgaZgInput(this)">${sgaZgOpcionesTipo(tipo, alm)}</select></td><td colspan="2"></td></tr>`;
 }
-function sgaZgFilaExistenteHtml(z, naveTxt, selId, edit){
+function sgaZgFilaExistenteHtml(z, naveTxt, selId, edit, alm){
   const esEst = z.tipo === 'estanteria', n = esEst ? sgaUbicacionesDe(z.id).length : 0;
   const ub = esEst ? `<button type="button" class="zg-ub" onclick="sgaZonaSel('${esc(z.id)}')" title="Ver las ubicaciones de esta zona">${n ? sgaTxtN(n, 'ubicación', 'ubicaciones') : (edit ? 'Crear ubicaciones' : 'Sin ubicaciones')} ▸</button>` : '';
   if (!edit) return `<tr class="zg-e${z.id === selId ? ' on' : ''}" data-id="${esc(z.id)}"><td class="zg-nv">${esc(naveTxt)}</td><td class="zg-tx">${esc(z.nombre)}</td><td><span class="sga-tipo ${esEst ? 'est' : ''}">${esc(SGA_ZONA_TIPOS[z.tipo] || z.tipo)}</span></td><td class="zg-u">${ub}</td><td></td></tr>`;
   const m = sgaZgM(), ed = m.edits[z.id] || {}, nombre = ed.nombre !== undefined ? ed.nombre : z.nombre, tipo = ed.tipo || z.tipo, del = !!m.borrar[z.id];
   return `<tr class="zg-e${z.id === selId ? ' on' : ''}${m.edits[z.id] ? ' dirty' : ''}${del ? ' del' : ''}" data-id="${esc(z.id)}"><td class="zg-nv">${esc(naveTxt)}</td>
     <td><input class="zg-n" data-mayus maxlength="60" value="${esc(nombre)}"${del ? ' disabled' : ''} oninput="sgaZgEdit(this, 'nombre')" onkeydown="sgaZgTecla(event, this)" /></td>
-    <td><select class="zg-es"${del ? ' disabled' : ''} onchange="sgaZgEdit(this, 'tipo')">${sgaZgOpcionesTipo(tipo)}</select></td>
+    <td><select class="zg-es"${del || alm === 'suelo' || alm === 'estanteria' ? ' disabled' : ''} onchange="sgaZgEdit(this, 'tipo')">${sgaZgOpcionesTipo(tipo, alm)}</select></td>
     <td class="zg-u">${ub}</td>
     <td class="zg-x"><button type="button" class="zg-del" onclick="sgaZgBorrar('${esc(z.id)}')" title="${del ? 'Quitar la marca de eliminar' : 'Eliminar la zona (al guardar)'}">${del ? '↺' : '✕'}</button></td></tr>`;
 }
 function sgaZonasHojaHtml(wid, nave, zs, selId, edit){
-  const tipo = window.__sgaZonaRapidaTipo === 'estanteria' ? 'estanteria' : 'suelo', naveTxt = nave || 'Sin nave';
+  const alm = sgaNaveAlm(wid, nave), tipo = sgaZgTipoDef(alm), naveTxt = nave || 'Sin nave';
   const nuevas = edit ? ((sgaZgM().nuevas[wid + '|' + nave.trim().toLowerCase()]) || []) : [];
-  return `<div class="zg zg-full" data-wh="${esc(wid)}" data-nave="${esc(nave)}">
+  return `<div class="zg zg-full" data-wh="${esc(wid)}" data-nave="${esc(nave)}" data-alm="${alm}">
     <table class="zg-tabla"><thead><tr><th style="width:16%">Nave</th><th>Zona</th><th style="width:140px">Tipo${edit ? ` <button type="button" class="zg-fill" title="Poner a las filas nuevas el tipo de la primera" onclick="sgaZgRellenar(this)">⇩</button>` : ''}</th><th style="width:150px">Ubicaciones</th><th style="width:34px"></th></tr></thead>
-    <tbody>${(zs || []).map(z => sgaZgFilaExistenteHtml(z, naveTxt, selId, edit)).join('')}${edit ? nuevas.concat([{ nombre: '', tipo }]).map(x => sgaZgFilaHtml(x.nombre, x.tipo, naveTxt)).join('') : ''}</tbody></table>
+    <tbody>${(zs || []).map(z => sgaZgFilaExistenteHtml(z, naveTxt, selId, edit, alm)).join('')}${edit ? nuevas.concat([{ nombre: '', tipo }]).map(x => sgaZgFilaHtml(x.nombre, x.tipo, naveTxt, alm)).join('') : ''}</tbody></table>
     ${edit ? '<div class="zg-ayuda" style="margin:8px 0 0;">Escribe un nombre por fila (Enter baja a la siguiente) o pega una columna de Excel. Se crean al pulsar «Guardar», arriba.</div>' : (zs && zs.length ? '' : '<div class="zg-ayuda" style="margin:8px 0 0;">Todavía no tiene zonas. Pulsa «Editar» para crearlas.</div>')}
   </div>`;
 }
@@ -4850,8 +4858,8 @@ function sgaZgActualizar(grid){
   const filas = [...grid.querySelectorAll('.zg-r')];
   const ult = filas[filas.length - 1];
   if (ult && ult.querySelector('.zg-n').value.trim()) {   // siempre queda una fila en blanco al final, como en una hoja
-    const tipo = window.__sgaZonaRapidaTipo === 'estanteria' ? 'estanteria' : 'suelo';
-    grid.querySelector('tbody').insertAdjacentHTML('beforeend', sgaZgFilaHtml('', tipo, grid.dataset.nave || 'Sin nave'));
+    const tipo = sgaZgTipoDef(grid.dataset.alm);
+    grid.querySelector('tbody').insertAdjacentHTML('beforeend', sgaZgFilaHtml('', tipo, grid.dataset.nave || 'Sin nave', grid.dataset.alm));
   }
   sgaZgSync(grid); sgaZgContador();
 }
@@ -4872,15 +4880,15 @@ function sgaZgPegar(e, inp){
   e.preventDefault();
   const grid = inp.closest('.zg'), lineas = txt.replace(/\r/g, '').replace(/\n+$/, '').split('\n');
   let i = [...grid.querySelectorAll('.zg-r')].indexOf(inp.closest('.zg-r'));
-  const tipoDef = window.__sgaZonaRapidaTipo === 'estanteria' ? 'estanteria' : 'suelo';
+  const tipoDef = sgaZgTipoDef(grid.dataset.alm);
   lineas.forEach(l => {
     const [nom, tp] = l.split('\t');
     if (!(nom || '').trim()) { i++; return; }
     let filas = grid.querySelectorAll('.zg-r');
-    if (!filas[i]) { grid.querySelector('tbody').insertAdjacentHTML('beforeend', sgaZgFilaHtml('', tipoDef, grid.dataset.nave || 'Sin nave')); filas = grid.querySelectorAll('.zg-r'); }
+    if (!filas[i]) { grid.querySelector('tbody').insertAdjacentHTML('beforeend', sgaZgFilaHtml('', tipoDef, grid.dataset.nave || 'Sin nave', grid.dataset.alm)); filas = grid.querySelectorAll('.zg-r'); }
     const f = filas[i];
     f.querySelector('.zg-n').value = nom.trim().replace(/\s+/g, ' ');
-    if (tp && /^\s*e/i.test(tp)) f.querySelector('.zg-s').value = 'estanteria'; else if (tp && /^\s*s/i.test(tp)) f.querySelector('.zg-s').value = 'suelo';
+    if (grid.dataset.alm === 'ambas') { if (tp && /^\s*e/i.test(tp)) f.querySelector('.zg-s').value = 'estanteria'; else if (tp && /^\s*s/i.test(tp)) f.querySelector('.zg-s').value = 'suelo'; }   // si la nave solo admite un tipo, manda el de la nave
     i++;
   });
   sgaZgActualizar(grid);
@@ -4933,6 +4941,8 @@ async function sgaZgGuardar(){
   }
   for (const key of Object.keys(m.nuevas)) {
     if (key.split('|')[0] !== wid) continue;
+    const almN = sgaNaveAlm(wid, m.naves[key] || '');
+    if (almN !== 'ambas') m.nuevas[key].forEach(x => { x.tipo = almN; });   // la nave solo admite un tipo: manda el de la nave
     for (const f of m.nuevas[key].filter(x => x.nombre.trim())) if (!anota(m.naves[key] || '', f.nombre)) { appToast(`«${f.nombre.trim()}» está repetida${m.naves[key] ? ' en ' + m.naves[key] : ''}.`, 'error'); return; }
   }
   const btn = document.getElementById('zg-guardar'); if (btn) btn.disabled = true;
@@ -4982,25 +4992,68 @@ async function sgaZgGuardar(){
   appToast(`Cambios guardados${ok ? ' (' + ok + ')' : ''}.`, 'ok');
   renderTab();
 }
-// Una nave no es una zona: existe mientras tenga zonas. Al crearla queda abierta (sin guardar nada todavía) y se guarda con su primera zona.
-function sgaNaveNueva(el){
+/* Naves: cada nave se registra (tabla sga_naves) con la forma de almacenar en ella —a suelo, en estantería o ambas— y eso limita el tipo de
+   las zonas que se crean dentro. Una nave sin registrar (o si falta el SQL «sga-naves.sql») cuenta como «ambas». */
+const SGA_NAVE_ALM = { suelo: 'A suelo', estanteria: 'Estantería', ambas: 'Suelo y estantería' };
+function sgaNaveReg(wid, nave){ const k = (nave || '').trim().toLowerCase(); return k ? sgaNaves.find(n => n.warehouseId === wid && n.nombre.trim().toLowerCase() === k) : null; }
+function sgaNaveAlm(wid, nave){ const r = sgaNaveReg(wid, nave); return r ? r.almacenaje : 'ambas'; }
+function sgaNaveAlmSelectHtml(sel, onchange, titulo){
+  return `<select class="sgn-alm" title="${esc(titulo || 'Cómo se almacena en esta nave')}"${onchange ? ` onchange="${onchange}"` : ''}>${Object.keys(SGA_NAVE_ALM).map(k => `<option value="${k}"${k === sel ? ' selected' : ''}>${SGA_NAVE_ALM[k]}</option>`).join('')}</select>`;
+}
+function sgaNaveFaltaSql(){ return window.__sgaNavesTabla === false; }
+// Crea una nave. Si falta el SQL, la nave queda abierta solo mientras tengas la pantalla (se guarda con su primera zona) y sin tipo propio.
+async function sgaNaveNueva(el){
   const box = el.closest('.sgn-add'), inp = box.querySelector('input'), nave = inp.value.trim(), wid = box.dataset.wh;
+  const alm = (box.querySelector('.sgn-alm') || {}).value || 'ambas';
   if (!nave) { inp.focus(); return; }
   const k = nave.toLowerCase();
   const nuevas = window.__sgaNavesNuevas || (window.__sgaNavesNuevas = []);
-  if (sgaZonas.some(z => z.warehouseId === wid && (z.nave || '').trim().toLowerCase() === k) || nuevas.some(t => t.wid === wid && t.k === k)) { appToast('Ya existe esa nave.', 'error'); inp.select(); return; }
-  nuevas.push({ wid, k, nave });
-  window.__sgaSelNave = k; window.__sgaSelZona = null; window.__sgaZonasArch = false;
+  if (sgaZonas.some(z => z.warehouseId === wid && (z.nave || '').trim().toLowerCase() === k) || sgaNaveReg(wid, nave) || nuevas.some(t => t.wid === wid && t.k === k)) { appToast('Ya existe esa nave.', 'error'); inp.select(); return; }
+  box.querySelectorAll('input,select,button').forEach(x => { x.disabled = true; });
+  let guardada = false;
+  if (!sgaNaveFaltaSql()) {
+    const { data, error } = await supabaseClient.from('sga_naves').insert({ warehouse_id: wid, nombre: nave, almacenaje: alm }).select().single();
+    if (error || !data) {
+      if (!/relation|does not exist|schema cache/i.test((error && error.message) || '')) { box.querySelectorAll('input,select,button').forEach(x => { x.disabled = false; }); appToast('No se pudo crear: ' + ((error && error.message) || 'error desconocido.'), 'error'); return; }
+      window.__sgaNavesTabla = false;
+    } else { sgaNaves.push({ id: data.id, warehouseId: wid, nombre: data.nombre, almacenaje: data.almacenaje }); guardada = true; }
+  }
+  if (!guardada) { nuevas.push({ wid, k, nave }); appToast('Falta ejecutar el SQL «sga-naves.sql» en Supabase: la nave se guardará con su primera zona y sin tipo propio.', 'error'); }
+  else await logWarehouseHistorial(wid, `ha creado la nave ${nave} (${SGA_NAVE_ALM[alm].toLowerCase()}).`);
+  window.__sgaSelNave = k; window.__sgaSelZona = null; window.__sgaZonasArch = false; window.__sgaNaveAlmNueva = alm;
   if (!window.__zgEdit && !window.__sgaNavesEdit) { window.__zgEdit = true; sgaZgReset(); }   // una nave recién creada está vacía: se entra a editar para ponerle sus zonas
   renderTab();
   const nuevo = window.__sgaNavesEdit ? document.querySelector('.sgs-nlist .sgn-add input') : document.querySelector('.zg .zg-r .zg-n');
   if (nuevo) nuevo.focus();
 }
+// Cambiar cómo se almacena en una nave. No se puede dejar una nave «a suelo» si ya tiene zonas de estantería, ni al revés.
+async function sgaNaveAlmCambiar(sel){
+  const key = sel.closest('[data-k]').dataset.k, p = key.indexOf('|'), wid = key.slice(0, p), k = key.slice(p + 1), alm = sel.value;
+  const reg = sgaNaves.find(n => n.warehouseId === wid && n.nombre.trim().toLowerCase() === k);
+  const nombre = reg ? reg.nombre : ((sgaZonas.find(z => z.warehouseId === wid && (z.nave || '').trim().toLowerCase() === k) || {}).nave || k);
+  const zs = sgaZonas.filter(z => z.warehouseId === wid && (z.nave || '').trim().toLowerCase() === k && z.nombre);
+  const antes = reg ? reg.almacenaje : 'ambas';
+  const choca = alm === 'suelo' ? zs.some(z => z.tipo === 'estanteria') : alm === 'estanteria' ? zs.some(z => z.tipo === 'suelo') : false;
+  if (choca) { appToast(`«${nombre}» ya tiene zonas ${alm === 'suelo' ? 'de estantería' : 'a suelo'}: cámbialas o elimínalas antes.`, 'error'); sel.value = antes; return; }
+  if (sgaNaveFaltaSql()) { appToast('Falta ejecutar el SQL «sga-naves.sql» en Supabase para guardar el tipo de la nave.', 'error'); sel.value = antes; return; }
+  sel.disabled = true;
+  let error;
+  if (reg) ({ error } = await supabaseClient.from('sga_naves').update({ almacenaje: alm }).eq('id', reg.id));
+  else {
+    const r = await supabaseClient.from('sga_naves').insert({ warehouse_id: wid, nombre, almacenaje: alm }).select().single();
+    error = r.error; if (!error && r.data) sgaNaves.push({ id: r.data.id, warehouseId: wid, nombre: r.data.nombre, almacenaje: r.data.almacenaje });
+  }
+  if (error) { sel.disabled = false; sel.value = antes; appToast('No se pudo guardar: ' + (error.message || 'error desconocido.'), 'error'); return; }
+  if (reg) reg.almacenaje = alm;
+  await logWarehouseHistorial(wid, `ha cambiado la nave ${nombre} a ${SGA_NAVE_ALM[alm].toLowerCase()}.`);
+  renderTab();
+}
 // Eliminar una nave = eliminar sus zonas (las que tienen o han tenido mercancía no se pueden borrar: se avisa).
 async function sgaNaveEliminar(key){
   const p = key.indexOf('|'), wid = key.slice(0, p), k = key.slice(p + 1);
   const zs = sgaZonas.filter(z => z.warehouseId === wid && (z.nave || '').trim().toLowerCase() === k);
-  const nombre = (zs[0] && zs[0].nave) || ((window.__sgaNavesNuevas || []).find(t => t.wid === wid && t.k === k) || {}).nave || '';
+  const reg = sgaNaves.find(n => n.warehouseId === wid && n.nombre.trim().toLowerCase() === k);
+  const nombre = (zs[0] && zs[0].nave) || (reg && reg.nombre) || ((window.__sgaNavesNuevas || []).find(t => t.wid === wid && t.k === k) || {}).nave || '';
   const reales = zs.filter(z => z.nombre).length;
   const msg = reales ? `Se borrarán ${reales === 1 ? 'su zona' : 'sus ' + reales + ' zonas'} y todas sus ubicaciones. Si alguna tiene o ha tenido mercancía, no se podrá borrar.` : 'La nave no tiene zonas.';
   if (!(await appConfirm({ title: 'Eliminar nave', name: nombre, message: msg, confirmLabel: 'Eliminar', tone: 'danger', icon: 'trash' }))) return;
@@ -5016,9 +5069,14 @@ async function sgaNaveEliminar(key){
     sgaUbicaciones = sgaUbicaciones.filter(u => u.zonaId !== z.id);
     borradas++;
   }
+  if (reg) {
+    const { error } = await supabaseClient.from('sga_naves').delete().eq('id', reg.id);
+    if (error) { renderTab(); appToast('Se borraron las zonas, pero no la nave: ' + (error.message || 'error desconocido.'), 'error'); return; }
+    sgaNaves = sgaNaves.filter(n => n.id !== reg.id);
+  }
   window.__sgaNavesNuevas = (window.__sgaNavesNuevas || []).filter(t => !(t.wid === wid && t.k === k));
   window.__sgaSelNave = null; window.__sgaSelZona = null;
-  if (zs.length) await logWarehouseHistorial(wid, `ha eliminado la nave ${nombre}.`);
+  if (zs.length || reg) await logWarehouseHistorial(wid, `ha eliminado la nave ${nombre}.`);
   appToast(`Nave «${nombre}» eliminada.`, 'ok');
   renderTab();
 }
@@ -5032,21 +5090,26 @@ async function sgaNaveRenombrarGuardar(inp){
   const nuevo = inp.value.trim();
   const zs = sgaZonas.filter(z => z.warehouseId === wid && (z.nave || '').trim().toLowerCase() === k);
   const temp = (window.__sgaNavesNuevas || []).find(t => t.wid === wid && t.k === k);
+  const reg = sgaNaves.find(n => n.warehouseId === wid && n.nombre.trim().toLowerCase() === k);
   if (!nuevo) { inp.focus(); return; }
-  if (zs.every(z => z.nave === nuevo) && (!temp || temp.nave === nuevo)) { window.__sgaNaveRen = null; renderTab(); return; }
-  if (nuevo.toLowerCase() !== k && (sgaZonas.some(z => z.warehouseId === wid && !zs.includes(z) && (z.nave || '').trim().toLowerCase() === nuevo.toLowerCase()) || (window.__sgaNavesNuevas || []).some(t => t.wid === wid && t !== temp && t.k === nuevo.toLowerCase()))) { appToast('Ya existe otra nave con ese nombre.', 'error'); inp.select(); return; }
+  if (zs.every(z => z.nave === nuevo) && (!temp || temp.nave === nuevo) && (!reg || reg.nombre === nuevo)) { window.__sgaNaveRen = null; renderTab(); return; }
+  if (nuevo.toLowerCase() !== k && (sgaZonas.some(z => z.warehouseId === wid && !zs.includes(z) && (z.nave || '').trim().toLowerCase() === nuevo.toLowerCase()) || sgaNaves.some(n => n.warehouseId === wid && n !== reg && n.nombre.trim().toLowerCase() === nuevo.toLowerCase()) || (window.__sgaNavesNuevas || []).some(t => t.wid === wid && t !== temp && t.k === nuevo.toLowerCase()))) { appToast('Ya existe otra nave con ese nombre.', 'error'); inp.select(); return; }
   inp.disabled = true;
   if (zs.length) {
     const { error } = await supabaseClient.from('sga_zonas').update({ nave: nuevo }).in('id', zs.map(z => z.id));
     if (error) { inp.disabled = false; appToast('No se pudo cambiar el nombre: ' + (error.code === '23505' ? 'ya hay una zona con ese nombre en esa nave.' : (error.message || 'error desconocido.')), 'error'); return; }
   }
-  const antes = zs.length ? zs[0].nave : (temp ? temp.nave : nuevo);
+  if (reg) {
+    const { error } = await supabaseClient.from('sga_naves').update({ nombre: nuevo }).eq('id', reg.id);
+    if (error) { inp.disabled = false; appToast('No se pudo cambiar el nombre de la nave: ' + (error.message || 'error desconocido.'), 'error'); return; }
+  }
+  const antes = zs.length ? zs[0].nave : (reg ? reg.nombre : (temp ? temp.nave : nuevo));
   zs.forEach(z => { z.nave = nuevo; });
+  if (reg) reg.nombre = nuevo;
   if (temp) { temp.nave = nuevo; temp.k = nuevo.toLowerCase(); }
-  if (!zs.length) { if (window.__sgaSelNave === k) window.__sgaSelNave = nuevo.toLowerCase(); window.__sgaNaveRen = null; renderTab(); return; }
   if (window.__sgaSelNave === k) window.__sgaSelNave = nuevo.toLowerCase();
   window.__sgaNaveRen = null;
-  await logWarehouseHistorial(wid, `ha cambiado el nombre de la nave ${antes} a ${nuevo}.`);
+  if (zs.length || reg) await logWarehouseHistorial(wid, `ha cambiado el nombre de la nave ${antes} a ${nuevo}.`);
   renderTab();
 }
 // Zonas de un almacén agrupadas por nave (las que no tienen nave, primero).
@@ -5056,8 +5119,9 @@ function sgaZonasGrupos(wid, verArch){
   const grupos = new Map();
   lista.forEach(z => { const k = (z.nave || '').trim().toLowerCase(); if (!grupos.has(k)) grupos.set(k, { k, key: wid + '|' + k, nave: z.nave || '', zs: [] }); if (z.nombre) grupos.get(k).zs.push(z); });   // la fila «solo nave» (sin zona) no se lista: sirve para que la nave exista
   if (!verArch) sgaZonas.filter(z => z.warehouseId === wid && z.nave).forEach(z => { const k = z.nave.trim().toLowerCase(); if (!grupos.has(k)) grupos.set(k, { k, key: wid + '|' + k, nave: z.nave, zs: [] }); });   // una nave con todas sus zonas archivadas sigue existiendo
+  if (!verArch) sgaNaves.filter(n => n.warehouseId === wid).forEach(n => { const k = n.nombre.trim().toLowerCase(); if (!grupos.has(k)) grupos.set(k, { k, key: wid + '|' + k, nave: n.nombre, zs: [] }); });   // naves registradas, aunque aún no tengan zonas
   if (!verArch) (window.__sgaNavesNuevas || []).filter(t => t.wid === wid && !grupos.has(t.k)).forEach(t => grupos.set(t.k, { k: t.k, key: wid + '|' + t.k, nave: t.nave, zs: [] }));
-  return [...grupos.values()].filter(g => !verArch || g.zs.length).sort((a, b) => a.nave.localeCompare(b.nave, 'es', { numeric: true }));
+  return [...grupos.values()].filter(g => !verArch || g.zs.length).sort((a, b) => a.nave.localeCompare(b.nave, 'es', { numeric: true })).map(g => Object.assign(g, { alm: g.nave ? sgaNaveAlm(wid, g.nave) : 'ambas' }));
 }
 const sgaNUb = zs => zs.reduce((s, z) => s + (z.tipo === 'estanteria' ? sgaUbicacionesDe(z.id).length : 0), 0);
 const sgaTxtN = (n, s, p) => n === 1 ? '1 ' + s : n + ' ' + p;
@@ -5095,13 +5159,13 @@ function sgaZonaTesela(z, wid){
 // Ficha del almacén: un plano con una tarjeta por zona (nave → zonas) y, dentro, sus ubicaciones como cuadraditos. Para cambiar algo, «Editar».
 function whZonasViewCardHtml(w){
   const activas = sgaZonas.filter(z => z.warehouseId === w.id && !z.archived && z.nombre);   // la fila «solo nave» no es una zona
-  const grupos = sgaZonasGrupos(w.id, false).filter(g => g.zs.length || sgaZonas.some(z => z.warehouseId === w.id && !z.archived && (z.nave || '').trim().toLowerCase() === g.k));   // sin las naves recién creadas aún sin guardar
+  const grupos = sgaZonasGrupos(w.id, false).filter(g => g.zs.length || sgaNaveReg(w.id, g.nave) || sgaZonas.some(z => z.warehouseId === w.id && !z.archived && (z.nave || '').trim().toLowerCase() === g.k));   // sin las naves recién creadas aún sin guardar
   const naves = grupos.filter(g => g.nave).length, totUb = sgaNUb(activas);
   const sub = activas.length ? [naves ? sgaTxtN(naves, 'nave', 'naves') : '', sgaTxtN(activas.length, 'zona', 'zonas'), totUb ? sgaTxtN(totUb, 'ubicación', 'ubicaciones') : ''].filter(Boolean).join(' · ') : 'Cómo está organizado este almacén';
   const arbol = grupos.map(g => {
     const tiles = g.zs.length ? `<div class="sgt-grid">${g.zs.map(z => sgaZonaTesela(z, w.id)).join('')}</div>` : '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía sin zonas.</div>';
     if (!g.nave) return (grupos.length > 1 ? '<div class="sgv-nh"><b>Sin nave</b></div>' : '') + tiles;
-    return `<div class="sgv-n"><div class="sgv-nh"><span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 16, 'currentColor', 1.8)}</span><b>${esc(g.nave)}</b><span>${sgaTxtN(g.zs.length, 'zona', 'zonas')}${sgaNUb(g.zs) ? ' · ' + sgaTxtN(sgaNUb(g.zs), 'ubicación', 'ubicaciones') : ''}</span></div>${tiles}</div>`;
+    return `<div class="sgv-n"><div class="sgv-nh"><span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 16, 'currentColor', 1.8)}</span><b>${esc(g.nave)}</b><em class="sga-tipo sgn-tp">${SGA_NAVE_ALM[g.alm]}</em><span>${sgaTxtN(g.zs.length, 'zona', 'zonas')}${sgaNUb(g.zs) ? ' · ' + sgaTxtN(sgaNUb(g.zs), 'ubicación', 'ubicaciones') : ''}</span></div>${tiles}</div>`;
   }).join('');
   return `
     <div class="card deca-card" style="margin-top:16px;--dc-accent:var(--primary);">
@@ -5121,23 +5185,30 @@ function openSgaZonasEditor(wid, k, zonaId){   // k y zonaId: entrar ya con esa 
   window.scrollTo(0, 0);
 }
 // Editar naves: una fila por nave con su nombre editable (se guarda al salir del campo o con Enter) y su botón Eliminar, más crear una nueva.
-function sgaNavesEditorHtml(wid, naves, selK){
-  const filas = naves.map(x => `<div class="sgs-nrow${x.k === selK ? ' on' : ''}" data-k="${esc(x.key)}" data-sel="${esc(x.k)}" onclick="if(!event.target.closest('input,select,button')) sgaNaveSel(this.dataset.sel)">
+function sgaNavesEditorHtml(wid, naves, selK, edit){
+  const res = x => `<span class="sgn-res">${sgaTxtN(x.zs.length, 'zona', 'zonas')}${sgaNUb(x.zs) ? ' · ' + sgaTxtN(sgaNUb(x.zs), 'ubicación', 'ubicaciones') : ''}</span>`;
+  const ver = x => x.k === selK ? '<span class="sga-tipo est" style="white-space:nowrap;">Zonas abajo ▾</span>' : `<button type="button" class="btn btn-ghost" style="padding:4px 12px;font-size:12px;" onclick="sgaNaveSel(this.closest('[data-sel]').dataset.sel)">Ver zonas</button>`;
+  const filas = naves.map(x => !edit
+    ? `<div class="sgs-nrow${x.k === selK ? ' on' : ''}" data-sel="${esc(x.k)}" style="cursor:pointer;" onclick="sgaNaveSel(this.dataset.sel)">
+      <span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 16, 'currentColor', 1.8)}</span>
+      <b>${esc(x.nave || 'Sin nave')}</b>${x.nave ? `<em class="sga-tipo sgn-tp">${SGA_NAVE_ALM[x.alm]}</em>` : ''}
+      ${res(x)}${ver(x)}
+    </div>`
+    : `<div class="sgs-nrow${x.k === selK ? ' on' : ''}" data-k="${esc(x.key)}" data-sel="${esc(x.k)}" onclick="if(!event.target.closest('input,select,button')) sgaNaveSel(this.dataset.sel)">
       <span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 16, 'currentColor', 1.8)}</span>
       <input class="sgn-ren" data-mayus maxlength="60" value="${esc(x.nave)}" title="Cambiar el nombre de la nave" onchange="sgaNaveRenombrarGuardar(this)" onkeydown="if(event.key==='Enter'){ event.preventDefault(); this.blur(); } else if(event.key==='Escape'){ this.value=this.defaultValue; this.blur(); }" />
-      <span class="sgn-res">${sgaTxtN(x.zs.length, 'zona', 'zonas')}${sgaNUb(x.zs) ? ' · ' + sgaTxtN(sgaNUb(x.zs), 'ubicación', 'ubicaciones') : ''}</span>
-      ${x.k === selK ? '<span class="sga-tipo est" style="white-space:nowrap;">Zonas abajo ▾</span>' : `<button type="button" class="btn btn-ghost" style="padding:4px 12px;font-size:12px;" onclick="sgaNaveSel(this.closest('[data-sel]').dataset.sel)">Ver zonas</button>`}
+      ${sgaNaveAlmSelectHtml(x.alm, 'sgaNaveAlmCambiar(this)', 'Cómo se almacena en esta nave: a suelo, en estantería o ambas')}
+      ${res(x)}${ver(x)}
       <button type="button" class="btn btn-ghost" style="padding:4px 12px;font-size:12px;color:var(--danger,#c0392b);" onclick="sgaNaveEliminar(this.closest('[data-k]').dataset.k)">Eliminar</button>
     </div>`).join('');
-  return `<div class="sgs-nlist">${filas || '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay naves.</div>'}
-    <div class="sgn-add sgs-nrow" data-wh="${esc(wid)}"><input data-mayus maxlength="60" placeholder="+ Nueva nave — escribe el nombre y pulsa Enter" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaNaveNueva(this); }" /><button type="button" class="btn btn-primary" style="padding:5px 14px;font-size:12.5px;" onclick="sgaNaveNueva(this)">+ Añadir nave</button></div>
+  const nueva = edit ? `
+    <div class="sgn-add sgs-nrow" data-wh="${esc(wid)}"><input data-mayus maxlength="60" placeholder="+ Nueva nave — escribe el nombre y pulsa Enter" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaNaveNueva(this); }" />${sgaNaveAlmSelectHtml(window.__sgaNaveAlmNueva || 'ambas', 'window.__sgaNaveAlmNueva=this.value', 'Cómo se almacenará en la nave nueva')}<button type="button" class="btn btn-primary" style="padding:5px 14px;font-size:12.5px;" onclick="sgaNaveNueva(this)">+ Añadir nave</button></div>` : '';
+  return `<div class="sgs-nlist">${filas || '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay naves. Pulsa «Editar» para crear la primera.</div>'}${nueva}
   </div>`;
 }
 // Desde la ficha del almacén: abre la pantalla ya con la tarjeta «Naves» en modo edición (cambiar nombre, eliminar, crear).
 function openSgaNavesEditor(wid){
-  openSgaZonasEditor(wid);
-  window.__sgaNavesEdit = true;
-  renderTab();
+  openSgaZonasEditor(wid);   // entra con las naves bloqueadas: «Editar» (arriba a la derecha de Naves) las desbloquea
 }
 function sgaNaveSel(k){ window.__sgaSelNave = k; window.__sgaSelZona = null; window.__sgaNaveRen = null; renderTab(); }
 function sgaZonaSel(id){ window.__sgaSelZona = id; window.__sgaGenFoco = false; renderTab(); }
@@ -5248,7 +5319,7 @@ function tplSgaZonasEditorPage(){
     </div>`;
   }).join('');
   const cabNave = g && g.nave ? `<div class="sgs-nh">
-      <span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 18, 'currentColor', 1.8)}</span><b>${esc(g.nave)}</b>
+      <span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 18, 'currentColor', 1.8)}</span><b>${esc(g.nave)}</b><em class="sga-tipo sgn-tp">${SGA_NAVE_ALM[g.alm]}</em>
       <span class="sgn-res">${sgaTxtN(g.zs.length, 'zona', 'zonas')}${sgaNUb(g.zs) ? ' · ' + sgaTxtN(sgaNUb(g.zs), 'ubicación', 'ubicaciones') : ''}</span>
     </div>` : '';
   const panel = g ? `${cabNave}
@@ -5281,9 +5352,9 @@ function tplSgaZonasEditorPage(){
     </div>
     <div class="deca-form" style="max-width:1000px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
       <div class="card deca-card">
-        ${decaCardHead('home', verArch ? 'Zonas archivadas' : 'Naves', verArch ? 'Se pueden restaurar o eliminar' : (navesEdit ? 'Cambia el nombre, elimina o crea naves. Pulsa una nave para ver sus zonas' : 'Elige la nave'), verArch || zgEdit ? '' : `<button class="btn btn-ghost" style="background:var(--panel);" onclick="window.__sgaNavesEdit=${!navesEdit}; renderTab();">${navesEdit ? '<span>Listo</span>' : `${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar naves</span>`}</button>`)}
+        ${decaCardHead('home', verArch ? 'Zonas archivadas' : 'Naves', verArch ? 'Se pueden restaurar o eliminar' : (navesEdit ? 'Cambia el nombre y el tipo (a suelo, estantería o ambas), elimina o crea naves' : 'Elige una nave para ver y editar sus zonas debajo'), verArch || zgEdit ? '' : `<button class="btn ${navesEdit ? 'btn-primary' : 'btn-ghost'}" style="${navesEdit ? '' : 'background:var(--panel);'}" onclick="window.__sgaNavesEdit=${!navesEdit}; renderTab();">${navesEdit ? '<span>Listo</span>' : `${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span>`}</button>`)}
         <div class="deca-card-body">
-          ${navesEdit ? sgaNavesEditorHtml(wid, grupos.filter(x => x.nave), g && g.k) : `<div class="sgs-chips">
+          ${!verArch ? sgaNavesEditorHtml(wid, navesEdit ? grupos.filter(x => x.nave) : grupos.filter(x => x.nave || x.zs.length), g && g.k, navesEdit) : `<div class="sgs-chips">
             ${chips}
             ${verArch ? '' : `<div class="sgn-add sgs-nueva" data-wh="${esc(wid)}"><input data-mayus maxlength="60" placeholder="+ Nueva nave" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaNaveNueva(this); }" /><button type="button" class="btn btn-ghost" style="padding:5px 12px;font-size:12px;" onclick="sgaNaveNueva(this)">Crear</button></div>`}
           </div>`}
