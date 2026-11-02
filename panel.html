@@ -1745,6 +1745,7 @@
   .sgn-tp{font-style:normal;margin-left:2px;} .sgn-alm{width:auto;flex:0 0 auto;padding:4px 8px;font-size:12.5px;}
   .sgs-nlist{display:flex;flex-direction:column;gap:6px;max-width:640px;}
   .sgs-nrow{display:flex;align-items:center;gap:10px;padding:6px 10px;border:1px solid var(--border);border-radius:10px;background:var(--panel);}
+  .sgs-nrow.on{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary);}
   .sgs-nrow .sgn-res{margin-left:auto;font-size:12px;color:var(--muted);white-space:nowrap;}
   .sgs-nrow.sgn-add input{flex:1;max-width:none;}
   .sgs-chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
@@ -4914,7 +4915,7 @@ function sgaZgBorrar(id){
   if (m.borrar[id]) delete m.borrar[id]; else m.borrar[id] = true;
   renderTab();
 }
-function sgaZgEditar(){ window.__zgEdit = true; sgaZgReset(); renderTab(); }
+function sgaZgEditar(){ window.__zgEdit = true; window.__sgaNavesEdit = false; sgaZgReset(); renderTab(); }
 async function sgaZgCancelar(){
   const n = sgaZgCambios();
   if (n && !(await appConfirm({ title: 'Cambios sin guardar', message: `Tienes ${n} cambio${n === 1 ? '' : 's'} sin guardar. Si cancelas se pierden.`, confirmLabel: 'Descartar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
@@ -5168,9 +5169,9 @@ function whZonasViewCardHtml(w){
   }).join('');
   return `
     <div class="card deca-card" style="margin-top:16px;--dc-accent:var(--primary);">
-      ${decaCardHead('pin', 'Zonas y ubicaciones', sub, `<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">${decaAccion('edit', 'Editar naves', "openSgaNavesEditor('${w.id}')", 'Cambiar el nombre, eliminar o crear naves')}${decaAccion('edit', 'Editar zonas', "openSgaZonasEditor('${w.id}')", 'Crear o cambiar las zonas y sus ubicaciones')}</div>`)}
+      ${decaCardHead('pin', 'Zonas y ubicaciones', sub, decaAccion('edit', 'Editar naves', "openSgaNavesEditor('${w.id}')", 'Crear o cambiar naves y, dentro de cada una, sus zonas y ubicaciones'))}
       <div class="deca-card-body" style="display:flex;flex-direction:column;gap:14px;">
-        ${activas.length ? arbol : '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay naves ni zonas. Pulsa «Editar» para crearlas.</div>'}
+        ${activas.length ? arbol : '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay naves ni zonas. Pulsa «Editar naves» para crearlas.</div>'}
       </div>
     </div>`;
 }
@@ -5184,12 +5185,13 @@ function openSgaZonasEditor(wid, k, zonaId){   // k y zonaId: entrar ya con esa 
   window.scrollTo(0, 0);
 }
 // Editar naves: una fila por nave con su nombre editable (se guarda al salir del campo o con Enter) y su botón Eliminar, más crear una nueva.
-function sgaNavesEditorHtml(wid, naves){
-  const filas = naves.map(x => `<div class="sgs-nrow" data-k="${esc(x.key)}">
+function sgaNavesEditorHtml(wid, naves, selK){
+  const filas = naves.map(x => `<div class="sgs-nrow${x.k === selK ? ' on' : ''}" data-k="${esc(x.key)}" data-sel="${esc(x.k)}" onclick="if(!event.target.closest('input,select,button')) sgaNaveSel(this.dataset.sel)">
       <span class="sgn-ico">${homeIcon(HOME_ICON_PATHS.home, 16, 'currentColor', 1.8)}</span>
       <input class="sgn-ren" data-mayus maxlength="60" value="${esc(x.nave)}" title="Cambiar el nombre de la nave" onchange="sgaNaveRenombrarGuardar(this)" onkeydown="if(event.key==='Enter'){ event.preventDefault(); this.blur(); } else if(event.key==='Escape'){ this.value=this.defaultValue; this.blur(); }" />
       ${sgaNaveAlmSelectHtml(x.alm, 'sgaNaveAlmCambiar(this)', 'Cómo se almacena en esta nave: a suelo, en estantería o ambas')}
       <span class="sgn-res">${sgaTxtN(x.zs.length, 'zona', 'zonas')}${sgaNUb(x.zs) ? ' · ' + sgaTxtN(sgaNUb(x.zs), 'ubicación', 'ubicaciones') : ''}</span>
+      ${x.k === selK ? '<span class="sga-tipo est" style="white-space:nowrap;">Zonas abajo ▾</span>' : `<button type="button" class="btn btn-ghost" style="padding:4px 12px;font-size:12px;" onclick="sgaNaveSel(this.closest('[data-sel]').dataset.sel)">Ver zonas</button>`}
       <button type="button" class="btn btn-ghost" style="padding:4px 12px;font-size:12px;color:var(--danger,#c0392b);" onclick="sgaNaveEliminar(this.closest('[data-k]').dataset.k)">Eliminar</button>
     </div>`).join('');
   return `<div class="sgs-nlist">${filas || '<div style="color:var(--mutedFaint);font-size:12.5px;">Todavía no hay naves.</div>'}
@@ -5327,7 +5329,7 @@ function tplSgaZonasEditorPage(){
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.pin, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
         <div class="deca-banner-title">Zonas y ubicaciones</div>
-        <div class="deca-banner-sub">${esc(w.name || '')} · ${zgEdit ? 'Cambia lo que necesites en la hoja (las casillas cambiadas se marcan). Al terminar, pulsa «Guardar».' : 'Pulsa «Editar» para crear o cambiar zonas. Los cambios no se guardan hasta que pulses «Guardar».'}</div>
+        <div class="deca-banner-sub">${esc(w.name || '')} · ${zgEdit ? 'Cambia lo que necesites en la hoja (las casillas cambiadas se marcan). Al terminar, pulsa «Guardar».' : 'Gestiona las naves y, dentro de cada una, pulsa «Editar zonas». Los cambios de zonas no se guardan hasta que pulses «Guardar».'}</div>
       </div>
       <div class="deca-banner-actions">
         <div class="deca-stat"><b>${navesN}</b><span>Naves</span></div>
@@ -5339,21 +5341,21 @@ function tplSgaZonasEditorPage(){
           <span id="zg-ncambios" style="font-size:12.5px;font-weight:600;color:#fff;">${sgaZgCambios() ? sgaZgCambios() + (sgaZgCambios() === 1 ? ' cambio' : ' cambios') + ' sin guardar' : ''}</span>
           <button class="btn btn-ghost" style="background:var(--panel);" onclick="sgaZgCancelar()">Cancelar</button>
           <button class="btn btn-primary" id="zg-guardar" ${sgaZgCambios() ? '' : 'disabled'} onclick="sgaZgGuardar()" title="Guardar todos los cambios">${homeIcon(HOME_ICON_PATHS.check, 16, 'currentColor', 2)}<span>Guardar</span></button>`
-        : `<button class="btn btn-primary" onclick="sgaZgEditar()" title="Desbloquear la hoja para crear o cambiar zonas">${homeIcon(HOME_ICON_PATHS.edit, 16, 'currentColor', 2)}<span>Editar zonas</span></button>`}
+        : ''}
       </div>
     </div>
     <div class="deca-form" style="max-width:1000px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
       <div class="card deca-card">
-        ${decaCardHead('home', verArch ? 'Zonas archivadas' : 'Naves', verArch ? 'Se pueden restaurar o eliminar' : (navesEdit ? 'Cambia el nombre, elimina o crea naves' : '1. Elige la nave'), verArch ? '' : `<button class="btn btn-ghost" style="background:var(--panel);" onclick="window.__sgaNavesEdit=${!navesEdit}; renderTab();">${navesEdit ? '<span>Listo</span>' : `${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar naves</span>`}</button>`)}
+        ${decaCardHead('home', verArch ? 'Zonas archivadas' : 'Naves', verArch ? 'Se pueden restaurar o eliminar' : (navesEdit ? 'Cambia el nombre o el tipo, elimina o crea naves. Pulsa una nave para ver sus zonas' : 'Elige la nave'), verArch || zgEdit ? '' : `<button class="btn btn-ghost" style="background:var(--panel);" onclick="window.__sgaNavesEdit=${!navesEdit}; renderTab();">${navesEdit ? '<span>Listo</span>' : `${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar naves</span>`}</button>`)}
         <div class="deca-card-body">
-          ${navesEdit ? sgaNavesEditorHtml(wid, grupos.filter(x => x.nave)) : `<div class="sgs-chips">
+          ${navesEdit ? sgaNavesEditorHtml(wid, grupos.filter(x => x.nave), g && g.k) : `<div class="sgs-chips">
             ${chips}
             ${verArch ? '' : `<div class="sgn-add sgs-nueva" data-wh="${esc(wid)}"><input data-mayus maxlength="60" placeholder="+ Nueva nave" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaNaveNueva(this); }" /><button type="button" class="btn btn-ghost" style="padding:5px 12px;font-size:12px;" onclick="sgaNaveNueva(this)">Crear</button></div>`}
           </div>`}
         </div>
       </div>
       <div class="card deca-card">
-        ${decaCardHead('pin', g && g.nave ? g.nave : 'Zonas', verArch ? 'Zonas archivadas' : 'Zonas de esta nave: escribe, pega o cambia lo que ya hay')}
+        ${decaCardHead('pin', g && g.nave ? g.nave : 'Zonas', verArch ? 'Zonas archivadas' : 'Zonas de esta nave: escribe, pega o cambia lo que ya hay', verArch || zgEdit || !g ? '' : `<button class="btn btn-primary" onclick="sgaZgEditar()" title="Desbloquear la hoja para crear o cambiar las zonas de esta nave">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar zonas</span></button>`)}
         <div class="deca-card-body">${panel}
           ${archivadas || verArch ? `<button type="button" class="tl-chg" style="margin-top:10px;" onclick="window.__sgaZonasArch=${!verArch}; window.__sgaSelZona=null; renderTab();">${verArch ? 'Ver las activas' : `Ver archivadas (${archivadas})`}</button>` : ''}
         </div>
