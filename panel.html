@@ -29,6 +29,19 @@
   th{text-align:left;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--border);}
   th.th-sort{cursor:pointer;user-select:none;white-space:nowrap;}
   th.th-sort:hover{color:var(--text);}
+  th.th-sort .th-fil{margin-left:5px;border:none;background:transparent;color:var(--mutedFaint);cursor:pointer;padding:3px 4px;border-radius:5px;line-height:0;vertical-align:middle;}
+  th.th-sort .th-fil:hover{background:var(--panel2);color:var(--text);}
+  th.th-sort .th-fil.on{background:var(--primary);color:var(--primary-text);}
+  .cat-colpop{position:fixed;z-index:9000;width:270px;background:var(--panel);border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 36px rgba(0,0,0,.22);padding:10px;display:flex;flex-direction:column;gap:8px;}
+  .cat-colpop .cp-q{width:100%;padding:7px 10px;font-size:13px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text);}
+  .cat-colpop label{display:flex;align-items:center;gap:8px;font-size:13px;margin:0;padding:4px 6px;border-radius:6px;cursor:pointer;color:var(--text);font-weight:400;text-transform:none;letter-spacing:0;}
+  .cat-colpop label:hover{background:var(--panel2);}
+  .cat-colpop label input{width:auto;margin:0;flex:0 0 auto;}
+  .cat-colpop .cp-all{font-weight:600;border-bottom:1px solid var(--border);border-radius:0;padding-bottom:7px;}
+  .cat-colpop .cp-list{max-height:240px;overflow:auto;display:flex;flex-direction:column;}
+  .cat-colpop .cp-it span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .cat-colpop .cp-it small{color:var(--muted);font-size:11px;}
+  .cat-colpop .cp-pie{display:flex;justify-content:flex-end;gap:8px;}
   th.th-sort .th-sort-arrow{display:inline-block;margin-left:4px;font-size:10px;opacity:.3;}
   th[data-col-mov]{cursor:grab;} th.col-drag{opacity:.45;} th.col-over{box-shadow:inset 3px 0 0 var(--primary);}
   td{padding:11px 12px;font-size:13.5px;border-bottom:1px solid var(--border);}
@@ -6636,6 +6649,7 @@ function catElegirCliente(id){
   window.__catSel = id || '';
   try { localStorage.setItem('qualified.sga.catCliente', window.__catSel); } catch (e) { /* sin almacenamiento: no pasa nada */ }
   window.__catFiltro = 'todos';
+  window.__catColFil = {};
   renderTab();
 }
 function catFiltro(){ return ['stock', 'sin'].includes(window.__catFiltro) ? window.__catFiltro : 'todos'; }
@@ -7059,7 +7073,115 @@ function catFiltrosHtml(){
   return [['todos', 'Todos'], ['stock', 'Con stock'], ['sin', 'Sin stock']].map(([k, t]) =>
     `<button type="button" class="${catFiltro() === k ? 'on' : ''}" data-k="${k}" onclick="window.__catFiltro='${k}'; refreshStockBody();">${t}<span class="cl-n">${n[k]}</span></button>`).join('');
 }
-function catRefrescarFiltros(){ const f = document.getElementById('cat-filtros'); if (f) f.innerHTML = catFiltrosHtml(); }
+function catRefrescarFiltros(){
+  const f = document.getElementById('cat-filtros'); if (f) f.innerHTML = catFiltrosHtml();
+  const q = document.getElementById('cat-colfil'); if (q) q.innerHTML = catColResumenHtml();
+}
+/* ---- Filtros por columna, como en Excel ----
+   En la cabecera de cada columna del Inventario hay un embudo: abre la lista de los valores que tiene esa columna, con casillas.
+   Se filtran los datos (no solo se ocultan filas), así que los totales, el «TOTAL · N artículos» y la exportación cuadran con lo que se ve.
+   Lo que se guarda por columna son los valores que se han desmarcado; los filtros de varias columnas se suman. */
+function catColEstado(){ return (window.__catColFil = window.__catColFil || {}); }
+function catColNum(){ return Object.values(catColEstado()).filter(l => l && l.length).length; }
+function catColLimpiar(){ window.__catColFil = {}; catColCerrar(); refreshStockBody(); }
+function catColValor(d, r){ const v = d.val(r); return v == null ? '' : String(v); }
+// Filas que cumplen los filtros de todas las columnas (menos la indicada en «salvo»: para listar sus valores sin que ella misma los esconda)
+function catColFiltrar(defs, rows, salvo){
+  const fil = catColEstado();
+  const act = defs.filter(d => d.k !== salvo && fil[d.k] && fil[d.k].length).map(d => ({ d, ex: new Set(fil[d.k]) }));
+  return act.length ? rows.filter(r => act.every(({ d, ex }) => !ex.has(catColValor(d, r)))) : rows;
+}
+// Guarda las columnas y las filas de la tabla que se está pintando (el embudo las necesita al abrirse) y devuelve las filas filtradas
+function catColPrep(defs, rows){ window.__catColCtx = { defs, rows }; return catColFiltrar(defs, rows); }
+function catColResumenHtml(){
+  const n = catColNum();
+  return n && !window.__catEditAll ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catColLimpiar()" title="Volver a ver todas las filas">✕ Quitar filtros de columna (${n})</button>` : '';
+}
+function thFil(k, label, type, extra){
+  const on = (catColEstado()[k] || []).length > 0;
+  return `<th class="th-sort" data-sort-type="${type || 'text'}" onclick="sortTableByHeader(this)" ${extra || ''}>${esc(label)}<span class="th-sort-arrow">⇅</span><button type="button" class="th-fil${on ? ' on' : ''}" data-k="${esc(k)}" onclick="event.stopPropagation(); catColAbrir(this)" title="${on ? 'Esta columna está filtrada' : 'Filtrar esta columna'}" aria-label="Filtrar ${esc(label)}"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 4h18l-7 8.5V20l-4-2v-5.5z"/></svg></button></th>`;
+}
+function catColCerrar(){ const p = document.getElementById('cat-colpop'); if (p) p.remove(); }
+function catColAbrir(btn){
+  const k = btn.dataset.k, abierto = document.getElementById('cat-colpop');
+  const mismo = abierto && abierto.dataset.k === k;
+  catColCerrar();
+  if (mismo) return;
+  const ctx = window.__catColCtx, d = ctx && ctx.defs.find(x => x.k === k);
+  if (!d) return;
+  const cuenta = new Map();
+  catColFiltrar(ctx.defs, ctx.rows, k).forEach(r => { const v = catColValor(d, r); cuenta.set(v, (cuenta.get(v) || 0) + 1); });
+  const ex = new Set(catColEstado()[k] || []);
+  ex.forEach(v => { if (!cuenta.has(v)) cuenta.set(v, 0); });   // un valor ya desmarcado sigue en la lista aunque otro filtro lo esconda
+  const col = new Intl.Collator('es', { sensitivity: 'base', numeric: true });
+  const num = s => parseFloat(String(s).replace(',', '.')) || 0;
+  const vals = [...cuenta.keys()].sort((a, b) => a === '' ? 1 : b === '' ? -1 : d.type === 'number' ? num(a) - num(b) : col.compare(a, b));
+  const etq = v => v === '' ? '(Vacías)' : d.lbl ? d.lbl(v) : v;
+  const p = document.createElement('div');
+  p.id = 'cat-colpop'; p.className = 'cat-colpop'; p.dataset.k = k;
+  p.innerHTML = `<input class="cp-q" placeholder="Buscar…" oninput="catColBuscar(this.value)" autocomplete="off" />
+    <label class="cp-all"><input type="checkbox" id="cp-all" onchange="catColTodos(this.checked)" /><span>(Seleccionar todo)</span></label>
+    <div class="cp-list">${vals.map((v, i) => `<label class="cp-it" data-t="${esc(mapaNorm(etq(v)))}"><input type="checkbox" data-i="${i}" ${ex.has(v) ? '' : 'checked'} onchange="catColSync()" /><span title="${esc(etq(v))}">${esc(etq(v))}</span>${cuenta.get(v) ? `<small>${cuenta.get(v)}</small>` : ''}</label>`).join('')}</div>
+    <div class="cp-pie">${(catColEstado()[k] || []).length ? `<button type="button" class="btn btn-ghost" style="margin-right:auto;" onclick="catColQuitar()">Quitar filtro</button>` : ''}<button type="button" class="btn btn-ghost" onclick="catColCerrar()">Cancelar</button><button type="button" class="btn btn-primary" onclick="catColAplicar()">Aceptar</button></div>`;
+  window.__catColPop = { k, vals };
+  document.body.appendChild(p);
+  const r = btn.getBoundingClientRect(), w = p.offsetWidth, h = p.offsetHeight;
+  p.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
+  p.style.top = (r.bottom + 6 + h > window.innerHeight ? Math.max(8, r.top - h - 6) : r.bottom + 6) + 'px';
+  catColSync();
+  const q = p.querySelector('.cp-q'); if (q) q.focus();
+}
+function catColItems(){ return [...document.querySelectorAll('#cat-colpop .cp-it')]; }
+// «Seleccionar todo» marca o desmarca lo que se ve en la lista (si se ha buscado algo, solo lo encontrado)
+function catColTodos(on){ catColItems().filter(l => l.style.display !== 'none').forEach(l => { l.querySelector('input').checked = on; }); catColSync(); }
+function catColSync(){
+  const vis = catColItems().filter(l => l.style.display !== 'none').map(l => l.querySelector('input'));
+  const all = document.getElementById('cp-all'); if (!all) return;
+  const n = vis.filter(i => i.checked).length;
+  all.checked = vis.length > 0 && n === vis.length;
+  all.indeterminate = n > 0 && n < vis.length;
+}
+// Al buscar se enseñan y marcan solo las coincidencias (como en Excel); al vaciar la búsqueda vuelve todo
+function catColBuscar(t){
+  const q = mapaNorm(t).trim();
+  catColItems().forEach(l => { const ok = !q || l.dataset.t.includes(q); l.style.display = ok ? '' : 'none'; l.querySelector('input').checked = ok; });
+  catColSync();
+}
+function catColAplicar(){
+  const P = window.__catColPop; if (!P) return;
+  const ex = [];
+  document.querySelectorAll('#cat-colpop .cp-list input').forEach(i => { if (!i.checked) ex.push(P.vals[+i.dataset.i]); });
+  if (ex.length === P.vals.length) { appToast('Marca al menos un valor para ver filas.', 'info'); return; }
+  const st = catColEstado();
+  if (ex.length) st[P.k] = ex; else delete st[P.k];
+  catColCerrar(); refreshStockBody();
+}
+function catColQuitar(){
+  const P = window.__catColPop; if (!P) return;
+  delete catColEstado()[P.k];
+  catColCerrar(); refreshStockBody();
+}
+(function(){
+  document.addEventListener('mousedown', e => { const p = document.getElementById('cat-colpop'); if (p && !p.contains(e.target) && !(e.target.closest && e.target.closest('.th-fil'))) catColCerrar(); }, true);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') catColCerrar(); });
+  document.addEventListener('scroll', e => { const p = document.getElementById('cat-colpop'); if (p && !p.contains(e.target)) catColCerrar(); }, true);
+})();
+// Las columnas del Inventario «Por artículo» (con el valor que se filtra de cada una)
+function catColDefsArticulos(cols, conCliente){
+  const num = v => (v == null ? '' : String(v).replace('.', ','));
+  const tipo = a => { const pr = a.productoId ? almacenajeProducto(a.productoId) : null; return pr ? almacenajeProductoTexto(pr).replace(/\s*·\s*sin subtipo definido/i, '') : ''; };
+  return [
+    ...(conCliente ? [{ k: 'a:cli', val: a => { const c = contactos.find(x => x.id === a.clienteId); return c ? ((c.nombreComercial || '').trim() || c.nombre) : '—'; } }] : []),
+    { k: 'a:cod', val: a => catPrincipalVal(a, cols) },
+    ...(cols.tipo ? [{ k: 'a:tipo', val: tipo }] : []),
+    ...(cols.bultos ? [{ k: 'a:bul', type: 'number', val: a => num(a.bultos) }] : []),
+    ...(cols.ml ? [{ k: 'a:ml', type: 'number', val: a => num(a.metrosLineales) }] : []),
+    ...(cols.peso ? [{ k: 'a:peso', type: 'number', val: a => num(a.peso) }] : []),
+    ...(cols.medidas ? [{ k: 'a:med', val: a => catMedidasLineas(a.medidas).join(' · ') }] : []),
+    ...cols.x.map(f => ({ k: 'a:x:' + f.id, type: f.tipo === 'numero' ? 'number' : 'text', val: a => { const v = a.atributos ? a.atributos[f.id] : null; return v != null && v !== '' ? String(sgaCampoMostrar(f, v)) : ''; } })),
+    { k: 'a:stock', type: 'number', val: a => String(catStockArticulo(a).mod), lbl: v => v === '0' ? 'Sin stock' : v },
+  ];
+}
 // Fila de totales: continúa la tabla (mismas columnas), con color fuerte y pegada abajo. Suma palets, bultos (si el cliente los cuenta) y kilos
 function catSumas(filas){
   return filas.reduce((s, f) => ({ pal: s.pal + f.pal, bul: s.bul + f.bul, kg: s.kg + (f.pesoU != null ? f.pesoU * f.pal : 0), sinPeso: s.sinPeso + (f.pesoU == null ? f.pal : 0), conPeso: s.conPeso + (f.pesoU != null ? f.pal : 0) }), { pal: 0, bul: 0, kg: 0, sinPeso: 0, conPeso: 0 });
@@ -7291,6 +7413,7 @@ function catElegirModo(m){
   const cid = catClienteSel();
   const o = (window.__catModo = window.__catModo || {}); o[cid] = m;
   try { localStorage.setItem('qualified.sga.catModo.' + cid, m); } catch (e) { /* sin almacenamiento: no pasa nada */ }
+  window.__catColFil = {};   // las columnas de cada vista son distintas
   renderTab();
 }
 function catModoHtml(){
@@ -7354,18 +7477,33 @@ function catEdadChip(f, conColor){
 }
 function catPaletsHtml(cid, cols, filtro, q){
   const vac = '<span style="color:var(--mutedFaint);">—</span>';
-  const filas = catFilasPalets(cid, filtro, q);
-  const conPalet = filas.filter(f => f.p);
+  const todas = catFilasPalets(cid, filtro, q);
   const modoSalida = sgaClienteSalida(cid);
   const manual = modoSalida === 'manual';                       // sin orden de entrada: la fecha de recepción no se enseña
   const conCodigo = !!sgaClienteCfg(cid).codigosUnicos;         // la columna «Palet» solo si cada palet lleva su propio código
-  window.__catExp = { modo: 'palets', cid, cols, filas, manual, conCodigo };   // lo que se ve, para poder exportarlo
-  if (!filas.length && !q && filtro === 'todos') return catGuiaVacioHtml(cid);
   const num = v => (v == null ? '' : String(v).replace('.', ','));
+  // Columnas con el valor que se filtra de cada una (el embudo de la cabecera)
+  const defs = [
+    ...(conCodigo ? [{ k: 'p:cod', val: ({ p }) => (p ? p.codigo : '') }] : []),
+    { k: 'p:art', val: ({ a }) => a.nombre },
+    { k: 'p:ubic', val: ({ p }) => (p ? whNombre(p.warehouseId) + ' · ' + (sgaSitioTxt(p) !== '—' ? sgaSitioTxt(p) : 'Sin ubicar') : '') },
+    ...(manual ? [] : [{ k: 'p:ent', type: 'date', val: ({ p }) => (p ? p.fechaEntrada : ''), lbl: v => fmtDateDMY(v) }]),
+    ...(cols.tipo ? [{ k: 'p:tipo', val: ({ a }) => { const pr = a.productoId ? almacenajeProducto(a.productoId) : null; return pr ? almacenajeProductoTexto(pr).replace(/\s*·\s*sin subtipo definido/i, '') : ''; } }] : []),
+    ...(cols.bultos ? [{ k: 'p:bul', type: 'number', val: ({ a }) => num(a.bultos) }] : []),
+    ...(cols.ml ? [{ k: 'p:ml', type: 'number', val: ({ a }) => num(a.metrosLineales) }] : []),
+    ...(cols.peso ? [{ k: 'p:peso', type: 'number', val: ({ a, p }) => num(catPesoPalet(a, p)) }] : []),
+    ...(cols.medidas ? [{ k: 'p:med', val: ({ a, p }) => catMedidasLineas(catMedidasPalet(a, p)).join(' · ') }] : []),
+    ...cols.xTodos.map(f => ({ k: 'p:x:' + f.id, type: f.tipo === 'numero' ? 'number' : 'text', val: ({ a, p }) => { const v = p ? sgaValorCampo(f, p) : (a.atributos ? a.atributos[f.id] : null); return v != null && v !== '' ? String(sgaCampoMostrar(f, v)) : ''; } })),
+    { k: 'p:estado', val: ({ p }) => (p ? 'En almacén' : 'Sin stock') },
+  ];
+  const filas = catColPrep(defs, todas);
+  const conPalet = filas.filter(f => f.p);
+  window.__catExp = { modo: 'palets', cid, cols, filas, manual, conCodigo };   // lo que se ve, para poder exportarlo
+  if (!todas.length && !q && filtro === 'todos') return catGuiaVacioHtml(cid);
   const celdaNum = v => `<td style="text-align:right;white-space:nowrap;" data-sort-value="${esc(v)}">${v === '' ? vac : esc(v)}</td>`;
-  const cabecera = [conCodigo ? thSort(sgaCap(sgaUnidadCfg(cid).s), 'text') : '', thSort('Artículo', 'text'), thSort('Ubicación', 'text'), manual ? '' : thSort('Entrada', 'date'),
-    cols.tipo ? thSort('Tipo de carga', 'text') : '', cols.bultos ? thSort('Bultos / palet', 'number', 'style="text-align:right;"') : '', cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : '', cols.peso ? thSort('Peso', 'number', 'style="text-align:right;"') : '', cols.medidas ? thSort('Medidas', 'text') : '',
-    ...cols.xTodos.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')), thSort('Estado', 'text')].join('');
+  const cabecera = [conCodigo ? thFil('p:cod', sgaCap(sgaUnidadCfg(cid).s), 'text') : '', thFil('p:art', 'Artículo', 'text'), thFil('p:ubic', 'Ubicación', 'text'), manual ? '' : thFil('p:ent', 'Entrada', 'date'),
+    cols.tipo ? thFil('p:tipo', 'Tipo de carga', 'text') : '', cols.bultos ? thFil('p:bul', 'Bultos / palet', 'number', 'style="text-align:right;"') : '', cols.ml ? thFil('p:ml', 'M. lineales', 'number', 'style="text-align:right;"') : '', cols.peso ? thFil('p:peso', 'Peso', 'number', 'style="text-align:right;"') : '', cols.medidas ? thFil('p:med', 'Medidas', 'text') : '',
+    ...cols.xTodos.map(f => thFil('p:x:' + f.id, f.label, f.tipo === 'numero' ? 'number' : 'text')), thFil('p:estado', 'Estado', 'text')].join('');
   const fila = ({ a, p }) => {
     const prod = a.productoId ? almacenajeProducto(a.productoId) : null, prodTxt = prod ? almacenajeProductoTexto(prod) : '';
     const sitio = p ? sgaSitioTxt(p) : '—';
@@ -7382,7 +7520,7 @@ function catPaletsHtml(cid, cols, filtro, q){
       <td class="cg-stock" data-sort-value="${p ? 1 : 0}">${p ? `<span class="cg-st ok"><i></i>En almacén${p.actual > 1 ? ` · ${p.actual} ${sgaUd(cid, p.actual)}` : ''}</span>${cols.bultos ? `<div class="cg-ref">${sgaNumTxt(p.bultos != null ? sgaBultosSalida(p, p.actual) : p.actual * (a.bultos || 1))} bultos</div>` : ''}` : '<span class="cg-st no"><i></i>Sin stock</span>'}</td>
     </tr>`;
   };
-  const vacio = !filas.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${q ? 'Ningún ' + sgaUnidadCfg(cid).s + ' coincide con la búsqueda.' : filtro === 'stock' ? 'No hay ' + sgaUnidadCfg(cid).p + ' en el almacén ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : 'Este cliente todavía no tiene mercancía registrada.'}</div>` : '';
+  const vacio = !filas.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${catColNum() && todas.length ? 'Ningún ' + sgaUnidadCfg(cid).s + ' coincide con los filtros de columna.' : q ? 'Ningún ' + sgaUnidadCfg(cid).s + ' coincide con la búsqueda.' : filtro === 'stock' ? 'No hay ' + sgaUnidadCfg(cid).p + ' en el almacén ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : 'Este cliente todavía no tiene mercancía registrada.'}</div>` : '';
   // fila de totales, continuación de la tabla: suma de palets (y bultos) en Estado y de kilos en Peso
   const tTot = catSumas(conPalet.map(f => ({ pal: f.p.actual, bul: f.p.bultos != null ? sgaBultosSalida(f.p, f.p.actual) : f.p.actual, pesoU: catPesoPalet(f.a, f.p) != null ? Number(catPesoPalet(f.a, f.p)) : null })));
   const ordenTot = [...(conCodigo ? ['cod'] : []), 'art', 'ubic', ...(manual ? [] : ['ent']), ...(cols.tipo ? ['tipo'] : []), ...(cols.bultos ? ['bul'] : []), ...(cols.ml ? ['ml'] : []), ...(cols.peso ? ['peso'] : []), ...(cols.medidas ? ['med'] : []), ...cols.xTodos.map(() => 'x'), 'estado'];
@@ -7420,19 +7558,21 @@ function stockCatalogoTablaHtml(){
     .filter(a => stockCatalogoCoincide(a, q) || (!cid && (nombreDe(contactos.find(c => c.id === a.clienteId) || {}) || '').toLowerCase().includes(q)));
   if (filtro === 'stock') lista = lista.filter(a => catStockArticulo(a).mod > 0);
   if (filtro === 'sin') lista = lista.filter(a => catStockArticulo(a).mod === 0);
+  const listaTodas = lista;
+  if (!window.__catEditAll) lista = catColPrep(catColDefsArticulos(cols, !cid), lista);   // filtros por columna (el embudo de cada cabecera)
   window.__catExp = { modo: 'articulos', cid, cols, lista };   // lo que se ve, para poder exportarlo
-  if (!window.__catEditAll && !lista.length && !q && filtro === 'todos') return catGuiaVacioHtml(cid);
+  if (!window.__catEditAll && !listaTodas.length && !q && filtro === 'todos') return catGuiaVacioHtml(cid);
   // Por defecto: primero lo que más stock tiene (palets), después por cliente y nombre
   lista.sort((a, b) => (catStockArticulo(b).mod - catStockArticulo(a).mod) || (cid ? 0 : nombreDe(contactos.find(c => c.id === a.clienteId) || {}).localeCompare(nombreDe(contactos.find(c => c.id === b.clienteId) || {}), 'es')) || sgaArticuloTxt(a).localeCompare(sgaArticuloTxt(b), 'es'));
   const puede = sgaPuedeEditarStock();
   const conCliente = !cid;
-  const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${q ? 'Ningún artículo coincide con la búsqueda.' : filtro === 'stock' ? 'Ningún artículo tiene stock ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : cid ? (window.__catLocked ? 'Este cliente todavía no tiene artículos. Pulsa «Editar» para crear el primero o «Pegar desde Excel».' : 'Escribe el primer artículo en la fila nueva de abajo.') : 'Todavía no hay artículos. Elige un cliente para crear el primero.'}</div>` : '';
+  const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${!window.__catEditAll && catColNum() && listaTodas.length ? 'Ningún artículo coincide con los filtros de columna.' : q ? 'Ningún artículo coincide con la búsqueda.' : filtro === 'stock' ? 'Ningún artículo tiene stock ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : cid ? (window.__catLocked ? 'Este cliente todavía no tiene artículos. Pulsa «Editar» para crear el primero o «Pegar desde Excel».' : 'Escribe el primer artículo en la fila nueva de abajo.') : 'Todavía no hay artículos. Elige un cliente para crear el primero.'}</div>` : '';
   return `
     ${cid ? '' : `<div class="card" style="padding:11px 16px;margin-bottom:12px;font-size:13.5px;color:var(--text);border-left:4px solid var(--primary);">Estás viendo los artículos de <b>todos los clientes</b>. Para <b>crear</b> uno, elige primero el cliente en el desplegable de arriba.</div>`}
     <div class="card${window.__catEditAll ? '' : ' cg-compacta'}" style="padding:0;">
       <div class="tc-hist-box" style="max-height:${window.__catEditAll ? 'calc(100vh - 290px)' : '660px'};min-height:${window.__catEditAll ? '320px' : '0'};border:none;border-radius:10px;">
         <table class="tf-table cg-tabla${window.__catEditAll ? ' cg-todo' : ''}">
-          <thead><tr>${window.__catEditAll ? `${thSortCat(catPrincipalTit(cols), 'text')}${cols.referencia ? thSortCat('Descripción', 'text') : ''}${cols.tipo ? thSortCat('Tipo de carga', 'text') : ''}${cols.bultos ? thSortCat('Bultos / palet', 'number') : ''}${cols.ml ? thSortCat('M. lineales', 'number') : ''}${cols.peso ? thSortCat(sgaPesoLabel(), 'number') : ''}${cols.medidas ? thSortCat('Medidas', 'text') : ''}${cols.x.map(f => thSortCat(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSortCat('Stock actual', 'number')}` : `${conCliente ? thSort('Cliente', 'text') : ''}${thSort(catPrincipalTit(cols), 'text')}${cols.tipo ? thSort('Tipo de carga', 'text') : ''}${cols.bultos ? thSort('Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thSort('M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thSort(sgaPesoLabel(), 'number', 'style="text-align:right;"') : ''}${cols.medidas ? thSort('Medidas', 'text') : ''}${cols.x.map(f => thSort(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSort('Stock actual', 'number')}`}</tr></thead>
+          <thead><tr>${window.__catEditAll ? `${thSortCat(catPrincipalTit(cols), 'text')}${cols.referencia ? thSortCat('Descripción', 'text') : ''}${cols.tipo ? thSortCat('Tipo de carga', 'text') : ''}${cols.bultos ? thSortCat('Bultos / palet', 'number') : ''}${cols.ml ? thSortCat('M. lineales', 'number') : ''}${cols.peso ? thSortCat(sgaPesoLabel(), 'number') : ''}${cols.medidas ? thSortCat('Medidas', 'text') : ''}${cols.x.map(f => thSortCat(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSortCat('Stock actual', 'number')}` : `${conCliente ? thFil('a:cli', 'Cliente', 'text') : ''}${thFil('a:cod', catPrincipalTit(cols), 'text')}${cols.tipo ? thFil('a:tipo', 'Tipo de carga', 'text') : ''}${cols.bultos ? thFil('a:bul', 'Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thFil('a:ml', 'M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thFil('a:peso', sgaPesoLabel(), 'number', 'style="text-align:right;"') : ''}${cols.medidas ? thFil('a:med', 'Medidas', 'text') : ''}${cols.x.map(f => thFil('a:x:' + f.id, f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thFil('a:stock', 'Stock actual', 'number')}`}</tr></thead>
           <tbody>
             ${lista.map(a => catFilaHtml(a, cols, conCliente)).join('')}
           </tbody>
@@ -8658,6 +8798,7 @@ function tplStock(){
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
       <div class="doc-seg" id="cat-filtros">${catFiltrosHtml()}</div>
+      <span id="cat-colfil">${catColResumenHtml()}</span>
       ${catModoHtml()}
       ` : seg === 'liquidaciones' ? `${sgaLiqToolbarHtml()}
       ` : `
