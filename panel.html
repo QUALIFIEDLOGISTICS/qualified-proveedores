@@ -284,8 +284,19 @@
   .ap-tabla tr.ap-fila.on td{background:color-mix(in srgb,var(--primary) 12%,var(--panel)) !important;}
   .ap-tabla tr.ap-fila{cursor:pointer;}
   .ap-tabla tr.ap-fila:hover td{background:color-mix(in srgb,var(--primary) 9%,var(--panel)) !important;}
-  .cat-resumen{margin:0 2px 10px;font-size:13.5px;color:var(--muted);}
-  .cat-resumen b{color:var(--text);font-size:15px;}
+  .cat-kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin:0 0 12px;}
+  .cat-kpi-t{display:flex;flex-direction:column;gap:2px;padding:12px 16px;border:1px solid var(--border);border-radius:12px;background:var(--panel);box-shadow:0 1px 2px rgba(27,58,107,.04);}
+  .cat-kpi-t small{font-size:10.5px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;color:var(--muted);}
+  .cat-kpi-t b{font-size:26px;line-height:1.15;font-variant-numeric:tabular-nums;color:var(--text);}
+  .cat-kpi-t b em{font-size:14px;font-style:normal;font-weight:600;color:var(--muted);}
+  .cat-kpi-t>span{font-size:12px;color:var(--muted);display:flex;gap:6px;flex-wrap:wrap;align-items:center;min-height:20px;}
+  .cat-kpi-t.aviso{border-color:color-mix(in srgb,#C98A2E 45%,var(--border));background:color-mix(in srgb,#C98A2E 7%,var(--panel));}
+  .cat-kpi-t.aviso b{color:#9A5F00;}
+  .cat-kpi-l{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--panel2);border-radius:999px;padding:2px 9px;font:inherit;font-size:12px;color:var(--text);cursor:pointer;}
+  .cat-kpi-l:hover{border-color:var(--primary);}
+  .cat-kpi-l.on{background:var(--primary);border-color:var(--primary);color:var(--primary-text);}
+  .cat-kpi-l i{width:7px;height:7px;border-radius:50%;background:var(--border);display:inline-block;}
+  .cat-kpi-l i.ok{background:var(--success);}
   .cat-guia{padding:26px 22px;text-align:center;}
   .cat-guia h3{font-family:var(--display);font-size:18px;margin:0 0 4px;color:var(--text);}
   .cat-guia p{color:var(--muted);font-size:13.5px;margin:0 auto 18px;max-width:560px;}
@@ -7637,8 +7648,26 @@ function catResumenHtml(){
   const conStock = altas.filter(a => catStockArticulo(a).mod > 0).length;
   const sinArt = catArticulosVirtuales(cid).length;
   const n = altas.length;
-  const c = cid ? contactos.find(x => x.id === cid) : null;
-  return `<div class="cat-resumen"><b>${n}</b> artículo${n === 1 ? '' : 's'} dado${n === 1 ? '' : 's'} de alta${c ? ' de ' + esc((c.nombreComercial || '').trim() || c.nombre) : ''} · <b>${conStock}</b> con stock · <b>${n - conStock}</b> sin stock${sinArt ? ` · <span title="Mercancía en el almacén que no está asociada a ningún artículo del catálogo">${sinArt} con stock sin artículo</span>` : ''}</div>`;
+  if (window.__catEditAll) return '';
+  // Franja de cifras: artículos (con los filtros «con stock» / «sin stock» a un clic), palets en el almacén, kilos y el palet más antiguo
+  const act = altas.concat(catArticulosVirtuales(cid));
+  const t = catSumas(catFilasTotalesArticulos(act));
+  const pal = act.reduce((s, a) => s + catStockArticulo(a).mod, 0);
+  const bul = act.reduce((s, a) => s + catStockArticulo(a).bul, 0);
+  const manual = !!cid && sgaClienteSalida(cid) === 'manual';   // sin orden de entrada: la antigüedad no cuenta
+  let masAntiguo = null, viejos = 0;
+  if (!manual) act.forEach(a => catPartidasArticulo(a).forEach(p => { if (!masAntiguo || p.fechaEntrada < masAntiguo.fecha) masAntiguo = { fecha: p.fechaEntrada, a }; if (catDiasDesde(p.fechaEntrada) > 90) viejos += p.actual; }));
+  const udDe = n => (cid ? sgaUd(cid, n) : (n === 1 ? 'palet' : 'palets')), ud = udDe(pal);
+  const f = catFiltro();
+  const lnk = (k, txt) => `<button type="button" class="cat-kpi-l${f === k ? ' on' : ''}" onclick="window.__catFiltro='${k}'; refreshStockBody();" title="Ver solo estos artículos en la tabla">${txt}</button>`;
+  const tile = (cls, etq, valor, sub, tit) => `<div class="cat-kpi-t ${cls}"${tit ? ` title="${esc(tit)}"` : ''}><small>${etq}</small><b>${valor}</b><span>${sub || '&nbsp;'}</span></div>`;
+  return `<div class="cat-kpi">
+    ${tile('', 'Artículos', sgaNumTxt(n), `${lnk('stock', `<i class="ok"></i>${conStock} con stock`)}${lnk('sin', `<i></i>${n - conStock} sin stock`)}`)}
+    ${tile('', sgaCap(ud), sgaNumTxt(pal), cid && sgaClienteConBultos(cid) ? `${sgaNumTxt(Math.round(bul * 100) / 100)} bultos` : 'en el almacén')}
+    ${t.conPeso ? tile('', 'Peso', `${sgaNumTxt(Math.round(t.kg * 10) / 10)} <em>kg</em>`, t.sinPeso ? `${sgaNumTxt(t.sinPeso)} ${udDe(t.sinPeso)} sin peso` : 'todo con peso indicado') : ''}
+    ${masAntiguo ? tile(viejos ? 'aviso' : '', 'Más antiguo', catTiempoTxt(masAntiguo.fecha) === 'hoy' ? 'hoy' : 'hace ' + catTiempoTxt(masAntiguo.fecha), viejos ? `${sgaNumTxt(viejos)} ${udDe(viejos)} con más de 90 días` : 'ninguno con más de 90 días', `${catPrincipalVal(masAntiguo.a, catColumnas(cid))} · recibido el ${fmtDateDMY(masAntiguo.fecha)}`) : ''}
+    ${sinArt ? tile('aviso', 'Sin artículo', sgaNumTxt(sinArt), 'con stock, fuera del catálogo', 'Mercancía en el almacén que no está asociada a ningún artículo del catálogo') : ''}
+  </div>`;
 }
 function stockCatalogoBodyHtml(){ return catResumenHtml() + stockCatalogoTablaHtml(); }
 function stockCatalogoTablaHtml(){
