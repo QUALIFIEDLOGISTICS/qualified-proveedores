@@ -11586,12 +11586,27 @@ function sgaResumenHtml(d, paraImprimir){
   // 3) Día a día: solo las columnas que usa este cliente
   const filasDia = r.filas.filter(f => !soloAct || f.entMod || f.salMod || f.regMod || f.mov || f.serv || f.oper);
   const pt = r.porTipo;   // saldo por tipo de palet (solo si el cliente tiene más de un tipo)
-  const nCols = 1 + 1 + (colsB ? 1 : 0) + 1 + (colsB ? 1 : 0) + (reg ? 1 : 0) + 1 + (colsB ? 1 : 0) + (pt ? pt.length : 0) + (hayAlm ? 1 : 0) + (hayCobros ? 1 : 0);
+  // Qué entra y qué sale cada día, por tipo de palet (o por artículo si el cliente no usa tipos): «Entra: +10 Palet Especial · Sale: −3 Palet Americano»
+  const detDia = {};
+  const claveMov = m => pt ? (m.productoId ? sgaProdTxt(m.productoId) : 'Sin tipo') : (m.desc || 'Mercancía');
+  d.movs.forEach(m => {
+    if (m.tipo === 'apertura') return;
+    const dd = (detDia[m.fecha] = detDia[m.fecha] || { ent: {}, sal: {}, reg: {} }), k = claveMov(m);
+    if (m.tipo === 'ajuste') dd.reg[k] = (dd.reg[k] || 0) + m.cantidad;
+    else if (m.cantidad > 0) dd.ent[k] = (dd.ent[k] || 0) + m.cantidad;
+    else dd.sal[k] = (dd.sal[k] || 0) - m.cantidad;
+  });
+  const detalleDia = f => {
+    const dd = detDia[f]; if (!dd) return '·';
+    const lista = (o, signo) => Object.keys(o).sort((a, b) => a.localeCompare(b, 'es')).map(k => `${signo || (o[k] > 0 ? '+' : '−')}${sgaNumTxt(Math.abs(o[k]))} ${esc(k)}`).join(' · ');
+    return [Object.keys(dd.ent).length ? `<div>Entra: ${lista(dd.ent, '+')}</div>` : '', Object.keys(dd.sal).length ? `<div>Sale: ${lista(dd.sal, '−')}</div>` : '', Object.keys(dd.reg).length ? `<div>Regul.: ${lista(dd.reg)}</div>` : ''].join('') || '·';
+  };
+  const nCols = 1 + 1 + (colsB ? 1 : 0) + 1 + (colsB ? 1 : 0) + (reg ? 1 : 0) + 1 + (colsB ? 1 : 0) + (pt ? pt.length : 0) + (hayAlm ? 1 : 0) + (hayCobros ? 1 : 0) + 1;
   const tabla = `
     <table class="${paraImprimir ? '' : 'tf-table'} rm-tabla">
-      <thead><tr>${th('Día')}${th('Recepciones', 1)}${colsB ? th('Bultos', 1) : ''}${th('Expediciones', 1)}${colsB ? th('Bultos', 1) : ''}${reg ? th('Regul.', 1) : ''}${th('Saldo', 1)}${colsB ? th('Bultos', 1) : ''}${pt ? pt.map(t => th('Saldo · ' + esc(t.nombre), 1)).join('') : ''}${hayAlm ? th('Almacenaje €', 1) : ''}${hayCobros ? th('Cobrado €', 1) : ''}</tr></thead>
+      <thead><tr>${th('Día')}${th('Recepciones', 1)}${colsB ? th('Bultos', 1) : ''}${th('Expediciones', 1)}${colsB ? th('Bultos', 1) : ''}${reg ? th('Regul.', 1) : ''}${th('Saldo', 1)}${colsB ? th('Bultos', 1) : ''}${pt ? pt.map(t => th('Saldo · ' + esc(t.nombre), 1)).join('') : ''}${hayAlm ? th('Almacenaje €', 1) : ''}${hayCobros ? th('Cobrado €', 1) : ''}${th('Qué entra y sale')}</tr></thead>
       <tbody>
-        <tr class="rm-ini"><td>Stock inicial</td><td></td>${colsB ? '<td></td>' : ''}<td></td>${colsB ? '<td></td>' : ''}${reg ? '<td></td>' : ''}<td class="r">${sgaNumTxt(r.inicial.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.inicial.bul)}</td>` : ''}${pt ? pt.map(t => `<td class="r">${sgaNumTxt(t.inicial)}</td>`).join('') : ''}${hayAlm ? '<td></td>' : ''}${hayCobros ? '<td></td>' : ''}</tr>
+        <tr class="rm-ini"><td>Stock inicial</td><td></td>${colsB ? '<td></td>' : ''}<td></td>${colsB ? '<td></td>' : ''}${reg ? '<td></td>' : ''}<td class="r">${sgaNumTxt(r.inicial.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.inicial.bul)}</td>` : ''}${pt ? pt.map(t => `<td class="r">${sgaNumTxt(t.inicial)}</td>`).join('') : ''}${hayAlm ? '<td></td>' : ''}${hayCobros ? '<td></td>' : ''}<td></td></tr>
         ${filasDia.map(f => { const act = f.entMod || f.salMod || f.regMod || f.mov || f.serv || f.oper; return `
         <tr class="${act ? 'rm-act' : 'rm-sin'}${f.prev ? ' rm-prev' : ''}"><td style="white-space:nowrap;">${fmtDateDMY(f.f).split('/').join('-')}${f.prev ? ' <small>previsto</small>' : ''}</td>
           <td class="r">${num(f.entMod)}</td>${colsB ? `<td class="r">${num(f.entBul)}</td>` : ''}
@@ -11599,10 +11614,10 @@ function sgaResumenHtml(d, paraImprimir){
           ${reg ? `<td class="r">${f.regMod ? (f.regMod > 0 ? '+' : '') + sgaNumTxt(f.regMod) : '·'}</td>` : ''}
           <td class="r">${sgaNumTxt(f.saldoMod)}</td>${colsB ? `<td class="r">${sgaNumTxt(f.saldoBul)}</td>` : ''}${pt ? pt.map(t => `<td class="r">${sgaNumTxt((f.tipos || {})[t.id])}</td>`).join('') : ''}
           ${hayAlm ? `<td class="r">${f.alm ? eur(f.alm) : '·'}</td>` : ''}
-          ${hayCobros ? `<td class="r">${f.mov || f.serv || f.oper ? eur(f.mov + f.serv + f.oper) : '·'}</td>` : ''}</tr>`; }).join('')}
+          ${hayCobros ? `<td class="r">${f.mov || f.serv || f.oper ? eur(f.mov + f.serv + f.oper) : '·'}</td>` : ''}<td style="white-space:normal;min-width:150px;font-size:${paraImprimir ? '9px' : '12px'};">${detalleDia(f.f)}</td></tr>`; }).join('')}
         ${!filasDia.length ? `<tr><td colspan="${nCols}" style="color:var(--mutedFaint);">Sin movimientos este mes.</td></tr>` : ''}
       </tbody>
-      <tfoot><tr><td>TOTAL</td><td class="r">${sgaNumTxt(tot('entMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('entBul'))}</td>` : ''}<td class="r">${sgaNumTxt(tot('salMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('salBul'))}</td>` : ''}${reg ? `<td class="r">${sgaNumTxt(tot('regMod'))}</td>` : ''}<td class="r">${sgaNumTxt(r.final.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.final.bul)}</td>` : ''}${pt ? pt.map(t => `<td class="r">${sgaNumTxt(t.final)}</td>`).join('') : ''}${hayAlm ? `<td class="r">${eur(r.filas.reduce((s, x) => s + (x.alm || 0), 0))}</td>` : ''}${hayCobros ? `<td class="r">${eur(r.totMov + r.totServ + r.totOperMes)}</td>` : ''}</tr></tfoot>
+      <tfoot><tr><td>TOTAL</td><td class="r">${sgaNumTxt(tot('entMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('entBul'))}</td>` : ''}<td class="r">${sgaNumTxt(tot('salMod'))}</td>${colsB ? `<td class="r">${sgaNumTxt(tot('salBul'))}</td>` : ''}${reg ? `<td class="r">${sgaNumTxt(tot('regMod'))}</td>` : ''}<td class="r">${sgaNumTxt(r.final.mod)}</td>${colsB ? `<td class="r">${sgaNumTxt(r.final.bul)}</td>` : ''}${pt ? pt.map(t => `<td class="r">${sgaNumTxt(t.final)}</td>`).join('') : ''}${hayAlm ? `<td class="r">${eur(r.filas.reduce((s, x) => s + (x.alm || 0), 0))}</td>` : ''}${hayCobros ? `<td class="r">${eur(r.totMov + r.totServ + r.totOperMes)}</td>` : ''}<td></td></tr></tfoot>
     </table>`;
   const interruptorPrev = !paraImprimir && r.mesActual ? `<label class="rm-solo" title="Suma al almacenaje los días que faltan del mes, con el stock que hay hoy"><input type="checkbox" ${r.proyectar ? 'checked' : ''} onchange="window.__rmProy=this.checked; refreshStockBody();" /> Prever almacenaje hasta fin de mes</label>` : '';
   const interruptor = interruptorPrev + `<label class="rm-solo"><input type="checkbox" ${soloAct ? 'checked' : ''} onchange="window.__rmSoloAct=this.checked; refreshStockBody();" /> Solo días con movimiento</label>`;
