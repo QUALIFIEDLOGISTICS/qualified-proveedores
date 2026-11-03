@@ -51,3 +51,21 @@ from public.contactos c
 where exists (select 1 from public.sga_partidas pa where pa.cliente_id = c.id)
    or exists (select 1 from public.sga_articulos a where a.cliente_id = c.id)
 order by 2 desc, 3 desc, 1;
+
+-- CONSULTA 5 · GLASS FACTORY: a qué producto de entrada y de salida apunta cada tipo de carga (con los id), para comprobar que los enlaces son los correctos
+select p.id, p.nombre, p.disparador, p.familia,
+       p.cobro_entrada, e.nombre as cobro_entrada_es, p.cobro_salida, s.nombre as cobro_salida_es
+from public.almacenaje_productos p
+left join public.almacenaje_productos e on e.id = p.cobro_entrada
+left join public.almacenaje_productos s on s.id = p.cobro_salida
+where p.id in (select t.tipo from public.almacenaje_tarifas t join public.contactos c on c.id = t.cliente_id where c.nombre ilike '%glas%' or c.nombre_comercial ilike '%glas%')
+order by p.disparador, p.nombre;
+
+-- CONSULTA 6 · GLASS FACTORY: lo que se ha cobrado por movimientos (recepciones y expediciones), para ver si las salidas se han cobrado bien
+select co.fecha, pr.nombre as producto, co.cantidad, co.precio, co.importe, co.estado
+from public.sga_cobros co
+join public.contactos c on c.id = co.cliente_id
+left join public.almacenaje_productos pr on pr.id = co.producto_id
+where (c.nombre ilike '%glas%' or c.nombre_comercial ilike '%glas%') and co.origen = 'movimiento'
+order by co.fecha desc
+limit 60;
