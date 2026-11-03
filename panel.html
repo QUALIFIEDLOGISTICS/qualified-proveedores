@@ -1566,7 +1566,22 @@
   .cg-tabla td.cg-trunc{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .qtip{position:fixed;z-index:99999;max-width:420px;padding:9px 12px;border-radius:9px;background:#1f2937;color:#fff;font-size:13px;line-height:1.45;box-shadow:0 8px 24px rgba(0,0,0,.28);pointer-events:none;white-space:pre-wrap;word-break:break-word;}
   /* Vista normal del catálogo: la tarjeta se ajusta a la tabla (no se estira por toda la pantalla) y las columnas quedan juntas */
-  .card.cg-compacta{width:fit-content;max-width:100%;min-width:min(100%,860px);}
+  .card.cg-compacta{width:100%;}
+  .cg-compacta .cg-tabla thead th{position:sticky;top:0;z-index:3;}
+  .cg-compacta .cg-tabla th:first-child,.cg-compacta .cg-tabla tbody td:first-child{position:sticky;left:0;}
+  .cg-compacta .cg-tabla tbody td:first-child{z-index:1;background:var(--panel);}
+  .cg-compacta .cg-tabla th:first-child{z-index:4;}
+  .cg-compacta .cg-tabla tbody tr:nth-child(even) td:first-child{background:color-mix(in srgb,var(--primary) 4%,var(--panel));}
+  .cg-compacta .cg-tabla tbody tr:hover td:first-child{background:color-mix(in srgb,var(--primary) 8%,var(--panel));}
+  .cg-compacta .cg-tabla.cg-dens-c th,.cg-compacta .cg-tabla.cg-dens-c td{padding-top:3px;padding-bottom:3px;font-size:12.5px;}
+  .cat-br{flex-basis:100%;height:0;}
+  #cat-colfil{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+  .fchip{display:inline-flex;align-items:center;gap:6px;padding:4px 6px 4px 10px;border-radius:999px;font-size:12.5px;background:color-mix(in srgb,var(--primary) 11%,var(--panel));color:var(--text);border:1px solid color-mix(in srgb,var(--primary) 30%,var(--border));}
+  .fchip button,.fchip-all{border:none;background:transparent;cursor:pointer;color:var(--muted);font:inherit;}
+  .fchip button{width:18px;height:18px;border-radius:50%;line-height:1;padding:0;font-size:11px;}
+  .fchip button:hover{background:var(--primary);color:var(--primary-text);}
+  .fchip-all{font-size:12.5px;text-decoration:underline;padding:4px 6px;}
+  .fchip-all:hover{color:var(--text);}
   .cg-compacta .cg-tabla th,.cg-compacta .cg-tabla td{padding-left:22px;padding-right:22px;white-space:nowrap;}
   .cg-compacta .cg-tabla td.cg-prod,.cg-compacta .cg-tabla td:first-child{white-space:normal;max-width:440px;}
   .cg-tabla input.cg-in,.cg-tabla select.cg-in,.cg-nuevo input,.cg-nuevo select{border:1px solid transparent;background:transparent;padding:6px 8px;border-radius:7px;font-size:13px;width:100%;}
@@ -7078,6 +7093,17 @@ function catFiltrosHtml(){
 function catRefrescarFiltros(){
   const f = document.getElementById('cat-filtros'); if (f) f.innerHTML = catFiltrosHtml();
   const q = document.getElementById('cat-colfil'); if (q) q.innerHTML = catColResumenHtml();
+  const d = document.getElementById('cat-dens'); if (d) d.innerHTML = catDensHtml();
+}
+// Alto de las filas del Inventario: cómodo (con aire) o compacto (caben más filas). Se recuerda en este navegador.
+function catDens(){ try { return localStorage.getItem('qualified.sga.catDens') === 'compacto' ? 'compacto' : 'comodo'; } catch (e) { return 'comodo'; } }
+function catDensHtml(){
+  const d = catDens();
+  return `<div class="doc-seg" title="Alto de las filas de la tabla"><button type="button" class="${d === 'comodo' ? 'on' : ''}" onclick="catDensidad('comodo')">Cómodo</button><button type="button" class="${d === 'compacto' ? 'on' : ''}" onclick="catDensidad('compacto')">Compacto</button></div>`;
+}
+function catDensidad(m){
+  try { localStorage.setItem('qualified.sga.catDens', m); } catch (e) { /* sin almacenamiento: vale para esta pantalla */ }
+  refreshStockBody();
 }
 /* ---- Filtros por columna, como en Excel ----
    En la cabecera de cada columna del Inventario hay un embudo: abre la lista de los valores que tiene esa columna, con casillas.
@@ -7085,7 +7111,8 @@ function catRefrescarFiltros(){
    Lo que se guarda por columna son los valores que se han desmarcado; los filtros de varias columnas se suman. */
 function catColEstado(){ return (window.__catColFil = window.__catColFil || {}); }
 function catColNum(){ return Object.values(catColEstado()).filter(l => l && l.length).length; }
-function catColLimpiar(){ window.__catColFil = {}; catColCerrar(); refreshStockBody(); }
+function catColLimpiar(){ window.__catColFil = {}; window.__catColChip = {}; catColCerrar(); refreshStockBody(); }
+function catColQuitarK(k){ delete catColEstado()[k]; if (window.__catColChip) delete window.__catColChip[k]; refreshStockBody(); }
 function catColValor(d, r){ const v = d.val(r); return v == null ? '' : String(v); }
 // Filas que cumplen los filtros de todas las columnas (menos la indicada en «salvo»: para listar sus valores sin que ella misma los esconda)
 function catColFiltrar(defs, rows, salvo){
@@ -7095,9 +7122,14 @@ function catColFiltrar(defs, rows, salvo){
 }
 // Guarda las columnas y las filas de la tabla que se está pintando (el embudo las necesita al abrirse) y devuelve las filas filtradas
 function catColPrep(defs, rows){ window.__catColCtx = { defs, rows }; return catColFiltrar(defs, rows); }
+// Los filtros de columna que están puestos, como etiquetas («Tipo de palet: EUR ✕») para verlos sin abrir los embudos
 function catColResumenHtml(){
-  const n = catColNum();
-  return n && !window.__catEditAll ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catColLimpiar()" title="Volver a ver todas las filas">✕ Quitar filtros de columna (${n})</button>` : '';
+  if (window.__catEditAll) return '';
+  const st = catColEstado(), ks = Object.keys(st).filter(k => (st[k] || []).length);
+  if (!ks.length) return '';
+  const info = window.__catColChip || {};
+  return ks.map(k => { const c = info[k] || { l: 'Filtro', t: '' }; return `<span class="fchip" title="Filtro de columna"><span><b>${esc(c.l)}</b>${c.t ? ': ' + esc(c.t) : ''}</span><button type="button" data-k="${esc(k)}" onclick="catColQuitarK(this.dataset.k)" aria-label="Quitar este filtro">✕</button></span>`; }).join('')
+    + (ks.length > 1 ? `<button type="button" class="fchip-all" onclick="catColLimpiar()">Quitar todos</button>` : '');
 }
 function thFil(k, label, type, extra){
   const on = (catColEstado()[k] || []).length > 0;
@@ -7120,8 +7152,16 @@ function catColAbrir(btn){
   const vals = [...cuenta.keys()].sort((a, b) => a === '' ? 1 : b === '' ? -1 : d.type === 'number' ? num(a) - num(b) : col.compare(a, b));
   catColPopup(btn, {
     k, vals, cuenta, ex, lbl: d.lbl,
-    aplicar: lista => { const st = catColEstado(); if (lista.length) st[k] = lista; else delete st[k]; refreshStockBody(); },
-    quitar: () => { delete catColEstado()[k]; refreshStockBody(); },
+    aplicar: lista => {
+      const st = catColEstado(), chip = (window.__catColChip = window.__catColChip || {});
+      if (lista.length) {
+        st[k] = lista;
+        const fuera = new Set(lista), dentro = vals.filter(v => !fuera.has(v)).map(v => v === '' ? '(Vacías)' : d.lbl ? d.lbl(v) : v);
+        chip[k] = { l: colsEtiqueta(btn.closest('th')), t: dentro.length <= 3 ? dentro.join(', ') : dentro.length + ' valores' };
+      } else { delete st[k]; delete chip[k]; }
+      refreshStockBody();
+    },
+    quitar: () => catColQuitarK(k),
   });
 }
 // La ventanita con la lista de valores (la usan el Inventario y las tablas de Expediciones). `vals` ya viene ordenado;
@@ -7476,7 +7516,7 @@ function catModoHtml(){
   const cid = catClienteSel();
   if (!cid) return '';
   const pal = catModoPalets(cid);
-  return `<div class="doc-seg" id="cat-modo" title="Cómo se ve el inventario de este cliente"><button type="button" class="${pal ? '' : 'on'}" onclick="catElegirModo('articulos')">Por artículo</button><button type="button" class="${pal ? 'on' : ''}" onclick="catElegirModo('palets')">${sgaCap(sgaUnidadCfg(cid).s)} a ${sgaUnidadCfg(cid).s}</button></div>`;
+  return `<div class="doc-seg" id="cat-modo" style="order:4;" title="Cómo se ve el inventario de este cliente"><button type="button" class="${pal ? '' : 'on'}" onclick="catElegirModo('articulos')">Por artículo</button><button type="button" class="${pal ? 'on' : ''}" onclick="catElegirModo('palets')">${sgaCap(sgaUnidadCfg(cid).s)} a ${sgaUnidadCfg(cid).s}</button></div>`;
 }
 // «hoy», «12 días», «7 meses», «1 año y 3 meses»
 function catDiasDesde(f){ return Math.floor((new Date(today() + 'T00:00:00') - new Date(f + 'T00:00:00')) / 86400000); }
@@ -7583,8 +7623,8 @@ function catPaletsHtml(cid, cols, filtro, q){
   const tfoot = tTot.pal ? `<tfoot><tr class="cg-tot">${ordenTot.map((k, i) => `<td>${k === 'peso' ? catCeldaKilos(tTot) : k === 'estado' ? catCeldaPalets(tTot, !!cols.bultos, cid) : i === 0 ? 'TOTAL' : ''}</td>`).join('')}</tr></tfoot>` : '';
   return `
     <div class="card cg-compacta" style="padding:0;">
-      <div class="tc-hist-box" style="max-height:660px;min-height:0;border:none;border-radius:10px;">
-        <table class="tf-table cg-tabla"><thead><tr>${cabecera}</tr></thead><tbody>${filas.map(fila).join('')}</tbody>${tfoot}</table>
+      <div class="tc-hist-box" style="max-height:max(420px, calc(100vh - 380px));min-height:0;border:none;border-radius:10px;">
+        <table class="tf-table cg-tabla${catDens() === 'compacto' ? ' cg-dens-c' : ''}"><thead><tr>${cabecera}</tr></thead><tbody>${filas.map(fila).join('')}</tbody>${tfoot}</table>
       </div>
       ${vacio}
     </div>`;
@@ -7626,8 +7666,8 @@ function stockCatalogoTablaHtml(){
   return `
     ${cid ? '' : `<div class="card" style="padding:11px 16px;margin-bottom:12px;font-size:13.5px;color:var(--text);border-left:4px solid var(--primary);">Estás viendo los artículos de <b>todos los clientes</b>. Para <b>crear</b> uno, elige primero el cliente en el desplegable de arriba.</div>`}
     <div class="card${window.__catEditAll ? '' : ' cg-compacta'}" style="padding:0;">
-      <div class="tc-hist-box" style="max-height:${window.__catEditAll ? 'calc(100vh - 290px)' : '660px'};min-height:${window.__catEditAll ? '320px' : '0'};border:none;border-radius:10px;">
-        <table class="tf-table cg-tabla${window.__catEditAll ? ' cg-todo' : ''}">
+      <div class="tc-hist-box" style="max-height:${window.__catEditAll ? 'calc(100vh - 290px)' : 'max(420px, calc(100vh - 380px))'};min-height:${window.__catEditAll ? '320px' : '0'};border:none;border-radius:10px;">
+        <table class="tf-table cg-tabla${window.__catEditAll ? ' cg-todo' : catDens() === 'compacto' ? ' cg-dens-c' : ''}">
           <thead><tr>${window.__catEditAll ? `${thSortCat(catPrincipalTit(cols), 'text')}${cols.referencia ? thSortCat('Descripción', 'text') : ''}${cols.tipo ? thSortCat('Tipo de carga', 'text') : ''}${cols.bultos ? thSortCat('Bultos / palet', 'number') : ''}${cols.ml ? thSortCat('M. lineales', 'number') : ''}${cols.peso ? thSortCat(sgaPesoLabel(), 'number') : ''}${cols.medidas ? thSortCat('Medidas', 'text') : ''}${cols.x.map(f => thSortCat(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSortCat('Stock actual', 'number')}` : `${conCliente ? thFil('a:cli', 'Cliente', 'text') : ''}${thFil('a:cod', catPrincipalTit(cols), 'text')}${cols.tipo ? thFil('a:tipo', 'Tipo de carga', 'text') : ''}${cols.bultos ? thFil('a:bul', 'Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thFil('a:ml', 'M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thFil('a:peso', sgaPesoLabel(), 'number', 'style="text-align:right;"') : ''}${cols.medidas ? thFil('a:med', 'Medidas', 'text') : ''}${cols.x.map(f => thFil('a:x:' + f.id, f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thFil('a:stock', 'Stock actual', 'number')}`}</tr></thead>
           <tbody>
             ${lista.map(a => catFilaHtml(a, cols, conCliente)).join('')}
@@ -8848,13 +8888,15 @@ function tplStock(){
     ${seg === 'operativas' ? '' : `<div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('actividades', 'Actividades')}${segBtn('liquidaciones', 'Liquidaciones')}</div>`}
     <div class="card deca-toolbar">
       ${seg === 'catalogo' ? `
-      <select id="cat-cliente" onchange="catElegirCliente(this.value)" style="width:auto;flex:0 0 210px;min-width:0;"><option value="">Todos los clientes</option>${contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es')).map(c => `<option value="${c.id}" ${c.id === catClienteSel() ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
-      <div class="deca-search" style="flex:1 1 230px;">
+      <select id="cat-cliente" onchange="catElegirCliente(this.value)" style="width:auto;flex:0 0 210px;min-width:0;order:1;"><option value="">Todos los clientes</option>${contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es')).map(c => `<option value="${c.id}" ${c.id === catClienteSel() ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
+      <div class="deca-search" style="flex:1 1 230px;order:3;">
         <input id="cat-buscar" placeholder="Buscar código, descripción o proveedor…" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      <div class="doc-seg" id="cat-filtros">${catFiltrosHtml()}</div>
-      <span id="cat-colfil">${catColResumenHtml()}</span>
+      <span class="cat-br" style="order:6;"></span>
+      <div class="doc-seg" id="cat-filtros" style="order:7;">${catFiltrosHtml()}</div>
+      <span id="cat-colfil" style="order:8;">${catColResumenHtml()}</span>
+      <span id="cat-dens" style="order:9;margin-left:auto;">${catDensHtml()}</span>
       ${catModoHtml()}
       ` : seg === 'liquidaciones' ? `${sgaLiqToolbarHtml()}
       ` : `
@@ -8863,8 +8905,8 @@ function tplStock(){
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
       ${seg === 'entradas' || seg === 'salidas' || seg === 'actividades' || seg === 'operativas' ? stockEmpresaSelectHtml(seg) + stockEstadoSelectHtml(seg) : ''}${seg === 'operativas' && sgaPuedeEditarStock() ? '<button class="btn btn-primary" style="margin-left:auto;" onclick="sgaOperativaAbrir()">+ Nueva operativa</button>' : ''}`}
-      ${seg === 'catalogo' ? `<div style="margin-left:auto;order:99;display:flex;gap:8px;"><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catExportarAbrir()" title="Descargar el inventario en Excel o PDF, eligiendo las columnas">${homeIcon(HOME_ICON_PATHS.download, 15, 'currentColor', 2)}<span>Exportar</span></button>${sgaPuedeEditarStock() ? (catSinNada(catClienteSel()) ? `<button type="button" class="btn btn-primary" onclick="catEditarTodo()" title="Todavía no hay nada: empieza creando el primer artículo">＋ Crear primer artículo</button>` : `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catEditarTodo()" title="Abrir una pantalla completa para editar todo el catálogo del cliente">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>`) : ''}</div>` : ''}
-      ${seg === 'liquidaciones' || seg === 'operativas' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
+      ${seg === 'catalogo' ? `<div style="margin-left:auto;order:5;display:flex;gap:8px;"><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catExportarAbrir()" title="Descargar el inventario en Excel o PDF, eligiendo las columnas">${homeIcon(HOME_ICON_PATHS.download, 15, 'currentColor', 2)}<span>Exportar</span></button>${sgaPuedeEditarStock() ? (catSinNada(catClienteSel()) ? `<button type="button" class="btn btn-primary" onclick="catEditarTodo()" title="Todavía no hay nada: empieza creando el primer artículo">＋ Crear primer artículo</button>` : `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catEditarTodo()" title="Abrir una pantalla completa para editar todo el catálogo del cliente">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>`) : ''}</div>` : ''}
+      ${seg === 'liquidaciones' || seg === 'operativas' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="${seg === 'catalogo' ? 'width:auto;flex:0 0 190px;order:2;' : ''}min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
     </div>
     <div id="stock-body">${stockBodyHtml()}</div>
     </div>`;
