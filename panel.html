@@ -17921,11 +17921,28 @@ function computeGasoilForWeek(driverId, year, week, month){
     .reduce((s,f) => s + Number(f.liters||0)*Number(f.pricePerLiter||0), 0);
 }
 
+// Un día excluido «como día» (sin excluir sus km ni sus horas) cuenta en las estadísticas de la semana (Km, Horas, €/km) porque se
+// condujo de verdad, pero el pago se calcula como si ese día no existiera: ni su €/día, ni su máximo, ni sus km y horas para el extra.
+// Aquí se devuelven los km y las horas de esos días, que están dentro del total guardado de la semana.
+function kmHorasDiasExcluidos(e){
+  if (!e || !e.driverId || !e.year || !e.week) return { km: 0, hours: 0 };
+  const { monday, sunday } = weekDateRange(e.year, e.week);
+  let km = 0, hours = 0;
+  dailyEntries.forEach(f => {
+    if (f.driverId !== e.driverId || f.status !== 'cerrada' || !f.excludeDays || f.date < monday || f.date > sunday) return;
+    if (e._splitMonth !== undefined && Number(f.date.slice(5, 7)) - 1 !== e._splitMonth) return;   // semana repartida entre dos meses: solo los días de ese mes
+    const v = effectiveDayValues(f);
+    if (!f.excludeKm) km += v.km;
+    if (!f.excludeHours) hours += v.hours;
+  });
+  return { km, hours };
+}
 function computeWeek(driver, e){
   const maxKm = driver.maxKmDay * e.daysWorked;
   const maxHours = driver.maxHoursDay * e.daysWorked;
-  const kmExtra = e.km - maxKm;
-  const hoursExtra = e.hours - maxHours;
+  const ex = kmHorasDiasExcluidos(e);
+  const kmExtra = Math.max(0, e.km - ex.km) - maxKm;
+  const hoursExtra = Math.max(0, e.hours - ex.hours) - maxHours;
   const dayAmount = e.daysWorked * driver.priceDay;
   const kmExtraAmount = kmExtra * driver.priceKmExtra;
   const hoursExtraAmount = hoursExtra * driver.priceHourExtra;
@@ -30502,8 +30519,9 @@ function fxResumenSemana(driverId, fecha){
   const es = dailyEntries.filter(f => f.driverId === driverId && f.date >= lunes && f.date <= dom);
   const cerr = es.filter(f => f.status === 'cerrada');
   const dias = cerr.filter(f => !f.excludeDays).length;
-  const km = cerr.filter(f => !f.excludeKm).reduce((s, f) => s + (Number(f.km) || 0), 0);
-  const horas = cerr.filter(f => !f.excludeHours).reduce((s, f) => s + (fichajeHours(f) || 0), 0);
+  // Contra los máximos solo cuentan los días que cuentan para el pago: un día excluido no suma sus km ni sus horas (ni su máximo)
+  const km = cerr.filter(f => !f.excludeKm && !f.excludeDays).reduce((s, f) => s + (Number(f.km) || 0), 0);
+  const horas = cerr.filter(f => !f.excludeHours && !f.excludeDays).reduce((s, f) => s + (fichajeHours(f) || 0), 0);
   const rates = getRatesForDate(driverId, lunes);
   const maxKm = (rates.maxKmDay || 0) * dias, maxH = (rates.maxHoursDay || 0) * dias;
   const extra = dias ? computeWeek(rates, { km, hours: horas, daysWorked: dias }).extraCharge : 0;
@@ -31441,8 +31459,8 @@ function tplDriverDetail(){
             <th class="fin-num fin-center fin-g-jornada fin-g-start th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Jornadas trabajadas ${monthRows?'ese mes':'esa semana'} — incluye los días con importe manual aunque estén excluidos del €/día. El €/día se calcula solo sobre los días no excluidos.">Días<span class="th-sort-arrow">⇅</span></th>
             <th class="fin-num fin-g-jornada th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Kilómetros totales recorridos ${monthRows?'ese mes':'esa semana'}.">Km<span class="th-sort-arrow">⇅</span></th>
             <th class="fin-num fin-g-jornada th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Horas totales trabajadas ${monthRows?'ese mes':'esa semana'}.">Horas<span class="th-sort-arrow">⇅</span></th>
-            <th class="fin-num fin-g-jornada th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Km − (máx. km/día × días trabajados). Positivo si se ha superado el máximo permitido.">Km extra<span class="th-sort-arrow">⇅</span></th>
-            <th class="fin-num fin-g-jornada th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Horas − (máx. horas/día × días trabajados). Positivo si se ha superado el máximo permitido.">H. extra<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-jornada th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Km − (máx. km/día × días trabajados). Positivo si se ha superado el máximo permitido. Los km de un día excluido como día no entran en este cálculo (sí en la columna Km).">Km extra<span class="th-sort-arrow">⇅</span></th>
+            <th class="fin-num fin-g-jornada th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Horas − (máx. horas/día × días trabajados). Positivo si se ha superado el máximo permitido. Las horas de un día excluido como día no entran en este cálculo (sí en la columna Horas).">H. extra<span class="th-sort-arrow">⇅</span></th>
             <th class="fin-num fin-g-ingresos fin-g-start th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Días trabajados × precio/día de la tarifa vigente ${monthRows?'ese mes':'esa semana'}.">€/día<span class="th-sort-arrow">⇅</span></th>
             <th class="fin-num fin-g-ingresos th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Se coge el valor más alto entre el importe de km extra y el de horas extra de cada semana. Nunca se suman los dos, solo se cobra el mayor.">Extra<span class="th-sort-arrow">⇅</span></th>
             <th class="fin-num fin-g-ingresos th-sort" data-sort-type="number" onclick="sortTableByHeader(this)" title="Suma de los suplementos registrados ${monthRows?'ese mes':'esa semana'} (fecha, importe y motivo).${monthRows?'':' Haz clic para ver el detalle.'}">Suplem.<span class="th-sort-arrow">⇅</span></th>
@@ -32661,7 +32679,7 @@ function openExclusionModal(id){
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
           <h3 class="modal-title">Excluir del cálculo — ${fmtDate(f.date)}</h3><button class="close-x" onclick="closeModal()">✕</button>
         </div>
-        <div style="font-size:11.5px;color:var(--mutedFaint);margin-bottom:14px;">Marca lo que no quieras que cuente en el cálculo normal de esa semana de este día (puedes marcar solo km, solo horas, solo días, o cualquier combinación). Lo que quede excluido no entra ni en €/día ni en el km/h extra. El importe manual, si pones uno, se suma siempre al ingreso de la semana, se haya excluido algo o no.</div>
+        <div style="font-size:11.5px;color:var(--mutedFaint);margin-bottom:14px;">Marca lo que no quieras que cuente en el cálculo normal de esa semana de este día (puedes marcar solo km, solo horas, solo días, o cualquier combinación). Lo que quede excluido no entra ni en €/día ni en el km/h extra. Si excluyes solo el día, el pago se calcula como si ese día no existiera (sin su €/día, su máximo ni sus km y horas para el extra), pero sus km y horas siguen sumando en las estadísticas de la semana (Km, Horas, €/km). El importe manual, si pones uno, se suma siempre al ingreso de la semana, se haya excluido algo o no.</div>
         <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:8px;">
           <input type="checkbox" id="excl-days" ${f.excludeDays?'checked':''} />
           Excluir días trabajados (no cuenta como jornada ni para €/día)
