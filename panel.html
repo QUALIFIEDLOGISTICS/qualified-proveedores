@@ -29,6 +29,7 @@
   th{text-align:left;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--border);}
   th.th-sort{cursor:pointer;user-select:none;white-space:nowrap;}
   th.th-sort:hover{color:var(--text);}
+  tr.fil-oculta{display:none !important;}
   th.th-sort .th-fil{margin-left:5px;border:none;background:transparent;color:var(--mutedFaint);cursor:pointer;padding:3px 4px;border-radius:5px;line-height:0;vertical-align:middle;}
   th.th-sort .th-fil:hover{background:var(--panel2);color:var(--text);}
   th.th-sort .th-fil.on{background:var(--primary);color:var(--primary-text);}
@@ -3323,6 +3324,7 @@ function colsBarrer(){
     if (!t.dataset.colsIni) colsPreparar(t);
     else if (t.dataset.colsIni === 'si') colsAjustarNuevas(t);
   });
+  if (typeof fdBarrer === 'function') fdBarrer();
 }
 function colsProgramar(){ if (!colsTimer) colsTimer = setTimeout(colsBarrer, 30); }
 (function colsIniciar(){
@@ -6599,8 +6601,8 @@ function stockBodyHtml(){
     // coinciden; si se mezclan, «Palets» y cada cifra lleva el nombre de la suya
     const unidades = [...new Set(lista.map(a => sgaCap(sgaUnidadCfg(a.clienteId).p)))];
     const udTit = unidades.length === 1 ? unidades[0] : 'Palets';
-    return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table">
-      <thead><tr>${thSort('Nº', conRefSal ? 'text' : 'number')}${thSort('Fecha','date')}${thSort('Cliente','text')}${thSort('Almacén','text')}${conDR ? (esSal ? thSort('Destinatario','text') : thSort('Referencia','text')) : ''}${conMerc ? thSort('Mercancía','text') : ''}${conModal ? thSort('Modalidad','text') : ''}${thSort(udTit,'number','style="text-align:right;"')}${thSort('Estado','text')}<th></th></tr></thead>
+    return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table" data-fk="alb-${stockSeg()}">
+      <thead><tr>${thFilD('Nº', conRefSal ? 'text' : 'number')}${thFilD('Fecha','date')}${thFilD('Cliente','text')}${thFilD('Almacén','text')}${conDR ? (esSal ? thFilD('Destinatario','text') : thFilD('Referencia','text')) : ''}${conMerc ? thFilD('Mercancía','text') : ''}${conModal ? thFilD('Modalidad','text') : ''}${thFilD(udTit,'number','style="text-align:right;"')}${thFilD('Estado','text')}<th></th></tr></thead>
       <tbody>${lista.map(a => { const c = contactos.find(x => x.id === a.clienteId); return `
         <tr data-alb="${a.id}">
           ${esSal && a.referencia
@@ -7116,14 +7118,24 @@ function catColAbrir(btn){
   const col = new Intl.Collator('es', { sensitivity: 'base', numeric: true });
   const num = s => parseFloat(String(s).replace(',', '.')) || 0;
   const vals = [...cuenta.keys()].sort((a, b) => a === '' ? 1 : b === '' ? -1 : d.type === 'number' ? num(a) - num(b) : col.compare(a, b));
-  const etq = v => v === '' ? '(Vacías)' : d.lbl ? d.lbl(v) : v;
+  catColPopup(btn, {
+    k, vals, cuenta, ex, lbl: d.lbl,
+    aplicar: lista => { const st = catColEstado(); if (lista.length) st[k] = lista; else delete st[k]; refreshStockBody(); },
+    quitar: () => { delete catColEstado()[k]; refreshStockBody(); },
+  });
+}
+// La ventanita con la lista de valores (la usan el Inventario y las tablas de Expediciones). `vals` ya viene ordenado;
+// `cuenta` dice cuántas filas tiene cada valor y `ex` cuáles están desmarcados ahora.
+function catColPopup(btn, o){
+  const { k, vals, cuenta, ex } = o;
+  const etq = v => v === '' ? '(Vacías)' : o.lbl ? o.lbl(v) : v;
   const p = document.createElement('div');
   p.id = 'cat-colpop'; p.className = 'cat-colpop'; p.dataset.k = k;
   p.innerHTML = `<input class="cp-q" placeholder="Buscar…" oninput="catColBuscar(this.value)" autocomplete="off" />
     <label class="cp-all"><input type="checkbox" id="cp-all" onchange="catColTodos(this.checked)" /><span>(Seleccionar todo)</span></label>
     <div class="cp-list">${vals.map((v, i) => `<label class="cp-it" data-t="${esc(mapaNorm(etq(v)))}"><input type="checkbox" data-i="${i}" ${ex.has(v) ? '' : 'checked'} onchange="catColSync()" /><span title="${esc(etq(v))}">${esc(etq(v))}</span>${cuenta.get(v) ? `<small>${cuenta.get(v)}</small>` : ''}</label>`).join('')}</div>
-    <div class="cp-pie">${(catColEstado()[k] || []).length ? `<button type="button" class="btn btn-ghost" style="margin-right:auto;" onclick="catColQuitar()">Quitar filtro</button>` : ''}<button type="button" class="btn btn-ghost" onclick="catColCerrar()">Cancelar</button><button type="button" class="btn btn-primary" onclick="catColAplicar()">Aceptar</button></div>`;
-  window.__catColPop = { k, vals };
+    <div class="cp-pie">${ex.size ? `<button type="button" class="btn btn-ghost" style="margin-right:auto;" onclick="catColQuitar()">Quitar filtro</button>` : ''}<button type="button" class="btn btn-ghost" onclick="catColCerrar()">Cancelar</button><button type="button" class="btn btn-primary" onclick="catColAplicar()">Aceptar</button></div>`;
+  window.__catColPop = { k, vals, aplicar: o.aplicar, quitar: o.quitar };
   document.body.appendChild(p);
   const r = btn.getBoundingClientRect(), w = p.offsetWidth, h = p.offsetHeight;
   p.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
@@ -7152,14 +7164,58 @@ function catColAplicar(){
   const ex = [];
   document.querySelectorAll('#cat-colpop .cp-list input').forEach(i => { if (!i.checked) ex.push(P.vals[+i.dataset.i]); });
   if (ex.length === P.vals.length) { appToast('Marca al menos un valor para ver filas.', 'info'); return; }
-  const st = catColEstado();
-  if (ex.length) st[P.k] = ex; else delete st[P.k];
-  catColCerrar(); refreshStockBody();
+  catColCerrar(); P.aplicar(ex);
 }
 function catColQuitar(){
   const P = window.__catColPop; if (!P) return;
-  delete catColEstado()[P.k];
-  catColCerrar(); refreshStockBody();
+  catColCerrar(); P.quitar();
+}
+/* ---- Los mismos filtros en las tablas de Expediciones (lista de expediciones y «Mercancía a expedir») ----
+   Aquí las filas ya están pintadas (y la de mercancía tiene casillas con cantidades escritas), así que no se vuelve a pintar nada:
+   las filas que no cumplen se esconden. Las cantidades escritas en filas escondidas se conservan y cuentan igual. */
+function thFilD(label, type, extra){
+  return thFil('', label, type, extra).replace('catColAbrir(this)', 'fdAbrir(this)').replace(/ data-k=""/, '');
+}
+function fdEstado(table){ const o = (window.__fdFil = window.__fdFil || {}); return (o[table.dataset.fk] = o[table.dataset.fk] || {}); }
+function fdTexto(td){ return td ? td.textContent.replace(/\s+/g, ' ').trim() : ''; }
+function fdActivos(table, salvo){
+  const st = fdEstado(table), ths = [...table.tHead.rows[0].cells];
+  return ths.map((th, i) => ({ i, e: colsEtiqueta(th) })).filter(x => x.e !== salvo && st[x.e] && st[x.e].length).map(x => ({ i: x.i, ex: new Set(st[x.e]) }));
+}
+function fdAplicar(table){
+  if (!table.tHead || !table.tBodies[0]) return;
+  const act = fdActivos(table), st = fdEstado(table);
+  [...table.tBodies[0].rows].forEach(tr => tr.classList.toggle('fil-oculta', act.some(a => a.ex.has(fdTexto(tr.cells[a.i])))));
+  [...table.tHead.rows[0].cells].forEach(th => { const b = th.querySelector('.th-fil'); if (b) b.classList.toggle('on', !!(st[colsEtiqueta(th)] || []).length); });
+}
+function fdAbrir(btn){
+  const th = btn.closest('th'), table = th && th.closest('table');
+  if (!table || !table.dataset.fk) return;
+  const etiqueta = colsEtiqueta(th), k = table.dataset.fk + '|' + etiqueta;
+  const abierto = document.getElementById('cat-colpop'), mismo = abierto && abierto.dataset.k === k;
+  catColCerrar();
+  if (mismo) return;
+  const idx = [...th.parentElement.cells].indexOf(th), act = fdActivos(table, etiqueta);
+  const cuenta = new Map(), orden = new Map();
+  [...table.tBodies[0].rows].filter(tr => !act.some(a => a.ex.has(fdTexto(tr.cells[a.i])))).forEach(tr => {
+    const c = tr.cells[idx], v = fdTexto(c);
+    cuenta.set(v, (cuenta.get(v) || 0) + 1);
+    if (!orden.has(v)) orden.set(v, c && c.hasAttribute('data-sort-value') ? c.getAttribute('data-sort-value') : v);
+  });
+  const ex = new Set(fdEstado(table)[etiqueta] || []);
+  ex.forEach(v => { if (!cuenta.has(v)) { cuenta.set(v, 0); orden.set(v, v); } });
+  const tipo = th.getAttribute('data-sort-type') || 'text', col = new Intl.Collator('es', { sensitivity: 'base', numeric: true });
+  const num = s => parseFloat(String(s).replace(/−/g, '-').replace(/\./g, '').replace(',', '.').replace(/[^0-9.\-]/g, '')) || 0;
+  const vals = [...cuenta.keys()].sort((a, b) => a === '' ? 1 : b === '' ? -1 : tipo === 'number' ? num(orden.get(a)) - num(orden.get(b)) : tipo === 'date' ? String(orden.get(a)).localeCompare(String(orden.get(b))) : col.compare(a, b));
+  catColPopup(btn, {
+    k, vals, cuenta, ex,
+    aplicar: lista => { const st = fdEstado(table); if (lista.length) st[etiqueta] = lista; else delete st[etiqueta]; fdAplicar(table); },
+    quitar: () => { delete fdEstado(table)[etiqueta]; fdAplicar(table); },
+  });
+}
+// Tras volver a pintar una tabla (al buscar, cambiar de pestaña…), se le vuelven a aplicar sus filtros
+function fdBarrer(){
+  document.querySelectorAll('#tab-content table[data-fk]').forEach(t => { if (!t.dataset.fdOk) { t.dataset.fdOk = '1'; fdAplicar(t); } });
 }
 (function(){
   document.addEventListener('mousedown', e => { const p = document.getElementById('cat-colpop'); if (p && !p.contains(e.target) && !(e.target.closest && e.target.closest('.th-fil'))) catColCerrar(); }, true);
@@ -10422,8 +10478,8 @@ function sgaSalidaStockHtml(clienteId){
     </div>
     ${ps.length > 8 ? sgaBuscadorFilasHtml('sl-buscar', '#sl-stock .tc-hist-box table', 'Buscar en el stock: artículo, descripción, código, sitio…') : ''}
     <div class="tc-hist-box" style="max-height:420px;">
-    <table class="tf-table" style="min-width:640px;">
-      <thead><tr>${manual ? '' : thSort('Recepción','date')}${conDesc ? thSort('Código de artículo','text') : ''}${conTipo ? thSort('Tipo de carga','text') : ''}${!agrupado && ps.some(p => sgaSubtipoPartida(p)) ? thSort('Tipo de palet','text') : ''}${conRef ? thSort('Descripción','text') : ''}${claves.map(f => thSort(esc(f.nombre), f.tipo === 'numero' ? 'number' : 'text')).join('')}${cfg.codigosUnicos && !agrupado ? thSort('Código','text') : ''}${conSitio ? thSort('Sitio','text') : ''}${thSort('Disponible','number','style="text-align:right;"')}<th style="text-align:right;">A expedir</th>${sgaClienteConBultos(clienteId) ? '<th style="text-align:right;">Bultos a expedir</th>' : ''}</tr></thead>
+    <table class="tf-table" style="min-width:640px;" data-fk="salida-stock">
+      <thead><tr>${manual ? '' : thFilD('Recepción','date')}${conDesc ? thFilD('Código de artículo','text') : ''}${conTipo ? thFilD('Tipo de carga','text') : ''}${!agrupado && ps.some(p => sgaSubtipoPartida(p)) ? thFilD('Tipo de palet','text') : ''}${conRef ? thFilD('Descripción','text') : ''}${claves.map(f => thFilD(f.nombre, f.tipo === 'numero' ? 'number' : 'text')).join('')}${cfg.codigosUnicos && !agrupado ? thFilD('Código','text') : ''}${conSitio ? thFilD('Sitio','text') : ''}${thFilD('Disponible','number','style="text-align:right;"')}<th style="text-align:right;">A expedir</th>${sgaClienteConBultos(clienteId) ? '<th style="text-align:right;">Bultos a expedir</th>' : ''}</tr></thead>
       <tbody>${agrupado ? sgaSalidaGruposHtml(clienteId, ps, flags) : ps.map(p => `
         <tr data-pid="${p.id}">
           ${manual ? '' : `<td style="white-space:nowrap;" data-sort-value="${esc(p.fechaEntrada)}">${fmtDateDMY(p.fechaEntrada)}</td>`}
@@ -10482,6 +10538,7 @@ function sgaSalidaClienteCambio(){
   sgaSalidaAlmacenCambio();
 }
 function sgaSalidaAlmacenCambio(){
+  (window.__fdFil = window.__fdFil || {})['salida-stock'] = {};   // otro almacén, otra tabla: los filtros de columna empiezan de cero
   const clienteId = sgaSalidaClienteId();
   const cont = document.getElementById('sl-stock');
   const wid = sgaSalidaWh();
