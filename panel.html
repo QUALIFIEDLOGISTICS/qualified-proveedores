@@ -11409,19 +11409,19 @@ async function sgaResumenCargar(){
     supabaseClient.from('sga_albaranes').select('id,tipo,fecha,estado,numero,numero_texto,referencia,destinatario').eq('cliente_id', cid).eq('estado', 'confirmado').gte('fecha', desde),
     supabaseClient.from('sga_cobros').select('*').eq('cliente_id', cid).eq('periodo', per),
     supabaseClient.from('sga_m2').select('*').eq('cliente_id', cid).order('periodo', { ascending: false }).limit(24),
-    supabaseClient.from('sga_partidas').select('id,producto_id,descripcion,referencia').eq('cliente_id', cid),
+    supabaseClient.from('sga_partidas').select('id,producto_id,descripcion,referencia,articulo_id').eq('cliente_id', cid),
     supabaseClient.from('sga_operativas_realizadas').select('*').eq('cliente_id', cid).eq('estado', 'activa').gte('fecha', desde).lte('fecha', hasta),
     supabaseClient.from('sga_operativas_realizadas').select('*').eq('cliente_id', cid).eq('estado', 'activa').eq('facturada', false).lt('fecha', desde),   // de meses anteriores y aún sin facturar
   ]);
   const albaranes = a.data || [];
   const prodDe = {};
-  const descDe = {};
-  (pt.data || []).forEach(p => { prodDe[p.id] = p.producto_id; descDe[p.id] = (p.descripcion || p.referencia || '').trim(); });
+  const descDe = {}, artDe = {};
+  (pt.data || []).forEach(p => { prodDe[p.id] = p.producto_id; descDe[p.id] = (p.descripcion || p.referencia || '').trim(); artDe[p.id] = p.articulo_id || ''; });
   const movs = [];
   const ids = albaranes.map(x => x.id);
   for (let i = 0; i < ids.length; i += 80) {
     const r = await supabaseClient.from('sga_movimientos').select('albaran_id,partida_id,cantidad,bultos,fecha,tipo').in('albaran_id', ids.slice(i, i + 80));
-    (r.data || []).forEach(x => movs.push({ albaranId: x.albaran_id, desc: descDe[x.partida_id] || '', productoId: prodDe[x.partida_id] || '', cantidad: Number(x.cantidad), bultos: x.bultos == null ? null : Number(x.bultos), fecha: x.fecha, tipo: x.tipo }));
+    (r.data || []).forEach(x => movs.push({ albaranId: x.albaran_id, desc: descDe[x.partida_id] || '', articuloId: artDe[x.partida_id] || '', productoId: prodDe[x.partida_id] || '', cantidad: Number(x.cantidad), bultos: x.bultos == null ? null : Number(x.bultos), fecha: x.fecha, tipo: x.tipo }));
   }
   rm.datos = {
     clienteId: cid, periodo: per, movs,
@@ -11635,32 +11635,35 @@ function sgaResumenHtml(d, paraImprimir){
     if (!paraImprimir) return '';
     const alb = {}; (d.albaranes || []).forEach(a => { alb[a.id] = a; });
     const ini = d.periodo + '-01', fin = `${d.periodo}-${String(sgaDiasDelMes(d.periodo)).padStart(2, '0')}`;
-    const clave = m => pt ? (m.productoId ? sgaProdTxt(m.productoId) : 'Sin tipo') : (m.desc || 'Mercancía');
+    const clave = m => pt ? (m.productoId ? sgaProdTxt(m.productoId) : 'Sin tipo') : '';
+    // Columna maestra del catálogo del cliente (código de artículo o el dato que manda, p. ej. el nº de serie): el material o producto que entra o sale
+    const colsCat = catColumnas(d.clienteId), artMap = new Map(sgaArticulos.map(x => [x.id, x]));
+    const maestra = m => { const x = m.articuloId ? artMap.get(m.articuloId) : null; return (x ? catPrincipalVal(x, colsCat) : (m.desc || '')) || '—'; };
     const grupos = {};
     d.movs.filter(m => m.fecha >= ini && m.fecha <= fin && m.tipo !== 'apertura' && m.tipo !== 'ajuste').forEach(m => {   // sin stock inicial ni regularizaciones
       const op = m.cantidad > 0 ? 'ent' : 'sal';
-      const k = [m.fecha, op, m.albaranId, clave(m)].join('|');
-      const g = (grupos[k] = grupos[k] || { f: m.fecha, op, albaranId: m.albaranId, clave: clave(m), cant: 0, bul: 0 });
+      const k = [m.fecha, op, m.albaranId, clave(m), maestra(m)].join('|');
+      const g = (grupos[k] = grupos[k] || { f: m.fecha, op, albaranId: m.albaranId, clave: clave(m), mat: maestra(m), cant: 0, bul: 0 });
       g.cant += op === 'sal' ? -m.cantidad : m.cantidad;
       g.bul += op === 'sal' ? -(m.bultos != null ? m.bultos : m.cantidad) : (m.bultos != null ? m.bultos : m.cantidad);
     });
     const ORDEN = { ent: 0, sal: 1, reg: 2 }, OPTXT = { ent: 'Recepción', sal: 'Expedición', reg: 'Regularización' };
-    const lista = Object.values(grupos).sort((a, b) => a.f.localeCompare(b.f) || ORDEN[a.op] - ORDEN[b.op] || String((alb[a.albaranId] || {}).numero).localeCompare(String((alb[b.albaranId] || {}).numero), 'es', { numeric: true }) || a.clave.localeCompare(b.clave, 'es'));
+    const lista = Object.values(grupos).sort((a, b) => a.f.localeCompare(b.f) || ORDEN[a.op] - ORDEN[b.op] || String((alb[a.albaranId] || {}).numero).localeCompare(String((alb[b.albaranId] || {}).numero), 'es', { numeric: true }) || a.clave.localeCompare(b.clave, 'es') || a.mat.localeCompare(b.mat, 'es', { numeric: true }));
     if (!lista.length) return '';
     const signo = (g, n) => (g.op === 'sal' ? '−' : g.op === 'ent' ? '+' : n > 0 ? '+' : '') + sgaNumTxt(n);
     const filas = lista.map((g, i) => {
       const a = alb[g.albaranId] || {}, p = lista[i - 1] || {};
       const nuevoDia = g.f !== p.f, nuevoAlb = nuevoDia || g.albaranId !== p.albaranId || g.op !== p.op;
       const quien = g.op === 'sal' && a.destinatario ? ` <small>· ${esc(a.destinatario)}</small>` : '';
-      return `<tr class="${nuevoDia ? 'rm-dia' : ''}"><td style="white-space:nowrap;">${nuevoDia ? fmtDateDMY(g.f).split('/').join('-') : `<span class="rm-rep">${fmtDateDMY(g.f).split('/').join('-')}</span>`}</td><td>${nuevoAlb ? OPTXT[g.op] : ''}</td><td>${nuevoAlb ? esc(a.numero || '—') + quien : ''}</td><td>${esc(g.clave)}</td><td class="r">${signo(g, g.cant)}</td>${colsB ? `<td class="r">${sgaNumTxt(Math.round(g.bul * 100) / 100)}</td>` : ''}</tr>`;
+      return `<tr class="${nuevoDia ? 'rm-dia' : ''}"><td style="white-space:nowrap;">${nuevoDia ? fmtDateDMY(g.f).split('/').join('-') : `<span class="rm-rep">${fmtDateDMY(g.f).split('/').join('-')}</span>`}</td><td>${nuevoAlb ? OPTXT[g.op] : ''}</td><td>${nuevoAlb ? esc(a.numero || '—') + quien : ''}</td>${pt ? `<td>${esc(g.clave)}</td>` : ''}<td>${esc(g.mat)}</td><td class="r">${signo(g, g.cant)}</td>${colsB ? `<td class="r">${sgaNumTxt(Math.round(g.bul * 100) / 100)}</td>` : ''}</tr>`;
     }).join('');
     const suma = (op, k) => lista.filter(g => g.op === op).reduce((s, g) => s + g[k], 0);
-    const totRow = (t, op) => lista.some(g => g.op === op) ? `<tr><td colspan="4">${t}</td><td class="r">${op === 'sal' ? '−' : op === 'ent' ? '+' : ''}${sgaNumTxt(suma(op, 'cant'))}</td>${colsB ? `<td class="r">${sgaNumTxt(Math.round(suma(op, 'bul') * 100) / 100)}</td>` : ''}</tr>` : '';
+    const totRow = (t, op) => lista.some(g => g.op === op) ? `<tr><td colspan="${pt ? 5 : 4}">${t}</td><td class="r">${op === 'sal' ? '−' : op === 'ent' ? '+' : ''}${sgaNumTxt(suma(op, 'cant'))}</td>${colsB ? `<td class="r">${sgaNumTxt(Math.round(suma(op, 'bul') * 100) / 100)}</td>` : ''}</tr>` : '';
     return `
       <div class="rm-salto"><div class="card deca-card" style="--dc-accent:var(--primary);margin-top:14px;border:none;box-shadow:none;">
         <h2>Detalle de recepciones y expediciones · ${esc(sgaPeriodoTxt(d.periodo))}</h2>
         <table class="rm-tabla">
-          <thead><tr>${th('Día')}${th('Operación')}${th('Albarán')}${th(pt ? 'Tipo de palet' : 'Artículo')}${th('Cantidad', 1)}${colsB ? th('Bultos', 1) : ''}</tr></thead>
+          <thead><tr>${th('Día')}${th('Operación')}${th('Albarán')}${pt ? th('Tipo de palet') : ''}${th(esc(catPrincipalTit(colsCat)))}${th('Cantidad', 1)}${colsB ? th('Bultos', 1) : ''}</tr></thead>
           <tbody>${filas}</tbody>
           <tfoot>${totRow('TOTAL RECEPCIONES', 'ent')}${totRow('TOTAL EXPEDICIONES', 'sal')}</tfoot>
         </table>
