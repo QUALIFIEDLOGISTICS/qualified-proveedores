@@ -69,3 +69,27 @@ left join public.almacenaje_productos pr on pr.id = co.producto_id
 where (c.nombre ilike '%glas%' or c.nombre_comercial ilike '%glas%') and co.origen = 'movimiento'
 order by co.fecha desc
 limit 60;
+
+-- CONSULTA 7 · Los 3 clientes que tienen «Tipo de palet» (ALMALIFT, GLASS FACTORY, KUKA ROBOTS): a qué producto de entrada y salida apunta cada tipo de carga
+select coalesce(nullif(c.nombre_comercial, ''), c.nombre) as cliente, p.id, p.nombre, p.disparador, p.familia,
+       p.cobro_entrada, e.nombre as cobro_entrada_es, p.cobro_salida, s.nombre as cobro_salida_es
+from public.almacenaje_tarifas t
+join public.contactos c on c.id = t.cliente_id
+join public.almacenaje_productos p on p.id = t.tipo
+left join public.almacenaje_productos e on e.id = p.cobro_entrada
+left join public.almacenaje_productos s on s.id = p.cobro_salida
+where c.nombre ~* 'glas|almalift|kuka' or c.nombre_comercial ~* 'glas|almalift|kuka'
+group by 1, p.id, p.nombre, p.disparador, p.familia, p.cobro_entrada, e.nombre, p.cobro_salida, s.nombre
+order by 1, p.disparador, p.nombre;
+
+-- CONSULTA 8 · Los mismos 3 clientes: stock actual por tipo de carga y tipo de palet anotado
+select coalesce(nullif(c.nombre_comercial, ''), c.nombre) as cliente,
+       pr.nombre as tipo_de_carga, pa.atributos ->> 'subtipo' as tipo_de_palet_en_el_palet,
+       count(*) as partidas, sum(pa.cantidad_actual) as palets_en_almacen
+from public.sga_partidas pa
+join public.contactos c on c.id = pa.cliente_id
+left join public.almacenaje_productos pr on pr.id = pa.producto_id
+where pa.estado = 'activa' and pa.cantidad_actual > 0
+  and (c.nombre ~* 'glas|almalift|kuka' or c.nombre_comercial ~* 'glas|almalift|kuka')
+group by 1, 2, 3
+order by 1, 2, 3;
