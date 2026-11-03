@@ -6676,11 +6676,14 @@ function catClienteSel(){
 function catElegirCliente(id){
   window.__catSel = id || '';
   try { localStorage.setItem('qualified.sga.catCliente', window.__catSel); } catch (e) { /* sin almacenamiento: no pasa nada */ }
-  window.__catFiltro = 'todos';
+  window.__catFiltro = 'stock';
   window.__catColFil = {};
   renderTab();
 }
-function catFiltro(){ return ['stock', 'sin'].includes(window.__catFiltro) ? window.__catFiltro : 'todos'; }
+function catFiltro(){
+  if (window.__catEditAll || window.__stockView === 'catedit') return 'todos';   // al editar se ven todos los artículos
+  return ['stock', 'sin', 'todos'].includes(window.__catFiltro) ? window.__catFiltro : 'stock';   // por defecto, solo los que tienen stock
+}
 // Almacenes donde hay mercancía ahora (del cliente elegido, si hay uno): en el catálogo solo se puede mirar dónde hay algo.
 // Si solo hay uno no hace falta elegir, y si el almacén elegido se quedó vacío se vuelve a «todos».
 function catAlmacenesConMercancia(){
@@ -6838,7 +6841,7 @@ function catSinNada(cid){
 function catEditarTodo(){
   if (!catClienteSel()) { catEnfocarCliente('Elige primero el cliente en el desplegable para editar su catálogo.'); return; }
   const nuevo = catSinNada(catClienteSel()) && sgaPuedeEditarStock();
-  window.__catFiltro = 'todos'; window.__stockSearch = '';
+  window.__stockSearch = '';
   window.__catEditAll = true;
   window.__catLocked = !sgaPuedeEditarStock();    // un solo clic en «Editar» y ya se puede escribir (se vuelve a bloquear al guardar o cancelar)
   window.__catDirty = {}; window.__catHist = null;
@@ -7606,7 +7609,7 @@ function catPaletsHtml(cid, cols, filtro, q){
   const filas = catColPrep(defs, todas);
   const conPalet = filas.filter(f => f.p);
   window.__catExp = { modo: 'palets', cid, cols, filas, manual, conCodigo };   // lo que se ve, para poder exportarlo
-  if (!todas.length && !q && filtro === 'todos') return catGuiaVacioHtml(cid);
+  if (!todas.length && !q && catSinNada(cid)) return catGuiaVacioHtml(cid);
   const celdaNum = v => `<td style="text-align:right;white-space:nowrap;" data-sort-value="${esc(v)}">${v === '' ? vac : esc(v)}</td>`;
   const cabecera = [conCodigo ? thFil('p:cod', sgaCap(sgaUnidadCfg(cid).s), 'text') : '', thFil('p:art', 'Artículo', 'text'), thFil('p:ubic', 'Ubicación', 'text'), manual ? '' : thFil('p:ent', 'Entrada', 'date'),
     cols.tipo ? thFil('p:tipo', 'Tipo de carga', 'text') : '', cols.bultos ? thFil('p:bul', 'Bultos / palet', 'number', 'style="text-align:right;"') : '', cols.ml ? thFil('p:ml', 'M. lineales', 'number', 'style="text-align:right;"') : '', cols.peso ? thFil('p:peso', 'Peso', 'number', 'style="text-align:right;"') : '', cols.medidas ? thFil('p:med', 'Medidas', 'text') : '',
@@ -7627,7 +7630,7 @@ function catPaletsHtml(cid, cols, filtro, q){
       <td class="cg-stock" data-sort-value="${p ? 1 : 0}">${p ? `<span class="cg-st ok"><i></i>En almacén${p.actual > 1 ? ` · ${p.actual} ${sgaUd(cid, p.actual)}` : ''}</span>${cols.bultos ? `<div class="cg-ref">${sgaNumTxt(p.bultos != null ? sgaBultosSalida(p, p.actual) : p.actual * (a.bultos || 1))} bultos</div>` : ''}` : '<span class="cg-st no"><i></i>Sin stock</span>'}</td>
     </tr>`;
   };
-  const vacio = !filas.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${catColNum() && todas.length ? 'Ningún ' + sgaUnidadCfg(cid).s + ' coincide con los filtros de columna.' : q ? 'Ningún ' + sgaUnidadCfg(cid).s + ' coincide con la búsqueda.' : filtro === 'stock' ? 'No hay ' + sgaUnidadCfg(cid).p + ' en el almacén ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : 'Este cliente todavía no tiene mercancía registrada.'}</div>` : '';
+  const vacio = !filas.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${catColNum() && todas.length ? 'Ningún ' + sgaUnidadCfg(cid).s + ' coincide con los filtros de columna.' : q ? 'Ningún ' + sgaUnidadCfg(cid).s + ' coincide con la búsqueda.' + (filtro === 'stock' ? ' Ahora solo se buscan los que tienen stock: pulsa «Todos» para incluir los demás.' : '') : filtro === 'stock' ? 'No hay ' + sgaUnidadCfg(cid).p + ' en el almacén ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : 'Este cliente todavía no tiene mercancía registrada.'}</div>` : '';
   // fila de totales, continuación de la tabla: suma de palets (y bultos) en Estado y de kilos en Peso
   const tTot = catSumas(conPalet.map(f => ({ pal: f.p.actual, bul: f.p.bultos != null ? sgaBultosSalida(f.p, f.p.actual) : f.p.actual, pesoU: catPesoPalet(f.a, f.p) != null ? Number(catPesoPalet(f.a, f.p)) : null })));
   const ordenTot = [...(conCodigo ? ['cod'] : []), 'art', 'ubic', ...(manual ? [] : ['ent']), ...(cols.tipo ? ['tipo'] : []), ...(cols.bultos ? ['bul'] : []), ...(cols.ml ? ['ml'] : []), ...(cols.peso ? ['peso'] : []), ...(cols.medidas ? ['med'] : []), ...cols.xTodos.map(() => 'x'), 'estado'];
@@ -7686,12 +7689,12 @@ function stockCatalogoTablaHtml(){
   const listaTodas = lista;
   if (!window.__catEditAll) lista = catColPrep(catColDefsArticulos(cols, !cid), lista);   // filtros por columna (el embudo de cada cabecera)
   window.__catExp = { modo: 'articulos', cid, cols, lista };   // lo que se ve, para poder exportarlo
-  if (!window.__catEditAll && !listaTodas.length && !q && filtro === 'todos') return catGuiaVacioHtml(cid);
+  if (!window.__catEditAll && !listaTodas.length && !q && catSinNada(cid)) return catGuiaVacioHtml(cid);
   // Por defecto: primero lo que más stock tiene (palets), después por cliente y nombre
   lista.sort((a, b) => (catStockArticulo(b).mod - catStockArticulo(a).mod) || (cid ? 0 : nombreDe(contactos.find(c => c.id === a.clienteId) || {}).localeCompare(nombreDe(contactos.find(c => c.id === b.clienteId) || {}), 'es')) || sgaArticuloTxt(a).localeCompare(sgaArticuloTxt(b), 'es'));
   const puede = sgaPuedeEditarStock();
   const conCliente = !cid;
-  const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${!window.__catEditAll && catColNum() && listaTodas.length ? 'Ningún artículo coincide con los filtros de columna.' : q ? 'Ningún artículo coincide con la búsqueda.' : filtro === 'stock' ? 'Ningún artículo tiene stock ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : cid ? (window.__catLocked ? 'Este cliente todavía no tiene artículos. Pulsa «Editar» para crear el primero o «Pegar desde Excel».' : 'Escribe el primer artículo en la fila nueva de abajo.') : 'Todavía no hay artículos. Elige un cliente para crear el primero.'}</div>` : '';
+  const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${!window.__catEditAll && catColNum() && listaTodas.length ? 'Ningún artículo coincide con los filtros de columna.' : q ? 'Ningún artículo coincide con la búsqueda.' + (filtro === 'stock' ? ' Ahora solo se buscan los que tienen stock: pulsa «Todos» para incluir los demás.' : '') : filtro === 'stock' ? 'Ningún artículo tiene stock ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : cid ? (window.__catLocked ? 'Este cliente todavía no tiene artículos. Pulsa «Editar» para crear el primero o «Pegar desde Excel».' : 'Escribe el primer artículo en la fila nueva de abajo.') : 'Todavía no hay artículos. Elige un cliente para crear el primero.'}</div>` : '';
   return `
     ${cid ? '' : `<div class="card" style="padding:11px 16px;margin-bottom:12px;font-size:13.5px;color:var(--text);border-left:4px solid var(--primary);">Estás viendo los artículos de <b>todos los clientes</b>. Para <b>crear</b> uno, elige primero el cliente en el desplegable de arriba.</div>`}
     <div class="card${window.__catEditAll ? '' : ' cg-compacta'}" style="padding:0;">
