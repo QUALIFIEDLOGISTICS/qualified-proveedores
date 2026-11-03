@@ -93,3 +93,19 @@ where pa.estado = 'activa' and pa.cantidad_actual > 0
   and (c.nombre ~* 'glas|almalift|kuka' or c.nombre_comercial ~* 'glas|almalift|kuka')
 group by 1, 2, 3
 order by 1, 2, 3;
+
+-- CONSULTA 9 · Los 3 clientes: stock actual por tipo de carga y tipo de palet EFECTIVO (el del palet o, si no tiene, el de su artículo del catálogo: el que usa el programa al cobrar)
+select coalesce(nullif(c.nombre_comercial, ''), c.nombre) as cliente,
+       pr.nombre as tipo_de_carga,
+       pa.atributos ->> 'subtipo' as tipo_en_el_palet,
+       a.atributos ->> 'subtipo' as tipo_en_su_articulo,
+       coalesce(nullif(pa.atributos ->> 'subtipo', ''), a.atributos ->> 'subtipo') as tipo_de_palet_efectivo,
+       count(*) as partidas, sum(pa.cantidad_actual) as palets_en_almacen
+from public.sga_partidas pa
+join public.contactos c on c.id = pa.cliente_id
+left join public.almacenaje_productos pr on pr.id = pa.producto_id
+left join public.sga_articulos a on a.id = pa.articulo_id
+where pa.estado = 'activa' and pa.cantidad_actual > 0
+  and (c.nombre ~* 'glas|almalift|kuka' or c.nombre_comercial ~* 'glas|almalift|kuka')
+group by 1, 2, 3, 4, 5
+order by 1, 2, 5;
