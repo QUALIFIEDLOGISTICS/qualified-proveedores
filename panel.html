@@ -11406,24 +11406,26 @@ async function sgaResumenCargar(){
   const cid = rm.clienteId, per = rm.periodo, desde = per + '-01';
   const hasta = `${per}-${String(sgaDiasDelMes(per)).padStart(2, '0')}`;
   const [a, c, m2, pt, op, opAnt] = await Promise.all([
-    supabaseClient.from('sga_albaranes').select('id,tipo,fecha,estado').eq('cliente_id', cid).eq('estado', 'confirmado').gte('fecha', desde),
+    supabaseClient.from('sga_albaranes').select('id,tipo,fecha,estado,numero,numero_texto,referencia,destinatario').eq('cliente_id', cid).eq('estado', 'confirmado').gte('fecha', desde),
     supabaseClient.from('sga_cobros').select('*').eq('cliente_id', cid).eq('periodo', per),
     supabaseClient.from('sga_m2').select('*').eq('cliente_id', cid).order('periodo', { ascending: false }).limit(24),
-    supabaseClient.from('sga_partidas').select('id,producto_id').eq('cliente_id', cid),
+    supabaseClient.from('sga_partidas').select('id,producto_id,descripcion,referencia').eq('cliente_id', cid),
     supabaseClient.from('sga_operativas_realizadas').select('*').eq('cliente_id', cid).eq('estado', 'activa').gte('fecha', desde).lte('fecha', hasta),
     supabaseClient.from('sga_operativas_realizadas').select('*').eq('cliente_id', cid).eq('estado', 'activa').eq('facturada', false).lt('fecha', desde),   // de meses anteriores y aún sin facturar
   ]);
   const albaranes = a.data || [];
   const prodDe = {};
-  (pt.data || []).forEach(p => { prodDe[p.id] = p.producto_id; });
+  const descDe = {};
+  (pt.data || []).forEach(p => { prodDe[p.id] = p.producto_id; descDe[p.id] = (p.descripcion || p.referencia || '').trim(); });
   const movs = [];
   const ids = albaranes.map(x => x.id);
   for (let i = 0; i < ids.length; i += 80) {
     const r = await supabaseClient.from('sga_movimientos').select('albaran_id,partida_id,cantidad,bultos,fecha,tipo').in('albaran_id', ids.slice(i, i + 80));
-    (r.data || []).forEach(x => movs.push({ albaranId: x.albaran_id, productoId: prodDe[x.partida_id] || '', cantidad: Number(x.cantidad), bultos: x.bultos == null ? null : Number(x.bultos), fecha: x.fecha, tipo: x.tipo }));
+    (r.data || []).forEach(x => movs.push({ albaranId: x.albaran_id, desc: descDe[x.partida_id] || '', productoId: prodDe[x.partida_id] || '', cantidad: Number(x.cantidad), bultos: x.bultos == null ? null : Number(x.bultos), fecha: x.fecha, tipo: x.tipo }));
   }
   rm.datos = {
     clienteId: cid, periodo: per, movs,
+    albaranes: albaranes.map(x => ({ id: x.id, tipo: x.tipo, numero: x.numero_texto || String(x.numero || ''), referencia: x.referencia || '', destinatario: x.destinatario || '' })),
     cobros: (c.data || []).filter(x => x.estado !== 'anulado').map(x => ({ fecha: x.fecha, origen: x.origen, productoId: x.producto_id, cantidad: Number(x.cantidad), precio: Number(x.precio), importe: Number(x.importe) })),
     m2: (m2.data || []).map(x => ({ periodo: x.periodo, m2: Number(x.m2) })),
     operativas: [...(opAnt.error ? [] : (opAnt.data || [])).map(x => ({ x, anterior: true })), ...(op.data || []).map(x => ({ x, anterior: false }))]
@@ -11628,6 +11630,42 @@ function sgaResumenHtml(d, paraImprimir){
         ${paraImprimir ? '<h2>Día a día</h2>' : decaCardHead('calendar', 'Día a día', 'Lo que entra, lo que sale y lo que se cobra', interruptor)}
         <div class="${paraImprimir ? '' : 'deca-card-body'}"><div>${tabla}</div></div>
       </div>`;
+  // Detalle de lo que entró y salió cada día (solo en el PDF, en una hoja nueva): por albarán y por tipo de palet (o por artículo si el cliente no usa tipos)
+  const cardMovs = (() => {
+    if (!paraImprimir) return '';
+    const alb = {}; (d.albaranes || []).forEach(a => { alb[a.id] = a; });
+    const ini = d.periodo + '-01', fin = `${d.periodo}-${String(sgaDiasDelMes(d.periodo)).padStart(2, '0')}`;
+    const clave = m => pt ? (m.productoId ? sgaProdTxt(m.productoId) : 'Sin tipo') : (m.desc || 'Mercancía');
+    const grupos = {};
+    d.movs.filter(m => m.fecha >= ini && m.fecha <= fin && m.tipo !== 'apertura').forEach(m => {
+      const op = m.tipo === 'ajuste' ? 'reg' : m.cantidad > 0 ? 'ent' : 'sal';
+      const k = [m.fecha, op, m.albaranId, clave(m)].join('|');
+      const g = (grupos[k] = grupos[k] || { f: m.fecha, op, albaranId: m.albaranId, clave: clave(m), cant: 0, bul: 0 });
+      g.cant += op === 'sal' ? -m.cantidad : m.cantidad;
+      g.bul += op === 'sal' ? -(m.bultos != null ? m.bultos : m.cantidad) : (m.bultos != null ? m.bultos : m.cantidad);
+    });
+    const ORDEN = { ent: 0, sal: 1, reg: 2 }, OPTXT = { ent: 'Recepción', sal: 'Expedición', reg: 'Regularización' };
+    const lista = Object.values(grupos).sort((a, b) => a.f.localeCompare(b.f) || ORDEN[a.op] - ORDEN[b.op] || String((alb[a.albaranId] || {}).numero).localeCompare(String((alb[b.albaranId] || {}).numero), 'es', { numeric: true }) || a.clave.localeCompare(b.clave, 'es'));
+    if (!lista.length) return '';
+    const signo = (g, n) => (g.op === 'sal' ? '−' : g.op === 'ent' ? '+' : n > 0 ? '+' : '') + sgaNumTxt(n);
+    const filas = lista.map((g, i) => {
+      const a = alb[g.albaranId] || {}, p = lista[i - 1] || {};
+      const nuevoDia = g.f !== p.f, nuevoAlb = nuevoDia || g.albaranId !== p.albaranId || g.op !== p.op;
+      const quien = g.op === 'sal' && a.destinatario ? ` <small>· ${esc(a.destinatario)}</small>` : '';
+      return `<tr class="${nuevoDia ? 'rm-dia' : ''}"><td style="white-space:nowrap;">${nuevoDia ? fmtDateDMY(g.f).split('/').join('-') : ''}</td><td>${nuevoAlb ? OPTXT[g.op] : ''}</td><td>${nuevoAlb ? esc(a.numero || '—') + quien : ''}</td><td>${esc(g.clave)}</td><td class="r">${signo(g, g.cant)}</td>${colsB ? `<td class="r">${sgaNumTxt(Math.round(g.bul * 100) / 100)}</td>` : ''}</tr>`;
+    }).join('');
+    const suma = (op, k) => lista.filter(g => g.op === op).reduce((s, g) => s + g[k], 0);
+    const totRow = (t, op) => lista.some(g => g.op === op) ? `<tr><td colspan="4">${t}</td><td class="r">${op === 'sal' ? '−' : op === 'ent' ? '+' : ''}${sgaNumTxt(suma(op, 'cant'))}</td>${colsB ? `<td class="r">${sgaNumTxt(Math.round(suma(op, 'bul') * 100) / 100)}</td>` : ''}</tr>` : '';
+    return `
+      <div class="rm-salto"><div class="card deca-card" style="--dc-accent:var(--primary);margin-top:14px;border:none;box-shadow:none;">
+        <h2>Detalle de recepciones y expediciones · ${esc(sgaPeriodoTxt(d.periodo))}</h2>
+        <table class="rm-tabla">
+          <thead><tr>${th('Día')}${th('Operación')}${th('Albarán')}${th(pt ? 'Tipo de palet' : 'Artículo')}${th('Cantidad', 1)}${colsB ? th('Bultos', 1) : ''}</tr></thead>
+          <tbody>${filas}</tbody>
+          <tfoot>${totRow('TOTAL RECEPCIONES', 'ent')}${totRow('TOTAL EXPEDICIONES', 'sal')}${totRow('TOTAL REGULARIZACIONES', 'reg')}</tfoot>
+        </table>
+      </div></div>`;
+  })();
   const notaPrev = r.almPrevisto ? `<div style="font-size:12px;color:var(--muted);background:color-mix(in srgb,#C98A2E 12%,var(--panel));border-radius:8px;padding:8px 12px;margin-top:10px;">El almacenaje incluye <b>${eur(r.almPrevisto)}</b> previstos de los días que faltan del mes, con el stock de hoy (${sgaNumTxt(r.final.mod)}). Si hay movimientos, cambiará.</div>` : '';
   const nota = notaPrev + (!paraImprimir && r.totStock ? `<div style="font-size:12px;color:var(--mutedFaint);margin-top:10px;">El almacenaje del stock (palet por día o máximo del mes) se calcula aquí con la tarifa vigente de cada día; no queda guardado como cobro.</div>` : '');
   return `
@@ -11635,7 +11673,7 @@ function sgaResumenHtml(d, paraImprimir){
       ${paraImprimir ? `<div class="rm-cab"><h1>Resumen mensual · ${esc(sgaPeriodoTxt(d.periodo))}</h1><div>${esc(nombre)}</div></div>` : ''}
       ${kpis}
       ${paraImprimir
-        ? cardCobro + cardTipos + cardDias
+        ? cardCobro + cardTipos + cardDias + cardMovs
         : `<div class="rm-grid"><div class="rm-main">${cardTipos}${cardDias}</div><aside class="rm-side">${cardCobro}${nota}</aside></div>`}
     </div>`;
 }
@@ -11842,6 +11880,7 @@ function sgaResumenImprimir(){
     th,td{padding:3px 4px;border-bottom:1px solid #BBB;white-space:nowrap;}
     th{border-bottom:1.5px solid #000;text-align:left;font-size:9px;}
     .r{text-align:right;} .rm-sin td{color:#777;} .rm-act td{font-weight:700;} .rm-ini td{font-weight:700;background:#E6E6E6;border-bottom:1.5px solid #000;}
+    .rm-salto{break-before:page;page-break-before:always;} .rm-dia td{border-top:1.5px solid #000;} td small{font-size:8px;color:#444;}
     .rm-prev td{font-style:italic;color:#555;} .rm-prev small{font-size:8px;text-transform:uppercase;}
     .rm-grp td{background:#EEE;font-weight:700;font-size:9px;text-transform:uppercase;}
     tfoot td{border-top:1.5px solid #000;border-bottom:none;font-weight:700;background:#E6E6E6;}
