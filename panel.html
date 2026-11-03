@@ -9011,35 +9011,14 @@ function sgaProdConTipo(clienteId, p, tipo){
 }
 // Tipos de palet de las líneas de movimiento (entrada y salida) del cliente, p. ej. [«Normal», «Especial»]: cada palet que entra tiene que decir cuál es
 // para que, al salir, se cobre con el precio que le toca
-// ¿El tipo de carga del cliente ya decide el producto de entrada y de salida? Pasa con un cliente que paga almacenaje por palet (tiene tipos de carga
-// en su tarifa de stock) y cuyos tipos de carga apuntan a su producto de entrada y de salida («Cobro en la entrada / en la salida», o su familia).
-// Entonces el «Tipo de palet» (Normal / Especial…, que se deduce de los nombres de sus productos de entrada y salida) diría lo mismo que el tipo de carga
-// y hasta podía contradecirlo, así que no se pide ni se usa. Un cliente sin tipos de carga (p. ej. el que paga por m²) sí lo necesita: es lo único que
-// distingue el precio de sus palets. El resultado se recuerda un segundo para no recalcularlo en cada fila.
-let __tpcCache = { t: 0, m: new Map() };
-function sgaProdMovDeCarga(ps, salida){
-  const directo = ps.disparador === 'entrada_salida' ? ps : null;
-  const enlace = directo || almacenajeProducto(salida ? ps.cobroSalida : ps.cobroEntrada);
-  return (enlace && !enlace.archived ? enlace : null) || (ps.familia ? almacenajeProductos.find(x => !x.archived && almacenajeCobraEn(x, salida ? 'salida' : 'entrada') && x.familia === ps.familia) : null);
-}
-function sgaTipoPorCarga(clienteId){
-  if (!clienteId) return false;
-  if (Date.now() - __tpcCache.t > 1000) __tpcCache = { t: Date.now(), m: new Map() };
-  if (!__tpcCache.m.has(clienteId)) {
-    const tipos = sgaProductosStock().filter(p => sgaTipoTarifado(clienteId, p, true));
-    __tpcCache.m.set(clienteId, tipos.length > 0 && tipos.every(ps => !!sgaProdMovDeCarga(ps, false) && !!sgaProdMovDeCarga(ps, true)));
-  }
-  return __tpcCache.m.get(clienteId);
-}
 function sgaSubtiposMov(clienteId){
-  if (!clienteId || sgaTipoPorCarga(clienteId)) return [];
+  if (!clienteId) return [];
   const vistos = new Map();
   sgaMovProductos(clienteId).forEach(p => sgaTiposDe(clienteId, p).forEach(s => { if (!vistos.has(sgaNormSub(s))) vistos.set(sgaNormSub(s), s); }));
   return [...vistos.values()].sort((a, b) => a.localeCompare(b, 'es'));
 }
 // Tipo de palet de una partida: el que se anotó al recibirla o, si no lo tiene, el de su artículo del catálogo
 function sgaSubtipoPartida(p){
-  if (sgaTipoPorCarga(p.clienteId)) return '';   // el tipo de carga ya decide el precio: el tipo de palet que pudiera tener anotado no cuenta
   const s = (p.atributos || {}).subtipo;
   if (s) return s;
   const a = p.articuloId ? sgaArticulos.find(x => x.id === p.articuloId) : null;
@@ -9087,7 +9066,7 @@ function sgaCalcularEntrada(d){
     const sinTipoPs = [];
     // Un producto con líneas por subtipo («Normal» / «Especial») se cobra con la línea del subtipo de cada palet; sin subtipo no se sabe cuál toca
     const sumar = (pe, p, cant) => {
-      const subs = sgaTipoPorCarga(d.clienteId) ? [] : sgaTiposDe(d.clienteId, pe);   // con tipos de carga que ya apuntan a su producto, no hay «tipo de palet» que elegir
+      const subs = sgaTiposDe(d.clienteId, pe);
       let sub = '';
       if (subs.length) {
         sub = subs.find(s => sgaNormSub(s) === sgaNormSub(p.subtipo)) || '';
