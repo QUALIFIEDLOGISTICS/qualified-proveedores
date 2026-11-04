@@ -9158,6 +9158,9 @@ function sgaCalcularEntrada(d){
     // Con varias tarifas de movimiento y mercancía sin tipo de carga, se elige la que es solo de este movimiento (el producto «Salida palet» gana al
     // que se cobra en recepción y expedición); si no, la única cuyo nombre habla de este movimiento («Salida palet», no «Entrada palet»)
     let candidatos = prodsMov;
+    // Si quien registra la expedición ha dicho cómo sale («Salida Palet» o «Picking Caja»), se cobra esa y no se adivina por el nombre
+    const elegidoMov = salida && d.productoMov ? almacenajeProducto(d.productoMov) : null;
+    if (sinTipo > 0 && elegidoMov && !elegidoMov.archived) candidatos = [elegidoMov];
     // «Entrada palet» y «Entrada palet Especial» son el mismo producto con dos tipos: cuentan como uno (el tipo de palet decide cuál se cobra)
     if (sinTipo > 0 && candidatos.length > 1) candidatos = [...new Map(candidatos.map(pr => { const r = sgaProdConTipo(d.clienteId, pr, 'Normal'); return [r.id, r.id !== pr.id && sgaTiposDe(d.clienteId, r).length ? r : pr]; })).values()];
     if (sinTipo > 0 && candidatos.length > 1) {
@@ -10352,6 +10355,25 @@ function sgaClientesParaSalida(){ return sgaClientesAlmacenLista().filter(c => s
 // Bultos de una línea de la expedición: los que se escribieron a mano o, si no, el reparto automático.
 function sgaBultosSale(x){ return x.bm != null && isFinite(x.bm) && x.bm >= 0 ? x.bm : sgaBultosSalida(x.p, x.n); }
 function sgaSalidaClienteId(){ const el = document.getElementById('sl-cliente'); return el ? el.value : ''; }
+// Salidas que el cliente tiene en su tarifa («Salida Palet», «Picking Caja»…); las variantes de una misma (Normal / Especial) cuentan como una
+function sgaSalidaOpciones(clienteId){
+  if (!clienteId) return [];
+  const ps = [...new Set(almacenajeTarifas.filter(t => t.clienteId === clienteId).map(t => almacenajeProducto(t.tipo)).filter(pr => pr && !pr.archived && almacenajeCobraEn(pr, 'salida')))];
+  return [...new Map(ps.map(pr => { const r = sgaProdConTipo(clienteId, pr, 'Normal'); const x = r.id !== pr.id && sgaTiposDe(clienteId, r).length ? r : pr; return [x.id, x]; })).values()]
+    .sort((a, b) => almacenajeProductoTexto(a).localeCompare(almacenajeProductoTexto(b), 'es'));
+}
+// ¿Hay que preguntar cómo sale? Cuando el cliente tiene varias salidas y alguna mercancía suya no lleva tipo de carga (los clientes de m²):
+// sin el tipo de carga el programa no puede saber si se cobra por palet o por cajas, así que lo dice quien hace la expedición
+function sgaSalidaPreguntaMov(clienteId){ return sgaSalidaOpciones(clienteId).length > 1 && sgaStockCliente(clienteId).some(p => !p.productoId); }
+function sgaSalidaMovRefrescar(){
+  const wrap = document.getElementById('sl-mov-wrap'), sel = document.getElementById('sl-mov');
+  if (!wrap || !sel) return;
+  const cid = sgaSalidaClienteId(), pregunta = sgaSalidaPreguntaMov(cid), ops = pregunta ? sgaSalidaOpciones(cid) : [];
+  const actual = ops.some(o => o.id === sel.value) ? sel.value : '';
+  sel.innerHTML = `<option value="">Elige cómo sale…</option>${ops.map(o => `<option value="${o.id}">${esc(almacenajeProductoTexto(o))}</option>`).join('')}`;
+  sel.value = actual;
+  wrap.style.display = pregunta ? '' : 'none';
+}
 function sgaSalidaAbrir(){
   window.__stockView = 'salida';
   window.__stockDirty = false;
@@ -10378,9 +10400,10 @@ async function sgaSalidaEditar(id, confirmar, keepNav){
       .filter(x => { const al = sgaAlbaranes.find(y => y.id === x); return al && al.tipo === 'salida' && al.estado === 'confirmado'; });
     window.__slNavConfirmar = confirmar === true;
   }
-  const [m, s] = await Promise.all([
+  const [m, s, cb] = await Promise.all([
     supabaseClient.from('sga_movimientos').select('partida_id,cantidad,bultos').eq('albaran_id', id).eq('tipo', 'salida'),
     supabaseClient.from('sga_servicios').select('producto_id,cantidad,nota').eq('albaran_id', id),
+    Promise.resolve(supabaseClient.from('sga_cobros').select('producto_id').eq('albaran_id', id).eq('origen', 'movimiento')).catch(() => ({ data: [] })),   // para recuperar «Se cobra como» (si falla, se vuelve a elegir)
   ]);
   if (m.error) { appToast('No se pudo abrir la expedición: ' + m.error.message, 'error'); return; }
   const prev = {}, prevB = {};
@@ -10393,7 +10416,7 @@ async function sgaSalidaEditar(id, confirmar, keepNav){
     (data || []).forEach(r => sgaPartidas.push(sgaPartidaDeFila(r)));
   }
   pids.forEach(pid => { const p = sgaPartidas.find(x => x.id === pid); if (p) { p.actual += prev[pid]; if (p.bultosAct != null) p.bultosAct += prevB[pid] || 0; } });
-  window.__slEdit = { id, albaran: a, prev, prevB, servicios: s.data || [], confirmar: confirmar === true };
+  window.__slEdit = { id, albaran: a, prev, prevB, servicios: s.data || [], cobrosMov: ((cb && cb.data) || []).map(r => r.producto_id), confirmar: confirmar === true };
   window.__stockView = 'salida';
   window.__stockDirty = false;
   renderHeader(); renderTab();
@@ -10430,6 +10453,8 @@ function sgaSalidaRellenar(){
     cli.disabled = true;   // el cliente de una expedición no se cambia
   }
   sgaSalidaClienteCambio();
+  const mov = document.getElementById('sl-mov');   // cómo se cobró la salida (si el cliente tiene varias): se recupera de sus cobros
+  if (mov) { const ya = (e.cobrosMov || []).find(id => [...mov.options].some(o => o.value === id)); if (ya) mov.value = ya; }
   const alm = document.getElementById('sl-almacen');
   if (alm) alm.value = a.warehouseId;
   sgaSalidaAlmacenCambio();
@@ -10683,6 +10708,7 @@ function sgaSalidaCandidatos(clienteId, tipo, art, ref){
 function sgaSalidaClienteCambio(){
   const clienteId = sgaSalidaClienteId();
   sgaModalidadesRefrescar('salida', clienteId);   // solo cómo sale según su tarifa
+  sgaSalidaMovRefrescar();                        // «Se cobra como» (palet o cajas) si el cliente tiene varias salidas
   sgaServiciosRefrescar();                        // y solo los servicios que tiene creados
   const alm = document.getElementById('sl-almacen');
   if (alm) {
@@ -10804,7 +10830,7 @@ function sgaSalidaLeer(){
     const bu = document.getElementById('sl-bu-' + el.dataset.pid), bt = bu ? bu.value.trim().replace(',', '.') : '';   // bultos escritos a mano (vacío: automático)
     return { p, txt: n, n: typeof n === 'number' ? n : (n === '' ? 0 : Number(n)), bt, bm: bt === '' ? null : Number(bt) };
   }).filter(x => x.p);
-  return { clienteId: val('sl-cliente'), fecha: val('sl-fecha'), referencia: val('sl-ref'), modalidad: val('sl-modalidad') || 'palet', transportista: val('sl-transp'), matricula: sgaMatriculaJoin(val('sl-matr'), val('sl-matr2')), observaciones: val('sl-obs'), destinatario: val('sl-dest'), destinatarioDireccion: val('sl-destdir'), items, servicios: sgaServiciosLeer() };
+  return { clienteId: val('sl-cliente'), fecha: val('sl-fecha'), referencia: val('sl-ref'), modalidad: val('sl-modalidad') || 'palet', transportista: val('sl-transp'), matricula: sgaMatriculaJoin(val('sl-matr'), val('sl-matr2')), observaciones: val('sl-obs'), destinatario: val('sl-dest'), destinatarioDireccion: val('sl-destdir'), productoMov: val('sl-mov'), items, servicios: sgaServiciosLeer() };
 }
 // FIFO (o LIFO, según el cliente) dentro de cada tipo de carga + referencia: no se puede sacar de una partida más nueva (o más antigua,
 // en LIFO) si hay otra anterior sin vaciar. En «manual» no se avisa de nada.
@@ -10833,10 +10859,12 @@ function sgaSalidaResumenHtml(d){
   if (!d.clienteId) return '<div style="color:var(--mutedFaint);font-size:12.5px;">Elige el cliente para ver lo que se le cobrará.</div>';
   const sale = d.items.filter(x => x.n > 0 && isFinite(x.n));
   const cfg = sgaClienteCfg(d.clienteId);
-  const calc = sgaCalcularEntrada({ tipo: 'salida', clienteId: d.clienteId, fecha: d.fecha, modalidad: d.modalidad, partidas: sale.map(x => ({ productoId: x.p.productoId, cantidad: x.n, bultos: sgaBultosSale(x), subtipo: sgaSubtipoPartida(x.p) })), servicios: d.servicios.filter(s => s.productoId && sgaNumero(s.cantidadTxt) > 0).map(s => ({ productoId: s.productoId, cantidad: sgaNumero(s.cantidadTxt) })) });
+  const calc = sgaCalcularEntrada({ tipo: 'salida', clienteId: d.clienteId, fecha: d.fecha, modalidad: d.modalidad, productoMov: d.productoMov, partidas: sale.map(x => ({ productoId: x.p.productoId, cantidad: x.n, bultos: sgaBultosSale(x), subtipo: sgaSubtipoPartida(x.p) })), servicios: d.servicios.filter(s => s.productoId && sgaNumero(s.cantidadTxt) > 0).map(s => ({ productoId: s.productoId, cantidad: sgaNumero(s.cantidadTxt) })) });
   const fifo = sgaSalidaFifo(d.clienteId, d.items);
   const avisosFifo = fifo.avisos.map(a => `<div class="se-aviso">⚠ ${esc(a)}</div>`).join('');
   if (!calc.activo) return `<div style="font-size:13px;color:var(--muted);">Este cliente no está activo en el SGA a esa fecha: la expedición <b>no se cobra</b>.</div>${avisosFifo}`;
+  // Varias salidas y mercancía sin tipo de carga: hasta que se diga cómo sale, no se enseña un precio que sería adivinado
+  if (!d.productoMov && sgaSalidaPreguntaMov(d.clienteId) && sale.some(x => !x.p.productoId)) return `<div class="se-aviso">⚠ Elige arriba en «Se cobra como» cómo sale la mercancía (${esc(sgaSalidaOpciones(d.clienteId).map(o => almacenajeProductoTexto(o)).join(' o '))}) y aquí verás lo que se cobra.</div>${avisosFifo}`;
   const total = sgaR2(calc.cobros.reduce((s, c) => s + c.importe, 0));
   return `
     ${calc.cobros.length ? `<div class="op-lines">${calc.cobros.map(c => `<div class="op-line"><span>${esc(sgaProdTxt(c.producto_id))}${c.cantidad !== 1 ? ` × ${esc(String(c.cantidad))}` : ''} <small style="color:var(--mutedFaint);">${esc(eurPrecio(c.precio))}${c.nota ? ' · ' + esc(c.nota) : ''}</small></span><span class="op-dots"></span><b>${esc(eur2(c.importe))}</b></div>`).join('')}</div>
@@ -10925,6 +10953,10 @@ function tplStockSalidaPage(){
             <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Cómo sale</label>
             <div class="doc-seg" id="sl-mod">${sgaModalidadesCliente('', 'salida').map(m => `<button type="button" data-m="${m}" class="${m === 'palet' ? 'on' : ''}" onclick="sgaSalidaModalidad('${m}')">${esc(SGA_MODALIDADES[m])}</button>`).join('')}</div>
           </div>
+          <div id="sl-mov-wrap" style="display:none;margin-top:14px;">
+            <div class="field" style="max-width:340px;"><label>Se cobra como <span class="dc-req">*</span> <small style="color:var(--mutedFaint);font-weight:400;">· esta mercancía no lleva tipo de carga</small></label>
+              <select id="sl-mov" onchange="window.__stockDirty=true; sgaSalidaRefrescar();"><option value="">Elige cómo sale…</option></select></div>
+          </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;">
             <div class="field" style="flex:1;min-width:240px;"><label>Para (destinatario) <small style="color:var(--mutedFaint);font-weight:400;">· elige de Direcciones o escríbelo a mano</small></label>${sgaSalidaPuedeCrearDireccion() ? decaCampoConCrearHtml(decaInputIcon('users', `<input id="sl-dest" data-combo="sl-destinatarios-datalist" autocomplete="off" maxlength="150" placeholder="Elige entre tus direcciones" oninput="sgaSalidaDestinatarioCambio()" />`), 'sgaSalidaIrACrearDireccion()', 'Crear una dirección nueva (no está en la lista)') : decaInputIcon('users', `<input id="sl-dest" data-combo="sl-destinatarios-datalist" autocomplete="off" maxlength="150" placeholder="Elige entre tus direcciones" oninput="sgaSalidaDestinatarioCambio()" />`)}
               <datalist id="sl-destinatarios-datalist">${sgaDestinatariosOptionsHtml()}</datalist>
@@ -10999,6 +11031,7 @@ async function sgaSalidaConfirmar(comoBorrador){
   });
   d.items.filter(x => x.bt !== '' && !(x.n > 0)).forEach(x => errores.push(`${sgaProdTxt(x.p.productoId)}${x.p.referencia ? ' · ref. ' + x.p.referencia : ''}: has escrito bultos pero no cuántos palets salen.`));
   if (!sale.length && !errores.length) errores.push('Marca qué sale: pide una cantidad o escribe cuántos de cada partida.');
+  if (!comoBorrador && !d.productoMov && sgaSalidaPreguntaMov(d.clienteId) && sale.some(x => !x.p.productoId)) errores.push('Elige en «Se cobra como» cómo sale la mercancía (' + sgaSalidaOpciones(d.clienteId).map(o => almacenajeProductoTexto(o)).join(' o ') + '): de eso depende el precio.');
   d.servicios.forEach((s, n) => {
     if (!s.productoId && !s.cantidadTxt) return;
     if (!s.productoId || !(sgaNumero(s.cantidadTxt) > 0)) errores.push(`Servicio ${n + 1}: elige el servicio y una cantidad mayor que 0.`);
@@ -11020,7 +11053,7 @@ async function sgaSalidaConfirmar(comoBorrador){
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const servicios = d.servicios.filter(s => s.productoId).map(s => ({ producto_id: s.productoId, cantidad: sgaNumero(s.cantidadTxt), nota: s.nota }));
   const fifo = sgaSalidaFifo(d.clienteId, d.items);
-  const calc = sgaCalcularEntrada({ tipo: 'salida', clienteId: d.clienteId, fecha: d.fecha, modalidad: d.modalidad, partidas: sale.map(x => ({ productoId: x.p.productoId, cantidad: x.n, bultos: sgaBultosSale(x), subtipo: sgaSubtipoPartida(x.p) })), servicios: servicios.map(s => ({ productoId: s.producto_id, cantidad: s.cantidad })) });
+  const calc = sgaCalcularEntrada({ tipo: 'salida', clienteId: d.clienteId, fecha: d.fecha, modalidad: d.modalidad, productoMov: d.productoMov, partidas: sale.map(x => ({ productoId: x.p.productoId, cantidad: x.n, bultos: sgaBultosSale(x), subtipo: sgaSubtipoPartida(x.p) })), servicios: servicios.map(s => ({ productoId: s.producto_id, cantidad: s.cantidad })) });
   if (fifo.saltados.size && !(await appConfirm({ title: 'No se sigue el FIFO', message: fifo.avisos.join('\n') + '\nLa expedición se guardará marcada como «FIFO saltado». ¿Continuar?', confirmLabel: 'Continuar igualmente', cancelLabel: 'Revisar', tone: 'warn', icon: 'warn' }))) return;
   if (comoBorrador && window.__sgaBorradorOk === false) { errEl.textContent = 'Para guardar borradores falta ejecutar el SQL «sga-salida-borrador.sql» en Supabase.'; return; }
   const btn = { set disabled(v){ document.querySelectorAll('.sl-save').forEach(b => { b.disabled = v; }); } };   // desactiva todos los botones de guardar
