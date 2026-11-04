@@ -9141,8 +9141,9 @@ function sgaCalcularEntrada(d){
       const k = pe.id + '|' + sub;
       grupos[k] = (grupos[k] || 0) + cant;
     };
+    const elegidoMov = salida && d.productoMov ? almacenajeProducto(d.productoMov) : null;   // «Se cobra como»: lo elegido manda sobre el tipo de carga de cada línea
     d.partidas.forEach(p => {
-      if (!p.productoId) { sinTipo += p.cantidad; sinTipoPs.push(p); return; }   // sin tipo de carga: se mira más abajo si se le puede aplicar la única tarifa de movimiento del cliente
+      if (!p.productoId || (elegidoMov && !elegidoMov.archived)) { sinTipo += p.cantidad; sinTipoPs.push(p); return; }   // sin tipo de carga: se mira más abajo si se le puede aplicar la única tarifa de movimiento del cliente
       const ps = almacenajeProducto(p.productoId);
       const directo = ps && ps.disparador === 'entrada_salida' ? ps : null;   // el propio producto del cliente se cobra en entrada y salida: es el que se aplica
       const enlace = directo || (ps && almacenajeProducto(salida ? ps.cobroSalida : ps.cobroEntrada));
@@ -9159,7 +9160,6 @@ function sgaCalcularEntrada(d){
     // que se cobra en recepción y expedición); si no, la única cuyo nombre habla de este movimiento («Salida palet», no «Entrada palet»)
     let candidatos = prodsMov;
     // Si quien registra la expedición ha dicho cómo sale («Salida Palet» o «Picking Caja»), se cobra esa y no se adivina por el nombre
-    const elegidoMov = salida && d.productoMov ? almacenajeProducto(d.productoMov) : null;
     if (sinTipo > 0 && elegidoMov && !elegidoMov.archived) candidatos = [elegidoMov];
     // «Entrada palet» y «Entrada palet Especial» son el mismo producto con dos tipos: cuentan como uno (el tipo de palet decide cuál se cobra)
     if (sinTipo > 0 && candidatos.length > 1) candidatos = [...new Map(candidatos.map(pr => { const r = sgaProdConTipo(d.clienteId, pr, 'Normal'); return [r.id, r.id !== pr.id && sgaTiposDe(d.clienteId, r).length ? r : pr]; })).values()];
@@ -10364,7 +10364,7 @@ function sgaSalidaOpciones(clienteId){
 }
 // ¿Hay que preguntar cómo sale? Cuando el cliente tiene varias salidas y alguna mercancía suya no lleva tipo de carga (los clientes de m²):
 // sin el tipo de carga el programa no puede saber si se cobra por palet o por cajas, así que lo dice quien hace la expedición
-function sgaSalidaPreguntaMov(clienteId){ return sgaSalidaOpciones(clienteId).length > 1 && sgaStockCliente(clienteId).some(p => !p.productoId); }
+function sgaSalidaPreguntaMov(clienteId){ return sgaSalidaOpciones(clienteId).length > 1 && (sgaStockCliente(clienteId).some(p => !p.productoId) || !sgaProductosCliente(clienteId, '', true).length); }
 function sgaSalidaMovRefrescar(){
   const wrap = document.getElementById('sl-mov-wrap'), sel = document.getElementById('sl-mov');
   if (!wrap || !sel) return;
@@ -10864,7 +10864,7 @@ function sgaSalidaResumenHtml(d){
   const avisosFifo = fifo.avisos.map(a => `<div class="se-aviso">⚠ ${esc(a)}</div>`).join('');
   if (!calc.activo) return `<div style="font-size:13px;color:var(--muted);">Este cliente no está activo en el SGA a esa fecha: la expedición <b>no se cobra</b>.</div>${avisosFifo}`;
   // Varias salidas y mercancía sin tipo de carga: hasta que se diga cómo sale, no se enseña un precio que sería adivinado
-  if (!d.productoMov && sgaSalidaPreguntaMov(d.clienteId) && sale.some(x => !x.p.productoId)) return `<div class="se-aviso">⚠ Elige arriba en «Se cobra como» cómo sale la mercancía (${esc(sgaSalidaOpciones(d.clienteId).map(o => almacenajeProductoTexto(o)).join(' o '))}) y aquí verás lo que se cobra.</div>${avisosFifo}`;
+  if (!d.productoMov && sgaSalidaPreguntaMov(d.clienteId) && sale.length) return `<div class="se-aviso">⚠ Elige arriba en «Se cobra como» cómo sale la mercancía (${esc(sgaSalidaOpciones(d.clienteId).map(o => almacenajeProductoTexto(o)).join(' o '))}) y aquí verás lo que se cobra.</div>${avisosFifo}`;
   const total = sgaR2(calc.cobros.reduce((s, c) => s + c.importe, 0));
   return `
     ${calc.cobros.length ? `<div class="op-lines">${calc.cobros.map(c => `<div class="op-line"><span>${esc(sgaProdTxt(c.producto_id))}${c.cantidad !== 1 ? ` × ${esc(String(c.cantidad))}` : ''} <small style="color:var(--mutedFaint);">${esc(eurPrecio(c.precio))}${c.nota ? ' · ' + esc(c.nota) : ''}</small></span><span class="op-dots"></span><b>${esc(eur2(c.importe))}</b></div>`).join('')}</div>
@@ -10954,7 +10954,7 @@ function tplStockSalidaPage(){
             <div class="doc-seg" id="sl-mod">${sgaModalidadesCliente('', 'salida').map(m => `<button type="button" data-m="${m}" class="${m === 'palet' ? 'on' : ''}" onclick="sgaSalidaModalidad('${m}')">${esc(SGA_MODALIDADES[m])}</button>`).join('')}</div>
           </div>
           <div id="sl-mov-wrap" style="display:none;margin-top:14px;">
-            <div class="field" style="max-width:340px;"><label>Se cobra como <span class="dc-req">*</span> <small style="color:var(--mutedFaint);font-weight:400;">· esta mercancía no lleva tipo de carga</small></label>
+            <div class="field" style="max-width:340px;"><label>Se cobra como <span class="dc-req">*</span> <small style="color:var(--mutedFaint);font-weight:400;">· este cliente tiene varias salidas</small></label>
               <select id="sl-mov" onchange="window.__stockDirty=true; sgaSalidaRefrescar();"><option value="">Elige cómo sale…</option></select></div>
           </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;">
@@ -11031,7 +11031,7 @@ async function sgaSalidaConfirmar(comoBorrador){
   });
   d.items.filter(x => x.bt !== '' && !(x.n > 0)).forEach(x => errores.push(`${sgaProdTxt(x.p.productoId)}${x.p.referencia ? ' · ref. ' + x.p.referencia : ''}: has escrito bultos pero no cuántos palets salen.`));
   if (!sale.length && !errores.length) errores.push('Marca qué sale: pide una cantidad o escribe cuántos de cada partida.');
-  if (!comoBorrador && !d.productoMov && sgaSalidaPreguntaMov(d.clienteId) && sale.some(x => !x.p.productoId)) errores.push('Elige en «Se cobra como» cómo sale la mercancía (' + sgaSalidaOpciones(d.clienteId).map(o => almacenajeProductoTexto(o)).join(' o ') + '): de eso depende el precio.');
+  if (!comoBorrador && !d.productoMov && sgaSalidaPreguntaMov(d.clienteId) && sale.length) errores.push('Elige en «Se cobra como» cómo sale la mercancía (' + sgaSalidaOpciones(d.clienteId).map(o => almacenajeProductoTexto(o)).join(' o ') + '): de eso depende el precio.');
   d.servicios.forEach((s, n) => {
     if (!s.productoId && !s.cantidadTxt) return;
     if (!s.productoId || !(sgaNumero(s.cantidadTxt) > 0)) errores.push(`Servicio ${n + 1}: elige el servicio y una cantidad mayor que 0.`);
