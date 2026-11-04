@@ -6700,6 +6700,18 @@ function catPartidasArticulo(a){
   const ps = a.virtual ? a._partidas : sgaPartidas.filter(p => p.articuloId === a.id);
   return ps.filter(p => p.actual > 0 && (!wid || p.warehouseId === wid));
 }
+// Dónde está un artículo ahora mismo: las zonas y ubicaciones distintas de sus palets con stock (en el almacén elegido, si hay uno)
+function catUbicArticulo(a){
+  const vistos = new Set();
+  catPartidasArticulo(a).forEach(p => { const t = sgaSitioTxt(p); if (t !== '—') vistos.add(t); });
+  return [...vistos].sort((x, y) => x.localeCompare(y, 'es', { numeric: true }));
+}
+function catUbicCeldaHtml(a){
+  const l = catUbicArticulo(a), vacio = '<span style="color:var(--mutedFaint);">—</span>';
+  if (!l.length) return `<td class="cg-ubic" data-sort-value="">${vacio}</td>`;
+  const ver = l.slice(0, 3).map(t => `<div>${esc(t)}</div>`).join('') + (l.length > 3 ? `<div class="cg-ref">+${l.length - 3} más</div>` : '');
+  return `<td class="cg-ubic" data-sort-value="${esc(l[0])}" ${l.length > 1 ? `title="${esc(l.join('\n'))}"` : ''}>${ver}</td>`;
+}
 // Stock actual de un artículo (módulos y bultos, y en qué almacenes)
 function catStockArticulo(a){
   const ps = catPartidasArticulo(a);
@@ -6763,6 +6775,7 @@ function catColumnas(clienteId){
     x: clienteId ? sgaCamposArticuloCat(clienteId).filter(f => !maestro || f.id !== maestro.id) : [],   // campos propios del artículo que usa este cliente (sin el que manda, que es la primera columna), con «Tipo de palet» si lo lleva
     xTodos: clienteId ? sgaCamposArticuloCat(clienteId) : [],   // todos, para la vista palet a palet (que no cambia su primera columna)
     bultos: clienteId ? sgaClienteConBultos(clienteId) : arts.some(a => a.bultos !== 1),   // solo si sus palets llevan varios bultos
+    ubic: sgaPartidas.some(p => p.actual > 0 && p.zonaId && (!clienteId || p.clienteId === clienteId)),   // «Ubicación» (antes del stock) solo si hay mercancía con zona o ubicación puesta
   };
 }
 // Primera columna del catálogo: el código de artículo o, si en este cliente el código no cuenta, el dato que manda (p. ej. el nº de serie)
@@ -7128,6 +7141,7 @@ function catFilaHtml(a, cols, conCliente){
       ${cols.peso ? dato('peso', num(a.peso), 'inputmode="decimal" style="width:80px;text-align:right;"') : ''}
       ${cols.medidas ? (edit ? `<td>${catCeldaInput(a, 'medidas', a.medidas, 'style="min-width:170px;"')}</td>` : catMedidasCeldaHtml(a.medidas, vacio)) : ''}
       ${cols.x.map(campoX).join('')}
+      ${cols.ubic ? catUbicCeldaHtml(a) : ''}
       <td class="cg-stock" data-sort-value="${st.mod}" ${st.almacenes ? `title="${esc(st.almacenes)}"` : ''}>${edit && !window.__catLocked && !st.mod ? `<button type="button" class="deca-act danger" style="float:right;margin-left:8px;" onclick="catEliminarArticulo('${a.id}')" title="Eliminar este artículo del catálogo (solo si no tiene entradas ni salidas)">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>` : ''}${st.mod
         ? `<span class="cg-st ok"><i></i><b>${st.mod}</b> ${sgaUd(a.clienteId, st.mod)}</span>${st.porAlm.length ? `<div class="cg-ref">${st.porAlm.map(x => `${esc(x.n)}: <b>${x.mod}</b>`).join(' · ')}</div>` : ''}${cols.bultos && (a.bultos !== 1 || st.bul !== st.mod) ? `<div class="cg-ref">${sgaNumTxt(st.bul)} bultos</div>` : ''}`
         : '<span class="cg-st no"><i></i>Sin stock</span>'}</td>
@@ -7331,6 +7345,7 @@ function catColDefsArticulos(cols, conCliente){
     ...(cols.peso ? [{ k: 'a:peso', type: 'number', val: a => num(a.peso) }] : []),
     ...(cols.medidas ? [{ k: 'a:med', val: a => catMedidasLineas(a.medidas).join(' · ') }] : []),
     ...cols.x.map(f => ({ k: 'a:x:' + f.id, type: f.tipo === 'numero' ? 'number' : 'text', val: a => { const v = a.atributos ? a.atributos[f.id] : null; return v != null && v !== '' ? String(sgaCampoMostrar(f, v)) : ''; } })),
+    ...(cols.ubic ? [{ k: 'a:ubic', val: a => catUbicArticulo(a).join(' · ') }] : []),
     { k: 'a:stock', type: 'number', val: a => String(catStockArticulo(a).mod), lbl: v => v === '0' ? 'Sin stock' : v },
   ];
 }
@@ -7742,15 +7757,15 @@ function stockCatalogoTablaHtml(){
     <div class="card${window.__catEditAll ? '' : ' cg-compacta'}" style="padding:0;">
       <div class="tc-hist-box" style="max-height:${window.__catEditAll ? 'calc(100vh - 290px)' : 'max(420px, calc(100vh - 380px))'};min-height:${window.__catEditAll ? '320px' : '0'};border:none;border-radius:10px;">
         <table class="tf-table cg-tabla${window.__catEditAll ? ' cg-todo' : catDens() === 'compacto' ? ' cg-dens-c' : ''}">
-          <thead><tr>${window.__catEditAll ? `${thSortCat(catPrincipalTit(cols), 'text')}${cols.referencia ? thSortCat('Descripción', 'text') : ''}${cols.tipo ? thSortCat('Tipo de carga', 'text') : ''}${cols.bultos ? thSortCat('Bultos / palet', 'number') : ''}${cols.ml ? thSortCat('M. lineales', 'number') : ''}${cols.peso ? thSortCat(sgaPesoLabel(), 'number') : ''}${cols.medidas ? thSortCat('Medidas', 'text') : ''}${cols.x.map(f => thSortCat(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thSortCat('Stock actual', 'number')}` : `${conCliente ? thFil('a:cli', 'Cliente', 'text') : ''}${thFil('a:cod', catPrincipalTit(cols), 'text')}${cols.tipo ? thFil('a:tipo', 'Tipo de carga', 'text') : ''}${cols.bultos ? thFil('a:bul', 'Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thFil('a:ml', 'M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thFil('a:peso', sgaPesoLabel(), 'number', 'style="text-align:right;"') : ''}${cols.medidas ? thFil('a:med', 'Medidas', 'text') : ''}${cols.x.map(f => thFil('a:x:' + f.id, f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${thFil('a:stock', 'Stock actual', 'number')}`}</tr></thead>
+          <thead><tr>${window.__catEditAll ? `${thSortCat(catPrincipalTit(cols), 'text')}${cols.referencia ? thSortCat('Descripción', 'text') : ''}${cols.tipo ? thSortCat('Tipo de carga', 'text') : ''}${cols.bultos ? thSortCat('Bultos / palet', 'number') : ''}${cols.ml ? thSortCat('M. lineales', 'number') : ''}${cols.peso ? thSortCat(sgaPesoLabel(), 'number') : ''}${cols.medidas ? thSortCat('Medidas', 'text') : ''}${cols.x.map(f => thSortCat(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${cols.ubic ? thSortCat('Ubicación', 'text') : ''}${thSortCat('Stock actual', 'number')}` : `${conCliente ? thFil('a:cli', 'Cliente', 'text') : ''}${thFil('a:cod', catPrincipalTit(cols), 'text')}${cols.tipo ? thFil('a:tipo', 'Tipo de carga', 'text') : ''}${cols.bultos ? thFil('a:bul', 'Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thFil('a:ml', 'M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thFil('a:peso', sgaPesoLabel(), 'number', 'style="text-align:right;"') : ''}${cols.medidas ? thFil('a:med', 'Medidas', 'text') : ''}${cols.x.map(f => thFil('a:x:' + f.id, f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${cols.ubic ? thFil('a:ubic', 'Ubicación', 'text') : ''}${thFil('a:stock', 'Stock actual', 'number')}`}</tr></thead>
           <tbody>
             ${lista.map(a => catFilaHtml(a, cols, conCliente)).join('')}
           </tbody>
-          ${window.__catEditAll && !window.__catLocked && puede && cid ? `<tfoot><tr class="cg-add"><td colspan="${1 + (cols.referencia ? 1 : 0) + (cols.tipo ? 1 : 0) + (cols.bultos ? 1 : 0) + (cols.ml ? 1 : 0) + (cols.peso ? 1 : 0) + (cols.medidas ? 1 : 0) + cols.x.length + 1}" onclick="catAnadirFila()" tabindex="0" onkeydown="if(event.key==='Enter'){ catAnadirFila(); }">＋ Añadir artículo</td></tr></tfoot>` : ''}
+          ${window.__catEditAll && !window.__catLocked && puede && cid ? `<tfoot><tr class="cg-add"><td colspan="${1 + (cols.referencia ? 1 : 0) + (cols.tipo ? 1 : 0) + (cols.bultos ? 1 : 0) + (cols.ml ? 1 : 0) + (cols.peso ? 1 : 0) + (cols.medidas ? 1 : 0) + cols.x.length + (cols.ubic ? 1 : 0) + 1}" onclick="catAnadirFila()" tabindex="0" onkeydown="if(event.key==='Enter'){ catAnadirFila(); }">＋ Añadir artículo</td></tr></tfoot>` : ''}
           ${!window.__catEditAll && lista.length ? (() => {
             const t = catSumas(catFilasTotalesArticulos(lista));
             if (!t.pal) return '';
-            const orden = [...(conCliente ? ['cli'] : []), 'cod', ...(cols.tipo ? ['tipo'] : []), ...(cols.bultos ? ['bul'] : []), ...(cols.ml ? ['ml'] : []), ...(cols.peso ? ['peso'] : []), ...(cols.medidas ? ['med'] : []), ...cols.x.map(() => 'x'), 'stock'];
+            const orden = [...(conCliente ? ['cli'] : []), 'cod', ...(cols.tipo ? ['tipo'] : []), ...(cols.bultos ? ['bul'] : []), ...(cols.ml ? ['ml'] : []), ...(cols.peso ? ['peso'] : []), ...(cols.medidas ? ['med'] : []), ...cols.x.map(() => 'x'), ...(cols.ubic ? ['ubic'] : []), 'stock'];
             return `<tfoot><tr class="cg-tot">${orden.map((k, i) => `<td>${k === 'peso' ? catCeldaKilos(t) : k === 'stock' ? catCeldaPalets(t, !!cols.bultos, cid) : i === 0 ? 'TOTAL · ' + lista.length + ' artículo' + (lista.length === 1 ? '' : 's') : ''}</td>`).join('')}</tr></tfoot>`;
           })() : ''}
         </table>
@@ -7820,6 +7835,7 @@ function catFilaNuevaHtml(cid){
       ${cols.peso ? num('peso') : ''}
       ${cols.medidas ? `<td><input class="cg-in" data-n="medidas" maxlength="500" style="min-width:170px;" ${k} /></td>` : ''}
       ${cols.x.map(f => `<td>${sgaCampoControl(f, '', `class="cg-in" data-n="x:${f.id}" style="min-width:${f.tipo === 'fecha' ? 130 : 100}px;" ${f.id === 'subtipo' ? 'onchange="catPaletMarcar(this.closest(\'tr\'))"' : ''} ${k}`)}</td>`).join('')}
+      ${cols.ubic ? '<td></td>' : ''}
       <td class="cg-stock" style="text-align:center;"><button type="button" class="deca-act" title="Quitar esta fila" onclick="catQuitarFilaNueva(this)">✕</button></td>
     </tr>`;
 }
