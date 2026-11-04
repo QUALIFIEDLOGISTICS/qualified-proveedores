@@ -892,6 +892,19 @@
   .crm-fs-h b{font-size:13.5px;}
   .crm-fside textarea{width:100%;box-sizing:border-box;height:min(68vh,620px);min-height:220px;resize:vertical;font-size:13px;line-height:1.5;background:var(--panel);}
   .crm-fside small{font-size:11.5px;color:var(--mutedFaint);}
+  .crm-fs-b{display:flex;gap:14px;}
+  /* mensaje del cliente con su formato (se puede seleccionar y copiar, no escribir) */
+  .crm-solv{box-sizing:border-box;width:100%;height:min(68vh,620px);min-height:220px;overflow:auto;resize:vertical;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--panel);font-size:13px;line-height:1.5;word-break:break-word;outline:none;cursor:text;}
+  .crm-solv:focus{border-color:var(--primary);}
+  .crm-solv:empty::before{content:attr(data-ph);color:var(--mutedFaint);}
+  .crm-solv p,.crm-cv-m p{margin:0 0 9px;}
+  .crm-sol-li{display:flex;gap:7px;margin:0 0 3px;}
+  .crm-sol-li>span{flex:0 0 auto;min-width:12px;color:var(--muted);}
+  .crm-sol-q{margin:0 0 9px;padding-left:9px;border-left:3px solid var(--border);color:var(--muted);}
+  .crm-solt{border-collapse:collapse;margin:2px 0 9px;font-size:12.5px;max-width:100%;}
+  .crm-solt td{border:1px solid var(--border);padding:3px 8px;vertical-align:top;}
+  .crm-solt tr:first-child td{background:color-mix(in srgb,var(--primary) 6%,var(--panel));}
+  @media(max-width:1060px){.crm-solv{height:160px;min-height:120px;}}
   @media(max-width:1060px){.crm-fg{grid-template-columns:1fr;}.crm-fside{position:static;order:-1;}.crm-fside textarea{height:160px;min-height:120px;}}
   .crm-pgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 32px;}
   @media(max-width:860px){.crm-pgrid{grid-template-columns:1fr;}}
@@ -24120,7 +24133,7 @@ function crmExportarCotizaciones(){
   if (!l.length) { appToast('No hay cotizaciones que exportar.', 'info'); return; }
   const cel = x => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"';
   const cab = ['Oferta', 'Empresa', 'Cotización', 'Servicio', 'Fase', 'Cotizada el', 'Siguiente paso', 'Fecha siguiente paso', 'Último contacto', 'Persona', 'Cargo', 'Teléfono', 'Correo', 'Solicitud'];
-  const filas = l.map(o => [o.oferta, crmEmpresa(o), crmTitulo(o), CRM_SERVICIOS[o.servicio], CRM_FASE[o.fase].label, crmFecha(o.fechaCot), o.proxAccion, o.proxFecha ? crmFecha(o.proxFecha) : '', o.ultimo ? crmFecha(o.ultimo) : '', o.persona, o.cargo, o.telefono ? phoneFormat(o.telefono) : '', o.email, o.solicitud]);
+  const filas = l.map(o => [o.oferta, crmEmpresa(o), crmTitulo(o), CRM_SERVICIOS[o.servicio], CRM_FASE[o.fase].label, crmFecha(o.fechaCot), o.proxAccion, o.proxFecha ? crmFecha(o.proxFecha) : '', o.ultimo ? crmFecha(o.ultimo) : '', o.persona, o.cargo, o.telefono ? phoneFormat(o.telefono) : '', o.email, (o.solicitud || '').replace(/\*\*/g, '')]);
   const csv = '﻿' + [cab, ...filas].map(f => f.map(cel).join(';')).join('\r\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
@@ -24296,13 +24309,136 @@ function crmProspectoFormHtml(p){
     </div>
     <div class="crm-dr-f">${p ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);color:var(--danger);margin-right:auto;" onclick="crmProspectoEliminar('${p.id}')">Eliminar</button>${p.estado !== 'cliente' ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="crmConvertir('${p.id}')">Pasar a cliente</button>` : ''}` : ''}<button type="button" class="btn btn-ghost" onclick="crmCerrarDrawer()">Cancelar</button>${p && p.estado === 'activo' ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="crmProspectoGuardar('${p.id}', true)">Guardar y cotizar</button>` : ''}<button type="button" class="btn btn-primary" onclick="crmProspectoGuardar(${p ? `'${p.id}'` : 'null'})">Guardar</button></div>`;
 }
+/* ---- Mensaje del cliente: pegado inteligente ----
+   Al pegar un correo, el navegador trae también su formato (HTML). Se pasa a un texto ordenado que se guarda tal cual en la cotización:
+   párrafos separados por una línea en blanco, listas con «•», tablas fila a fila con las columnas separadas por « | » y la negrita entre **dos asteriscos**.
+   El panel enseña ese texto con su formato; «Editar texto» deja corregirlo a mano. */
+function crmHtmlATexto(html){
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script,style,head,meta,link,noscript,title,img,svg').forEach(n => n.remove());
+  // Marcas internas: \u0001 = salto de bloque (una línea nueva como mucho), \u0002 = salto de párrafo (línea en blanco), \n = <br> real
+  const SEP = /([\n\u0001\u0002]+)/;
+  const negrita = n => n.tagName === 'B' || n.tagName === 'STRONG' || /^H[1-6]$/.test(n.tagName) || /bold|^[6-9]00$/.test((n.style && n.style.fontWeight) || '');
+  const envolver = s => s.split(SEP).map((p, i) => i % 2 ? p : p.replace(/^(\s*)([\s\S]*?)(\s*)$/, (m, a, b, c) => b ? a + '**' + b + '**' + c : m)).join('');
+  const plano = s => s.replace(/[\n\u0001\u0002]+/g, ' ').replace(/\s+/g, ' ').trim();
+  // Las marcas internas pasan a saltos de línea de verdad: máximo una línea en blanco seguida
+  const limpiar = s => s.replace(/[ \t]*([\n\u0001\u0002])[ \t]*/g, '$1').replace(/[\n\u0001\u0002]+/g, run => {
+    const reales = (run.match(/\n/g) || []).length, blando = /[\u0001\u0002]/.test(run);
+    return '\n'.repeat(Math.min(2, Math.max(run.includes('\u0002') ? 2 : 0, reales + (blando ? 1 : 0))));
+  }).replace(/\*\*\s*\*\*/g, '').trim();
+  const hijos = (el, neg) => [...el.childNodes].map(n => nodo(n, neg)).join('');
+  const tabla = (t, neg) => {
+    const filas = [...t.rows].map(r => [...r.cells]);
+    if (filas.every(f => f.length <= 1)) return filas.map(f => f.map(c => '\u0001' + hijos(c, neg) + '\u0001').join('')).join('');   // tabla usada solo para maquetar
+    return filas.map(f => { const cs = f.map(c => plano(hijos(c, neg))); return cs.some(Boolean) ? '\u0001' + cs.join(' | ') + '\u0001' : ''; }).join('');
+  };
+  const nodo = (n, neg) => {
+    if (n.nodeType === 3) return n.nodeValue.replace(/\s+/g, ' ');
+    if (n.nodeType !== 1) return '';
+    const t = n.tagName;
+    if (t === 'BR') return '\n';
+    if (t === 'HR') return '\u0002';
+    if (t === 'TABLE') return '\u0002' + tabla(n, neg) + '\u0002';
+    if (t === 'UL' || t === 'OL') {
+      let i = 0;
+      return '\u0002' + [...n.children].filter(c => c.tagName === 'LI').map(li => '\u0001' + (t === 'OL' ? `${++i}. ` : '• ') + hijos(li, neg).replace(/^[\s\u0001\u0002]+/, '') + '\u0001').join('') + '\u0002';
+    }
+    const b = !neg && negrita(n);
+    let inner = hijos(n, neg || b);
+    if (b) inner = envolver(inner);
+    if (t === 'P') {
+      const compacto = /Mso/i.test(n.className || '') || /margin(-top|-bottom)?:\s*0/i.test(n.getAttribute('style') || '');   // Outlook pone cada línea en su <p> sin separación
+      if (compacto) return inner.trim() ? '\u0001' + inner + '\u0001' : '\u0001\n\u0001';
+      return '\u0002' + inner + '\u0002';
+    }
+    if (t === 'BLOCKQUOTE') return '\u0002' + limpiar(inner).split('\n').map(l => l ? '> ' + l : l).join('\n') + '\u0002';   // mensaje citado de una respuesta anterior
+    if (/^H[1-6]$/.test(t) || t === 'PRE') return '\u0002' + inner + '\u0002';
+    if (['DIV', 'LI', 'TR', 'SECTION', 'ARTICLE', 'HEADER', 'FOOTER'].includes(t)) return '\u0001' + inner + '\u0001';
+    return inner;
+  };
+  return limpiar(hijos(doc.body, false));
+}
+// El texto guardado, con su formato: párrafos, listas, tablas, citas de respuestas anteriores («>») y negrita
+function crmSolHtml(txt){
+  const ln = String(txt || '').replace(/\r\n?/g, '\n').split('\n');
+  const inl = s => esc(s).replace(/\*\*([^*\n]+?)\*\*/g, '<b>$1</b>').replace(/(^|[\s(])\*([^*\s][^*\n]*?)\*(?=[\s).,;:!?]|$)/g, '$1<b>$2</b>');   // **negrita** (y *negrita* de WhatsApp)
+  const celdas = s => s.split(' | ').map(c => c.trim());
+  const esFila = s => s.includes(' | ') && celdas(s).length >= 2;
+  const reLi = /^\s*([•·▪-]|\d{1,2}[.)])\s+(\S.*)$/;
+  const especial = s => esFila(s) || reLi.test(s) || /^\s*>/.test(s);
+  const out = []; let i = 0;
+  while (i < ln.length) {
+    const l = ln[i];
+    if (!l.trim()) { i++; continue; }
+    if (esFila(l) && i + 1 < ln.length && esFila(ln[i + 1])) {
+      const filas = []; while (i < ln.length && esFila(ln[i])) filas.push(celdas(ln[i++]));
+      out.push(`<table class="crm-solt">${filas.map(f => `<tr>${f.map(c => `<td>${inl(c)}</td>`).join('')}</tr>`).join('')}</table>`);
+    } else if (reLi.test(l)) {
+      const items = []; while (i < ln.length && reLi.test(ln[i])) items.push(reLi.exec(ln[i++]));
+      out.push(items.map(m => `<div class="crm-sol-li"><span>${/^\d/.test(m[1]) ? esc(m[1]) : '•'}</span><div>${inl(m[2])}</div></div>`).join(''));
+    } else if (/^\s*>/.test(l)) {
+      const q = []; while (i < ln.length && /^\s*>/.test(ln[i])) q.push(ln[i++].replace(/^\s*>+\s?/, ''));
+      out.push(`<div class="crm-sol-q">${q.map(inl).join('<br>')}</div>`);
+    } else {
+      const p = [l]; i++;
+      while (i < ln.length && ln[i].trim() && !especial(ln[i])) p.push(ln[i++]);
+      out.push(`<p>${p.map(inl).join('<br>')}</p>`);
+    }
+  }
+  return out.join('');
+}
+const crmSolEl = () => document.getElementById('crm-f-sol');
+function crmSolPinta(){ const v = document.getElementById('crm-f-sol-v'), t = crmSolEl(); if (v && t) v.innerHTML = crmSolHtml(t.value); }
+function crmSolEditando(){ const t = crmSolEl(); return !!t && t.style.display !== 'none'; }
+// Cambia entre ver el mensaje con su formato y editar el texto (con sus ** y « | »)
+function crmSolModo(){
+  const t = crmSolEl(), v = document.getElementById('crm-f-sol-v'), b = document.getElementById('crm-sol-modo');
+  if (!t || !v) return;
+  if (crmSolEditando()) { t.style.display = 'none'; v.style.display = ''; crmSolPinta(); if (b) b.textContent = 'Editar texto'; }
+  else { v.style.display = 'none'; t.style.display = ''; t.focus(); if (b) b.textContent = 'Ver con formato'; }
+}
+// Inserta el texto pegado: en el cursor si se está editando, o al final del mensaje si se está viendo
+function crmSolInsertar(txt){
+  const t = crmSolEl(); if (!t) return;
+  txt = String(txt || '').replace(/\r\n?/g, '\n').trim();
+  if (!txt) { appToast('No hay nada que pegar.', 'info'); return; }
+  const edit = crmSolEditando();
+  let v = t.value, pos;
+  if (edit) { const a = t.selectionStart, b = t.selectionEnd; v = v.slice(0, a) + txt + v.slice(b); pos = a + txt.length; }
+  else { v = v.replace(/\s+$/, ''); v = v ? v + '\n\n' + txt : txt; pos = v.length; }
+  if (v.length > 8000) { v = v.slice(0, 8000); pos = Math.min(pos, 8000); appToast('El mensaje es muy largo: se ha cortado a 8000 caracteres.', 'info'); }
+  t.value = v; crmSolPinta();
+  if (edit) { t.focus(); t.setSelectionRange(pos, pos); }
+  else { const w = document.getElementById('crm-f-sol-v'); if (w) w.scrollTop = w.scrollHeight; }
+}
+// Ctrl+V sobre el panel (viendo o editando): se usa el formato del correo si lo trae
+function crmSolPegar(ev){
+  const cd = ev.clipboardData; if (!cd) return;
+  const html = cd.getData('text/html'), plano = cd.getData('text/plain');
+  ev.preventDefault();
+  let txt = plano;
+  if (html) { try { txt = crmHtmlATexto(html) || plano; } catch (e) { txt = plano; } }
+  crmSolInsertar(txt);
+}
+// La vista con formato se puede seleccionar y copiar, pero no escribir en ella
+function crmSolTecla(ev){ if (ev.ctrlKey || ev.metaKey || ev.altKey || /^(Arrow|Home$|End$|Page|Tab$|Shift$|Control$|Meta$|Alt$|Escape$|F\d)/.test(ev.key)) return; ev.preventDefault(); }
 async function crmPegarSolicitud(){
-  const t = document.getElementById('crm-f-sol');
   try {
-    const txt = await navigator.clipboard.readText();
+    let html = '', plano = '';
+    if (navigator.clipboard && navigator.clipboard.read) {
+      try {
+        for (const it of await navigator.clipboard.read()) {
+          if (it.types.includes('text/html')) html = await (await it.getType('text/html')).text();
+          if (it.types.includes('text/plain')) plano = await (await it.getType('text/plain')).text();
+        }
+      } catch (e) { html = ''; plano = ''; }
+    }
+    if (!html && !plano) plano = await navigator.clipboard.readText();
+    let txt = plano;
+    if (html) { try { txt = crmHtmlATexto(html) || plano; } catch (e) { txt = plano; } }
     if (!txt) { appToast('El portapapeles está vacío.', 'info'); return; }
-    t.value = t.value ? t.value.replace(/\s+$/, '') + '\n\n' + txt : txt; t.focus();
-  } catch (e) { t.focus(); appToast('El navegador no deja pegar con el botón: usa Ctrl+V dentro del cuadro.', 'info'); }
+    crmSolInsertar(txt);
+  } catch (e) { appToast('El navegador no deja pegar con el botón: haz clic en el panel y pulsa Ctrl+V.', 'info'); }
 }
 function crmPfRev(meses){ const d = new Date(today() + 'T00:00:00'); d.setMonth(d.getMonth() + meses); const e = document.getElementById('crm-p-rev'); if (e) e.value = toDateStr(d); }
 async function crmProspectoGuardar(id, cotizar){
@@ -24633,7 +24769,7 @@ function crmConvHtml(o){
   return lista.map(m => {
     const cab = m.a.fecha !== dia ? `<div class="crm-cv-d">${crmFecha(dia = m.a.fecha)}</div>` : '';
     const quien = m.ini ? 'Solicitud inicial' : (m.dir === 'in' ? 'Cliente' : 'Nosotros') + ' · ' + (CRM_CANAL[m.canal] || m.canal);
-    return `${cab}<div class="crm-cv-m ${m.dir}"><small><span>${esc(quien)}${m.a.createdBy && !m.ini ? ' · ' + esc(crmQuien(m.a.createdBy)) : ''}</span>${m.ini ? '' : `<button type="button" title="Quitar este mensaje" onclick="crmCvBorrar('${m.a.id}')">✕</button>`}</small>${esc(m.a.texto).replace(/\n/g, '<br>')}</div>`;
+    return `${cab}<div class="crm-cv-m ${m.dir}"><small><span>${esc(quien)}${m.a.createdBy && !m.ini ? ' · ' + esc(crmQuien(m.a.createdBy)) : ''}</span>${m.ini ? '' : `<button type="button" title="Quitar este mensaje" onclick="crmCvBorrar('${m.a.id}')">✕</button>`}</small>${m.ini ? crmSolHtml(m.a.texto) : esc(m.a.texto).replace(/\n/g, '<br>')}</div>`;
   }).join('');
 }
 function crmConvPinta(id){
@@ -25162,7 +25298,7 @@ function crmFormHtml(o){
       </div>
       <div class="field"><label>Notas internas</label><textarea id="crm-f-notas" rows="3" maxlength="800" placeholder="Lo que conviene recordar de esta cotización">${esc(o ? o.notas : '')}</textarea></div>
       </div>
-      <aside class="crm-fside"><div class="crm-fs-h"><b>Mensaje del cliente</b><button type="button" class="crm-link" onclick="crmPegarSolicitud()">Pegar del portapapeles</button></div><textarea id="crm-f-sol" maxlength="8000" placeholder="Pega aquí el correo o mensaje donde te piden la cotización, tal cual. Lo tendrás delante, siempre a la vista, mientras rellenas las rutas y los productos.">${esc(o ? o.solicitud : '')}</textarea><small>Solo lo ves tú: no sale en el PDF de la oferta.</small></aside></div>
+      <aside class="crm-fside"><div class="crm-fs-h"><b>Mensaje del cliente</b><span class="crm-fs-b"><button type="button" class="crm-link" onclick="crmPegarSolicitud()" title="Pega lo último que hayas copiado, con su formato">Pegar</button><button type="button" class="crm-link" id="crm-sol-modo" onclick="crmSolModo()" title="Ver el texto tal cual para corregirlo a mano">Editar texto</button></span></div><div id="crm-f-sol-v" class="crm-solv" contenteditable="true" spellcheck="false" data-ph="Haz clic aquí y pega (Ctrl+V) el correo o mensaje donde te piden la cotización. Se conserva la negrita, las listas y las tablas. Lo tendrás delante, siempre a la vista, mientras rellenas las rutas y los productos." onpaste="crmSolPegar(event)" onkeydown="crmSolTecla(event)" onbeforeinput="event.preventDefault()" ondrop="return false" oncut="return false">${crmSolHtml(o ? o.solicitud : '')}</div><textarea id="crm-f-sol" maxlength="8000" style="display:none;" onpaste="crmSolPegar(event)" placeholder="El texto del mensaje. La negrita va entre **dos asteriscos** y las columnas de una tabla se separan con « | ».">${esc(o ? o.solicitud : '')}</textarea><small>Solo lo ves tú: no sale en el PDF de la oferta.</small></aside></div>
       <div id="crm-f-err" class="crm-err"></div>
     </div>
     <div class="crm-dr-f"><button type="button" class="btn btn-ghost" onclick="${nuevo ? 'crmCerrarDrawer()' : `crmAbrir('${o.id}')`}">Cancelar</button><button type="button" class="btn btn-ghost" style="background:var(--panel);" id="crm-f-pdf" onclick="crmFormGuardar(${nuevo ? 'null' : `'${o.id}'`}, true)" title="Guarda la cotización y descarga el PDF de la oferta para el cliente">Guardar y generar PDF</button><button type="button" class="btn btn-primary" id="crm-f-ok" onclick="crmFormGuardar(${nuevo ? 'null' : `'${o.id}'`}, false)">${nuevo ? 'Guardar cotización' : 'Guardar cambios'}</button></div>`;
