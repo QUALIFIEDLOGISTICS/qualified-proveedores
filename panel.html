@@ -25537,12 +25537,12 @@ function crmFormHtml(o){
       <aside class="crm-fside"><div class="crm-fs-h"><b>Mensaje del cliente</b><span class="crm-fs-b"><button type="button" class="crm-link" onclick="crmPegarSolicitud()" title="Pega lo último que hayas copiado, con su formato">Pegar</button><button type="button" class="crm-link" id="crm-sol-modo" onclick="crmSolModo()" title="Ver el texto tal cual para corregirlo a mano">Editar texto</button></span></div><div id="crm-f-sol-v" class="crm-solv" contenteditable="true" spellcheck="false" data-ph="Haz clic aquí y pega (Ctrl+V) el correo o mensaje donde te piden la cotización. Se conserva la negrita, las listas y las tablas. Lo tendrás delante, siempre a la vista, mientras rellenas las rutas y los productos." onpaste="crmSolPegar(event)" onkeydown="crmSolTecla(event)" onbeforeinput="event.preventDefault()" ondrop="return false" oncut="return false">${crmSolHtml(o ? o.solicitud : '')}</div><textarea id="crm-f-sol" maxlength="8000" style="display:none;" onpaste="crmSolPegar(event)" placeholder="El texto del mensaje. La negrita va entre **dos asteriscos** y las columnas de una tabla se separan con « | ».">${esc(o ? o.solicitud : '')}</textarea><small>Solo lo ves tú: no sale en el PDF de la oferta.</small></aside></div>
       <div id="crm-f-err" class="crm-err"></div>
     </div>
-    <div class="crm-dr-f"><button type="button" class="btn btn-ghost" onclick="${nuevo ? 'crmCerrarDrawer()' : `crmAbrir('${o.id}')`}">Cancelar</button><button type="button" class="btn btn-ghost" style="background:var(--panel);" id="crm-f-pdf" onclick="crmFormGuardar(${nuevo ? 'null' : `'${o.id}'`}, true)" title="Guarda la cotización y descarga el PDF de la oferta para el cliente">Guardar y generar PDF</button><button type="button" class="btn btn-primary" id="crm-f-ok" onclick="crmFormGuardar(${nuevo ? 'null' : `'${o.id}'`}, false)">${nuevo ? 'Guardar cotización' : 'Guardar cambios'}</button></div>`;
+    <div class="crm-dr-f"><button type="button" class="btn btn-ghost" onclick="${nuevo ? 'crmCerrarDrawer()' : `crmAbrir('${o.id}')`}">Cancelar</button><button type="button" class="btn btn-ghost" style="background:var(--panel);" id="crm-f-pdf" onclick="crmPdfMenu(event,'form:${nuevo ? '' : o.id}')" title="Guarda la cotización y descarga el PDF de la oferta para el cliente, en el idioma que elijas">Guardar y generar PDF</button><button type="button" class="btn btn-primary" id="crm-f-ok" onclick="crmFormGuardar(${nuevo ? 'null' : `'${o.id}'`}, false)">${nuevo ? 'Guardar cotización' : 'Guardar cambios'}</button></div>`;
 }
-async function crmFormGuardar(id, pdf){
+async function crmFormGuardar(id, pdf, lang){
   const S = crmS(), f = S.form || {};
-  if (pdf != null) f.pdf = !!pdf;   // «Guardar y generar PDF»: se recuerda por si antes hay que confirmar la empresa
-  const quierePdf = !!f.pdf;
+  if (pdf != null) { f.pdf = !!pdf; f.pdfLang = lang; }   // «Guardar y generar PDF»: se recuerda (con el idioma) por si antes hay que confirmar la empresa
+  const quierePdf = !!f.pdf, langPdf = f.pdfLang;
   const v = k => ((document.getElementById(k) || {}).value || '').trim();
   const err = document.getElementById('crm-f-err');
   err.textContent = '';
@@ -25599,7 +25599,7 @@ async function crmFormGuardar(id, pdf){
       if (!(await crmGuardarOpp(o, datos))) { if (btn) btn.disabled = false; if (btnPdf) btnPdf.disabled = false; return; }
       appToast('Cotización actualizada.', 'ok');
       crmPinta(); crmAbrir(id);
-      if (quierePdf) { f.pdf = false; await crmOfertaGenerar(id); }
+      if (quierePdf) { f.pdf = false; await crmOfertaGenerar(id, langPdf); }
       return;
     }
     const fila = { titulo, servicio: datos.servicio, prospecto_id: prospectoId || null, contacto_id: contactoId || null, persona: datos.persona || null, email: mail || null, telefono: datos.telefono || null,
@@ -25619,7 +25619,7 @@ async function crmFormGuardar(id, pdf){
     await crmActividad(o.id, 'cotizacion', `Cotización enviada: ${crmTitulo(o)}`);
     appToast('Cotización anotada.' + (o.proxFecha ? ` Te aviso ${crmRel(o.proxFecha).toLowerCase()}.` : ''), 'ok');
     crmCerrarDrawer(); crmPinta();
-    if (quierePdf) await crmOfertaGenerar(o.id);
+    if (quierePdf) await crmOfertaGenerar(o.id, langPdf);
   } catch (e) {
     err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache|conceptos|importe_rec|oferta_validez_dias|gasoil|cargo|solicitud|plazo_pago|empresa_nombre|crm_oportunidades_empresa|check constraint/i.test((e && e.message) || '') ? 'falta ejecutar el SQL del CRM en Supabase (comercial-crm-columnas-todas.sql). Detalle: ' + ((e && e.message) || '') : ((e && e.message) || 'error desconocido'));
     if (btn) btn.disabled = false; if (btnPdf) btnPdf.disabled = false;
@@ -25700,7 +25700,11 @@ function crmPdfMenu(ev, id){
   m.style.top = (r.bottom + 6 + h > window.innerHeight - 8 ? Math.max(8, r.top - h - 6) : r.bottom + 6) + 'px';
   setTimeout(() => { document.addEventListener('click', crmPdfMenuCierra); window.addEventListener('scroll', crmPdfMenuCierra, true); }, 0);
 }
-function crmPdfMenuElige(id, lang){ crmPdfMenuCierra(); crmPdfIdiomaGuarda(lang); crmOfertaGenerar(id, lang); }
+function crmPdfMenuElige(id, lang){
+  crmPdfMenuCierra(); crmPdfIdiomaGuarda(lang);
+  if (String(id).startsWith('form:')) { crmFormGuardar(id.slice(5) || null, true, lang); return; }   // «Guardar y generar PDF» del formulario: guarda y genera en ese idioma
+  crmOfertaGenerar(id, lang);
+}
 function crmOfertaCliente(o){
   const c = o.contactoId ? contactos.find(x => x.id === o.contactoId) : null;
   if (!c) return { nombre: crmEmpresa(o), nif: '', dir: [] };
