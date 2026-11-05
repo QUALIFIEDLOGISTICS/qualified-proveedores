@@ -8519,12 +8519,14 @@ function sgaOperativaCambio(que){
   if (que === 'cliente') { f.nombre = ''; f.apartados = []; f.operativaId = null; }
   else if (que === 'operativa' && sel) {
     f.nombre = sel.value;
+    const manuales = f.apartados.filter(a => a.manual);   // los extras escritos a mano se conservan
     const v = f.nombre ? sgaOperativaVigente(f.clienteId, f.nombre, f.fecha) : null;
-    f.apartados = v ? JSON.parse(JSON.stringify(v.apartados)) : [];
+    f.apartados = v ? [...JSON.parse(JSON.stringify(v.apartados)), ...manuales] : [];
     f.operativaId = v ? v.id : null;
   } else if (que === 'fecha' && f.nombre) {   // otro día: puede haber otro precio vigente
+    const manuales = f.apartados.filter(a => a.manual);
     const v = sgaOperativaVigente(f.clienteId, f.nombre, f.fecha);
-    f.apartados = v ? JSON.parse(JSON.stringify(v.apartados)) : [];
+    f.apartados = v ? [...JSON.parse(JSON.stringify(v.apartados)), ...manuales] : [];
     f.operativaId = v ? v.id : null;
     if (!v) f.nombre = '';
   }
@@ -8543,12 +8545,21 @@ function sgaOperativaPintar(){
   const det = document.getElementById('op-f-detalle');
   if (!det) return;
   if (!f.apartados.length) { det.innerHTML = '<div style="color:var(--mutedFaint);font-size:13px;">Elige el cliente y la operativa para ver su precio.</div>'; return; }
-  const fijos = f.apartados.map((a, i) => ({ a, i })).filter(x => !x.a.extra), extras = f.apartados.map((a, i) => ({ a, i })).filter(x => x.a.extra);
+  const fijos = f.apartados.map((a, i) => ({ a, i })).filter(x => !x.a.extra), extras = f.apartados.map((a, i) => ({ a, i })).filter(x => x.a.extra && !x.a.manual), manuales = f.apartados.map((a, i) => ({ a, i })).filter(x => x.a.manual);
   det.innerHTML = `
     <div class="op-lines">${fijos.map(({ a }) => `<div class="op-line"><span>${esc(a.concepto)}</span><span class="op-dots"></span><b>${esc(eur2(a.importe))}</b></div>`).join('')}</div>
     ${extras.length ? `<div class="op-extras" style="margin-top:12px;"><div class="op-extras-t">Extras: pon cuántos ha habido</div>
       ${extras.map(({ a, i }) => `<div class="op-line" style="align-items:center;"><span>${esc(a.concepto)} <small style="color:var(--muted);">· ${esc(operativaExtraTxt(a))}</small></span><span class="op-dots"></span>
         <input inputmode="numeric" maxlength="5" placeholder="0" value="${Number(a.cantidad) > 0 ? a.cantidad : ''}" style="width:78px;text-align:right;" oninput="sgaOperativaExtra(${i}, this.value)" /><b id="op-xs-${i}" style="min-width:96px;text-align:right;">${eur2((Number(a.cantidad) || 0) * (Number(a.importe) || 0))}</b></div>`).join('')}</div>` : ''}
+    <div class="op-extras" style="margin-top:12px;"><div class="op-extras-t">Extra puntual · escríbelo a mano</div>
+      ${manuales.map(({ a, i }) => `<div class="op-line" style="align-items:center;gap:8px;flex-wrap:wrap;">
+        <input maxlength="80" placeholder="Qué es (ej. Cancelación)" value="${esc(a.concepto || '')}" style="flex:1;min-width:170px;" oninput="sgaOperativaManual(${i}, 'concepto', this.value)" />
+        <input inputmode="numeric" maxlength="4" placeholder="1" title="Cantidad" value="${Number(a.cantidad) > 0 ? a.cantidad : ''}" style="width:60px;text-align:right;" oninput="sgaOperativaManual(${i}, 'cantidad', this.value)" />
+        <span style="color:var(--muted);">×</span>
+        <input inputmode="decimal" maxlength="9" placeholder="0,00" title="Precio de cada uno, sin IVA" value="${a.importe ? esc(String(a.importe).replace('.', ',')) : ''}" style="width:90px;text-align:right;" oninput="sgaOperativaManual(${i}, 'importe', this.value)" /><span style="color:var(--muted);">€</span>
+        <b id="op-xs-${i}" style="min-width:86px;text-align:right;">${eur2((Number(a.cantidad) || 0) * (Number(a.importe) || 0))}</b>
+        <button type="button" class="op-x" onclick="sgaOperativaManualQuitar(${i})" title="Quitar este extra">✕</button></div>`).join('')}
+      <div><button type="button" class="op-chip otro" onclick="sgaOperativaManualAdd()">+ Añadir extra manual</button></div></div>
     <div class="op-total-row" style="margin-top:14px;"><span>Importe de esta operativa (sin IVA)</span><b id="op-f-total">${eur2(sgaOperativaTotal(f.apartados))}</b></div>`;
 }
 function sgaOperativaExtra(i, v){
@@ -8562,12 +8573,52 @@ function sgaOperativaExtra(i, v){
   const t = document.getElementById('op-f-total');
   if (t) t.textContent = eur2(sgaOperativaTotal(f.apartados));
 }
+// Extra puntual escrito a mano (ej. una cancelación): descripción, cantidad y precio de cada uno
+function sgaOperativaManualAdd(){
+  const f = window.__opForm;
+  if (!f) return;
+  f.apartados.push({ concepto: '', importe: 0, extra: true, manual: true, unidad: 'unidad', cantidad: 1 });
+  window.__stockDirty = true;
+  sgaOperativaPintar();
+  const cajas = document.querySelectorAll('#op-f-detalle .op-extras');
+  const filas = cajas.length ? cajas[cajas.length - 1].querySelectorAll('.op-line') : [];
+  const ult = filas.length ? filas[filas.length - 1].querySelector('input') : null;
+  if (ult) ult.focus();
+}
+function sgaOperativaManual(i, campo, v){
+  const f = window.__opForm;
+  if (!f || !f.apartados[i]) return;
+  const a = f.apartados[i];
+  if (campo === 'concepto') a.concepto = String(v).slice(0, 80);
+  else if (campo === 'cantidad') { const n = parseInt(String(v).replace(/\D/g, ''), 10); a.cantidad = isFinite(n) && n > 0 ? n : 0; }
+  else { const n = parseFloat(String(v).replace(',', '.').replace(/[^\d.]/g, '')); a.importe = isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0; }
+  const sub = document.getElementById('op-xs-' + i);
+  if (sub) sub.textContent = eur2((Number(a.cantidad) || 0) * (Number(a.importe) || 0));
+  window.__stockDirty = true;
+  const t = document.getElementById('op-f-total');
+  if (t) t.textContent = eur2(sgaOperativaTotal(f.apartados));
+}
+function sgaOperativaManualQuitar(i){
+  const f = window.__opForm;
+  if (!f || !f.apartados[i]) return;
+  f.apartados.splice(i, 1);
+  window.__stockDirty = true;
+  sgaOperativaPintar();
+}
 async function sgaOperativaGuardar(){
   const f = window.__opForm;
   const errEl = document.getElementById('op-f-error');
   if (!f || !errEl) return;
   errEl.textContent = '';
   const errores = [];
+  // Los extras manuales vacíos se descartan; los a medias avisan
+  f.apartados = f.apartados.filter(a => !(a.manual && !(a.concepto || '').trim() && !(Number(a.importe) > 0)));
+  f.apartados.filter(a => a.manual).forEach(a => {
+    a.concepto = (a.concepto || '').trim();
+    if (!a.concepto) errores.push('Un extra manual no tiene descripción.');
+    else if (!(Number(a.importe) > 0)) errores.push(`Pon el precio del extra «${a.concepto}».`);
+    else if (!(Number(a.cantidad) > 0)) a.cantidad = 1;
+  });
   if (!f.clienteId) errores.push('Elige el cliente.');
   if (!f.fecha) errores.push('Indica la fecha.');
   if (!f.nombre || !f.apartados.length) errores.push('Elige la operativa.');
