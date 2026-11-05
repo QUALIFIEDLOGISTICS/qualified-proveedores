@@ -24849,14 +24849,17 @@ async function crmAdjAnexar(o, bytes){
   }
   return { bytes: n ? await pdf.save() : bytes, n, fallos };
 }
-// Guarda la oferta generada en la carpeta de la cotización (sustituye a la anterior del mismo número e idioma)
+// Guarda la oferta generada en la carpeta de la cotización. Solo hay una por cotización: la nueva sustituye a la anterior (sea del idioma que sea)
 async function crmAdjGuardaOferta(o, nombre, bytes, lang){
   try {
     const S = crmS(); S.adj = S.adj || {};
-    const path = `comercial/ofertas/${o.id}/oferta-${crmAdjLimpio(o.oferta)}-${lang}.pdf`;
+    const path = `comercial/ofertas/${o.id}/oferta-${crmAdjLimpio(o.oferta)}.pdf`;
     const up = await supabaseClient.storage.from(DOCS_BUCKET).upload(path, new Blob([bytes], { type: 'application/pdf' }), { upsert: true, contentType: 'application/pdf', cacheControl: '0' });
     if (up.error) return;
-    await supabaseClient.from('crm_oportunidad_docs').delete().eq('oportunidad_id', o.id).eq('storage_path', path);
+    const previas = (await crmAdjCarga(o.id, true)).filter(d => d.origen === 'oferta');   // también las guardadas con otro nombre o idioma
+    await supabaseClient.from('crm_oportunidad_docs').delete().eq('oportunidad_id', o.id).eq('origen', 'oferta');
+    const viejas = previas.map(d => d.path).filter(p => p && p !== path);
+    if (viejas.length) { try { await supabaseClient.storage.from(DOCS_BUCKET).remove(viejas); } catch (e) { /* sin enlace no estorba */ } }
     const ins = await supabaseClient.from('crm_oportunidad_docs').insert({ oportunidad_id: o.id, nombre: nombre.replace(/\.pdf$/i, ''), archivo: nombre, storage_path: path, tipo: 'application/pdf', tamano: bytes.length, origen: 'oferta', incluir: false, created_by: currentUserEmail() });
     if (ins.error) { await supabaseClient.storage.from(DOCS_BUCKET).remove([path]); return; }
     await crmAdjCarga(o.id, true);
