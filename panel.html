@@ -6614,6 +6614,7 @@ function sgaAlbMenuItems(a){
   if (conf && a.tipo === 'salida' && a.borrador) it.push(['Imprimir albarán', 'file', `sgaAlbaranImprimir('${a.id}')`]);
   if (conf && a.tipo === 'salida') it.push(['Etiqueta de envío', 'tag', `sgaEtiquetaAbrir('${a.id}')`]);
   if (conf && (a.tipo === 'salida' || a.tipo === 'entrada' || a.tipo === 'apertura') && puede) it.push(['Editar', 'edit', `${a.tipo === 'salida' ? 'sgaSalidaEditar' : 'sgaEntradaEditar'}('${a.id}')`]);
+  if (conf && a.tipo === 'salida' && !a.borrador && puede) it.push(['Volver a borrador', 'clock', `sgaSalidaABorrador('${a.id}')`]);
   if (conf && a.tipo !== 'regularizacion' && puede) it.push(['Anular albarán', 'trash', `sgaAnularAbrir('${a.id}')`, true]);
   return it;
 }
@@ -12897,6 +12898,40 @@ async function sgaFranjaAdjuntarAlbaran(albaranId){
 }
 async function sgaFranjaBorrarPdf(albaranId){
   try { await supabaseClient.storage.from(DOCS_BUCKET).remove([sgaFranjaPdfRuta(albaranId)]); } catch (e) { /* un archivo suelto sin enlace no estorba */ }
+}
+/* ---- Volver una expedición confirmada a borrador (por ejemplo, confirmada sin querer) ----
+   Mismo albarán y mismo número: la mercancía sigue apartada, pero se quitan sus cobros hasta que se vuelva a confirmar con la fecha real.
+   Se hace con la misma función de la base de datos que «Editar», pasándole los datos que ya tiene la salida y borrador = true. */
+async function sgaSalidaABorrador(id){
+  const a = sgaAlbaranes.find(x => x.id === id);
+  if (!a || a.tipo !== 'salida' || a.estado !== 'confirmado' || a.borrador) return;
+  if (window.__sgaBorradorOk === false) { appToast('Para usar borradores falta ejecutar el SQL «sga-salida-borrador.sql» en Supabase.', 'error'); return; }
+  if (!(await appConfirm({ title: 'Volver a borrador', message: `La expedición ${sgaNumAlbaran(a)} (${fmtDateDMY(a.fecha)}) volverá a ser un borrador: se mantiene el nº de albarán y la mercancía sigue apartada, pero se quitan sus cobros hasta que la confirmes de nuevo con la fecha real.`, confirmLabel: 'Volver a borrador', cancelLabel: 'Cancelar', tone: 'warn', icon: 'warn' }))) return;
+  const [m, s] = await Promise.all([
+    supabaseClient.from('sga_movimientos').select('partida_id,cantidad,bultos,fifo_saltado').eq('albaran_id', id).eq('tipo', 'salida'),
+    supabaseClient.from('sga_servicios').select('producto_id,cantidad,nota').eq('albaran_id', id),
+  ]);
+  if (m.error || s.error) { appToast('No se pudo leer la expedición: ' + ((m.error || s.error).message || 'error desconocido.'), 'error'); return; }
+  if (!(m.data || []).length) { appToast('Esta expedición no tiene mercancía registrada: no se puede pasar a borrador.', 'error'); return; }
+  const porPartida = {};
+  m.data.forEach(r => {
+    const x = porPartida[r.partida_id] || (porPartida[r.partida_id] = { partida_id: r.partida_id, cantidad: 0, bultos: null, fifo_saltado: false });
+    x.cantidad += Math.abs(Number(r.cantidad));
+    if (r.bultos != null) x.bultos = (x.bultos || 0) + Math.abs(Number(r.bultos));
+    if (r.fifo_saltado) x.fifo_saltado = true;
+  });
+  const payload = {
+    albaran: { created_by: currentUserEmail(), cliente_id: a.clienteId, warehouse_id: a.warehouseId, fecha: a.fecha, referencia: a.referencia || '', modalidad: a.modalidad || 'palet', transportista: a.transportista || '', matricula: a.matricula || '', observaciones: a.observaciones || '', destinatario: a.destinatario || '', destinatario_direccion: a.destinatarioDireccion || '', borrador: true },
+    salidas: Object.values(porPartida),
+    servicios: (s.data || []).map(r => ({ producto_id: r.producto_id, cantidad: Number(r.cantidad), nota: r.nota || '' })),
+    cobros: [],
+  };
+  const { error } = await supabaseClient.rpc('sga_editar_salida', { p_id: id, p: payload });
+  if (error) { appToast('No se pudo pasar a borrador: ' + (error.message || 'error desconocido.'), 'error'); return; }
+  await loadSgaStock();
+  await logAlbaranHistorial(id, 'Vuelta a borrador. Cobros quitados hasta que se confirme de nuevo.');
+  appToast(`Expedición ${sgaNumAlbaran(a)} vuelta a borrador.`, 'ok');
+  renderTab();
 }
 /* ---- Anular un albarán ---- */
 function sgaAnularAbrir(id){
