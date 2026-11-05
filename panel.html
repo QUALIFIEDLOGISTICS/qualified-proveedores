@@ -3831,6 +3831,7 @@ function switchWarehouse(id){
   renderHeader(); renderTab();
 }
 function goHome(){
+  if (!crmConfirmLeaveForm()) return;
   if (window.__showingContactoDetail && !contactoConfirmLeaveEdit()) return;
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
@@ -3848,6 +3849,7 @@ function goHome(){
   window.__showingContactoDetail = false;
   window.__contactoDetailId = null;
   window.__contactoDetailEditMode = false;
+  crmFormDescartar();
   currentTab = 'inicio';
   saveLastTab();
   renderHeader(); renderTab();
@@ -3856,6 +3858,7 @@ async function setTab(id){
   const allowed = visibleTabs().map(t=>t.id);
   if (id !== 'admin' && !allowed.includes(id)) return;
   if (id === 'admin' && !PROFILE.isAdmin) return;
+  if (!crmConfirmLeaveForm()) return;
   if (window.__showingContactoDetail && !contactoConfirmLeaveEdit()) return;
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
@@ -3870,6 +3873,7 @@ async function setTab(id){
   window.__flotaFormDirty = false;
   window.__adminFormDirty = false;
   window.__contactoFormDirty = false;
+  crmFormDescartar();
   currentTab = id;
   if (id === ALMACEN_CONFIG_TAB) resetWarehouseConfigState();
   if (id === 'stock') { window.__stockView = 'home'; window.__stockDirty = false; }
@@ -24347,7 +24351,7 @@ function crmProspectoFormHtml(p){
   const s = window.__crmPF = { servicio: p ? p.servicio : '', potencial: p ? p.potencial : '' };
   const chs = (k, mapa) => `<div class="crm-chs">${Object.keys(mapa).map(v => `<button type="button" class="crm-ch${s[k] === v ? ' on' : ''}" data-v="${v}" onclick="crmPfSet('${k}', '${v}', this)">${mapa[v]}</button>`).join('')}</div>`;
   return `<div class="crm-dr-h"><button type="button" class="crm-x" onclick="crmCerrarDrawer()" title="Cerrar">✕</button><small>${p ? 'Editar prospecto' : 'Nuevo prospecto'}</small><h3>${p ? esc(p.nombre) : 'Añadir un prospecto'}</h3></div>
-    <div class="crm-dr-b crm-form"><div class="crm-pgrid"><div class="crm-pcol">
+    <div class="crm-dr-b crm-form" oninput="crmFormSucio()" onchange="crmFormSucio()"><div class="crm-pgrid"><div class="crm-pcol">
       <div class="field"><label>Empresa <span class="dc-req">*</span></label><input id="crm-p-nom" maxlength="120" oninput="crmMayus(this)" value="${esc(p ? p.nombre : '')}" /></div>
       <div class="field"><label>Por qué nos interesa <small style="font-weight:400;color:var(--mutedFaint);">· qué tienen de bueno a largo plazo</small></label><textarea id="crm-p-int" rows="3" maxlength="500" placeholder="Ej. Mueven mucho volumen a Francia y están ampliando; contrato anual a la vista">${esc(p ? p.interes : '')}</textarea></div>
       <div class="field"><label>Potencial</label>${chs('potencial', { alto: 'Alto', medio: 'Medio', bajo: 'Bajo' })}</div>
@@ -24463,6 +24467,7 @@ function crmSolModo(){
 // Inserta el texto pegado: en el cursor si se está editando, o al final del mensaje si se está viendo
 function crmSolInsertar(txt){
   const t = crmSolEl(); if (!t) return;
+  crmFormSucio();
   txt = String(txt || '').replace(/\r\n?/g, '\n').trim();
   if (!txt) { appToast('No hay nada que pegar.', 'info'); return; }
   const edit = crmSolEditando();
@@ -24527,7 +24532,7 @@ async function crmProspectoGuardar(id, cotizar){
   const i = S.prospectos.findIndex(x => x.id === p.id);
   if (i >= 0) S.prospectos[i] = p; else S.prospectos.push(p);
   S.prospectos.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
-  crmCerrarDrawer(); crmPinta(); appToast('Prospecto guardado.', 'ok');
+  window.__crmFormDirty = false; crmCerrarDrawer(); crmPinta(); appToast('Prospecto guardado.', 'ok');
   if (cotizar) crmNuevaDesdeProspecto(p.id);
 }
 /* ---- Documentos: PDF y otros archivos para guardar (tarifas de la competencia, condiciones, contratos…) ---- */
@@ -24775,7 +24780,7 @@ async function crmAdjElegir(files){
   const c = window.__crmAdj; if (!c || c.subiendo) return;
   const ok = crmAdjValida(files); if (!ok.length) return;
   if (!c.id) {   // cotización nueva: se guardan en memoria y se suben al guardarla
-    const f = crmS().form; f.adjPend = f.adjPend || [];
+    const f = crmS().form; f.adjPend = f.adjPend || []; crmFormSucio();
     ok.forEach(x => f.adjPend.push({ nombre: x.name.replace(/\.[^.]+$/, ''), archivo: x.name, tamano: x.size, tipo: x.type || '', origen: 'subido', incluir: crmAdjEsAnexable(x.name), file: x }));
     crmAdjPinta(); return;
   }
@@ -24911,9 +24916,19 @@ function crmInformesHtml(){
 }
 function crmPeriodo(v){ crmS().periodo = v; crmPinta(); }
 /* ---- Panel lateral: ficha de una cotización, formularios y prospectos ---- */
-function crmDrawerAbre(d){ crmS().drawer = d; crmDrawerPinta(); }
+function crmDrawerAbre(d){ window.__crmFormDirty = false; crmS().drawer = d; crmDrawerPinta(); }
+/* Aviso de «cambios sin guardar» en las fichas de cotización y de prospecto, como en el resto de la app */
+function crmFormSucio(){ window.__crmFormDirty = true; }
+function crmConfirmLeaveForm(){
+  const d = window.__crm && window.__crm.drawer;
+  if (currentTab === 'comercial' && d && (d.tipo === 'form' || d.tipo === 'prospecto') && window.__crmFormDirty) return leaveGuard();
+  return true;
+}
+// Al salir de Comercial (ya confirmado) la ficha abierta se descarta
+function crmFormDescartar(){ if (!window.__crmFormDirty) return; window.__crmFormDirty = false; if (window.__crm) window.__crm.drawer = null; }
+function crmFormCancelar(id){ if (!crmConfirmLeaveForm()) return; if (id) crmAbrir(id); else crmCerrarDrawer(); }
 function crmPaginaModo(on){ ['.crm-head', '#crm-body'].forEach(s => { const e = document.querySelector(s); if (e) e.style.display = on ? 'none' : ''; }); }
-function crmCerrarDrawer(){ crmS().drawer = null; const w = document.getElementById('crm-drawer-w'); if (w) w.innerHTML = ''; crmPaginaModo(false); }
+function crmCerrarDrawer(){ if (!crmConfirmLeaveForm()) return; window.__crmFormDirty = false; crmS().drawer = null; const w = document.getElementById('crm-drawer-w'); if (w) w.innerHTML = ''; crmPaginaModo(false); }
 function crmDrawerPinta(){
   const S = crmS(), w = document.getElementById('crm-drawer-w');
   if (!w) return;
@@ -25126,6 +25141,7 @@ function crmEmpSugPinta(){
 function crmEmpElegir(i){
   const f = crmS().form, c = f && f.sug && f.sug[i];
   if (!c) return;
+  crmFormSucio();
   f.emp = { tipo: c.tipo, id: c.id }; f.cerrada = true;
   const inp = document.getElementById('crm-f-emp'); if (inp) inp.value = c.titulo;
   crmEmpSugPinta(); crmEmpresaCambio();
@@ -25319,6 +25335,7 @@ function crmTrHtml(l, i){
 // ¿Los precios de transporte llevan indexación de gasoil? Va en la oferta en PDF; «Sin indicar» no escribe nada
 function crmGasoilSet(v){
   const f = crmS().form; if (!f) return;
+  crmFormSucio();
   f.gasoil = v;
   document.querySelectorAll('#crm-gas button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
 }
@@ -25416,6 +25433,7 @@ function crmAlHtml(l, i){
       ${t ? `<div class="crm-sug">Tarifa vigente de este cliente: <b>${esc(crmEur2(t.precio))}</b>${t.subtipo ? ' · ' + esc(t.subtipo) : ''} (${fmtDateDMY(t.fecha)}) <button type="button" class="crm-link" onclick="crmUsarTarifaAl(${l.k}, ${t.precio})">Usar este precio</button></div>` : ''}` : ''}</div>`;
 }
 function crmLineasPinta(){
+  crmFormSucio();
   const f = crmS().form, tr = document.getElementById('crm-tr'), al = document.getElementById('crm-al');
   if (tr) tr.innerHTML = crmTrListaHtml(f);
   if (al) al.innerHTML = crmAlListaHtml(f);
@@ -25439,7 +25457,7 @@ function crmUsarTarifaAl(k, precio){ const f = crmS().form, l = f.al.find(x => x
 async function crmCatalogosRefrescar(){
   try { await Promise.all([loadAlmacenajeProductos(), loadOperativas()]); } catch (e) { return; }
   const S = crmS();
-  if (S.drawer && S.drawer.tipo === 'form' && S.form && document.getElementById('crm-al')) crmLineasPinta();
+  if (S.drawer && S.drawer.tipo === 'form' && S.form && document.getElementById('crm-al')) { const sucio = window.__crmFormDirty; crmLineasPinta(); window.__crmFormDirty = sucio; }   // repintar con los productos recién cargados no es un cambio del usuario
 }
 // Lo que se guarda de cada línea (todo lo necesario para reconstruirla)
 function crmConceptosDeForm(f){
@@ -25481,6 +25499,7 @@ function crmSecLineaNueva(f, k){
 const crmSecTieneDatos = (f, k) => f[k].some(l => k === 'tr' ? (l.o.z || l.d.z || l.precio) : k === 'al' ? (l.prod || l.precio) : (l.nombre.trim() || l.precio));
 async function crmSecToggle(k){
   const f = crmS().form; if (!f) return;
+  crmFormSucio();
   if (!f.sec[k]) {
     f.sec[k] = true;
     if (!f[k].length) f[k].push(crmSecLineaNueva(f, k));
@@ -25509,7 +25528,7 @@ function crmFormHtml(o){
   const paso = (n, t, sub) => `<div class="crm-fsec"><span>${n}</span><div><b>${t}</b>${sub ? `<small>${sub}</small>` : ''}</div></div>`;
   const blk = (k, tit) => `<div class="crm-blk ${k}" id="crm-sec-${k}" style="${f.sec[k] ? '' : 'display:none;'}"><div class="crm-blk-h" id="crm-blk-${k}">${crmBlkCabHtml(f, k)}</div><div id="crm-${k}">${k === 'tr' ? crmTrListaHtml(f) : k === 'al' ? crmAlListaHtml(f) : crmOpListaHtml(f)}</div></div>`;
   return `<div class="crm-dr-h conadj"><button type="button" class="crm-x" onclick="crmCerrarDrawer()" title="Cerrar">✕</button>${crmAdjBtnHtml(o ? o.id : null)}<small>${nuevo ? 'Nueva cotización' : 'Editar cotización'}</small><h3>${nuevo ? 'Anotar una cotización' : esc(crmTitulo(o))}</h3></div>
-    <div class="crm-dr-b crm-form"><div class="crm-fg"><div class="crm-fmain">
+    <div class="crm-dr-b crm-form" oninput="crmFormSucio()" onchange="crmFormSucio()"><div class="crm-fg"><div class="crm-fmain">
       ${paso(1, 'Cliente', 'Para quién es y con quién has hablado')}
       <div class="field"><label>Empresa <span class="dc-req">*</span></label><input id="crm-f-emp" autocomplete="off" maxlength="120" placeholder="Busca un cliente o escribe una empresa nueva" value="${esc(emp)}" oninput="crmMayus(this); crmEmpSug()" onfocus="crmEmpAbrir()" onkeydown="crmEmpTecla(event)" onblur="setTimeout(crmEmpCerrar, 180)" /><div id="crm-f-emp-res"></div><div id="crm-f-emp-h" class="crm-hint">${o ? 'Cliente o prospecto elegido.' : 'Busca un cliente o prospecto, o escribe el nombre de una empresa nueva.'}</div></div>
       <div class="crm-g2">
@@ -25540,7 +25559,7 @@ function crmFormHtml(o){
       <aside class="crm-fside"><div class="crm-fs-h"><b>Mensaje del cliente</b><span class="crm-fs-b"><button type="button" class="crm-link" onclick="crmPegarSolicitud()" title="Pega lo último que hayas copiado, con su formato">Pegar</button><button type="button" class="crm-link" id="crm-sol-modo" onclick="crmSolModo()" title="Ver el texto tal cual para corregirlo a mano">Editar texto</button></span></div><div id="crm-f-sol-v" class="crm-solv" contenteditable="true" spellcheck="false" data-ph="Haz clic aquí y pega (Ctrl+V) el correo o mensaje donde te piden la cotización. Se conserva la negrita, las listas y las tablas. Lo tendrás delante, siempre a la vista, mientras rellenas las rutas y los productos." onpaste="crmSolPegar(event)" onkeydown="crmSolTecla(event)" onbeforeinput="event.preventDefault()" ondrop="return false" oncut="return false">${crmSolHtml(o ? o.solicitud : '')}</div><textarea id="crm-f-sol" maxlength="8000" style="display:none;" onpaste="crmSolPegar(event)" placeholder="El texto del mensaje. La negrita va entre **dos asteriscos** y las columnas de una tabla se separan con « | ».">${esc(o ? o.solicitud : '')}</textarea><small>Solo lo ves tú: no sale en el PDF de la oferta.</small></aside></div>
       <div id="crm-f-err" class="crm-err"></div>
     </div>
-    <div class="crm-dr-f"><button type="button" class="btn btn-ghost" onclick="${nuevo ? 'crmCerrarDrawer()' : `crmAbrir('${o.id}')`}">Cancelar</button><button type="button" class="btn btn-ghost" style="background:var(--panel);" id="crm-f-pdf" onclick="crmPdfMenu(event,'form:${nuevo ? '' : o.id}')" title="Guarda la cotización y descarga el PDF de la oferta para el cliente, en el idioma que elijas">Guardar y generar PDF</button><button type="button" class="btn btn-primary" id="crm-f-ok" onclick="crmFormGuardar(${nuevo ? 'null' : `'${o.id}'`}, false)">${nuevo ? 'Guardar cotización' : 'Guardar cambios'}</button></div>`;
+    <div class="crm-dr-f"><button type="button" class="btn btn-ghost" onclick="crmFormCancelar(${nuevo ? '' : `'${o.id}'`})">Cancelar</button><button type="button" class="btn btn-ghost" style="background:var(--panel);" id="crm-f-pdf" onclick="crmPdfMenu(event,'form:${nuevo ? '' : o.id}')" title="Guarda la cotización y descarga el PDF de la oferta para el cliente, en el idioma que elijas">Guardar y generar PDF</button><button type="button" class="btn btn-primary" id="crm-f-ok" onclick="crmFormGuardar(${nuevo ? 'null' : `'${o.id}'`}, false)">${nuevo ? 'Guardar cotización' : 'Guardar cambios'}</button></div>`;
 }
 async function crmFormGuardar(id, pdf, lang){
   const S = crmS(), f = S.form || {};
@@ -25621,7 +25640,7 @@ async function crmFormGuardar(id, pdf, lang){
     await crmAdjSubirPend(o.id);   // los documentos que se adjuntaron antes de guardar
     await crmActividad(o.id, 'cotizacion', `Cotización enviada: ${crmTitulo(o)}`);
     appToast('Cotización anotada.' + (o.proxFecha ? ` Te aviso ${crmRel(o.proxFecha).toLowerCase()}.` : ''), 'ok');
-    crmCerrarDrawer(); crmPinta();
+    window.__crmFormDirty = false; crmCerrarDrawer(); crmPinta();
     if (quierePdf) await crmOfertaGenerar(o.id, langPdf);
   } catch (e) {
     err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache|conceptos|importe_rec|oferta_validez_dias|gasoil|cargo|solicitud|plazo_pago|empresa_nombre|crm_oportunidades_empresa|check constraint/i.test((e && e.message) || '') ? 'falta ejecutar el SQL del CRM en Supabase (comercial-crm-columnas-todas.sql). Detalle: ' + ((e && e.message) || '') : ((e && e.message) || 'error desconocido'));
@@ -34085,7 +34104,7 @@ function leaveGuard(){
  'contactoNavGoto', 'closeContactoDetail', 'setContactoDetailTab', 'exitContactoEditMode', 'newContactoFromContext',
  'setTraficoSection', 'backToTraficoHome', 'setComercialSection', 'backFromAlmacenajeForm',
  'backToTarifas', 'backToComercialClientes', 'backToColabRutas', 'backToDecaList', 'backToOrdenesCarga', 'tcfgSetSeccion',
- 'backToAdminList', 'adminNavGoto', 'adminExitEdit', 'almacenajeProductoNavGoto'].forEach(name => {
+ 'backToAdminList', 'adminNavGoto', 'adminExitEdit', 'almacenajeProductoNavGoto', 'crmCerrarDrawer', 'crmFormCancelar'].forEach(name => {
   const orig = window[name];
   if (typeof orig !== 'function') return;
   window[name] = function(){
