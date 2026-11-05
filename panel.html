@@ -1312,6 +1312,18 @@
   .crm-dr-h2{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
   .crm-dr-h2 b{font-size:16px;}
   .crm-edad{font-size:12px;color:var(--mutedFaint);}
+  .crm-adjb{position:absolute;top:14px;right:58px;height:32px;display:inline-flex;align-items:center;gap:6px;padding:0 12px;border-radius:999px;border:1px solid var(--border);background:var(--panel);color:var(--muted);font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--body);}
+  .crm-adjb:hover{border-color:var(--primary);color:var(--primary);}
+  .crm-adjb.tiene{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 50%,var(--border));background:color-mix(in srgb,var(--primary) 7%,var(--panel));}
+  .crm-adjb i{font-style:normal;min-width:18px;height:18px;border-radius:9px;background:var(--primary);color:#fff;font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;}
+  .crm-pg .crm-adjb{top:18px;right:62px;}
+  .crm-dr-h.conadj small,.crm-dr-h.conadj h3{display:block;margin-right:170px;}
+  .crm-adj-t{font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);margin:2px 0 6px;}
+  .crm-adj-t small{text-transform:none;letter-spacing:0;font-weight:400;}
+  .crm-adj-r .crm-x2{flex:0 0 auto;}
+  .crm-adj-inc{flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--muted);cursor:pointer;white-space:nowrap;}
+  .crm-adj-no{flex:0 0 auto;font-size:11px;color:var(--mutedFaint);white-space:nowrap;}
+  @media (max-width:560px){.crm-adjb span{display:none;}.crm-dr-h.conadj small,.crm-dr-h.conadj h3{margin-right:90px;}}
   .crm-x{position:absolute;top:14px;right:16px;width:32px;height:32px;border-radius:50%;border:0;background:var(--panel2);color:var(--muted);font-size:14px;cursor:pointer;}
   .crm-x:hover{background:var(--border);}
   .crm-dr-b{flex:1;overflow-y:auto;padding:16px 22px 22px;display:flex;flex-direction:column;gap:14px;}
@@ -24681,6 +24693,177 @@ async function crmDocEliminar(id){
   await supabaseClient.storage.from(DOCS_BUCKET).remove([d.path]);
   S.docs = S.docs.filter(x => x.id !== id); crmPinta(); appToast('Documento eliminado.', 'ok');
 }
+/* ---- Carpeta de documentos de cada cotización (tipo Odoo): botón arriba a la derecha. Los PDF e imágenes marcados «con la oferta»
+   se añaden como anexos al PDF cuando se genera la oferta, y la oferta generada se guarda sola en la carpeta. ---- */
+const CRM_ADJ_ANEXABLE = ['pdf', 'png', 'jpg', 'jpeg'];
+const crmAdjEsAnexable = n => CRM_ADJ_ANEXABLE.includes(crmDocExt(n));
+const crmAdjLimpio = n => String(n || 'archivo').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9._-]+/g, '_');
+function crmAdjDeFila(r){ return { id: r.id, nombre: r.nombre || r.archivo || '', archivo: r.archivo || r.nombre || '', path: r.storage_path, tipo: r.tipo || '', tamano: r.tamano == null ? null : Number(r.tamano), origen: r.origen || 'subido', incluir: !!r.incluir, creado: r.created_at || '', por: r.created_by || '' }; }
+function crmAdjLista(id){ const S = crmS(); return id ? ((S.adj || {})[id] || []) : ((S.form && S.form.adjPend) || []); }
+function crmAdjErrTxt(e){ return /relation|does not exist|schema cache/i.test((e && e.message) || '') ? 'Falta ejecutar el SQL de los documentos de la cotización en Supabase (comercial-crm-adjuntos.sql).' : ((e && e.message) || 'error desconocido'); }
+async function crmAdjCarga(id, forzar){
+  const S = crmS(); S.adj = S.adj || {};
+  if (S.adj[id] && !forzar) return S.adj[id];
+  const { data, error } = await supabaseClient.from('crm_oportunidad_docs').select('*').eq('oportunidad_id', id).order('created_at', { ascending: true });
+  if (error) { S.adjError = crmAdjErrTxt(error); S.adj[id] = S.adj[id] || []; return S.adj[id]; }
+  S.adjError = '';
+  S.adj[id] = (data || []).map(crmAdjDeFila);
+  return S.adj[id];
+}
+function crmAdjBtnHtml(id){
+  const n = crmAdjLista(id).length;
+  return `<button type="button" class="crm-adjb${n ? ' tiene' : ''}" onclick="crmAdjAbre(${id ? `'${id}'` : 'null'})" title="Documentos de esta cotización: se pueden añadir a la oferta en PDF"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>Documentos</span>${n ? `<i>${n}</i>` : ''}</button>`;
+}
+function crmAdjBtnPinta(id){
+  const d = crmS().drawer;
+  if (!d || (d.id || null) !== (id || null)) return;
+  const b = document.querySelector('.crm-adjb'); if (b) b.outerHTML = crmAdjBtnHtml(id);
+}
+async function crmAdjAbre(id){
+  window.__crmAdj = { id: id || null, subiendo: false };
+  if (id && !crmS().adj?.[id]) { crmAdjPinta(); await crmAdjCarga(id); }
+  else if (id) crmAdjCarga(id, true).then(() => { if (window.__crmAdj) crmAdjPinta(); crmAdjBtnPinta(id); });
+  crmAdjPinta();
+}
+function crmAdjPinta(){
+  const c = window.__crmAdj; if (!c) return;
+  const S = crmS(), id = c.id, l = crmAdjLista(id), o = id ? S.opps.find(x => x.id === id) : null;
+  const subidos = l.map((d, i) => ({ d, i })).filter(x => x.d.origen !== 'oferta'), ofertas = l.map((d, i) => ({ d, i })).filter(x => x.d.origen === 'oferta');
+  const fila = ({ d, i }) => {
+    const anex = d.origen !== 'oferta' && crmAdjEsAnexable(d.archivo || d.nombre);
+    return `<div class="crm-dsub-r crm-adj-r">${crmDocIcono(d.archivo || d.nombre)}<span><b title="${esc(d.archivo || d.nombre)}">${esc(d.archivo || d.nombre)}</b><small>${d.tamano != null ? attachmentSizeTxt(d.tamano) : ''}${d.creado ? ' · ' + crmFecha(d.creado.slice(0, 10)) : ''}${d.origen === 'oferta' ? ' · oferta generada' : ''}${d.por ? ' · ' + esc(crmQuien(d.por)) : ''}</small></span>
+      ${anex ? `<label class="crm-adj-inc" title="Si está marcado, se añade al final del PDF cuando generes la oferta"><input type="checkbox" ${d.incluir ? 'checked' : ''} onchange="crmAdjIncluir(${i}, this.checked)" /> Con la oferta</label>` : (d.origen === 'oferta' ? '' : `<span class="crm-adj-no" title="Word, Excel y otros no se pueden meter dentro del PDF: se descargan aparte">solo carpeta</span>`)}
+      <button type="button" class="crm-x2" title="Abrir" onclick="crmAdjAbrirDoc(${i})">↗</button><button type="button" class="crm-x2" title="Descargar" onclick="crmAdjDescargar(${i})">↓</button><button type="button" class="crm-x2" title="Eliminar" onclick="crmAdjQuitar(${i})">✕</button></div>`;
+  };
+  crmModal(`<div class="crm-modal-h"><b>Documentos de la cotización</b><small>${o ? esc(crmTitulo(o)) + ' · ' + esc(crmEmpresa(o)) : 'Se guardarán cuando guardes la cotización'}</small></div>
+    <div class="crm-modal-b">
+      <div class="crm-dz" style="padding:14px 16px;margin-bottom:12px;" onclick="document.getElementById('crm-adj-in').click()" ondragover="event.preventDefault(); this.classList.add('over')" ondragleave="this.classList.remove('over')" ondrop="event.preventDefault(); this.classList.remove('over'); crmAdjElegir(event.dataTransfer.files)">
+        <input id="crm-adj-in" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.xlsm,.csv,.ppt,.pptx,.png,.jpg,.jpeg,.webp,.gif,.txt" style="display:none" onchange="crmAdjElegir(this.files); this.value=''" />
+        <span class="crm-dz-i" style="width:36px;height:36px;font-size:18px;">${c.subiendo ? '…' : '↑'}</span>
+        <div><b>${c.subiendo ? 'Subiendo…' : 'Arrastra aquí los documentos o pulsa para elegirlos'}</b><small>PDF, imágenes, Word, Excel… · máximo ${CRM_DOC_MAX_MB} MB cada uno</small></div>
+      </div>
+      ${S.adjError && id ? `<div class="crm-err">${esc(S.adjError)}</div>` : ''}
+      ${subidos.length ? `<div class="crm-adj-t">Documentos <small>· los PDF e imágenes marcados «Con la oferta» irán al final del PDF</small></div><div class="crm-dsub" style="max-height:280px;">${subidos.map(fila).join('')}</div>` : '<div class="crm-nada">Todavía no hay documentos en esta cotización.</div>'}
+      ${ofertas.length ? `<div class="crm-adj-t" style="margin-top:14px;">Ofertas generadas</div><div class="crm-dsub" style="max-height:160px;">${ofertas.map(fila).join('')}</div>` : ''}
+      <div id="crm-adj-err" class="crm-err"></div></div>
+    <div class="crm-modal-f"><button type="button" class="btn btn-primary" onclick="crmAdjCerrar()">Cerrar</button></div>`);
+}
+function crmAdjCerrar(){ const c = window.__crmAdj; window.__crmAdj = null; crmModalCerrar(); if (c) crmAdjBtnPinta(c.id); }
+function crmAdjValida(files){
+  const ok = [];
+  Array.from(files || []).forEach(f => {
+    if (!CRM_DOC_EXT.includes(crmDocExt(f.name))) { appToast(`«${f.name}» no es de un tipo admitido (PDF, Excel, Word, imagen…).`, 'error'); return; }
+    if (f.size > CRM_DOC_MAX_MB * 1024 * 1024) { appToast(`«${f.name}» pesa demasiado (${attachmentSizeTxt(f.size)}; máximo ${CRM_DOC_MAX_MB} MB).`, 'error'); return; }
+    ok.push(f);
+  });
+  return ok;
+}
+// Sube los archivos de una cotización que ya existe. Devuelve el texto del error, o '' si todo fue bien
+async function crmAdjSubirA(id, files){
+  const S = crmS(); S.adj = S.adj || {}; S.adj[id] = S.adj[id] || [];
+  for (const f of files) {
+    const path = `comercial/ofertas/${id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${crmAdjLimpio(f.name)}`;
+    const up = await supabaseClient.storage.from(DOCS_BUCKET).upload(path, f, { contentType: f.type || undefined });
+    if (up.error) return `«${f.name}»: ${up.error.message || 'no se pudo subir'}`;
+    const ins = await supabaseClient.from('crm_oportunidad_docs').insert({ oportunidad_id: id, nombre: f.name.replace(/\.[^.]+$/, ''), archivo: f.name, storage_path: path, tipo: f.type || null, tamano: f.size, origen: 'subido', incluir: crmAdjEsAnexable(f.name), created_by: currentUserEmail() }).select().single();
+    if (ins.error) { await supabaseClient.storage.from(DOCS_BUCKET).remove([path]); return crmAdjErrTxt(ins.error); }
+    S.adj[id].push(crmAdjDeFila(ins.data));
+  }
+  return '';
+}
+async function crmAdjElegir(files){
+  const c = window.__crmAdj; if (!c || c.subiendo) return;
+  const ok = crmAdjValida(files); if (!ok.length) return;
+  if (!c.id) {   // cotización nueva: se guardan en memoria y se suben al guardarla
+    const f = crmS().form; f.adjPend = f.adjPend || [];
+    ok.forEach(x => f.adjPend.push({ nombre: x.name.replace(/\.[^.]+$/, ''), archivo: x.name, tamano: x.size, tipo: x.type || '', origen: 'subido', incluir: crmAdjEsAnexable(x.name), file: x }));
+    crmAdjPinta(); return;
+  }
+  c.subiendo = true; crmAdjPinta();
+  const mal = await crmAdjSubirA(c.id, ok);
+  c.subiendo = false; crmAdjPinta();
+  const e = document.getElementById('crm-adj-err'); if (mal && e) e.textContent = 'No se pudo subir: ' + mal;
+  else appToast(`${ok.length} documento${ok.length === 1 ? '' : 's'} guardado${ok.length === 1 ? '' : 's'}.`, 'ok');
+}
+async function crmAdjSubirPend(id){
+  const f = crmS().form, pend = (f && f.adjPend) || [];
+  if (!pend.length) return;
+  const mal = await crmAdjSubirA(id, pend.map(p => p.file));
+  f.adjPend = [];
+  if (mal) appToast('La cotización se guardó, pero no se pudieron subir los documentos: ' + mal, 'error');
+}
+async function crmAdjIncluir(i, v){
+  const c = window.__crmAdj, d = c && crmAdjLista(c.id)[i]; if (!d) return;
+  d.incluir = !!v;
+  if (!c.id) return;
+  const { error } = await supabaseClient.from('crm_oportunidad_docs').update({ incluir: !!v }).eq('id', d.id);
+  if (error) { d.incluir = !v; crmAdjPinta(); appToast('No se pudo cambiar: ' + crmAdjErrTxt(error), 'error'); }
+}
+async function crmAdjAbrirDoc(i){
+  const c = window.__crmAdj, d = c && crmAdjLista(c.id)[i]; if (!d) return;
+  const w = window.open('', '_blank');
+  const url = d.file ? URL.createObjectURL(d.file) : await signedUrl(d.path);
+  if (!url) { if (w) w.close(); appToast('No se pudo abrir el documento.', 'error'); return; }
+  if (w) w.location = url; else window.location.href = url;
+}
+async function crmAdjDescargar(i){
+  const c = window.__crmAdj, d = c && crmAdjLista(c.id)[i]; if (!d) return;
+  let url = d.file ? URL.createObjectURL(d.file) : null;
+  if (!url) { const { data } = await supabaseClient.storage.from(DOCS_BUCKET).createSignedUrl(d.path, 300, { download: d.archivo || d.nombre }); url = data && data.signedUrl; }
+  if (!url) { appToast('No se pudo descargar el documento.', 'error'); return; }
+  const a = document.createElement('a'); a.href = url; a.download = d.archivo || d.nombre;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+async function crmAdjQuitar(i){
+  const c = window.__crmAdj, l = c && crmAdjLista(c.id), d = l && l[i]; if (!d) return;
+  if (!c.id) { l.splice(i, 1); crmAdjPinta(); return; }
+  const { error } = await supabaseClient.from('crm_oportunidad_docs').delete().eq('id', d.id);
+  if (error) { appToast('No se pudo eliminar: ' + crmAdjErrTxt(error), 'error'); return; }
+  try { await supabaseClient.storage.from(DOCS_BUCKET).remove([d.path]); } catch (e) { /* un archivo suelto sin enlace no estorba */ }
+  crmS().adj[c.id] = l.filter(x => x !== d);
+  crmAdjPinta(); appToast('Documento eliminado.', 'ok');
+}
+// Añade como anexos, al final del PDF de la oferta, los PDF e imágenes marcados «Con la oferta»
+async function crmAdjAnexar(o, bytes){
+  let lista = [];
+  try { lista = (await crmAdjCarga(o.id)).filter(d => d.origen !== 'oferta' && d.incluir && crmAdjEsAnexable(d.archivo || d.nombre)); } catch (e) { return { bytes, n: 0, fallos: [] }; }
+  if (!lista.length) return { bytes, n: 0, fallos: [] };
+  const { PDFDocument } = PDFLib, pdf = await PDFDocument.load(bytes), fallos = [];
+  let n = 0;
+  for (const d of lista) {
+    try {
+      const url = await signedUrl(d.path); if (!url) throw new Error('no se pudo descargar');
+      const r = await fetch(url); if (!r.ok) throw new Error('no se pudo descargar');
+      const buf = await r.arrayBuffer(), ext = crmDocExt(d.archivo || d.nombre);
+      if (ext === 'pdf') {
+        const src = await PDFDocument.load(buf, { ignoreEncryption: true });
+        (await pdf.copyPages(src, src.getPageIndices())).forEach(p => pdf.addPage(p));
+      } else {
+        const img = ext === 'png' ? await pdf.embedPng(buf) : await pdf.embedJpg(buf);
+        const W = 595.28, H = 841.89, m = 36, k = Math.min((W - 2 * m) / img.width, (H - 2 * m) / img.height);
+        const pg = pdf.addPage([W, H]);
+        pg.drawImage(img, { x: (W - img.width * k) / 2, y: (H - img.height * k) / 2, width: img.width * k, height: img.height * k });
+      }
+      n++;
+    } catch (e) { fallos.push(d.archivo || d.nombre); }
+  }
+  return { bytes: n ? await pdf.save() : bytes, n, fallos };
+}
+// Guarda la oferta generada en la carpeta de la cotización (sustituye a la anterior del mismo número e idioma)
+async function crmAdjGuardaOferta(o, nombre, bytes, lang){
+  try {
+    const S = crmS(); S.adj = S.adj || {};
+    const path = `comercial/ofertas/${o.id}/oferta-${crmAdjLimpio(o.oferta)}-${lang}.pdf`;
+    const up = await supabaseClient.storage.from(DOCS_BUCKET).upload(path, new Blob([bytes], { type: 'application/pdf' }), { upsert: true, contentType: 'application/pdf', cacheControl: '0' });
+    if (up.error) return;
+    await supabaseClient.from('crm_oportunidad_docs').delete().eq('oportunidad_id', o.id).eq('storage_path', path);
+    const ins = await supabaseClient.from('crm_oportunidad_docs').insert({ oportunidad_id: o.id, nombre: nombre.replace(/\.pdf$/i, ''), archivo: nombre, storage_path: path, tipo: 'application/pdf', tamano: bytes.length, origen: 'oferta', incluir: false, created_by: currentUserEmail() });
+    if (ins.error) { await supabaseClient.storage.from(DOCS_BUCKET).remove([path]); return; }
+    await crmAdjCarga(o.id, true);
+    crmAdjBtnPinta(o.id);
+    if (window.__crmAdj && window.__crmAdj.id === o.id) crmAdjPinta();
+  } catch (e) { /* si falla guardarla en la carpeta, la descarga ya se hizo */ }
+}
 /* ---- Informes ---- */
 function crmInformesHtml(){
   const S = crmS(), h = today();
@@ -24752,6 +24935,7 @@ function crmDrawerPinta(){
 async function crmAbrir(id){
   const S = crmS();
   crmDrawerAbre({ tipo: 'detalle', id });
+  crmAdjCarga(id).then(() => crmAdjBtnPinta(id)).catch(() => {});
   if (S.acts[id]) setTimeout(() => crmConvPinta(id), 50);   // ya cargada: baja al último mensaje
   if (!S.acts[id]) {
     const { data } = await supabaseClient.from('crm_actividades').select('*').eq('oportunidad_id', id).order('created_at', { ascending: false });
@@ -24771,8 +24955,8 @@ function crmDetalleHtml(o){
   const atras = abierta && o.proxFecha && o.proxFecha < h;
   const edad = o.fechaCot ? crmDias(o.fechaCot, h) : 0;
   const dato = (t, v) => v ? `<div class="crm-d"><span>${t}</span><div>${v}</div></div>` : '';
-  return `<div class="crm-dr-h" style="--c:${f.color}">
-      <button type="button" class="crm-x" onclick="crmCerrarDrawer()" title="Cerrar">✕</button>
+  return `<div class="crm-dr-h conadj" style="--c:${f.color}">
+      <button type="button" class="crm-x" onclick="crmCerrarDrawer()" title="Cerrar">✕</button>${crmAdjBtnHtml(o.id)}
       <small>${esc(crmEmpresa(o))}${o.contactoId ? '' : ' · prospecto'} · ${esc(CRM_SERVICIOS[o.servicio])}</small>
       <h3>${esc(crmTitulo(o))}</h3>
       <div class="crm-dr-h2"><span class="crm-chip" style="--c:${f.color}">${f.label}</span>${o.oferta ? `<span class="crm-chip" style="--c:#5B6B8C" title="Número de oferta del PDF">${esc(o.oferta)}</span>` : ''}<span class="crm-edad">cotizada hace ${edad} día${edad === 1 ? '' : 's'}</span></div>
@@ -25271,6 +25455,7 @@ function crmNueva(){ crmS().form = crmFormEstado(null); crmDrawerAbre({ tipo: 'f
 function crmEditar(id){
   const o = crmS().opps.find(x => x.id === id), f = crmS().form = crmFormEstado(o);
   crmDrawerAbre({ tipo: 'form', id }); crmCatalogosRefrescar();
+  crmAdjCarga(id).then(() => crmAdjBtnPinta(id)).catch(() => {});
 }
 /* ---- Qué se cotiza: se elige transporte, almacén y/o operativas y solo aparecen las partes que hacen falta ---- */
 const CRM_SEC = {
@@ -25320,7 +25505,7 @@ function crmFormHtml(o){
   const prox = o ? o.proxFecha : crmSuma(today(), 3);
   const paso = (n, t, sub) => `<div class="crm-fsec"><span>${n}</span><div><b>${t}</b>${sub ? `<small>${sub}</small>` : ''}</div></div>`;
   const blk = (k, tit) => `<div class="crm-blk ${k}" id="crm-sec-${k}" style="${f.sec[k] ? '' : 'display:none;'}"><div class="crm-blk-h" id="crm-blk-${k}">${crmBlkCabHtml(f, k)}</div><div id="crm-${k}">${k === 'tr' ? crmTrListaHtml(f) : k === 'al' ? crmAlListaHtml(f) : crmOpListaHtml(f)}</div></div>`;
-  return `<div class="crm-dr-h"><button type="button" class="crm-x" onclick="crmCerrarDrawer()" title="Cerrar">✕</button><small>${nuevo ? 'Nueva cotización' : 'Editar cotización'}</small><h3>${nuevo ? 'Anotar una cotización' : esc(crmTitulo(o))}</h3></div>
+  return `<div class="crm-dr-h conadj"><button type="button" class="crm-x" onclick="crmCerrarDrawer()" title="Cerrar">✕</button>${crmAdjBtnHtml(o ? o.id : null)}<small>${nuevo ? 'Nueva cotización' : 'Editar cotización'}</small><h3>${nuevo ? 'Anotar una cotización' : esc(crmTitulo(o))}</h3></div>
     <div class="crm-dr-b crm-form"><div class="crm-fg"><div class="crm-fmain">
       ${paso(1, 'Cliente', 'Para quién es y con quién has hablado')}
       <div class="field"><label>Empresa <span class="dc-req">*</span></label><input id="crm-f-emp" autocomplete="off" maxlength="120" placeholder="Busca un cliente o escribe una empresa nueva" value="${esc(emp)}" oninput="crmMayus(this); crmEmpSug()" onfocus="crmEmpAbrir()" onkeydown="crmEmpTecla(event)" onblur="setTimeout(crmEmpCerrar, 180)" /><div id="crm-f-emp-res"></div><div id="crm-f-emp-h" class="crm-hint">${o ? 'Cliente o prospecto elegido.' : 'Busca un cliente o prospecto, o escribe el nombre de una empresa nueva.'}</div></div>
@@ -25430,6 +25615,7 @@ async function crmFormGuardar(id, pdf){
     if (error) throw error;
     const o = crmOppDeFila(data); S.opps.unshift(o);
     S.acts[o.id] = [];
+    await crmAdjSubirPend(o.id);   // los documentos que se adjuntaron antes de guardar
     await crmActividad(o.id, 'cotizacion', `Cotización enviada: ${crmTitulo(o)}`);
     appToast('Cotización anotada.' + (o.proxFecha ? ` Te aviso ${crmRel(o.proxFecha).toLowerCase()}.` : ''), 'ok');
     crmCerrarDrawer(); crmPinta();
@@ -25556,16 +25742,20 @@ async function crmOfertaGenerar(id, lang){
       return;
     }
     o.oferta = num; o.ofertaFecha = today();
-    const bytes = await crmOfertaPdfBytes(o, num, lang);
+    const base = await crmOfertaPdfBytes(o, num, lang);
+    const anex = await crmAdjAnexar(o, base);   // PDF e imágenes de la carpeta marcados «Con la oferta», al final
+    const bytes = anex.bytes;
+    if (anex.fallos.length) appToast(`No se pudo añadir a la oferta: ${anex.fallos.join(', ')}. Revisa que el archivo no esté dañado.`, 'error');
     const nombre = `${L.pres} ${num} ${crmEmpresa(o)}`.replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim() + '.pdf';
     const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
     const a = document.createElement('a');
     a.href = url; a.download = nombre;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
-    const idiomaTxt = lang === 'es' ? '' : ` (${L.nombre})`;
+    const idiomaTxt = (lang === 'es' ? '' : ` (${L.nombre})`) + (anex.n ? ` con ${anex.n} anexo${anex.n === 1 ? '' : 's'}` : '');
     await crmActividad(o.id, 'cotizacion', nueva ? `Oferta ${num} generada en PDF${idiomaTxt}` : `PDF de la oferta ${num} generado de nuevo${idiomaTxt}`);
-    appToast(`${nueva ? 'Oferta' : 'PDF de la oferta'} ${num} descargado.`, 'ok');
+    appToast(`${nueva ? 'Oferta' : 'PDF de la oferta'} ${num} descargado${anex.n ? ` con ${anex.n} anexo${anex.n === 1 ? '' : 's'}` : ''}.`, 'ok');
+    await crmAdjGuardaOferta(o, nombre, bytes, lang);
     if (S.drawer && S.drawer.tipo === 'detalle' && S.drawer.id === id) crmDrawerPinta();
   } catch (err) {
     appToast('No se pudo generar el PDF: ' + (err && err.message ? err.message : 'error desconocido.'), 'error');
@@ -25761,9 +25951,12 @@ async function crmEliminar(id){
   const S = crmS(), o = S.opps.find(x => x.id === id);
   if (!o) return;
   if (!(await appConfirm({ title: 'Eliminar cotización', message: `Se elimina «${crmTitulo(o)}» de ${crmEmpresa(o)} con todo su historial. No se puede deshacer.`, confirmLabel: 'Eliminar', cancelLabel: 'Cancelar', tone: 'warn', icon: 'warn' }))) return;
+  let rutasAdj = [];
+  try { rutasAdj = (await crmAdjCarga(id, true)).map(d => d.path).filter(Boolean); } catch (e) { /* sin documentos */ }
   const { error } = await supabaseClient.from('crm_oportunidades').delete().eq('id', id);
   if (error) { appToast('No se pudo eliminar: ' + (error.message || 'error desconocido'), 'error'); return; }
-  S.opps = S.opps.filter(x => x.id !== id); delete S.acts[id];
+  if (rutasAdj.length) { try { await supabaseClient.storage.from(DOCS_BUCKET).remove(rutasAdj); } catch (e) { /* ya no hay enlace */ } }
+  S.opps = S.opps.filter(x => x.id !== id); delete S.acts[id]; if (S.adj) delete S.adj[id];
   crmCerrarDrawer(); crmPinta();
   appToast('Cotización eliminada.', 'ok');
 }
