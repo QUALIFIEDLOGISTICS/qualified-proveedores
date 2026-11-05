@@ -9943,7 +9943,7 @@ function sgaEntradaPegarCodigos(){
 // Servicios que se pueden poner en una expedición: los de tarifa manual que ese cliente tiene creados en su tarifa
 function sgaServiciosDeCliente(clienteId){
   const ids = new Set(almacenajeTarifas.filter(t => t.clienteId === clienteId).map(t => t.tipo));
-  return almacenajeProductos.filter(p => !p.archived && p.disparador === 'manual' && ids.has(p.id));
+  return almacenajeProductos.filter(p => !p.archived && p.disparador === 'manual' && p.unidad !== 'cuota' && ids.has(p.id));   // las cuotas mensuales salen solas en el resumen
 }
 // Cliente elegido en el formulario de recepción o expedición que se está viendo ('' si aún no hay), o null fuera de ellos
 function sgaServicioCliente(){
@@ -9955,7 +9955,7 @@ function sgaServiciosCambio(){ if (window.__stockView === 'actividad') sgaActivi
 function sgaServicioFilaHtml(j, pre){
   pre = pre || {};
   const cli = sgaServicioCliente();   // en recepciones y expediciones solo salen los servicios que el cliente tiene en su tarifa
-  let prods = almacenajeProductos.filter(p => !p.archived && p.disparador === 'manual');
+  let prods = almacenajeProductos.filter(p => !p.archived && p.disparador === 'manual' && p.unidad !== 'cuota');
   if (cli !== null) prods = prods.filter(p => sgaServiciosDeCliente(cli).some(s => s.id === p.id) || p.id === pre.prod);   // el ya guardado se conserva aunque se haya quitado de la tarifa
   prods.sort((a, b) => almacenajeProductoTexto(a).localeCompare(almacenajeProductoTexto(b), 'es'));
   return `
@@ -11681,7 +11681,16 @@ function sgaResumenCalcular(d){
   const conceptos = {};
   d.cobros.forEach(c => { const k = c.productoId + '|' + c.precio; const e = (conceptos[k] = conceptos[k] || { productoId: c.productoId, precio: c.precio, cantidad: 0, importe: 0, origen: c.origen, detalle: '' }); e.cantidad += c.cantidad; e.importe += c.importe; });
   const totMov = d.cobros.filter(c => c.origen === 'movimiento').reduce((s, c) => s + c.importe, 0);
-  const totServ = d.cobros.filter(c => c.origen === 'servicio').reduce((s, c) => s + c.importe, 0);
+  // Cuotas mensuales fijas (extras «por mes», p. ej. un seguro de mercancía): salen solas cada mes en los clientes que las tienen en su tarifa
+  const finMesCuota = `${d.periodo}-${String(dias).padStart(2, '0')}`;
+  const cuotaLineas = [];
+  if (!d.wid && (!cfg.activoDesde || finMesCuota >= cfg.activoDesde)) {   // con un almacén filtrado no sale (como los m²)
+    almacenajeProductos.filter(p => !p.archived && p.unidad === 'cuota').forEach(p => {
+      const t = sgaTarifaEn(d.clienteId, p.id, finMesCuota);
+      if (t && t.precio > 0) cuotaLineas.push({ productoId: p.id, precio: t.precio, cantidad: 1, importe: sgaR2(t.precio), origen: 'cuota', detalle: 'cuota mensual' });
+    });
+  }
+  const totServ = sgaR2(d.cobros.filter(c => c.origen === 'servicio').reduce((s, c) => s + c.importe, 0) + cuotaLineas.reduce((s, l) => s + l.importe, 0));
   const totOper = sgaR2((d.operativas || []).reduce((s, o) => s + o.importe, 0));
   // Almacenaje de stock: palet por día (suma de cada día) o máximo del mes (el día con más stock), según la base de cada línea de tarifa
   const hoy = today();
@@ -11717,7 +11726,7 @@ function sgaResumenCalcular(d){
   const prodM2 = almacenajeProductos.find(p => !p.archived && p.disparador === 'stock_mes' && almacenajeTarifas.some(t => t.clienteId === d.clienteId && t.tipo === p.id));
   const finMes = `${d.periodo}-${String(dias).padStart(2, '0')}`;
   const tM2 = prodM2 ? sgaTarifaEn(d.clienteId, prodM2.id, finMes) : null;
-  return { cfg, usaBultos, filas, inicial, porTipo, final: { mod: actualMod, bul: actualBul }, conceptos: [...Object.values(conceptos), ...stockLineas], hayReg: filas.some(x => x.regMod), mesActual, proyectar, almPrevisto: sgaR2(almPrevisto), totMov, totServ, totOper, totOperMes: sgaR2(filas.reduce((s, x) => s + (x.oper || 0), 0)), operativas: d.operativas || [], totStock, m2, m2Guardado: !!guardado, m2Origen, m2Desde: contrato ? contrato.desde : '', prodM2, tM2, finMes };
+  return { cfg, usaBultos, filas, inicial, porTipo, final: { mod: actualMod, bul: actualBul }, conceptos: [...Object.values(conceptos), ...stockLineas, ...cuotaLineas], hayReg: filas.some(x => x.regMod), mesActual, proyectar, almPrevisto: sgaR2(almPrevisto), totMov, totServ, totOper, totOperMes: sgaR2(filas.reduce((s, x) => s + (x.oper || 0), 0)), operativas: d.operativas || [], totStock, m2, m2Guardado: !!guardado, m2Origen, m2Desde: contrato ? contrato.desde : '', prodM2, tM2, finMes };
 }
 function sgaResumenHtml(d, paraImprimir){
   const r = sgaResumenCalcular(d);
@@ -11752,7 +11761,7 @@ function sgaResumenHtml(d, paraImprimir){
   // Los conceptos van siempre en este orden: movimientos (recepciones y luego expediciones), almacenaje y, al final, extras
   const grupoDe = c => { if (c.origen === 'stock') return 'almacenaje'; const cat = (almacenajeProducto(c.productoId) || {}).categoria; return cat || (c.origen === 'servicio' ? 'extra' : 'movimiento'); };
   const ordenDe = c => { const p = almacenajeProducto(c.productoId) || {}; return c.origen === 'stock' ? 0 : ['descarga', 'descarga_carga'].includes(p.disparador) ? 0 : p.disparador === 'carga' ? 1 : 2; };
-  const lineas = r.conceptos.map(c => ({ g: grupoDe(c), o: ordenDe(c), importe: c.importe, html: `<tr><td>${esc(sgaProdTxt(c.productoId))}${c.origen === 'stock' ? ` <small style="color:var(--muted);">· almacenaje (${esc(c.detalle)})</small>` : ''}</td><td class="r">${sgaNumTxt(c.cantidad)}</td><td class="r">${esc(eurPrecio(c.precio))}</td><td class="r">${eur(c.importe)}</td></tr>` }));
+  const lineas = r.conceptos.map(c => ({ g: grupoDe(c), o: ordenDe(c), importe: c.importe, html: `<tr><td>${esc(sgaProdTxt(c.productoId))}${c.origen === 'stock' ? ` <small style="color:var(--muted);">· almacenaje (${esc(c.detalle)})</small>` : c.origen === 'cuota' ? ' <small style="color:var(--muted);">· cuota mensual</small>' : ''}</td><td class="r">${sgaNumTxt(c.cantidad)}</td><td class="r">${esc(eurPrecio(c.precio))}</td><td class="r">${eur(c.importe)}</td></tr>` }));
   r.operativas.slice().sort((x, y) => x.fecha.localeCompare(y.fecha)).forEach(o => {
     const det = sgaOperativaDetalleTxt(o.apartados);
     lineas.push({ g: 'operativa', o: 0, importe: o.importe, html: `<tr><td>${esc(o.nombre)} <small style="color:var(--muted);">· ${esc(fmtDateDMY(o.fecha).split('/').join('-'))}${o.referencia ? ' · ' + esc(o.referencia) : ''}${o.facturada ? ' · facturada' : ' · pendiente'}${o.anterior ? ' · de un mes anterior' : ''}</small></td><td class="r">1</td><td class="r">${eur(o.importe)}</td><td class="r">${eur(o.importe)}</td></tr>` });
@@ -26432,7 +26441,7 @@ function almacenajeCobroActualizar(){
   if (!h) return;
   const dir = (document.getElementById('ap-direccion') || {}).value;
   h.textContent = cat === 'almacenaje' ? (uni === 'mes' ? 'Se cobra solo cada mes, con los metros cuadrados que ocupa el cliente.' : 'Se cobra solo cada día, con el stock que haya en el almacén.')
-    : cat === 'extra' ? (uni === 'cuota' ? 'Cuota fija de cada mes (por ejemplo, un seguro de mercancía). Se apunta a mano cada mes, con la cantidad que toque.' : 'Lo apunta el operario a mano en el albarán, con la cantidad que toque.')
+    : cat === 'extra' ? (uni === 'cuota' ? 'Cuota fija de cada mes (por ejemplo, un seguro de mercancía). Sale sola en el resumen mensual de cada cliente que la tenga en su tarifa, una vez al mes.' : 'Lo apunta el operario a mano en el albarán, con la cantidad que toque.')
     : `Se cobra solo en cada ${dir === 'expedicion' ? 'expedición' : dir === 'ambas' ? 'recepción y en cada expedición, con el mismo precio' : 'recepción'}${uni === 'albaran' ? ', una vez por albarán' : uni === 'bulto' ? ', por cada bulto' : ', por cada palet o unidad'}.`;
 }
 async function submitAlmacenajeProducto(editId){
@@ -26538,7 +26547,7 @@ function almacenajeCobroFrase(p){
     const e = almacenajeProducto(p.cobroEntrada), s = almacenajeProducto(p.cobroSalida);
     return 'Cada día, con el stock que haya' + (e || s ? ` · Al entrar: ${e ? e.nombre : '—'} · Al salir: ${s ? s.nombre : '—'}` : '');
   }
-  if (p.categoria === 'extra') return `Lo apunta el operario · ${cuenta}`;
+  if (p.categoria === 'extra') return p.unidad === 'cuota' ? 'Sale sola cada mes · cuota fija' : `Lo apunta el operario · ${cuenta}`;
   const dir = almacenajeDireccionTxt(p);
   return `En cada ${dir === 'Expedición' ? 'expedición' : dir === 'Recepción' ? 'recepción' : 'recepción y expedición'} · ${cuenta}`;
 }
@@ -26562,7 +26571,7 @@ function setApLayout(v){ try { localStorage.setItem('qp_ap_layout', v); } catch 
 function apChipsHtml(p){
   const cuenta = { movimiento: 'Por palet o unidad', bulto: 'Por bulto', albaran: 'Por albarán', hora: 'Por hora', cuota: 'Cuota cada mes' }[p.unidad];
   const l = p.categoria === 'almacenaje' ? [p.unidad === 'mes' ? 'Cada mes' : 'Cada día', p.unidad === 'mes' ? 'Por m²' : (p.unidad === 'bulto' ? 'Por bulto' : '')]
-    : p.categoria === 'extra' ? ['A mano', cuenta]
+    : p.categoria === 'extra' ? [p.unidad === 'cuota' ? 'Automático' : 'A mano', cuenta]
     : [almacenajeDireccionTxt(p), cuenta];
   return l.filter(Boolean).map(t => `<span>${esc(t)}</span>`).join('');
 }
