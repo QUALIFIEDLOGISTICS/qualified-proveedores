@@ -8829,6 +8829,16 @@ async function sgaDashCargar(stArg){
   refreshStockBody();
 }
 // Resumen de cada cliente del SGA para un mes (con los filtros de cliente y almacén aplicados)
+// Lo que no pertenece a ningún almacén (m² contratados, operativas y cuotas mensuales) se suma, al elegir un almacén, al almacén del cliente:
+// el único que tiene asignado en su ficha o, si tiene varios, donde más stock tiene ahora. Sin almacén elegido se suma todo, como siempre.
+function dashAlmacenPrincipal(c){
+  const asignados = (c.warehouseIds || []).filter(id => allWarehouses.some(w => w.id === id && !w.archived));
+  if (asignados.length === 1) return asignados[0];
+  const stock = {};
+  sgaPartidas.forEach(p => { if (p.clienteId === c.id && p.actual > 0) stock[p.warehouseId] = (stock[p.warehouseId] || 0) + p.actual; });
+  const cand = asignados.length ? asignados : Object.keys(stock);
+  return cand.map((id, i) => ({ id, i })).sort((a, b) => (stock[b.id] || 0) - (stock[a.id] || 0) || a.i - b.i).map(x => x.id)[0] || '';
+}
 // opAnual: para sumar los meses de un año sin contar dos veces lo mismo, una operativa sin facturar solo cuenta en el mes de su fecha
 // (en vez de arrastrarse a los meses siguientes); las que venían de antes del año cuentan en enero (primerMes).
 function dashCalcularPeriodo(periodo, stArg, opAnual){
@@ -8842,10 +8852,11 @@ function dashCalcularPeriodo(periodo, stArg, opAnual){
     const cobros = D.cobros.filter(x => x.periodo === periodo && x.cliente_id === c.id && (!wid || idsC.has(x.albaran_id))).map(x => ({ fecha: x.fecha, origen: x.origen, productoId: x.producto_id, cantidad: Number(x.cantidad), precio: Number(x.precio), importe: Number(x.importe) }));
     const mapOp = x => ({ id: x.id, fecha: x.fecha, nombre: x.nombre, importe: Number(x.importe), facturada: !!x.facturada, referencia: x.referencia || '', apartados: Array.isArray(x.apartados) ? x.apartados : [] });
     const opsC = D.op.filter(x => x.cliente_id === c.id);
-    const operativas = wid ? [] : [...(opAnual && !opAnual.primerMes ? [] : [...D.opPend.filter(x => x.cliente_id === c.id && x.fecha < ini), ...opsC.filter(x => !x.facturada && x.fecha < ini)]), ...opsC.filter(x => x.fecha >= ini && x.fecha <= fin)].map(mapOp);
-    const m2 = wid ? [] : D.m2.filter(x => x.cliente_id === c.id).map(x => ({ periodo: x.periodo, m2: Number(x.m2) }));
-    const r = sgaResumenCalcular({ clienteId: c.id, periodo, movs, cobros, m2, operativas, wid });
-    const fijo = !wid && r.m2 != null && r.tM2 ? sgaR2(r.m2 * r.tM2.precio) : 0;
+    const propio = !wid || dashAlmacenPrincipal(c) === wid;   // m², operativas y cuotas cuentan en el almacén principal del cliente
+    const operativas = !propio ? [] : [...(opAnual && !opAnual.primerMes ? [] : [...D.opPend.filter(x => x.cliente_id === c.id && x.fecha < ini), ...opsC.filter(x => !x.facturada && x.fecha < ini)]), ...opsC.filter(x => x.fecha >= ini && x.fecha <= fin)].map(mapOp);
+    const m2 = !propio ? [] : D.m2.filter(x => x.cliente_id === c.id).map(x => ({ periodo: x.periodo, m2: Number(x.m2) }));
+    const r = sgaResumenCalcular({ clienteId: c.id, periodo, movs, cobros, m2, operativas, wid, conSinAlmacen: !!wid && propio });
+    const fijo = propio && r.m2 != null && r.tM2 ? sgaR2(r.m2 * r.tM2.precio) : 0;
     const total = sgaR2(r.totMov + r.totServ + r.totOper + r.totStock + fijo);
     const delMes = tipo => albsC.filter(x => x.tipo === tipo && x.fecha.slice(0, 7) === periodo && !x.borrador);
     return { c, r, fijo, total, recs: delMes('entrada'), exps: delMes('salida'), conceptos: { mov: r.totMov, alm: sgaR2(r.totStock + fijo), oper: r.totOper, serv: r.totServ } };
@@ -9115,7 +9126,7 @@ function stockDashboardAnioHtml(st){
       <div class="deca-card-body">${dashBarrasSvg(serieRE, { etq: s => s.corto, cada: 1, tit: s => s.nombre })}<div class="dash-leyenda"><span><i style="background:${DASH_COLORES.mov}"></i>Recibidos · ${sgaNumTxt(palRec)}</span><span><i style="background:${DASH_COLORES.oper}"></i>Expedidos · ${sgaNumTxt(palExp)}</span></div></div>
     </div>`;
   const { cardClientes, cardEdad, cardAtencion } = dashTarjetasComunes(st, D, items, total, borradores, hoy, `Pulsa un cliente para ver su resumen mensual en ${anio}`);
-  const nota = '<div class="dash-nota" style="margin-top:10px;">En el año, cada operativa cuenta en el mes de su fecha (las que venían de antes de enero, en enero), para no sumarla dos veces.' + (st.wid ? ' Con un almacén elegido no se cuentan las operativas ni el almacenaje por m² contratados (no pertenecen a un almacén).' : '') + '</div>';
+  const nota = '<div class="dash-nota" style="margin-top:10px;">En el año, cada operativa cuenta en el mes de su fecha (las que venían de antes de enero, en enero), para no sumarla dos veces.' + (st.wid ? ' Con un almacén elegido, los m² contratados, las operativas y las cuotas (que no pertenecen a un almacén) se suman al almacén principal de cada cliente: el único que tiene asignado o, si tiene varios, donde más stock tiene ahora.' : '') + '</div>';
   return `${kpis}
     <div class="dash-grid">
       <div class="dash-main">${cardMeses}${cardRE}${cardClientes}</div>
@@ -9206,7 +9217,7 @@ function stockDashboardBodyHtml(){
       <div class="deca-card-body">${dashBarrasSvg(serieRE)}<div class="dash-leyenda"><span><i style="background:${DASH_COLORES.mov}"></i>Recibidos · ${sgaNumTxt(palRec)}</span><span><i style="background:${DASH_COLORES.oper}"></i>Expedidos · ${sgaNumTxt(palExp)}</span></div></div>
     </div>`;
   const { cardClientes, cardEdad, cardAtencion } = dashTarjetasComunes(st, D, items, total, borradores, hoy, `Pulsa un cliente para ver su resumen mensual`);
-  const nota = st.wid ? '<div class="dash-nota" style="margin-top:10px;">Con un almacén elegido no se cuentan las operativas ni el almacenaje por m² contratados (no pertenecen a un almacén).</div>' : '';
+  const nota = st.wid ? '<div class="dash-nota" style="margin-top:10px;">Con un almacén elegido, los m² contratados, las operativas y las cuotas (que no pertenecen a un almacén) se suman al almacén principal de cada cliente: el único que tiene asignado o, si tiene varios, donde más stock tiene ahora.</div>' : '';
   return `${kpis}
     <div class="dash-grid">
       <div class="dash-main">${cardIngreso}${cardRE}${cardClientes}</div>
@@ -11988,7 +11999,7 @@ function sgaResumenCalcular(d){
   // Cuotas mensuales fijas (extras «por mes», p. ej. un seguro de mercancía): salen solas cada mes en los clientes que las tienen en su tarifa
   const finMesCuota = `${d.periodo}-${String(dias).padStart(2, '0')}`;
   const cuotaLineas = [];
-  if (!d.wid && (!cfg.activoDesde || finMesCuota >= cfg.activoDesde)) {   // con un almacén filtrado no sale (como los m²)
+  if ((!d.wid || d.conSinAlmacen) && (!cfg.activoDesde || finMesCuota >= cfg.activoDesde)) {   // con un almacén filtrado solo sale en el almacén principal del cliente (como los m²)
     almacenajeProductos.filter(p => !p.archived && p.unidad === 'cuota').forEach(p => {
       const t = sgaTarifaEn(d.clienteId, p.id, finMesCuota);
       if (t && t.precio > 0) cuotaLineas.push({ productoId: p.id, precio: t.precio, cantidad: 1, importe: sgaR2(t.precio), origen: 'cuota', detalle: 'cuota mensual' });
