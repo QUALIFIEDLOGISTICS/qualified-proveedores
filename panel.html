@@ -4895,7 +4895,7 @@ async function loadSgaConfig(){
   sgaUbicaciones = (u.data || []).map(r => ({ id: r.id, zonaId: r.zona_id, codigo: r.codigo, archived: !!r.archived }));
 }
 const SGA_ZONA_TIPOS = { suelo: 'Suelo', estanteria: 'Estantería' };
-function sgaZonaNombre(z){ return z.nave && z.nombre ? `${z.nave} · ${z.nombre}` : (z.nave || z.nombre || ""); }
+function sgaZonaNombre(z){ return z.nave && z.nombre && z.nave.trim().toLowerCase() !== z.nombre.trim().toLowerCase() ? `${z.nave} · ${z.nombre}` : (z.nave || z.nombre || ""); }   // una zona que se llama como su nave (nave pequeña sin zonas) sale una sola vez
 function sgaUbicacionesDe(zonaId, conArchivadas){ return sgaUbicaciones.filter(u => u.zonaId === zonaId && (conArchivadas || !u.archived)); }
 /* ---- Zonas y ubicaciones: árbol Nave → Zona → Ubicaciones, con el mapa de la estantería ----
    Solo dimensiona el almacén (naves, zonas y huecos): aquí no se muestra el stock de los clientes. */
@@ -9438,7 +9438,11 @@ function sgaZonaOptionsHtml(sel, wid, clienteId){
   // Naves registradas que aún no tienen ninguna zona: salen en su sitio con una línea en gris («sin zonas»), para que no parezca que faltan
   const wid2 = wid || sgaEntradaWh();
   sgaNaves.filter(n => n.warehouseId === wid2).forEach(n => { const k = (n.nombre || '').trim(); if (k && ![...porNave.keys()].some(x => x.toLowerCase() === k.toLowerCase())) porNave.set(k, []); });
-  const sinZonas = nave => `<option value="" disabled>${esc(nave)} · sin zonas (créalas en Zonas y ubicaciones)</option>`;
+  // Una nave sin zonas se elige entera («Exterior B (toda la nave)»): al elegirla se crea sola una zona con su nombre (sgaEntradaZonaNave).
+  // Si la nave solo admite estanterías no vale una zona de suelo: sale en gris.
+  const sinZonas = nave => sgaNaveAlm(wid2, nave) === 'estanteria'
+    ? `<option value="" disabled>${esc(nave)} · sin zonas (créalas en Zonas y ubicaciones)</option>`
+    : `<option value="nave:${esc(nave)}">${esc(nave)} (toda la nave)</option>`;
   let cuerpo;
   if (!usadas.length && porNave.size <= 1 && zs.length) cuerpo = zs.map(opt).join('');
   else cuerpo = (usadas.length ? `<optgroup label="Usadas por este cliente">${usadas.map(opt).join('')}</optgroup>` : '')
@@ -9822,8 +9826,44 @@ function sgaEntradaQuitarFila(i){
   const row = document.querySelector(`.se-row[data-i="${i}"]`);
   if (row && document.querySelectorAll('.se-row').length > 1) { row.remove(); window.__stockDirty = true; sgaEntradaRefrescar(); }
 }
+// Zona «de toda la nave» para las naves pequeñas sin zonas: se crea una zona con el nombre de la nave la primera vez que se elige (y se reutiliza después)
+const sgaZonaNaveEnCurso = {};
+function sgaZonaDeNave(wid, nave){
+  const n = nave.trim().toLowerCase(), k = wid + '|' + n;
+  const ya = sgaZonas.find(z => z.warehouseId === wid && !z.archived && (z.nave || '').trim().toLowerCase() === n);
+  if (ya) return Promise.resolve(ya);
+  if (!sgaZonaNaveEnCurso[k]) sgaZonaNaveEnCurso[k] = (async () => {
+    try {
+      const { data, error } = await supabaseClient.from('sga_zonas').insert({ warehouse_id: wid, nave, nombre: nave, tipo: 'suelo' }).select().single();
+      if (error || !data) { appToast(`No se pudo usar la nave «${nave}»: ${error && error.code === '23505' ? 'ya hay una zona archivada con ese nombre (restáurala en Zonas y ubicaciones)' : ((error && error.message) || 'error desconocido')}.`, 'error'); return null; }
+      const z = { id: data.id, warehouseId: wid, nave, nombre: data.nombre, tipo: data.tipo, orden: data.orden || 0, archived: false };
+      sgaZonas.push(z);
+      return z;
+    } finally { delete sgaZonaNaveEnCurso[k]; }
+  })();
+  return sgaZonaNaveEnCurso[k];
+}
+async function sgaEntradaZonaNave(i, nave){
+  const z = await sgaZonaDeNave(sgaEntradaWhLinea(i), nave);
+  const el = document.getElementById(`se-${i}-zona`);
+  if (!el) return;
+  if (z) {
+    // la zona nueva ya existe: se rehacen las listas de las demás líneas (conservando lo que tengan elegido; las que aún esperan su nave se rehacen al terminar)
+    document.querySelectorAll('.se-row').forEach(tr => {
+      const j = tr.dataset.i, s = document.getElementById(`se-${j}-zona`);
+      if (!s || s === el || s.value.startsWith('nave:')) return;
+      s.innerHTML = sgaZonaOptionsHtml(s.value, sgaEntradaWhLinea(j));
+    });
+    el.innerHTML = sgaZonaOptionsHtml(z.id, sgaEntradaWhLinea(i));
+    el.value = z.id;
+    window.__stockDirty = true;
+  } else el.value = '';
+  sgaEntradaZonaCambio(i);
+}
 function sgaEntradaZonaCambio(i){
-  const z = document.getElementById(`se-${i}-zona`).value;
+  const sel = document.getElementById(`se-${i}-zona`);
+  if (sel.value.startsWith('nave:')) { sgaEntradaZonaNave(i, sel.value.slice(5)); return; }
+  const z = sel.value;
   const u = document.getElementById(`se-${i}-ubic`);
   u.innerHTML = sgaUbicOptionsHtml(z, '', i);
   sgaEntradaRefrescar();
@@ -10406,6 +10446,7 @@ async function sgaEntradaConfirmar(){
     const f = `Línea ${n + 1}`;
     const vacia = !l.productoId && !l.articuloId && !l.codigo && !l.cantidadTxt && sgaCamposEntrada().every(c => !l[c.id]);
     if (vacia && d.lineas.length > 1) return;
+    if (String(l.zonaId).startsWith('nave:')) { errores.push(`${f}: la zona de la nave se está creando; espera un segundo y vuelve a guardar.`); return; }
     if (conArt && !l.articuloId && !cfg.codigosUnicos) { errores.push(`${f}: elige el artículo.`); return; }   // con código propio por palet, el artículo es opcional (palet único)
     if (!l.productoId && sgaProductosCliente(d.clienteId, '').length > 0) { errores.push(`${f}: elige el tipo de carga (es el que decide qué tarifa de entrada y salida se cobra).`); return; }
     if (!l.subtipo && sgaSubtiposMov(d.clienteId).length) { errores.push(`${f}: elige el tipo de palet (${sgaSubtiposMov(d.clienteId).join(' o ')}): decide el precio de entrada y de salida.`); return; }
