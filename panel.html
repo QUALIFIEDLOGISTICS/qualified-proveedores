@@ -9346,9 +9346,23 @@ function sgaProdOptionsHtml(clienteId, sel){
   const elegido = sel || (prods.length === 1 ? prods[0].id : '');
   return `<option value=""${elegido ? '' : ' selected'}>Elige el tipo…</option>${prods.map(p => `<option value="${p.id}" ${p.id === elegido ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}`;
 }
-function sgaZonaOptionsHtml(sel, wid){
-  const zs = sgaZonasActivas(wid);
-  return `<option value="">${zs.length ? 'Zona (opcional)' : 'Sin zonas creadas'}</option>${zs.map(z => `<option value="${z.id}" ${z.id === sel ? 'selected' : ''}>${esc(sgaZonaNombre(z))}${z.tipo === 'estanteria' ? ' (estantería)' : ''}</option>`).join('')}`;
+// Zonas para elegir al recibir: primero las que ese cliente ya usa («Usadas por este cliente»), después una lista por nave, y dentro de cada nave en orden
+// natural (A2 antes que A10). El desplegable lleva buscador (data-buscable). Cada zona sale una sola vez.
+function sgaZonaOptionsHtml(sel, wid, clienteId){
+  const nat = (a, b) => String(a || '').localeCompare(String(b || ''), 'es', { numeric: true, sensitivity: 'base' });
+  const zs = sgaZonasActivas(wid).slice().sort((a, b) => nat(a.nave, b.nave) || nat(a.nombre, b.nombre));
+  const cid = clienteId === undefined ? sgaEntradaClienteId() : clienteId;
+  const usadasIds = new Set(cid ? sgaPartidas.filter(p => p.actual > 0 && p.clienteId === cid && p.zonaId).map(p => p.zonaId) : []);
+  const opt = z => `<option value="${z.id}" ${z.id === sel ? 'selected' : ''}>${esc(sgaZonaNombre(z))}${z.tipo === 'estanteria' ? ' (estantería)' : ''}</option>`;
+  const usadas = zs.filter(z => usadasIds.has(z.id));
+  const resto = zs.filter(z => !usadasIds.has(z.id));
+  const porNave = new Map();
+  resto.forEach(z => { const k = (z.nave || '').trim(); if (!porNave.has(k)) porNave.set(k, []); porNave.get(k).push(z); });
+  let cuerpo;
+  if (!usadas.length && porNave.size <= 1) cuerpo = zs.map(opt).join('');
+  else cuerpo = (usadas.length ? `<optgroup label="Usadas por este cliente">${usadas.map(opt).join('')}</optgroup>` : '')
+    + [...porNave.entries()].sort((a, b) => (a[0] === '') - (b[0] === '')).map(([nave, lista]) => `<optgroup label="${esc(nave || 'Sin nave')}">${lista.map(opt).join('')}</optgroup>`).join('');
+  return `<option value="">${zs.length ? 'Zona (opcional)' : 'Sin zonas creadas'}</option>${cuerpo}`;
 }
 function sgaUbicOptionsHtml(zonaId, sel, excluirI){
   const z = sgaZonaDe(zonaId);
@@ -9542,7 +9556,7 @@ function sgaEntradaFilaHtml(i, cfg, pre){
         : cell(`<input id="se-${i}-cant" inputmode="numeric" maxlength="6" placeholder="Nº de ${esc(sgaUnidadCfg(clienteId).p)}" oninput="sgaEntradaBultosAuto(${i})" value="${esc(pre.cant || '')}" />`, 90)}
       ${conArt && sgaClienteConBultos(clienteId) ? cell(`<input id="se-${i}-bultos" inputmode="decimal" maxlength="8" placeholder="Bultos" oninput="this.dataset.manual='1'" value="${esc(pre.bultos || '')}" />`, 90) : ''}
       ${campos.map(campoInput).join('')}
-      ${cell(`<select id="se-${i}-zona" onchange="sgaEntradaZonaCambio(${i})">${sgaZonaOptionsHtml(pre.zona || '', wl)}</select>`, 170)}
+      ${cell(`<select id="se-${i}-zona" data-buscable onchange="sgaEntradaZonaCambio(${i})">${sgaZonaOptionsHtml(pre.zona || '', wl)}</select>`, 170)}
       ${cell(`<select id="se-${i}-ubic" onchange="sgaEntradaUbicCambio()">${sgaUbicOptionsHtml(pre.zona || "", pre.ubic || "", i)}</select>`, 120)}
       <td style="padding:5px 0 5px 4px;">${pre.cons > 0 ? `<span title="Ya han salido ${pre.cons} ${sgaUd(clienteId, pre.cons)} de esta línea: no se puede quitar ni dejar con menos" style="color:var(--mutedFaint);font-size:12px;white-space:nowrap;">salieron ${pre.cons}</span>` : ''}<button type="button"${pre.cons > 0 ? ' disabled style="display:none;"' : ''} onclick="sgaEntradaQuitarFila(${i})" title="Quitar la línea" style="background:none;border:none;color:var(--mutedFaint);font-size:15px;">✕</button></td>
     </tr>`;
@@ -15939,7 +15953,7 @@ function comboOpenSelect(sel){
     } else if (ch.tagName === 'OPTION' && !ch.hidden) items.push({ value: ch.value, text: ch.textContent.trim(), disabled: ch.disabled, selected: ch.value === sel.value });
   });
   Combo.input = sel; Combo.todos = items; Combo.items = items;
-  Combo.buscable = items.filter(i => !i.disabled && !i.group).length > 10;   // con muchas opciones, el panel lleva un buscador arriba
+  Combo.buscable = sel.hasAttribute('data-buscable') || items.filter(i => !i.disabled && !i.group).length > 10;   // con muchas opciones (o si el desplegable lo pide), el panel lleva un buscador arriba
   Combo.active = items.findIndex(i => i.selected);
   if (Combo.active < 0) Combo.active = items.findIndex(i => !i.disabled);
   Combo.typeahead = ''; Combo.typeaheadAt = 0;
