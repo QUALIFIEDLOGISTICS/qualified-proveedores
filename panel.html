@@ -4835,20 +4835,44 @@ let sgaNaves = [];   // naves registradas (con cómo se almacena en ellas); las 
    Cada cambio es una fila nueva con su fecha «desde» (tabla sga_m2_contrato). Para cada mes, la liquidación usa los m² escritos a mano
    ese mes (si los hay) y, si no, los vigentes a fin de mes según este histórico. */
 let sgaM2Historial = [];
-function sgaM2ContratoDeFila(r){ return { id: r.id, clienteId: r.cliente_id, m2: Number(r.m2), desde: r.vigente_desde, nota: r.nota || '', por: r.created_by || '', creadoEn: r.created_at || '' }; }
+function sgaM2ContratoDeFila(r){ return { id: r.id, clienteId: r.cliente_id, m2: Number(r.m2), desde: r.vigente_desde, nota: r.nota || '', por: r.created_by || '', creadoEn: r.created_at || '', warehouseId: r.warehouse_id || '' }; }
 function sgaM2Ordenar(){ sgaM2Historial.sort((a, b) => String(b.desde).localeCompare(String(a.desde)) || String(b.creadoEn).localeCompare(String(a.creadoEn))); }
-// Los m² vigentes de un cliente en una fecha (el último cambio hecho hasta ese día)
-function sgaM2Contrato(clienteId, fecha){ return sgaM2Historial.find(x => x.clienteId === clienteId && x.desde <= fecha) || null; }
+// Los m² vigentes de un cliente en una fecha, almacén por almacén: el último cambio de cada almacén hecho hasta ese día. La clave '' son los m²
+// «sin repartir» (anotados antes de poder indicar el almacén, en clientes con varios).
+function sgaM2ContratoPorAlmacen(clienteId, fecha){
+  const m = new Map();
+  sgaM2Historial.forEach(x => {
+    if (x.clienteId !== clienteId || x.desde > fecha) return;
+    const cur = m.get(x.warehouseId);
+    if (!cur || x.desde > cur.desde || (x.desde === cur.desde && String(x.creadoEn) > String(cur.creadoEn))) m.set(x.warehouseId, x);
+  });
+  return m;
+}
+// Los m² vigentes de un cliente en una fecha: la suma de todos sus almacenes (con el desglose en porAlmacen)
+function sgaM2Contrato(clienteId, fecha){
+  const m = sgaM2ContratoPorAlmacen(clienteId, fecha);
+  if (!m.size) return null;
+  let m2 = 0, desde = '';
+  m.forEach(x => { m2 += x.m2; if (x.desde > desde) desde = x.desde; });
+  return { m2, desde, porAlmacen: m };
+}
 function sgaM2CardHtml(clienteId){
   const hist = sgaM2Historial.filter(x => x.clienteId === clienteId);
   const act = sgaM2Contrato(clienteId, today());
+  const ws = sgaAlmacenesCliente(clienteId);
+  const nomAlm = id => id ? whNombre(id) : 'Sin repartir';
+  const reparto = act ? [...act.porAlmacen.entries()].filter(([, x]) => x.m2 > 0 || act.porAlmacen.size === 1) : [];
+  const sinRepartir = act && act.porAlmacen.has('') && act.porAlmacen.get('').m2 > 0 && ws.length > 0;
   const quien = e => esc(String(e || '').split('@')[0].replace(/[._-]+/g, ' ')) || '—';
   return `
-    <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
-      ${act ? `<span style="font-family:var(--display);font-size:24px;font-weight:700;">${esc(sgaNumTxt(act.m2))} m²</span><span style="color:var(--muted);font-size:13px;">vigentes desde el ${esc(fmtDateDMY(act.desde))}</span>`
+    <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:${reparto.length > 1 || sinRepartir ? 6 : 12}px;">
+      ${act ? `<span style="font-family:var(--display);font-size:24px;font-weight:700;">${esc(sgaNumTxt(act.m2))} m²</span><span style="color:var(--muted);font-size:13px;">${reparto.length > 1 ? 'en total · ' : ''}vigentes desde el ${esc(fmtDateDMY(act.desde))}</span>`
             : '<span style="color:var(--mutedFaint);font-size:13px;">Todavía no hay m² definidos para este cliente.</span>'}
     </div>
+    ${reparto.length > 1 || (reparto.length === 1 && reparto[0][0]) ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">${reparto.map(([k, x]) => `<span class="cg-chip" style="max-width:none;">${esc(nomAlm(k))} · ${esc(sgaNumTxt(x.m2))} m²</span>`).join('')}</div>` : ''}
+    ${sinRepartir ? '<div class="sgac-h" style="margin:0 0 12px;color:var(--danger);">Hay m² «sin repartir» entre los almacenes del cliente. Guarda los m² de cada almacén (abajo): el dashboard los cuenta por almacén.</div>' : ''}
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+      <div class="field" style="width:200px;margin-bottom:0;"><label>Almacén</label><select id="sgac-m2-w">${ws.length ? ws.map(w => `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join('') : '<option value="">Sin almacén asignado</option>'}</select></div>
       <div class="field" style="width:140px;margin-bottom:0;"><label>m² contratados</label><input id="sgac-m2-n" inputmode="decimal" maxlength="9" placeholder="Ej. 250" style="text-align:right;" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaM2ContratoGuardar(); }" /></div>
       <div class="field" style="width:170px;margin-bottom:0;"><label>Desde el día</label><input id="sgac-m2-d" type="date" value="${today()}" /></div>
       <div class="field" style="flex:1;min-width:180px;margin-bottom:0;"><label>Nota <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></label><input id="sgac-m2-nota" maxlength="120" placeholder="Ej. Amplía una nave" /></div>
@@ -4857,8 +4881,8 @@ function sgaM2CardHtml(clienteId){
     <div id="sgac-m2-error" style="color:var(--danger);font-size:12.5px;margin-top:8px;"></div>
     <div class="sgac-h" style="margin-top:8px;">Se usan en las liquidaciones de cada mes (los vigentes a fin de mes), salvo que escribas otros a mano en esa liquidación. Cada cambio queda en el histórico. Para cobrarlos, el cliente necesita su tarifa de «M²».</div>
     ${hist.length ? `<div class="sgac-tit" style="margin-top:14px;">Histórico</div>
-      <table class="tf-table" style="margin-top:6px;"><thead><tr><th>Desde</th><th style="text-align:right;">m²</th><th>Nota</th><th>Registrado</th></tr></thead>
-      <tbody>${hist.map((x, i) => `<tr${i === 0 ? ' style="font-weight:700;"' : ''}><td style="white-space:nowrap;">${esc(fmtDateDMY(x.desde))}</td><td class="tf-precio">${esc(sgaNumTxt(x.m2))}</td><td>${esc(x.nota) || '<span style="color:var(--mutedFaint);">—</span>'}</td><td style="color:var(--muted);font-size:12.5px;">${quien(x.por)}${x.creadoEn ? ' · ' + esc(fmtDateDMY(String(x.creadoEn).slice(0, 10))) : ''}</td></tr>`).join('')}</tbody></table>` : ''}`;
+      <table class="tf-table" style="margin-top:6px;"><thead><tr><th>Desde</th><th>Almacén</th><th style="text-align:right;">m²</th><th>Nota</th><th>Registrado</th></tr></thead>
+      <tbody>${hist.map((x, i) => `<tr${i === 0 ? ' style="font-weight:700;"' : ''}><td style="white-space:nowrap;">${esc(fmtDateDMY(x.desde))}</td><td>${x.warehouseId ? esc(nomAlm(x.warehouseId)) : '<span style="color:var(--mutedFaint);">Sin repartir</span>'}</td><td class="tf-precio">${esc(sgaNumTxt(x.m2))}</td><td>${esc(x.nota) || '<span style="color:var(--mutedFaint);">—</span>'}</td><td style="color:var(--muted);font-size:12.5px;">${quien(x.por)}${x.creadoEn ? ' · ' + esc(fmtDateDMY(String(x.creadoEn).slice(0, 10))) : ''}</td></tr>`).join('')}</tbody></table>` : ''}`;
 }
 async function sgaM2ContratoGuardar(){
   const id = window.__sgaClienteFormId;
@@ -4870,12 +4894,18 @@ async function sgaM2ContratoGuardar(){
   const nota = ((document.getElementById('sgac-m2-nota') || {}).value || '').trim();
   if (!(String((document.getElementById('sgac-m2-n') || {}).value || '').trim() !== '' && isFinite(n) && n >= 0)) { err.textContent = 'Escribe los m² como un número.'; return; }
   if (!desde) { err.textContent = 'Indica desde qué día valen.'; return; }
-  const { data, error } = await supabaseClient.from('sga_m2_contrato').insert({ cliente_id: id, m2: n, vigente_desde: desde, nota: nota || null, created_by: currentUserEmail() }).select().single();
-  if (error || !data) { err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test((error && error.message) || '') ? 'falta ejecutar el SQL «sga-m2-contrato.sql» en Supabase.' : ((error && error.message) || 'error desconocido.')); return; }
-  sgaM2Historial.push(sgaM2ContratoDeFila(data)); sgaM2Ordenar();
+  const wid = (document.getElementById('sgac-m2-w') || {}).value || '';
+  const por = currentUserEmail(), filas = [{ cliente_id: id, m2: n, vigente_desde: desde, nota: nota || null, created_by: por, warehouse_id: wid || null }];
+  // Si había m² «sin repartir» y ahora se anotan los de un almacén, los «sin repartir» pasan a 0 ese mismo día para no contarlos dos veces
+  const sinRep = wid ? sgaM2ContratoPorAlmacen(id, desde).get('') : null;
+  if (sinRep && sinRep.m2 > 0) filas.push({ cliente_id: id, m2: 0, vigente_desde: desde, nota: 'Repartidos por almacén', created_by: por, warehouse_id: null });
+  const { data, error } = await supabaseClient.from('sga_m2_contrato').insert(filas).select();
+  if (error || !data) { err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test((error && error.message) || '') ? 'falta ejecutar el SQL «sga-m2-por-almacen.sql» en Supabase.' : ((error && error.message) || 'error desconocido.')); return; }
+  data.forEach(r => sgaM2Historial.push(sgaM2ContratoDeFila(r))); sgaM2Ordenar();
   const el = document.getElementById('sgac-m2'); if (el) el.innerHTML = sgaM2CardHtml(id);
-  await logContactoHistorial(id, `SGA · m² contratados: ${sgaNumTxt(n)} m² desde el ${fmtDateDMY(desde)}${nota ? ' (' + nota + ')' : ''}.`);
-  appToast(`m² guardados: ${sgaNumTxt(n)} m² desde el ${fmtDateDMY(desde)}.`, 'ok');
+  const nomW = wid ? whNombre(wid) : '';
+  await logContactoHistorial(id, `SGA · m² contratados${nomW ? ' en ' + nomW : ''}: ${sgaNumTxt(n)} m² desde el ${fmtDateDMY(desde)}${nota ? ' (' + nota + ')' : ''}.`);
+  appToast(`m² guardados${nomW ? ' en ' + nomW : ''}: ${sgaNumTxt(n)} m² desde el ${fmtDateDMY(desde)}.`, 'ok');
 }
 async function loadSgaConfig(){
   const [z, u, cl, ar, cp, m2c, nv] = await Promise.all([
@@ -8829,15 +8859,19 @@ async function sgaDashCargar(stArg){
   refreshStockBody();
 }
 // Resumen de cada cliente del SGA para un mes (con los filtros de cliente y almacén aplicados)
-// Lo que no pertenece a ningún almacén (m² contratados, operativas y cuotas mensuales) se suma, al elegir un almacén, al almacén del cliente:
-// el único que tiene asignado en su ficha o, si tiene varios, donde más stock tiene ahora. Sin almacén elegido se suma todo, como siempre.
-function dashAlmacenPrincipal(c){
+// Con un almacén elegido, el almacenaje por m² cuenta con los m² contratados de ESE almacén (se anotan por almacén en la ficha del cliente).
+// Devuelve qué parte de los m² del cliente le toca a ese almacén en una fecha: 1 sin filtro; con filtro, sus m² entre el total contratado
+// (así también se reparte si ese mes se escribieron a mano los m² totales). Un cliente sin m² por almacén cuenta entero en su único almacén asignado.
+function dashM2Parte(c, fin, wid){
+  if (!wid) return 1;
+  const ct = sgaM2Contrato(c.id, fin);
   const asignados = (c.warehouseIds || []).filter(id => allWarehouses.some(w => w.id === id && !w.archived));
-  if (asignados.length === 1) return asignados[0];
-  const stock = {};
-  sgaPartidas.forEach(p => { if (p.clienteId === c.id && p.actual > 0) stock[p.warehouseId] = (stock[p.warehouseId] || 0) + p.actual; });
-  const cand = asignados.length ? asignados : Object.keys(stock);
-  return cand.map((id, i) => ({ id, i })).sort((a, b) => (stock[b.id] || 0) - (stock[a.id] || 0) || a.i - b.i).map(x => x.id)[0] || '';
+  const unico = asignados.length === 1 && asignados[0] === wid ? 1 : 0;
+  if (!ct) return unico;
+  if (ct.m2 <= 0) return 0;
+  const suyos = (ct.porAlmacen.get(wid) || { m2: 0 }).m2;
+  if (suyos > 0) return suyos / ct.m2;
+  return ct.porAlmacen.size === 1 && ct.porAlmacen.has('') ? unico : 0;   // todo «sin repartir» y un solo almacén asignado: cuenta entero ahí
 }
 // opAnual: para sumar los meses de un año sin contar dos veces lo mismo, una operativa sin facturar solo cuenta en el mes de su fecha
 // (en vez de arrastrarse a los meses siguientes); las que venían de antes del año cuentan en enero (primerMes).
@@ -8852,11 +8886,10 @@ function dashCalcularPeriodo(periodo, stArg, opAnual){
     const cobros = D.cobros.filter(x => x.periodo === periodo && x.cliente_id === c.id && (!wid || idsC.has(x.albaran_id))).map(x => ({ fecha: x.fecha, origen: x.origen, productoId: x.producto_id, cantidad: Number(x.cantidad), precio: Number(x.precio), importe: Number(x.importe) }));
     const mapOp = x => ({ id: x.id, fecha: x.fecha, nombre: x.nombre, importe: Number(x.importe), facturada: !!x.facturada, referencia: x.referencia || '', apartados: Array.isArray(x.apartados) ? x.apartados : [] });
     const opsC = D.op.filter(x => x.cliente_id === c.id);
-    const propio = !wid || dashAlmacenPrincipal(c) === wid;   // m², operativas y cuotas cuentan en el almacén principal del cliente
-    const operativas = !propio ? [] : [...(opAnual && !opAnual.primerMes ? [] : [...D.opPend.filter(x => x.cliente_id === c.id && x.fecha < ini), ...opsC.filter(x => !x.facturada && x.fecha < ini)]), ...opsC.filter(x => x.fecha >= ini && x.fecha <= fin)].map(mapOp);
-    const m2 = !propio ? [] : D.m2.filter(x => x.cliente_id === c.id).map(x => ({ periodo: x.periodo, m2: Number(x.m2) }));
-    const r = sgaResumenCalcular({ clienteId: c.id, periodo, movs, cobros, m2, operativas, wid, conSinAlmacen: !!wid && propio });
-    const fijo = propio && r.m2 != null && r.tM2 ? sgaR2(r.m2 * r.tM2.precio) : 0;
+    const operativas = wid ? [] : [...(opAnual && !opAnual.primerMes ? [] : [...D.opPend.filter(x => x.cliente_id === c.id && x.fecha < ini), ...opsC.filter(x => !x.facturada && x.fecha < ini)]), ...opsC.filter(x => x.fecha >= ini && x.fecha <= fin)].map(mapOp);
+    const m2 = D.m2.filter(x => x.cliente_id === c.id).map(x => ({ periodo: x.periodo, m2: Number(x.m2) }));
+    const r = sgaResumenCalcular({ clienteId: c.id, periodo, movs, cobros, m2, operativas, wid });
+    const fijo = r.m2 != null && r.tM2 ? sgaR2(r.m2 * r.tM2.precio * dashM2Parte(c, fin, wid)) : 0;
     const total = sgaR2(r.totMov + r.totServ + r.totOper + r.totStock + fijo);
     const delMes = tipo => albsC.filter(x => x.tipo === tipo && x.fecha.slice(0, 7) === periodo && !x.borrador);
     return { c, r, fijo, total, recs: delMes('entrada'), exps: delMes('salida'), conceptos: { mov: r.totMov, alm: sgaR2(r.totStock + fijo), oper: r.totOper, serv: r.totServ } };
@@ -9126,7 +9159,7 @@ function stockDashboardAnioHtml(st){
       <div class="deca-card-body">${dashBarrasSvg(serieRE, { etq: s => s.corto, cada: 1, tit: s => s.nombre })}<div class="dash-leyenda"><span><i style="background:${DASH_COLORES.mov}"></i>Recibidos · ${sgaNumTxt(palRec)}</span><span><i style="background:${DASH_COLORES.oper}"></i>Expedidos · ${sgaNumTxt(palExp)}</span></div></div>
     </div>`;
   const { cardClientes, cardEdad, cardAtencion } = dashTarjetasComunes(st, D, items, total, borradores, hoy, `Pulsa un cliente para ver su resumen mensual en ${anio}`);
-  const nota = '<div class="dash-nota" style="margin-top:10px;">En el año, cada operativa cuenta en el mes de su fecha (las que venían de antes de enero, en enero), para no sumarla dos veces.' + (st.wid ? ' Con un almacén elegido, los m² contratados, las operativas y las cuotas (que no pertenecen a un almacén) se suman al almacén principal de cada cliente: el único que tiene asignado o, si tiene varios, donde más stock tiene ahora.' : '') + '</div>';
+  const nota = '<div class="dash-nota" style="margin-top:10px;">En el año, cada operativa cuenta en el mes de su fecha (las que venían de antes de enero, en enero), para no sumarla dos veces.' + (st.wid ? ' Con un almacén elegido, el almacenaje por m² cuenta los m² contratados de ese almacén (se anotan por almacén en la ficha de cada cliente). Las operativas y las cuotas fijas, que no pertenecen a un almacén, todavía no se cuentan.' : '') + '</div>';
   return `${kpis}
     <div class="dash-grid">
       <div class="dash-main">${cardMeses}${cardRE}${cardClientes}</div>
@@ -9217,7 +9250,7 @@ function stockDashboardBodyHtml(){
       <div class="deca-card-body">${dashBarrasSvg(serieRE)}<div class="dash-leyenda"><span><i style="background:${DASH_COLORES.mov}"></i>Recibidos · ${sgaNumTxt(palRec)}</span><span><i style="background:${DASH_COLORES.oper}"></i>Expedidos · ${sgaNumTxt(palExp)}</span></div></div>
     </div>`;
   const { cardClientes, cardEdad, cardAtencion } = dashTarjetasComunes(st, D, items, total, borradores, hoy, `Pulsa un cliente para ver su resumen mensual`);
-  const nota = st.wid ? '<div class="dash-nota" style="margin-top:10px;">Con un almacén elegido, los m² contratados, las operativas y las cuotas (que no pertenecen a un almacén) se suman al almacén principal de cada cliente: el único que tiene asignado o, si tiene varios, donde más stock tiene ahora.</div>' : '';
+  const nota = st.wid ? '<div class="dash-nota" style="margin-top:10px;">Con un almacén elegido, el almacenaje por m² cuenta los m² contratados de ese almacén (se anotan por almacén en la ficha de cada cliente). Las operativas y las cuotas fijas, que no pertenecen a un almacén, todavía no se cuentan.</div>' : '';
   return `${kpis}
     <div class="dash-grid">
       <div class="dash-main">${cardIngreso}${cardRE}${cardClientes}</div>
@@ -11999,7 +12032,7 @@ function sgaResumenCalcular(d){
   // Cuotas mensuales fijas (extras «por mes», p. ej. un seguro de mercancía): salen solas cada mes en los clientes que las tienen en su tarifa
   const finMesCuota = `${d.periodo}-${String(dias).padStart(2, '0')}`;
   const cuotaLineas = [];
-  if ((!d.wid || d.conSinAlmacen) && (!cfg.activoDesde || finMesCuota >= cfg.activoDesde)) {   // con un almacén filtrado solo sale en el almacén principal del cliente (como los m²)
+  if (!d.wid && (!cfg.activoDesde || finMesCuota >= cfg.activoDesde)) {   // con un almacén filtrado no sale
     almacenajeProductos.filter(p => !p.archived && p.unidad === 'cuota').forEach(p => {
       const t = sgaTarifaEn(d.clienteId, p.id, finMesCuota);
       if (t && t.precio > 0) cuotaLineas.push({ productoId: p.id, precio: t.precio, cantidad: 1, importe: sgaR2(t.precio), origen: 'cuota', detalle: 'cuota mensual' });
