@@ -8760,14 +8760,21 @@ async function sgaOperativaAnular(id){
    incluye la previsión del almacenaje de los días que faltan con el stock de hoy; se compara con el mes anterior. */
 const DASH_COLORES = { mov: '#1B3A6B', alm: '#2F7F86', oper: '#C0721A', serv: '#7C5CBF' };
 const DASH_CONCEPTOS = [['mov', 'Movimientos'], ['alm', 'Almacenaje'], ['oper', 'Operativas'], ['serv', 'Servicios']];   // el almacenaje incluye los m² contratados
-function sgaDashEstado(){ return (window.__dash = window.__dash || { periodo: today().slice(0, 7), clienteId: '', wid: '', datos: null, cargando: false }); }
+function sgaDashEstado(){ return (window.__dash = window.__dash || { periodo: today().slice(0, 7), anio: false, clienteId: '', wid: '', datos: null, cargando: false }); }
 function dashPeriodoAnterior(p){ const [y, m] = p.split('-').map(Number); const d = new Date(y, m - 2, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }
 function sgaDashMes(delta){
   const st = sgaDashEstado();
   const [y, m] = st.periodo.split('-').map(Number);
-  const d = new Date(y, m - 1 + delta, 1);
+  const d = new Date(y, m - 1 + (st.anio ? delta * 12 : delta), 1);
   st.periodo = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   st.datos = null;
+  renderTab();
+}
+// Ver un mes o el año completo (enero a diciembre del año del periodo elegido)
+function sgaDashVista(anio){
+  const st = sgaDashEstado();
+  if (st.anio === !!anio) return;
+  st.anio = !!anio; st.datos = null;
   renderTab();
 }
 function sgaDashFiltro(){
@@ -8781,19 +8788,33 @@ async function sgaDashCargar(stArg){
   const st = stArg || sgaDashEstado();
   if (st.cargando) return;
   st.cargando = true;
-  const per = st.periodo, ant = dashPeriodoAnterior(per), desde = ant + '-01';
+  // Un mes: ese mes y el anterior (para comparar). Año completo: de enero a diciembre del año del periodo, mes a mes.
+  const anio = !!st.anio, per = st.periodo, ant = dashPeriodoAnterior(per);
+  const desde = anio ? per.slice(0, 4) + '-01-01' : ant + '-01';
+  const periodos = anio ? Array.from({ length: 12 }, (_, i) => `${per.slice(0, 4)}-${String(i + 1).padStart(2, '0')}`) : [per, ant];
+  // Supabase devuelve como mucho 1000 filas por consulta: se pide por tandas para que un año entero no se quede cortado
+  const todo = async mk => {
+    const out = [];
+    for (let from = 0; ; from += 1000) {
+      const r = await mk().range(from, from + 999);
+      if (r.error) return { data: out, error: r.error };
+      (r.data || []).forEach(x => out.push(x));
+      if ((r.data || []).length < 1000) break;
+    }
+    return { data: out };
+  };
   const [a, c, m2, op, opPend] = await Promise.all([
-    supabaseClient.from('sga_albaranes').select('*').eq('estado', 'confirmado').in('tipo', ['entrada', 'salida', 'apertura', 'regularizacion']).gte('fecha', desde),   // el stock inicial y las regularizaciones también mueven el stock: sin ellos el saldo de cada día (y el almacenaje) sale mal
-    supabaseClient.from('sga_cobros').select('*').in('periodo', [per, ant]),
-    supabaseClient.from('sga_m2').select('*').order('periodo', { ascending: false }).limit(800),
-    supabaseClient.from('sga_operativas_realizadas').select('*').eq('estado', 'activa').gte('fecha', desde),
-    supabaseClient.from('sga_operativas_realizadas').select('*').eq('estado', 'activa').eq('facturada', false).lt('fecha', desde),
+    todo(() => supabaseClient.from('sga_albaranes').select('*').eq('estado', 'confirmado').in('tipo', ['entrada', 'salida', 'apertura', 'regularizacion']).gte('fecha', desde).order('id')),   // el stock inicial y las regularizaciones también mueven el stock: sin ellos el saldo de cada día (y el almacenaje) sale mal
+    todo(() => supabaseClient.from('sga_cobros').select('*').in('periodo', periodos).order('id')),
+    supabaseClient.from('sga_m2').select('*').order('periodo', { ascending: false }).limit(anio ? 3000 : 800),
+    todo(() => supabaseClient.from('sga_operativas_realizadas').select('*').eq('estado', 'activa').gte('fecha', desde).order('id')),
+    todo(() => supabaseClient.from('sga_operativas_realizadas').select('*').eq('estado', 'activa').eq('facturada', false).lt('fecha', desde).order('id')),
   ]);
   const albs = a.data || [];
   const movsRaw = [];
   const ids = albs.map(x => x.id);
   for (let i = 0; i < ids.length; i += 80) {
-    const r = await supabaseClient.from('sga_movimientos').select('albaran_id,partida_id,cantidad,bultos,fecha,tipo').in('albaran_id', ids.slice(i, i + 80));
+    const r = await todo(() => supabaseClient.from('sga_movimientos').select('albaran_id,partida_id,cantidad,bultos,fecha,tipo').in('albaran_id', ids.slice(i, i + 80)).order('id'));
     (r.data || []).forEach(x => movsRaw.push(x));
   }
   const pids = [...new Set(movsRaw.map(x => x.partida_id))];
@@ -8802,13 +8823,15 @@ async function sgaDashCargar(stArg){
     const r = await supabaseClient.from('sga_partidas').select('id,producto_id').in('id', pids.slice(i, i + 100));
     (r.data || []).forEach(p => { prodDe[p.id] = p.producto_id; });
   }
-  st.datos = { per, ant, albs, movsRaw, prodDe, cobros: (c.data || []).filter(x => x.estado !== 'anulado'), m2: m2.data || [],
+  st.datos = { per, ant, anio, albs, movsRaw, prodDe, cobros: (c.data || []).filter(x => x.estado !== 'anulado'), m2: m2.data || [],
     op: op.error ? [] : (op.data || []), opPend: opPend.error ? [] : (opPend.data || []), cargadoEn: new Date() };
   st.cargando = false;
   refreshStockBody();
 }
 // Resumen de cada cliente del SGA para un mes (con los filtros de cliente y almacén aplicados)
-function dashCalcularPeriodo(periodo, stArg){
+// opAnual: para sumar los meses de un año sin contar dos veces lo mismo, una operativa sin facturar solo cuenta en el mes de su fecha
+// (en vez de arrastrarse a los meses siguientes); las que venían de antes del año cuentan en enero (primerMes).
+function dashCalcularPeriodo(periodo, stArg, opAnual){
   const st = stArg || sgaDashEstado(), D = st.datos, wid = st.wid;
   const ini = periodo + '-01', fin = `${periodo}-${String(sgaDiasDelMes(periodo)).padStart(2, '0')}`;
   const clientes = sgaClientesAlmacenLista().filter(c => !st.clienteId || c.id === st.clienteId);
@@ -8819,7 +8842,7 @@ function dashCalcularPeriodo(periodo, stArg){
     const cobros = D.cobros.filter(x => x.periodo === periodo && x.cliente_id === c.id && (!wid || idsC.has(x.albaran_id))).map(x => ({ fecha: x.fecha, origen: x.origen, productoId: x.producto_id, cantidad: Number(x.cantidad), precio: Number(x.precio), importe: Number(x.importe) }));
     const mapOp = x => ({ id: x.id, fecha: x.fecha, nombre: x.nombre, importe: Number(x.importe), facturada: !!x.facturada, referencia: x.referencia || '', apartados: Array.isArray(x.apartados) ? x.apartados : [] });
     const opsC = D.op.filter(x => x.cliente_id === c.id);
-    const operativas = wid ? [] : [...D.opPend.filter(x => x.cliente_id === c.id && x.fecha < ini), ...opsC.filter(x => !x.facturada && x.fecha < ini), ...opsC.filter(x => x.fecha >= ini && x.fecha <= fin)].map(mapOp);
+    const operativas = wid ? [] : [...(opAnual && !opAnual.primerMes ? [] : [...D.opPend.filter(x => x.cliente_id === c.id && x.fecha < ini), ...opsC.filter(x => !x.facturada && x.fecha < ini)]), ...opsC.filter(x => x.fecha >= ini && x.fecha <= fin)].map(mapOp);
     const m2 = wid ? [] : D.m2.filter(x => x.cliente_id === c.id).map(x => ({ periodo: x.periodo, m2: Number(x.m2) }));
     const r = sgaResumenCalcular({ clienteId: c.id, periodo, movs, cobros, m2, operativas, wid });
     const fijo = !wid && r.m2 != null && r.tM2 ? sgaR2(r.m2 * r.tM2.precio) : 0;
@@ -8893,7 +8916,9 @@ function dashHoverFuera(key){
   const c = document.querySelector('.dash-cross'); if (c) c.setAttribute('opacity', '0');
 }
 // Barras por día: recibidos (azul) y expedidos (naranja)
-function dashBarrasSvg(serie){
+function dashBarrasSvg(serie, opt){
+  opt = opt || {};   // opt.etq(s): etiqueta del eje (por defecto el día); opt.cada: cada cuántas barras se pone; opt.tit(s): «Día 3» / «Marzo»
+  const etq = opt.etq || (s => s.dia), cada = opt.cada || 5, tit = opt.tit || (s => `Día ${s.dia}`);
   const W = 760, H = 200, pl = 36, pr = 8, pt = 12, pb = 26;
   const max = Math.max(1, ...serie.flatMap(s => [s.rec, s.exp]));
   const paso = (W - pl - pr) / serie.length, bw = Math.max(2.5, paso * 0.38);
@@ -8902,9 +8927,9 @@ function dashBarrasSvg(serie){
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;" role="img" aria-label="Recepciones y expediciones por día">
     ${ticks.map(t => `<line x1="${pl}" x2="${W - pr}" y1="${t.y.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="var(--border)"/><text x="${pl - 6}" y="${(t.y + 3.5).toFixed(1)}" text-anchor="end" font-size="10.5" fill="var(--mutedFaint)">${t.v}</text>`).join('')}
     ${serie.map((s, i) => { const x0 = pl + i * paso + paso / 2; return `
-      <rect x="${(x0 - bw - 0.5).toFixed(1)}" y="${y(s.rec).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y(0) - y(s.rec)).toFixed(1)}" fill="${DASH_COLORES.mov}" rx="2"><title>Día ${s.dia}: ${s.rec} palets recibidos</title></rect>
-      <rect x="${(x0 + 0.5).toFixed(1)}" y="${y(s.exp).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y(0) - y(s.exp)).toFixed(1)}" fill="${DASH_COLORES.oper}" rx="2"><title>Día ${s.dia}: ${s.exp} palets expedidos</title></rect>
-      ${(i % 5 === 0 || i === serie.length - 1) ? `<text x="${x0.toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="var(--mutedFaint)">${s.dia}</text>` : ''}`; }).join('')}
+      <rect x="${(x0 - bw - 0.5).toFixed(1)}" y="${y(s.rec).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y(0) - y(s.rec)).toFixed(1)}" fill="${DASH_COLORES.mov}" rx="2"><title>${tit(s)}: ${s.rec} palets recibidos</title></rect>
+      <rect x="${(x0 + 0.5).toFixed(1)}" y="${y(s.exp).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y(0) - y(s.exp)).toFixed(1)}" fill="${DASH_COLORES.oper}" rx="2"><title>${tit(s)}: ${s.exp} palets expedidos</title></rect>
+      ${(i % cada === 0 || i === serie.length - 1) ? `<text x="${x0.toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="var(--mutedFaint)">${etq(s)}</text>` : ''}`; }).join('')}
   </svg>`;
 }
 // Anillo con el reparto del ingreso por concepto
@@ -8921,19 +8946,187 @@ function dashToolbarHtml(){
   const wh = allWarehouses.filter(w => !w.archived);
   const hora = st.datos ? st.datos.cargadoEn.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '';
   return `
-    <div class="dash-mes"><button type="button" onclick="sgaDashMes(-1)" title="Mes anterior">‹</button><b>${esc(sgaPeriodoTxt(st.periodo))}</b><button type="button" onclick="sgaDashMes(1)" title="Mes siguiente">›</button></div>
-    ${st.periodo !== today().slice(0, 7) ? `<button class="btn btn-ghost" onclick="window.__dash.periodo = today().slice(0,7); window.__dash.datos = null; renderTab();">Mes actual</button>` : ''}
+    <div class="doc-seg" title="Ver un mes o el año completo"><button type="button" class="${st.anio ? '' : 'on'}" onclick="sgaDashVista(false)">Mes</button><button type="button" class="${st.anio ? 'on' : ''}" onclick="sgaDashVista(true)">Año</button></div>
+    <div class="dash-mes"><button type="button" onclick="sgaDashMes(-1)" title="${st.anio ? 'Año anterior' : 'Mes anterior'}">‹</button><b>${esc(st.anio ? st.periodo.slice(0, 4) : sgaPeriodoTxt(st.periodo))}</b><button type="button" onclick="sgaDashMes(1)" title="${st.anio ? 'Año siguiente' : 'Mes siguiente'}">›</button></div>
+    ${(st.anio ? st.periodo.slice(0, 4) !== today().slice(0, 4) : st.periodo !== today().slice(0, 7)) ? `<button class="btn btn-ghost" onclick="window.__dash.periodo = today().slice(0,7); window.__dash.datos = null; renderTab();">${st.anio ? 'Año actual' : 'Mes actual'}</button>` : ''}
     <select id="dash-cli" onchange="sgaDashFiltro()" style="width:auto;flex:0 1 240px;min-width:170px;"><option value="">Todos los clientes</option>${clientes.map(c => `<option value="${c.id}" ${c.id === st.clienteId ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
     ${wh.length > 1 ? `<select id="dash-wh" onchange="sgaDashFiltro()" style="width:auto;flex:0 1 200px;min-width:150px;"><option value="">Todos los almacenes</option>${wh.map(w => `<option value="${w.id}" ${w.id === st.wid ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>` : ''}
     <button class="btn btn-ghost" style="margin-left:auto;" onclick="sgaDashRefrescar()" title="Volver a calcular con los datos de ahora">↻ Actualizar${hora ? ` <small style="color:var(--mutedFaint);font-weight:400;">· ${hora}</small>` : ''}</button>`;
 }
 function dashIr(seg){ window.__stockSeg = seg; setTab('stock'); }   // desde el dashboard se va a la pantalla de Control Stock SGA
+// Tarjetas que comparten la vista de un mes y la de un año: ingreso por cliente, antigüedad del stock y «Requiere atención»
+function dashTarjetasComunes(st, D, items, total, borradores, hoy, subClientes){
+  // ---- Ingreso por cliente
+  // Salen TODOS los clientes: primero los que tienen ingreso este mes (de más a menos) y después, sin barra, los que no tienen ninguno
+  const nomCli = x => ((x.c.nombreComercial || '').trim() || x.c.nombre);
+  const ranking = items.filter(x => x.total > 0).sort((a, b) => b.total - a.total);
+  const sinIngreso = items.filter(x => !(x.total > 0)).sort((a, b) => nomCli(a).localeCompare(nomCli(b), 'es'));
+  const maxCli = Math.max(1, ...ranking.map(x => x.total));
+  const cardClientes = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('home', 'Ingreso por cliente', subClientes)}
+      <div class="deca-card-body dash-cli-lista">
+        ${ranking.length ? ranking.map((x, i) => `
+          <div class="dash-cli" onclick="sgaDashIrResumen('${x.c.id}')" title="Ver su resumen mensual">
+            <span class="dash-rank">${i + 1}</span>
+            <div class="dash-cli-c"><div class="dash-cli-n"><b>${esc(nomCli(x))}</b><span>${dashEur(x.total)}<small>${total > 0 ? (x.total / total * 100).toFixed(0) : 0} %</small></span></div>
+              <div class="dash-barra" style="width:${(x.total / maxCli * 100).toFixed(1)}%;">${DASH_CONCEPTOS.map(([k, t]) => x.conceptos[k] > 0 ? `<i style="flex:${x.conceptos[k]};background:${DASH_COLORES[k]};" title="${t}: ${dashEur(x.conceptos[k])}"></i>` : '').join('')}</div></div>
+          </div>`).join('') : '<div class="dash-vacio">Todavía no hay ingresos este mes para este filtro.</div>'}
+        ${sinIngreso.length ? `<div class="dash-nota" style="margin:10px 0 2px 8px;">Sin ingreso este mes · ${sinIngreso.length}</div>` + sinIngreso.map(x => `
+          <div class="dash-cli sin" onclick="sgaDashIrResumen('${x.c.id}')" title="Ver su resumen mensual">
+            <span class="dash-rank">–</span>
+            <div class="dash-cli-c"><div class="dash-cli-n"><b>${esc(nomCli(x))}</b><span>${dashEur(0)}</span></div></div>
+          </div>`).join('') : ''}
+      </div>
+    </div>`;
+  // ---- Antigüedad del stock y atención
+  const ps = sgaPartidas.filter(p => p.actual > 0 && (!st.clienteId || p.clienteId === st.clienteId) && (!st.wid || p.warehouseId === st.wid));
+  const edad = p => Math.floor((Date.parse(hoy) - Date.parse(p.fechaEntrada)) / 86400000);
+  const tramos = [['Menos de 30 días', p => edad(p) < 30, '#3F8F5F'], ['De 30 a 90 días', p => edad(p) >= 30 && edad(p) <= 90, '#C98A2E'], ['Más de 90 días', p => edad(p) > 90, '#C1443D']].map(([t, f, c]) => ({ t, c, v: ps.filter(f).reduce((s, p) => s + p.actual, 0) }));
+  const totalPs = tramos.reduce((s, x) => s + x.v, 0);
+  const cardEdad = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('clock', 'Antigüedad del stock', 'Cuánto llevan los palets en el almacén')}
+      <div class="deca-card-body">${totalPs ? `<div class="dash-edad">${tramos.map(x => x.v ? `<i style="flex:${x.v};background:${x.c};" title="${x.t}: ${x.v} palets"></i>` : '').join('')}</div>
+        <div class="dash-donut-l" style="margin-top:12px;">${tramos.map(x => `<div><i style="background:${x.c}"></i><span>${x.t}</span><b>${sgaNumTxt(x.v)} palets</b><em>${(x.v / totalPs * 100).toFixed(0)} %</em></div>`).join('')}</div>` : '<div class="dash-vacio">No hay stock.</div>'}</div>
+    </div>`;
+  const opsPend = [...D.opPend, ...D.op].filter(o => o.estado === 'activa' && !o.facturada && (!st.clienteId || o.cliente_id === st.clienteId));
+  // Un cliente que paga por m² (tarifa «Stock · cada mes») no necesita tarifa por día: no se le avisa
+  const sinTarifa = st.wid ? [] : items.filter(x => x.r.final.mod > 0 && !x.r.prodM2 && !almacenajeProductos.some(p => !p.archived && p.disparador === 'stock_dia' && almacenajeTarifas.some(t => t.clienteId === x.c.id && t.tipo === p.id)));
+  const viejos = tramos[2].v;
+  const alertas = [
+    borradores.length ? { cls: 'warn', txt: `<b>${borradores.length}</b> expedición${borradores.length === 1 ? '' : 'es'} en borrador sin confirmar${(() => { const f = borradores.map(b => b.fecha).sort()[0]; return f ? ' · la más antigua del ' + fmtDateDMY(f).split('/').join('-') : ''; })()}`, go: "dashIr('salidas')" } : null,
+    opsPend.length ? { cls: 'warn', txt: `<b>${opsPend.length}</b> operativa${opsPend.length === 1 ? '' : 's'} pendiente${opsPend.length === 1 ? '' : 's'} de facturar · ${dashEur(opsPend.reduce((s, o) => s + Number(o.importe), 0))}`, go: "dashIr('operativas')" } : null,
+    sinTarifa.length ? { cls: 'bad', txt: `<b>${sinTarifa.length}</b> cliente${sinTarifa.length === 1 ? '' : 's'} con stock y <b>sin tarifa de almacenaje</b>: ${sinTarifa.slice(0, 3).map(x => esc((x.c.nombreComercial || '').trim() || x.c.nombre)).join(', ')}${sinTarifa.length > 3 ? '…' : ''}` } : null,
+    viejos > 0 ? { cls: 'bad', txt: `<b>${sgaNumTxt(viejos)}</b> palets llevan más de 90 días en el almacén`, go: "dashIr('catalogo')" } : null,
+  ].filter(Boolean);
+  const cardAtencion = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('info', 'Requiere atención', alertas.length ? alertas.length + ' aviso' + (alertas.length === 1 ? '' : 's') : 'Todo en orden')}
+      <div class="deca-card-body">${alertas.length ? alertas.map(a => `<div class="dash-alerta ${a.cls}"${a.go ? ` onclick="${a.go}" style="cursor:pointer;"` : ''}><i></i><span>${a.txt}</span>${a.go ? '<em>→</em>' : ''}</div>`).join('') : '<div class="dash-ok">✓ No hay nada pendiente: sin borradores, sin operativas por facturar y todos los clientes con tarifa.</div>'}</div>
+    </div>`;
+  return { cardClientes, cardEdad, cardAtencion };
+}
+// Barras apiladas del ingreso de cada mes del año (movimientos, almacenaje, operativas y servicios)
+function dashMesesSvg(meses){
+  const W = 760, H = 230, pl = 44, pr = 8, pt = 18, pb = 26;
+  const max = Math.max(1, ...meses.map(m => m.total));
+  const paso = (W - pl - pr) / 12, bw = Math.min(36, paso * 0.62);
+  const y = v => pt + (H - pt - pb) * (1 - v / max);
+  const ticks = [0, .5, 1].map(f => ({ v: max * f, y: y(max * f) }));
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;" role="img" aria-label="Ingreso de cada mes del año">
+    ${ticks.map(t => `<line x1="${pl}" x2="${W - pr}" y1="${t.y.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="var(--border)"/><text x="${pl - 6}" y="${(t.y + 3.5).toFixed(1)}" text-anchor="end" font-size="10.5" fill="var(--mutedFaint)">${dashCorto(t.v)}</text>`).join('')}
+    ${meses.map((m, i) => {
+      const x0 = pl + i * paso + paso / 2;
+      let acc = 0;
+      const segs = DASH_CONCEPTOS.map(([k, t]) => {
+        const v = m.conceptos[k] || 0;
+        if (!(v > 0)) return '';
+        const y1 = y(acc + v), h = y(acc) - y1;
+        acc += v;
+        return `<rect x="${(x0 - bw / 2).toFixed(1)}" y="${y1.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, h).toFixed(1)}" fill="${DASH_COLORES[k]}"><title>${m.nombre}: ${t} ${dashEur(v)}</title></rect>`;
+      }).join('');
+      return `${segs}
+      <rect x="${(x0 - paso / 2).toFixed(1)}" y="${pt}" width="${paso.toFixed(1)}" height="${(H - pt - pb).toFixed(1)}" fill="transparent"><title>${m.nombre}: ${dashEur(m.total)}${m.parcial ? ' (incluye lo previsto hasta fin de mes)' : ''}</title></rect>
+      ${m.total > 0 ? `<text x="${x0.toFixed(1)}" y="${(y(m.total) - 4).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--muted)">${dashCorto(m.total)}</text>` : ''}
+      <text x="${x0.toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="${m.futuro ? 'var(--border)' : 'var(--mutedFaint)'}">${m.corto}</text>`;
+    }).join('')}
+  </svg>`;
+}
+// El dashboard de un año completo: la suma de los doce meses (cada mes se calcula igual que en la vista de un mes)
+function stockDashboardAnioHtml(st){
+  const D = st.datos, hoy = today(), anio = st.periodo.slice(0, 4), esteAnio = anio === hoy.slice(0, 4);
+  const hastaMes = anio < hoy.slice(0, 4) ? 12 : esteAnio ? Number(hoy.slice(5, 7)) : 0;
+  const pad = n => String(n).padStart(2, '0');
+  const pers = Array.from({ length: hastaMes }, (_, i) => `${anio}-${pad(i + 1)}`);
+  if (!hastaMes) return `<div class="card"><div class="dash-vacio" style="text-align:center;padding:30px;">Todavía no hay datos de ${anio}.</div></div>`;
+  const porMes = pers.map((p, i) => dashCalcularPeriodo(p, st, { primerMes: i === 0 }));
+  const suma = (arr, f) => arr.reduce((s, x) => s + f(x), 0);
+  const ultimo = hastaMes - 1;
+  // Un registro por cliente con lo de todo el año sumado (el último mes aporta el stock de ahora)
+  const mapa = new Map();
+  porMes.forEach(mes => mes.forEach(x => {
+    let it = mapa.get(x.c.id);
+    if (!it) { it = { c: x.c, total: 0, conceptos: { mov: 0, alm: 0, oper: 0, serv: 0 }, recs: [], exps: [], r: x.r }; mapa.set(x.c.id, it); }
+    it.total += x.total;
+    DASH_CONCEPTOS.forEach(([k]) => { it.conceptos[k] += x.conceptos[k]; });
+    x.recs.forEach(a => it.recs.push(a)); x.exps.forEach(a => it.exps.push(a));
+    it.r = x.r;
+  }));
+  const items = [...mapa.values()].map(it => { it.total = sgaR2(it.total); DASH_CONCEPTOS.forEach(([k]) => { it.conceptos[k] = sgaR2(it.conceptos[k]); }); return it; });
+  // Cada mes del año (los que aún no han llegado salen vacíos)
+  const meses = Array.from({ length: 12 }, (_, i) => {
+    const nombre = SGA_MESES[i].charAt(0).toUpperCase() + SGA_MESES[i].slice(1), corto = SGA_MESES[i].slice(0, 3);
+    if (i >= hastaMes) return { nombre, corto, total: 0, conceptos: {}, rec: 0, exp: 0, nRec: 0, nExp: 0, futuro: true };
+    const mes = porMes[i], conceptos = {};
+    DASH_CONCEPTOS.forEach(([k]) => { conceptos[k] = sgaR2(suma(mes, x => x.conceptos[k])); });
+    return { nombre, corto, total: sgaR2(suma(mes, x => x.total)), conceptos, parcial: esteAnio && i === ultimo,
+      rec: suma(mes, x => x.r.filas.reduce((s, f) => s + f.entMod, 0)), exp: suma(mes, x => x.r.filas.reduce((s, f) => s + f.salMod, 0)),
+      nRec: suma(mes, x => x.recs.length), nExp: suma(mes, x => x.exps.length) };
+  });
+  const total = sgaR2(suma(items, x => x.total));
+  const previsto = esteAnio ? sgaR2(suma(porMes[ultimo], x => x.r.almPrevisto)) : 0, generado = sgaR2(total - previsto);
+  const nRec = suma(meses, m => m.nRec), nExp = suma(meses, m => m.nExp), palRec = suma(meses, m => m.rec), palExp = suma(meses, m => m.exp);
+  const saldoMes = porMes.map((mes, i) => suma(mes, x => (esteAnio && i === ultimo) ? x.r.final.mod : ((x.r.filas[sgaDiasDelMes(pers[i]) - 1] || {}).saldoMod || 0)));
+  const stockFin = saldoMes[ultimo], stockIni = suma(porMes[0], x => x.r.inicial.mod);
+  const conceptosTot = {}; DASH_CONCEPTOS.forEach(([k]) => { conceptosTot[k] = sgaR2(suma(items, x => x.conceptos[k])); });
+  const mediaMes = hastaMes ? sgaR2(total / hastaMes) : 0;
+  const borradores = sgaAlbaranes.filter(a => a.tipo === 'salida' && a.estado === 'confirmado' && a.borrador && a.fecha.slice(0, 4) <= anio && (!st.clienteId || a.clienteId === st.clienteId) && (!st.wid || a.warehouseId === st.wid));
+  const kpi = (icono, titulo, valor, sub, delta, spark, color, alIr) => `
+    <div class="dash-kpi${alIr ? ' clic' : ''}" ${alIr ? `onclick="${alIr}"` : ''}>
+      <div class="dash-kpi-h"><span class="dash-ico" style="background:${color}1F;color:${color};">${homeIcon(HOME_ICON_PATHS[icono] || HOME_ICON_PATHS.box, 17, 'currentColor', 2)}</span><small>${titulo}</small>${alIr ? '<em>ver →</em>' : ''}</div>
+      <b>${valor}</b>
+      <div class="dash-kpi-s">${delta || ''}<span>${sub}</span></div>
+      ${spark || ''}
+    </div>`;
+  const pctGen = total > 0 ? generado / total * 100 : 0;
+  const hero = `
+    <div class="dash-hero">
+      <div class="dash-kpi-h"><span class="dash-ico" style="background:rgba(255,255,255,.18);color:#fff;">${homeIcon(HOME_ICON_PATHS.tag, 17, 'currentColor', 2)}</span><small>${esteAnio ? `Ingreso de ${anio} hasta ahora (con lo previsto de ${SGA_MESES[ultimo]})` : 'Ingreso de ' + anio}</small></div>
+      <b>${dashEur(total)}</b>
+      <div class="dash-hero-b"><i style="width:${(esteAnio ? pctGen : 100).toFixed(1)}%;"></i></div>
+      <div class="dash-hero-s">${esteAnio ? `<span><i class="s1"></i>Generado <b>${dashEur(generado)}</b></span><span><i class="s2"></i>Previsto <b>${dashEur(previsto)}</b></span>` : '<span>Sin IVA</span>'}<span>Media <b>${dashEur(mediaMes)}</b> al mes</span></div>
+    </div>`;
+  const kpis = `<div class="dash-top">${hero}
+    ${kpi('box', esteAnio ? 'Stock actual' : 'Stock a fin de año', `${sgaNumTxt(stockFin)} <small>palets</small>`, `desde el 1 de enero`, dashDelta(stockIni > 0 ? dashPct(stockFin, stockIni) : null, '', true), dashSpark(saldoMes, '#2F7F86'), '#2F7F86', "dashIr('catalogo')")}
+    ${kpi('list', 'Recepciones', String(nRec), `${sgaNumTxt(palRec)} palets recibidos`, '', dashSpark(meses.slice(0, hastaMes).map(m => m.rec), DASH_COLORES.mov), DASH_COLORES.mov, "dashIr('entradas')")}
+    ${kpi('truck', 'Expediciones', String(nExp), `${sgaNumTxt(palExp)} palets expedidos`, borradores.length ? `<span class="dash-delta warn">${borradores.length} en borrador</span>` : '', dashSpark(meses.slice(0, hastaMes).map(m => m.exp), DASH_COLORES.oper), DASH_COLORES.oper, "dashIr('salidas')")}
+  </div>`;
+  const cardMeses = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('tag', 'Ingreso mes a mes', 'Lo que se ingresa cada mes de ' + anio + (esteAnio ? ' (el mes en curso incluye lo previsto hasta su fin)' : ''))}
+      <div class="deca-card-body">
+        ${dashMesesSvg(meses)}
+        <div class="dash-leyenda">${DASH_CONCEPTOS.map(([k, t]) => `<span><i style="background:${DASH_COLORES[k]}"></i>${t}</span>`).join('')}</div>
+      </div>
+    </div>`;
+  const partes = DASH_CONCEPTOS.map(([k, t]) => ({ k, t, v: conceptosTot[k], color: DASH_COLORES[k] }));
+  const cardConcepto = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('list', 'Ingreso por concepto', 'De qué se compone el total de ' + anio)}
+      <div class="deca-card-body">${total > 0 ? `<div class="dash-donut">${dashDonutSvg(partes, total)}<div class="dash-donut-l">${partes.filter(p => p.v > 0).map(p => `<div><i style="background:${p.color}"></i><span>${p.t}</span><b>${dashEur(p.v)}</b><em>${(p.v / total * 100).toFixed(0)} %</em></div>`).join('')}</div></div>` : `<div class="dash-vacio">Todavía no hay ingresos en ${anio}.</div>`}</div>
+    </div>`;
+  const serieRE = meses.map((m, i) => ({ dia: i + 1, rec: m.rec, exp: m.exp, corto: m.corto, nombre: m.nombre }));
+  const cardRE = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('box', 'Recepciones y expediciones', 'Palets que entran y salen cada mes')}
+      <div class="deca-card-body">${dashBarrasSvg(serieRE, { etq: s => s.corto, cada: 1, tit: s => s.nombre })}<div class="dash-leyenda"><span><i style="background:${DASH_COLORES.mov}"></i>Recibidos · ${sgaNumTxt(palRec)}</span><span><i style="background:${DASH_COLORES.oper}"></i>Expedidos · ${sgaNumTxt(palExp)}</span></div></div>
+    </div>`;
+  const { cardClientes, cardEdad, cardAtencion } = dashTarjetasComunes(st, D, items, total, borradores, hoy, `Pulsa un cliente para ver su resumen mensual · ${items.length} cliente${items.length === 1 ? '' : 's'} en ${anio}`);
+  const nota = '<div class="dash-nota" style="margin-top:10px;">En el año, cada operativa cuenta en el mes de su fecha (las que venían de antes de enero, en enero), para no sumarla dos veces.' + (st.wid ? ' Con un almacén elegido no se cuentan las operativas ni el almacenaje por m² contratados (no pertenecen a un almacén).' : '') + '</div>';
+  return `${kpis}
+    <div class="dash-grid">
+      <div class="dash-main">${cardMeses}${cardRE}${cardClientes}</div>
+      <div class="dash-side">${cardConcepto}${cardAtencion}${cardEdad}</div>
+    </div>${nota}`;
+}
 function stockDashboardBodyHtml(){
   const st = sgaDashEstado();
   if (!st.datos) {
     if (!st.cargando) setTimeout(() => sgaDashCargar(), 0);
     return `<div class="rm-kpis dash-kpis">${[1, 2, 3, 4].map(() => '<div class="rm-kpi dash-sk"></div>').join('')}</div><div class="dash-grid"><div class="dash-a"><div class="card dash-sk" style="height:300px;"></div></div><div class="dash-b"><div class="card dash-sk" style="height:300px;"></div></div></div>`;
   }
+  if (st.anio) return st.datos.anio ? stockDashboardAnioHtml(st) : (setTimeout(() => sgaDashRefrescar(), 0), '');   // datos de un solo mes en la vista de año: se vuelven a pedir
   const D = st.datos, hoy = today(), mesActual = st.periodo === hoy.slice(0, 7), pasado = st.periodo < hoy.slice(0, 7);
   const dias = sgaDiasDelMes(st.periodo), hoyDia = mesActual ? Number(hoy.slice(8, 10)) : (pasado ? dias : 0);
   const nombreMes = SGA_MESES[Number(st.periodo.slice(5)) - 1], nombreAnt = SGA_MESES[Number(D.ant.slice(5)) - 1];
@@ -9010,55 +9203,7 @@ function stockDashboardBodyHtml(){
       ${decaCardHead('box', 'Recepciones y expediciones', 'Palets que entran y salen cada día')}
       <div class="deca-card-body">${dashBarrasSvg(serieRE)}<div class="dash-leyenda"><span><i style="background:${DASH_COLORES.mov}"></i>Recibidos · ${sgaNumTxt(palRec)}</span><span><i style="background:${DASH_COLORES.oper}"></i>Expedidos · ${sgaNumTxt(palExp)}</span></div></div>
     </div>`;
-  // ---- Ingreso por cliente
-  // Salen TODOS los clientes: primero los que tienen ingreso este mes (de más a menos) y después, sin barra, los que no tienen ninguno
-  const nomCli = x => ((x.c.nombreComercial || '').trim() || x.c.nombre);
-  const ranking = items.filter(x => x.total > 0).sort((a, b) => b.total - a.total);
-  const sinIngreso = items.filter(x => !(x.total > 0)).sort((a, b) => nomCli(a).localeCompare(nomCli(b), 'es'));
-  const maxCli = Math.max(1, ...ranking.map(x => x.total));
-  const cardClientes = `
-    <div class="card deca-card dash-card">
-      ${decaCardHead('home', 'Ingreso por cliente', `Pulsa un cliente para ver su resumen mensual · ${items.length} cliente${items.length === 1 ? '' : 's'}`)}
-      <div class="deca-card-body dash-cli-lista">
-        ${ranking.length ? ranking.map((x, i) => `
-          <div class="dash-cli" onclick="sgaDashIrResumen('${x.c.id}')" title="Ver su resumen mensual">
-            <span class="dash-rank">${i + 1}</span>
-            <div class="dash-cli-c"><div class="dash-cli-n"><b>${esc(nomCli(x))}</b><span>${dashEur(x.total)}<small>${total > 0 ? (x.total / total * 100).toFixed(0) : 0} %</small></span></div>
-              <div class="dash-barra" style="width:${(x.total / maxCli * 100).toFixed(1)}%;">${DASH_CONCEPTOS.map(([k, t]) => x.conceptos[k] > 0 ? `<i style="flex:${x.conceptos[k]};background:${DASH_COLORES[k]};" title="${t}: ${dashEur(x.conceptos[k])}"></i>` : '').join('')}</div></div>
-          </div>`).join('') : '<div class="dash-vacio">Todavía no hay ingresos este mes para este filtro.</div>'}
-        ${sinIngreso.length ? `<div class="dash-nota" style="margin:10px 0 2px 8px;">Sin ingreso este mes · ${sinIngreso.length}</div>` + sinIngreso.map(x => `
-          <div class="dash-cli sin" onclick="sgaDashIrResumen('${x.c.id}')" title="Ver su resumen mensual">
-            <span class="dash-rank">–</span>
-            <div class="dash-cli-c"><div class="dash-cli-n"><b>${esc(nomCli(x))}</b><span>${dashEur(0)}</span></div></div>
-          </div>`).join('') : ''}
-      </div>
-    </div>`;
-  // ---- Antigüedad del stock y atención
-  const ps = sgaPartidas.filter(p => p.actual > 0 && (!st.clienteId || p.clienteId === st.clienteId) && (!st.wid || p.warehouseId === st.wid));
-  const edad = p => Math.floor((Date.parse(hoy) - Date.parse(p.fechaEntrada)) / 86400000);
-  const tramos = [['Menos de 30 días', p => edad(p) < 30, '#3F8F5F'], ['De 30 a 90 días', p => edad(p) >= 30 && edad(p) <= 90, '#C98A2E'], ['Más de 90 días', p => edad(p) > 90, '#C1443D']].map(([t, f, c]) => ({ t, c, v: ps.filter(f).reduce((s, p) => s + p.actual, 0) }));
-  const totalPs = tramos.reduce((s, x) => s + x.v, 0);
-  const cardEdad = `
-    <div class="card deca-card dash-card">
-      ${decaCardHead('clock', 'Antigüedad del stock', 'Cuánto llevan los palets en el almacén')}
-      <div class="deca-card-body">${totalPs ? `<div class="dash-edad">${tramos.map(x => x.v ? `<i style="flex:${x.v};background:${x.c};" title="${x.t}: ${x.v} palets"></i>` : '').join('')}</div>
-        <div class="dash-donut-l" style="margin-top:12px;">${tramos.map(x => `<div><i style="background:${x.c}"></i><span>${x.t}</span><b>${sgaNumTxt(x.v)} palets</b><em>${(x.v / totalPs * 100).toFixed(0)} %</em></div>`).join('')}</div>` : '<div class="dash-vacio">No hay stock.</div>'}</div>
-    </div>`;
-  const opsPend = [...D.opPend, ...D.op].filter(o => o.estado === 'activa' && !o.facturada && (!st.clienteId || o.cliente_id === st.clienteId));
-  // Un cliente que paga por m² (tarifa «Stock · cada mes») no necesita tarifa por día: no se le avisa
-  const sinTarifa = st.wid ? [] : items.filter(x => x.r.final.mod > 0 && !x.r.prodM2 && !almacenajeProductos.some(p => !p.archived && p.disparador === 'stock_dia' && almacenajeTarifas.some(t => t.clienteId === x.c.id && t.tipo === p.id)));
-  const viejos = tramos[2].v;
-  const alertas = [
-    borradores.length ? { cls: 'warn', txt: `<b>${borradores.length}</b> expedición${borradores.length === 1 ? '' : 'es'} en borrador sin confirmar${(() => { const f = borradores.map(b => b.fecha).sort()[0]; return f ? ' · la más antigua del ' + fmtDateDMY(f).split('/').join('-') : ''; })()}`, go: "dashIr('salidas')" } : null,
-    opsPend.length ? { cls: 'warn', txt: `<b>${opsPend.length}</b> operativa${opsPend.length === 1 ? '' : 's'} pendiente${opsPend.length === 1 ? '' : 's'} de facturar · ${dashEur(opsPend.reduce((s, o) => s + Number(o.importe), 0))}`, go: "dashIr('operativas')" } : null,
-    sinTarifa.length ? { cls: 'bad', txt: `<b>${sinTarifa.length}</b> cliente${sinTarifa.length === 1 ? '' : 's'} con stock y <b>sin tarifa de almacenaje</b>: ${sinTarifa.slice(0, 3).map(x => esc((x.c.nombreComercial || '').trim() || x.c.nombre)).join(', ')}${sinTarifa.length > 3 ? '…' : ''}` } : null,
-    viejos > 0 ? { cls: 'bad', txt: `<b>${sgaNumTxt(viejos)}</b> palets llevan más de 90 días en el almacén`, go: "dashIr('catalogo')" } : null,
-  ].filter(Boolean);
-  const cardAtencion = `
-    <div class="card deca-card dash-card">
-      ${decaCardHead('info', 'Requiere atención', alertas.length ? alertas.length + ' aviso' + (alertas.length === 1 ? '' : 's') : 'Todo en orden')}
-      <div class="deca-card-body">${alertas.length ? alertas.map(a => `<div class="dash-alerta ${a.cls}"${a.go ? ` onclick="${a.go}" style="cursor:pointer;"` : ''}><i></i><span>${a.txt}</span>${a.go ? '<em>→</em>' : ''}</div>`).join('') : '<div class="dash-ok">✓ No hay nada pendiente: sin borradores, sin operativas por facturar y todos los clientes con tarifa.</div>'}</div>
-    </div>`;
+  const { cardClientes, cardEdad, cardAtencion } = dashTarjetasComunes(st, D, items, total, borradores, hoy, `Pulsa un cliente para ver su resumen mensual · ${items.length} cliente${items.length === 1 ? '' : 's'}`);
   const nota = st.wid ? '<div class="dash-nota" style="margin-top:10px;">Con un almacén elegido no se cuentan las operativas ni el almacenaje por m² contratados (no pertenecen a un almacén).</div>' : '';
   return `${kpis}
     <div class="dash-grid">
@@ -9068,7 +9213,8 @@ function stockDashboardBodyHtml(){
 }
 function sgaDashIrResumen(clienteId){
   const L = sgaLiqEstado(), rm = sgaResumenEstado();
-  L.periodo = sgaDashEstado().periodo; L.datos = null; L.estados = null; L.filtro = ''; L.q = ''; L.sel = clienteId;
+  const sd = sgaDashEstado(), hoyP = today().slice(0, 7);
+  L.periodo = sd.anio ? (sd.periodo.slice(0, 4) === hoyP.slice(0, 4) ? hoyP : sd.periodo.slice(0, 4) + '-12') : sd.periodo; L.datos = null;   // desde la vista de un año se abre su último mes L.estados = null; L.filtro = ''; L.q = ''; L.sel = clienteId;
   rm.clienteId = clienteId; rm.periodo = L.periodo; rm.datos = null;
   window.__stockSeg = 'liquidaciones';
   setTab('stock');   // su liquidación del mes está en Control Stock SGA
