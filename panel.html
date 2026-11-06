@@ -321,6 +321,10 @@
   .sgac-rq{flex:1 1 230px;font-size:13.5px;font-weight:600;color:var(--text);}
   .sgac-rq small{font-weight:400;color:var(--muted);font-size:12px;}
   .sgac-sg button{padding:5px 14px;font-size:12.5px;}
+  .sgac-m2-c,.sgac-m2-f{display:grid;grid-template-columns:minmax(110px,1fr) 130px 160px minmax(150px,2fr) auto;gap:10px;align-items:center;}
+  .sgac-m2-c{font-size:12px;color:var(--muted);font-weight:600;margin-bottom:4px;} .sgac-m2-f{margin-bottom:8px;}
+  .sgac-m2-f b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;}
+  @media (max-width:760px){ .sgac-m2-c{display:none;} .sgac-m2-f{grid-template-columns:1fr 1fr;} .sgac-m2-f b,.sgac-m2-f button{grid-column:1 / -1;} }
   .sgac-h{flex-basis:100%;font-size:12px;line-height:1.4;color:var(--muted);}
   .sgac-h b{color:var(--text);}
   .sgac-h.fl{display:flex;align-items:center;gap:7px;}
@@ -4871,11 +4875,21 @@ function sgaM2CardHtml(clienteId){
     </div>
     ${reparto.length > 1 || (reparto.length === 1 && reparto[0][0]) ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">${reparto.map(([k, x]) => `<span class="cg-chip" style="max-width:none;">${esc(nomAlm(k))} · ${esc(sgaNumTxt(x.m2))} m²</span>`).join('')}</div>` : ''}
     ${sinRepartir ? '<div class="sgac-h" style="margin:0 0 12px;color:var(--danger);">Hay m² «sin repartir» entre los almacenes del cliente. Guarda los m² de cada almacén (abajo): el dashboard los cuenta por almacén.</div>' : ''}
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
-      ${(ws.length ? ws.map(w => ({ id: w.id, nombre: w.name })) : [{ id: '', nombre: '' }]).map(w => { const cur = act ? act.porAlmacen.get(w.id) : null, v = cur ? String(cur.m2).replace('.', ',') : ''; return `<div class="field" style="width:150px;margin-bottom:0;"><label>${w.nombre ? esc(w.nombre) + ' · m²' : 'm² contratados'}</label><input class="sgac-m2-i" data-w="${esc(w.id)}" data-orig="${esc(v)}" value="${esc(v)}" inputmode="decimal" maxlength="9" placeholder="m²" style="text-align:right;" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaM2ContratoGuardar(); }" /></div>`; }).join('')}
-      <div class="field" style="width:170px;margin-bottom:0;"><label>Desde el día</label><input id="sgac-m2-d" type="date" value="${today()}" /></div>
-      <div class="field" style="flex:1;min-width:180px;margin-bottom:0;"><label>Nota <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></label><input id="sgac-m2-nota" maxlength="120" placeholder="Ej. Amplía una nave" /></div>
-      <button type="button" class="btn btn-primary" onclick="sgaM2ContratoGuardar()">Guardar cambio</button>
+    <div class="sgac-m2-t">
+      ${(() => {
+        const lista = ws.length ? ws.map(w => ({ id: w.id, nombre: w.name })) : [{ id: '', nombre: '' }];
+        const cab = `<div class="sgac-m2-c"><span>${ws.length ? 'Almacén' : ''}</span><span>m² contratados</span><span>Desde el día</span><span>Nota <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></span><span></span></div>`;
+        return cab + lista.map((w, i) => {
+          const cur = act ? act.porAlmacen.get(w.id) : null, v = cur ? String(cur.m2).replace('.', ',') : '';
+          return `<div class="sgac-m2-f">
+            <b title="${esc(w.nombre)}">${esc(w.nombre) || '&nbsp;'}</b>
+            <input id="sgac-m2-n-${i}" class="sgac-m2-i" data-w="${esc(w.id)}" data-orig="${esc(v)}" value="${esc(v)}" inputmode="decimal" maxlength="9" placeholder="Ej. 250" style="text-align:right;" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaM2ContratoGuardar(${i}); }" />
+            <input id="sgac-m2-d-${i}" type="date" value="${today()}" />
+            <input id="sgac-m2-nota-${i}" maxlength="120" placeholder="Ej. Amplía una nave" />
+            <button type="button" class="btn btn-primary" onclick="sgaM2ContratoGuardar(${i})">Guardar cambio</button>
+          </div>`;
+        }).join('');
+      })()}
     </div>
     <div id="sgac-m2-error" style="color:var(--danger);font-size:12.5px;margin-top:8px;"></div>
     <div class="sgac-h" style="margin-top:8px;">Se usan en las liquidaciones de cada mes (los vigentes a fin de mes), salvo que escribas otros a mano en esa liquidación. Cada cambio queda en el histórico. Para cobrarlos, el cliente necesita su tarifa de «M²».</div>
@@ -4883,37 +4897,32 @@ function sgaM2CardHtml(clienteId){
       <table class="tf-table" style="margin-top:6px;"><thead><tr><th>Desde</th><th>Almacén</th><th style="text-align:right;">m²</th><th>Nota</th><th>Registrado</th></tr></thead>
       <tbody>${hist.map((x, i) => `<tr${i === 0 ? ' style="font-weight:700;"' : ''}><td style="white-space:nowrap;">${esc(fmtDateDMY(x.desde))}</td><td>${x.warehouseId ? esc(nomAlm(x.warehouseId)) : '<span style="color:var(--mutedFaint);">Sin repartir</span>'}</td><td class="tf-precio">${esc(sgaNumTxt(x.m2))}</td><td>${esc(x.nota) || '<span style="color:var(--mutedFaint);">—</span>'}</td><td style="color:var(--muted);font-size:12.5px;">${quien(x.por)}${x.creadoEn ? ' · ' + esc(fmtDateDMY(String(x.creadoEn).slice(0, 10))) : ''}</td></tr>`).join('')}</tbody></table>` : ''}`;
 }
-async function sgaM2ContratoGuardar(){
+async function sgaM2ContratoGuardar(i){
   const id = window.__sgaClienteFormId;
   const err = document.getElementById('sgac-m2-error');
   if (!id || !err) return;
   err.textContent = '';
-  const desde = (document.getElementById('sgac-m2-d') || {}).value || '';
-  const nota = ((document.getElementById('sgac-m2-nota') || {}).value || '').trim();
+  const el = document.getElementById(`sgac-m2-n-${i}`);
+  if (!el) return;
+  const wid = el.dataset.w || '';
+  const t = el.value.trim();
+  const n = Number(t.replace(',', '.'));
+  const desde = (document.getElementById(`sgac-m2-d-${i}`) || {}).value || '';
+  const nota = ((document.getElementById(`sgac-m2-nota-${i}`) || {}).value || '').trim();
+  if (!(t !== '' && isFinite(n) && n >= 0)) { err.textContent = 'Escribe los m² como un número.'; el.focus(); return; }
   if (!desde) { err.textContent = 'Indica desde qué día valen.'; return; }
-  // Una casilla por almacén: se guardan solo las que has cambiado (las demás se quedan como están)
-  const por = currentUserEmail(), filas = [], resumen = [];
-  let malo = false;
-  document.querySelectorAll('#sgac-m2 .sgac-m2-i').forEach(el => {
-    const t = el.value.trim();
-    if (t === '' || t === (el.dataset.orig || '')) return;
-    const n = Number(t.replace(',', '.'));
-    if (!isFinite(n) || n < 0) { malo = true; el.style.borderColor = 'var(--danger)'; return; }
-    el.style.borderColor = '';
-    filas.push({ cliente_id: id, m2: n, vigente_desde: desde, nota: nota || null, created_by: por, warehouse_id: el.dataset.w || null });
-    resumen.push(`${el.dataset.w ? whNombre(el.dataset.w) + ' ' : ''}${sgaNumTxt(n)} m²`);
-  });
-  if (malo) { err.textContent = 'Escribe los m² como un número.'; return; }
-  if (!filas.length) { err.textContent = 'No has cambiado ningún m²: escribe los nuevos en el almacén que cambie.'; return; }
+  if (t === (el.dataset.orig || '') && !nota) { err.textContent = `${wid ? whNombre(wid) + ': ' : ''}no has cambiado los m². Escribe los nuevos para anotar el cambio.`; el.focus(); return; }
+  const por = currentUserEmail(), filas = [{ cliente_id: id, m2: n, vigente_desde: desde, nota: nota || null, created_by: por, warehouse_id: wid || null }];
   // Si había m² «sin repartir» y ahora se anotan los de un almacén, los «sin repartir» pasan a 0 ese mismo día para no contarlos dos veces
-  const sinRep = filas.some(f => f.warehouse_id) ? sgaM2ContratoPorAlmacen(id, desde).get('') : null;
+  const sinRep = wid ? sgaM2ContratoPorAlmacen(id, desde).get('') : null;
   if (sinRep && sinRep.m2 > 0) filas.push({ cliente_id: id, m2: 0, vigente_desde: desde, nota: 'Repartidos por almacén', created_by: por, warehouse_id: null });
   const { data, error } = await supabaseClient.from('sga_m2_contrato').insert(filas).select();
   if (error || !data) { err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test((error && error.message) || '') ? 'falta ejecutar el SQL «sga-m2-por-almacen.sql» en Supabase.' : ((error && error.message) || 'error desconocido.')); return; }
   data.forEach(r => sgaM2Historial.push(sgaM2ContratoDeFila(r))); sgaM2Ordenar();
-  const el = document.getElementById('sgac-m2'); if (el) el.innerHTML = sgaM2CardHtml(id);
-  await logContactoHistorial(id, `SGA · m² contratados: ${resumen.join(' · ')} desde el ${fmtDateDMY(desde)}${nota ? ' (' + nota + ')' : ''}.`);
-  appToast(`m² guardados: ${resumen.join(' · ')} desde el ${fmtDateDMY(desde)}.`, 'ok');
+  const card = document.getElementById('sgac-m2'); if (card) card.innerHTML = sgaM2CardHtml(id);
+  const nomW = wid ? whNombre(wid) : '';
+  await logContactoHistorial(id, `SGA · m² contratados${nomW ? ' en ' + nomW : ''}: ${sgaNumTxt(n)} m² desde el ${fmtDateDMY(desde)}${nota ? ' (' + nota + ')' : ''}.`);
+  appToast(`m² guardados${nomW ? ' en ' + nomW : ''}: ${sgaNumTxt(n)} m² desde el ${fmtDateDMY(desde)}.`, 'ok');
 }
 async function loadSgaConfig(){
   const [z, u, cl, ar, cp, m2c, nv] = await Promise.all([
