@@ -6952,6 +6952,41 @@ function catCeldaInput(a, campo, valor, extra){
 function thSortCat(label, type){
   return thSort(label, type).replace('sortTableByHeader(this)', 'catOrdenar(this)');
 }
+// «⇩» junto al título «Tipo de carga» de «Editar catálogo» (con la tabla desbloqueada): pone en todas las filas el tipo de carga de la primera.
+function catThTipoCarga(){
+  const th = thSortCat('Tipo de carga', 'text');
+  if (window.__catLocked) return th;
+  const b = `<button type="button" class="se-fill" style="margin-left:6px;" onclick="event.stopPropagation(); catRellenarTipoCarga()" title="Poner en todas las filas el tipo de carga de la primera fila">⇩</button>`;
+  return th.replace('<span class="th-sort-arrow">', b + '<span class="th-sort-arrow">');
+}
+function catRellenarTipoCarga(){
+  if (window.__catLocked) return;
+  const sels = [...document.querySelectorAll('#stock-body table.cg-tabla tbody tr.cg-row')].map(tr => tr.querySelector('select[data-f="productoId"], select[data-n="productoId"]')).filter(Boolean);
+  if (sels.length < 2) { appToast('Hace falta al menos una segunda fila para copiar el tipo de carga.', 'info'); return; }
+  const val = sels[0].value;
+  if (!val) { appToast('Elige primero el tipo de carga en la primera fila: se copia en todas las demás.', 'info'); return; }
+  const antes = new Map();
+  let n = 0, omitidas = 0;
+  const toast = window.appToast;
+  window.__catPegando = true;   // las casillas no anotan su propio paso: todo el relleno es uno solo
+  window.appToast = () => {};   // el aviso «tipo de palet puesto…» saldría una vez por fila
+  try {
+    sels.slice(1).forEach(ctl => {
+      if (ctl.value === val) return;
+      if (ctl.disabled || ![...ctl.options].some(o => o.value === val)) { omitidas++; return; }
+      antes.set(ctl, ctl.value);
+      ctl.value = val;
+      ctl.dispatchEvent(new Event('input', { bubbles: true }));
+      ctl.dispatchEvent(new Event('change', { bubbles: true }));
+      n++;
+    });
+  } finally { window.__catPegando = false; window.appToast = toast; }
+  catActualizarContador();
+  const grupo = [...antes].map(([c, a]) => ({ el: c, antes: a, despues: c.value })).filter(x => x.antes !== x.despues);
+  if (grupo.length) { const h = catHist(); h.u.push({ grupo, creadas: [], tbody: sels[0].closest('tbody') }); if (h.u.length > 300) h.u.shift(); h.r = []; catHistRefrescar(); }
+  if (!n) { appToast(omitidas ? 'Ese tipo de carga no está disponible en las demás filas.' : 'Todas las filas ya tienen ese tipo de carga.', 'info'); return; }
+  appToast(`Tipo de carga copiado en ${n} fila${n === 1 ? '' : 's'}.${omitidas ? ` ${omitidas} no se ${omitidas === 1 ? 'pudo' : 'pudieron'} rellenar (ese tipo no está en su lista).` : ''} Con Ctrl+Z se deshace. Revisa y pulsa «Guardar».`, omitidas ? 'info' : 'ok');
+}
 function catOrdenar(th){
   const idx = [...th.parentElement.children].indexOf(th);
   const tbody = th.closest('table').querySelector('tbody');
@@ -7836,7 +7871,7 @@ function stockCatalogoTablaHtml(){
     <div class="card${window.__catEditAll ? '' : ' cg-compacta'}" style="padding:0;">
       <div class="tc-hist-box" style="max-height:${window.__catEditAll ? 'calc(100vh - 290px)' : 'max(420px, calc(100vh - 380px))'};min-height:${window.__catEditAll ? '320px' : '0'};border:none;border-radius:10px;">
         <table class="tf-table cg-tabla${window.__catEditAll ? ' cg-todo' : catDens() === 'compacto' ? ' cg-dens-c' : ''}">
-          <thead><tr>${window.__catEditAll ? `${thSortCat(catPrincipalTit(cols), 'text')}${cols.referencia ? thSortCat('Descripción', 'text') : ''}${cols.tipo ? thSortCat('Tipo de carga', 'text') : ''}${cols.bultos ? thSortCat('Bultos / palet', 'number') : ''}${cols.ml ? thSortCat('M. lineales', 'number') : ''}${cols.peso ? thSortCat(sgaPesoLabel(), 'number') : ''}${cols.medidas ? thSortCat('Medidas', 'text') : ''}${cols.x.map(f => thSortCat(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${cols.ubic ? thSortCat('Ubicación', 'text') : ''}${thSortCat('Stock actual', 'number')}` : `${conCliente ? thFil('a:cli', 'Cliente', 'text') : ''}${thFil('a:cod', catPrincipalTit(cols), 'text')}${cols.tipo ? thFil('a:tipo', 'Tipo de carga', 'text') : ''}${cols.bultos ? thFil('a:bul', 'Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thFil('a:ml', 'M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thFil('a:peso', sgaPesoLabel(), 'number', 'style="text-align:right;"') : ''}${cols.medidas ? thFil('a:med', 'Medidas', 'text') : ''}${cols.x.map(f => thFil('a:x:' + f.id, f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${cols.ubic ? thFil('a:ubic', 'Ubicación', 'text') : ''}${thFil('a:stock', 'Stock actual', 'number')}`}</tr></thead>
+          <thead><tr>${window.__catEditAll ? `${thSortCat(catPrincipalTit(cols), 'text')}${cols.referencia ? thSortCat('Descripción', 'text') : ''}${cols.tipo ? catThTipoCarga() : ''}${cols.bultos ? thSortCat('Bultos / palet', 'number') : ''}${cols.ml ? thSortCat('M. lineales', 'number') : ''}${cols.peso ? thSortCat(sgaPesoLabel(), 'number') : ''}${cols.medidas ? thSortCat('Medidas', 'text') : ''}${cols.x.map(f => thSortCat(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${cols.ubic ? thSortCat('Ubicación', 'text') : ''}${thSortCat('Stock actual', 'number')}` : `${conCliente ? thFil('a:cli', 'Cliente', 'text') : ''}${thFil('a:cod', catPrincipalTit(cols), 'text')}${cols.tipo ? thFil('a:tipo', 'Tipo de carga', 'text') : ''}${cols.bultos ? thFil('a:bul', 'Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thFil('a:ml', 'M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thFil('a:peso', sgaPesoLabel(), 'number', 'style="text-align:right;"') : ''}${cols.medidas ? thFil('a:med', 'Medidas', 'text') : ''}${cols.x.map(f => thFil('a:x:' + f.id, f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${cols.ubic ? thFil('a:ubic', 'Ubicación', 'text') : ''}${thFil('a:stock', 'Stock actual', 'number')}`}</tr></thead>
           <tbody>
             ${lista.map(a => catFilaHtml(a, cols, conCliente)).join('')}
           </tbody>
