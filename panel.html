@@ -20256,7 +20256,7 @@ function fzFormHtml(){
         ${sec(1, 'Carga', 'De quién se compra la mercancía')}
         <div class="dr-g">
           <div class="field"><label>Fecha <span class="dc-req">*</span></label><input id="fz-fecha" type="date" value="${esc(f.fecha)}" /></div>
-          <div class="field"><label>Nº de viaje</label><input id="fz-num" inputmode="numeric" value="${esc(f.numero == null ? '' : f.numero)}" /></div>
+          <div class="field"><label>Nº de viaje <small style="color:var(--mutedFaint);font-weight:400;">· lo da el programa</small></label><input id="fz-num" value="${esc(f.numero == null ? '' : f.numero)}" readonly tabindex="-1" style="background:var(--panel2);cursor:default;font-weight:700;" title="El número lo asigna el programa solo, en orden" /></div>
           <div class="field"><label>Camión / conductor</label><input id="fz-cc" list="fz-dl-cam" maxlength="40" placeholder="Q-28, T-134…" value="${esc(f.camionCarga)}" /></div>
           <div class="field dr-w2"><label>Proveedor ${nuevo('proveedores')}</label>${fzSelHtml('fz-prov', prov, f.proveedorId, 'Elige el proveedor…', 'fzFormProveedor()')}</div>
           <div class="field"><label>Región de carga</label><input id="fz-zc" list="fz-dl-zona" maxlength="12" placeholder="FR31" style="text-transform:uppercase;" value="${esc(f.zonaCarga)}" /></div>
@@ -20354,9 +20354,17 @@ async function fzGuardarViaje(){
   if (!(cantidad > 0)) { err.textContent = 'Indica la cantidad (toneladas o balas).'; document.getElementById('fz-cant').focus(); return; }
   const nums = ['fz-pcu', 'fz-pvu', 'fz-flete'].map(fzN);
   if (nums.some(n => !isFinite(n) || n < 0)) { err.textContent = 'Los precios y el flete tienen que ser números (sin signo negativo).'; return; }
-  const num = fzV('fz-num'), fp = document.getElementById('fz-fp').checked, fc = document.getElementById('fz-fc').checked;
+  const fp = document.getElementById('fz-fp').checked, fc = document.getElementById('fz-fc').checked;
+  // El nº de viaje lo da el programa: un viaje nuevo recibe el siguiente al más alto que haya en la base de datos en este momento (así no se repite
+  // aunque otra persona haya creado viajes después de abrir esta pantalla); uno ya creado conserva el suyo
+  let numero = f.numero == null || f.numero === '' ? null : Number(f.numero);
+  if (!f.id) {
+    let max = null;
+    try { const r = await supabaseClient.from('forraje_viajes').select('numero').not('numero', 'is', null).order('numero', { ascending: false }).limit(1); if (!r.error) max = ((r.data || [])[0] || {}).numero || 0; } catch (e) { /* sin red: se usa el de esta pantalla */ }
+    numero = max != null ? max + 1 : fzSiguienteNumero();
+  }
   const row = {
-    numero: num === '' ? fzSiguienteNumero() : parseInt(num, 10) || null, fecha,
+    numero: Number.isFinite(numero) ? numero : null, fecha,
     proveedor_id: fzV('fz-prov') || null, cliente_id: fzV('fz-cli') || null, zona_carga: fzRegion('fz-zc') || null, zona_descarga: fzRegion('fz-zd') || null,
     camion_carga: fzV('fz-cc') || null, camion_descarga: fzV('fz-cd') || null, producto_id: fzV('fz-prod') || null, formato: fzV('fz-formato') || null, cantidad, unidad: fzV('fz-ud') || 't',
     pago_proveedor: fzV('fz-pp') || null, facturado_proveedor: fp, factura_proveedor: fp ? (fzV('fz-fpn') || null) : null, tel_carga: fzV('fz-tc') || null,
