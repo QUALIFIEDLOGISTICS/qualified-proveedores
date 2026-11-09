@@ -6077,6 +6077,9 @@ function sgaAlbColumnaNombre(k){
 function sgaAlbExpandir(colList, conBultos){
   return colList.flatMap(k => k === '@cajas' ? (conBultos ? ['@palets', '@cajas'] : ['@palets']) : [k]);
 }
+// ¿El albarán saca una línea por cada palet (cada una con sus medidas y sus cajas)? Solo se desactiva si el cliente lo pide («no» en su ficha):
+// así sigue igual para quien ya lo tiene (carpas con cajas por unidad). Desactivado, sale una línea por artículo con el total de palets y de cajas.
+function sgaAlbPorUnidadOn(clienteId){ return ((sgaClienteCfg(clienteId).campos || {}).__alb_unidad) !== 'no'; }
 function sgaAlbColumnasCliente(clienteId){
   const cc = sgaClienteCfg(clienteId).campos || {};
   const validos = new Set([...Object.keys(SGA_ALB_COLS), ...sgaCamposPropios().filter(sgaCampoAlbaranElegible).map(f => f.clave)]);
@@ -6436,7 +6439,9 @@ function sgacAlbaranHtml(){
   return `<div class="sgac-tit" style="margin-top:8px;">Salen, de izquierda a derecha</div>
     <div class="sgac-alb-ord">${cols.map(fila).join('')}</div>
     ${libres.length ? `<div class="sgac-tit" style="margin-top:12px;">Añadir al albarán</div><div style="display:flex;flex-wrap:wrap;gap:8px;">${libres.map(k => `<button type="button" class="btn btn-ghost" style="padding:5px 12px;font-size:12.5px;" onclick="sgacAlbAnadir('${k}')">+ ${esc(sgaAlbColumnaNombre(k))}</button>`).join('')}</div>` : ''}
-    <div class="sgac-h" style="margin-top:8px;">Solo se pueden elegir los datos que este cliente tiene en su catálogo (apartado «Datos de la mercancía», arriba) y Cajas. Las columnas que dejes salen siempre en este orden, tengan o no valor.</div>`;
+    <div class="sgac-h" style="margin-top:8px;">Solo se pueden elegir los datos que este cliente tiene en su catálogo (apartado «Datos de la mercancía», arriba) y Palets (con Cajas, si el cliente cuenta bultos). Las columnas que dejes salen siempre en este orden, tengan o no valor.</div>
+    <label class="dr-chk" style="margin-top:14px;"><input type="checkbox" id="sgac-alb-unidad" ${((window.__sgacCampos || {}).__alb_unidad) === 'no' ? '' : 'checked'} onchange="(window.__sgacCampos = window.__sgacCampos || {}).__alb_unidad = this.checked ? 'si' : 'no'" /> Una línea por cada palet (cada una con sus medidas y sus cajas)</label>
+    <div class="sgac-h" style="margin-top:2px;">Con la casilla quitada, el albarán saca <b>una línea por artículo</b> con el total de palets y, si el cliente cuenta bultos, el total de cajas. Con ella puesta, saca una línea por cada palet, como hasta ahora.</div>`;
 }
 function sgacAlbRefrescar(cols){ window.__sgacAlbCols = cols; const al = document.getElementById('sgac-alb'); if (al) al.innerHTML = sgacAlbaranHtml(); }
 function sgacAlbAnadir(k){ sgacAlbRefrescar([...sgacAlbColsActual(), k]); }
@@ -6625,6 +6630,7 @@ async function submitSgaCliente(){
   campos.__unidad = udS ? udS + '|' + (udP || sgaUdPlural(udS)) : '';   // vacío = «palet / palets»
   const unidadAntes = sgaUnidadCfg(id).propia ? sgaUnidadCfg(id).s + '|' + sgaUnidadCfg(id).p : '';
   campos.__albaran_cols = sgacAlbColsActual().join(',');
+  campos.__alb_unidad = (window.__sgacCampos || {}).__alb_unidad === 'no' ? 'no' : 'si';   // una línea por palet en el albarán (por defecto sí, como siempre)
   const salidaAntes = sgaClienteSalida(id);
   const observaciones = document.getElementById('sgac-obs').value.trim();
   const prefijo = ((document.getElementById('sgac-prefijo') || {}).value || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
@@ -13129,7 +13135,7 @@ async function sgaAlbaranDatos(id){
       extra: camposAlb.map(f => sgaCampoMostrar(sgaCampoDef(f), (art && art.atributos && art.atributos[f.clave] != null && art.atributos[f.clave] !== '') ? art.atributos[f.clave] : (SGA_CAMPOS_COLUMNA.includes(f.clave) ? p[f.clave] : (p.atributos || {})[f.clave]))) };
     // Varias unidades iguales (2 carpas del mismo artículo) con cajas o medidas por unidad: una línea por unidad, cada una con sus medidas y sus cajas
     const n = Math.round(mod);
-    const porUnidad = n > 1 && n <= 200 && n === mod && (conBultos || (art && catMedidasLineas(art.medidas).length > 1));
+    const porUnidad = sgaAlbPorUnidadOn(a.clienteId) && n > 1 && n <= 200 && n === mod && (conBultos || (art && catMedidasLineas(art.medidas).length > 1));
     return porUnidad ? Array.from({ length: n }, () => ({ ...linea, palets: 1, cajas: sgaR2(cajas / n), peso: art && art.peso != null ? sgaR2(art.peso) : null })) : [linea];
   });
   // Campos que salen en el albarán: los que ha elegido el cliente en su ficha SGA
