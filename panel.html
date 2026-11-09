@@ -20513,10 +20513,20 @@ function fzCatTablaHtml(tipo){
   const lista = S[tipo].filter(e => (S.archivados || !e.archived) && (!q || fzNorm([e.nombre, e.telefono, e.formaPago, e.notas].join(' ')).includes(q)));
   if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${S[tipo].length ? 'Ninguno coincide con la búsqueda.' : `Todavía no hay ${c.plural.toLowerCase()}.`}</div>`;
   const esProd = tipo === 'productos';
+  // Los proveedores salen de más a menos toneladas compradas (se puede cambiar pulsando el título de cualquier columna)
+  if (tipo === 'proveedores') lista.sort((a, b) => ((est.get(b.id) || {}).tn || 0) - ((est.get(a.id) || {}).tn || 0) || a.nombre.localeCompare(b.nombre, 'es'));
+  const compra = new Map();   // proveedor → productos que se le han comprado (con las toneladas de cada uno)
+  if (tipo === 'proveedores') S.viajes.forEach(v => { if (!v.proveedorId || !v.productoId) return; const m = compra.get(v.proveedorId) || new Map(); m.set(v.productoId, (m.get(v.productoId) || 0) + (v.unidad === 'balas' ? 0 : v.cantidad)); compra.set(v.proveedorId, m); });
   const filas = lista.map(e => { const s = est.get(e.id) || { n: 0, tn: 0, beneficio: 0, reg: new Set() }, regs = [...s.reg].sort().join(', ');
     return `<tr class="cg-row${e.archived ? ' arch' : ''}" style="cursor:pointer;" onclick="fzCatForm('${tipo}', '${e.id}')">
       <td data-sort-value="${esc(e.nombre)}"><b>${esc(e.nombre)}</b>${e.archived ? ' <span class="cg-chip">Archivado</span>' : ''}${e.notas ? `<div class="cg-ref">${esc(e.notas)}</div>` : ''}</td>
-      ${tipo === 'proveedores' ? (() => { const vg = fzPreciosVigentes(e.id), t = vg.map(r => `${(M0.prod.get(r.productoId) || {}).nombre || ''}${r.formato ? ' ' + r.formato : ''}: ${fzPrecioTxt(r)}`).join(' · '); return `<td data-sort-value="${esc(t)}" style="font-size:12.5px;max-width:260px;" title="${esc(t)}">${t ? esc(t.length > 70 ? t.slice(0, 68) + '…' : t) : '<span style="color:var(--mutedFaint);">—</span>'}</td>`; })() : ''}
+      ${tipo === 'proveedores' ? (() => {
+        const comprados = [...(compra.get(e.id) || new Map())].sort((a, b) => b[1] - a[1]).map(x => x[0]), tiene = fzPreciosDe(e.id).map(r => r.productoId);
+        const todos = [...new Set([...comprados, ...tiene])], nom = id => (M0.prod.get(id) || {}).nombre || '';
+        const chips = todos.map(id => `<span class="cg-chip" style="margin:1px 4px 1px 0;${comprados.includes(id) ? '' : 'opacity:.6;'}" title="${comprados.includes(id) ? 'Se le ha comprado' : 'Lo tiene apuntado en su ficha, aún no se le ha comprado'}">${esc(nom(id))}</span>`).join('');
+        const lineas = fzPreciosVigentes(e.id).map(r => `${nom(r.productoId)}${r.formato ? ' ' + r.formato : ''}: ${fzPrecioTxt(r)}`), vacio = '<span style="color:var(--mutedFaint);">—</span>';
+        return `<td data-sort-value="${esc(todos.map(nom).join(' '))}" style="max-width:240px;">${chips || vacio}</td><td data-sort-value="${esc(lineas.join(' '))}" style="font-size:12.5px;white-space:nowrap;">${lineas.length ? lineas.map(l => `<div>${esc(l)}</div>`).join('') : vacio}</td>`;
+      })() : ''}
       ${esProd ? '' : `<td data-sort-value="${esc(regs)}">${esc(regs) || '<span style="color:var(--mutedFaint);">—</span>'}</td><td data-sort-value="${esc(e.telefono)}" style="white-space:nowrap;">${esc(e.telefono) || '<span style="color:var(--mutedFaint);">—</span>'}</td><td data-sort-value="${esc(e.formaPago)}">${esc(e.formaPago) || '<span style="color:var(--mutedFaint);">—</span>'}</td>`}
       <td data-sort-value="${s.n}" style="text-align:right;">${s.n}</td>
       <td data-sort-value="${s.tn}" style="text-align:right;white-space:nowrap;">${fzNum(s.tn, 1)} t</td>
@@ -20524,7 +20534,7 @@ function fzCatTablaHtml(tipo){
       <td class="td-acc" style="text-align:right;white-space:nowrap;"><button type="button" class="deca-act" title="Editar" onclick="event.stopPropagation(); fzCatForm('${tipo}', '${e.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button></td>
     </tr>`; }).join('');
   return `<div class="card cg-compacta" style="padding:0;overflow:hidden;"><div style="overflow-x:auto;"><table class="tf-table">
-    <thead><tr>${thSort(c.unoT, 'text')}${tipo === 'proveedores' ? thSort('Productos y precios vigentes', 'text') : ''}${esProd ? '' : `${thSort('Regiones', 'text')}${thSort('Teléfono', 'text')}${thSort('Forma de pago', 'text')}`}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Toneladas', 'number', 'style="text-align:right;"')}${thSort('Beneficio', 'number', 'style="text-align:right;"')}<th class="td-acc"></th></tr></thead>
+    <thead><tr>${thSort(c.unoT, 'text')}${tipo === 'proveedores' ? thSort('Productos', 'text') + thSort('Precios vigentes', 'text') : ''}${esProd ? '' : `${thSort('Regiones', 'text')}${thSort('Teléfono', 'text')}${thSort('Forma de pago', 'text')}`}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Toneladas', 'number', 'style="text-align:right;"')}${thSort('Beneficio', 'number', 'style="text-align:right;"')}<th class="td-acc"></th></tr></thead>
     <tbody>${filas}</tbody></table></div></div>`;
 }
 function fzCatalogoHtml(tipo){
