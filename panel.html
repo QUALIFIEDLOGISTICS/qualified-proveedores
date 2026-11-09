@@ -19943,7 +19943,7 @@ const FZ_FORMATOS = ['Redonda', 'Rectangular', 'Ensilada'];   // formato de la b
 const FZ_MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 function fzS(){
   return (window.__fz = window.__fz || { cargado: false, cargando: false, error: '', sec: 'viajes', view: 'lista', viajes: [], proveedores: [], clientes: [], productos: [],
-    q: '', periodo: '', producto: '', formato: '', pend: false, cq: '', archivados: false, resPeriodo: '', form: null, formDirty: false });
+    q: '', periodo: '', producto: '', formato: '', pend: false, cq: '', archivados: false, dp: '12m', dd: '', dh: '', df: { producto: '', formato: '', prov: '', cli: '', reg: '' }, form: null, formDirty: false });
 }
 const fzR2 = n => Math.round((Number(n) || 0) * 100) / 100;
 const fzNorm = s => String(s == null ? '' : s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -20027,9 +20027,9 @@ function tplForrajes(){
   else if (!S.cargado) cuerpo = `<div class="card dash-sk" style="height:260px;"></div>`;
   else if (S.view === 'form') { cuerpo = fzFormHtml(); setTimeout(() => { if (fzS().view === 'form') fzFormPrecios(); }, 0); }
   else if (S.sec === 'viajes') cuerpo = fzViajesHtml();
-  else if (S.sec === 'dashboard') cuerpo = fzResumenHtml();
+  else if (S.sec === 'dashboard') cuerpo = fzDashboardHtml();
   else cuerpo = fzCatalogoHtml(S.sec);
-  return `<div style="--bn-accent:var(--primary);">${S.view === 'form' ? '' : fzBarHtml()}${cuerpo}</div>`;
+  return `<div style="--bn-accent:var(--primary);--dc-accent:var(--primary);">${S.view === 'form' ? '' : fzBarHtml()}${cuerpo}</div>`;
 }
 // ---------------------------------------------------------------- Viajes
 function fzPeriodoOpciones(lista){
@@ -20437,45 +20437,298 @@ async function fzCatEliminar(){
   S[ctx.tipo] = S[ctx.tipo].filter(x => x.id !== e.id);
   closeModal(); appToast(`${c.unoT} eliminado.`, 'ok'); renderTab();
 }
-// ---------------------------------------------------------------- Resumen
-function fzResPeriodo(v){ fzS().resPeriodo = v; renderTab(); }
-function fzResumenHtml(){
-  const S = fzS(), M = fzMaps(), per = S.resPeriodo;
-  const lista = S.viajes.filter(v => !per || String(v.fecha).startsWith(per)), T = fzTotales(lista);
-  const anios = [...new Set(S.viajes.map(v => String(v.fecha).slice(0, 4)))].sort().reverse();
-  const tile = (t, v, sub, color) => `<div class="fz-tile"><small>${t}</small><b${color ? ` style="color:${color};"` : ''}>${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
-  const sinFacProv = lista.filter(v => !v.facturadoProveedor), sinFacCli = lista.filter(v => !v.facturadoCliente);
-  const grupo = (clave, etiqueta, orden) => {
-    const g = new Map();
-    lista.forEach(v => { const k = clave(v); const e = g.get(k) || { k, n: 0, tn: 0, compra: 0, flete: 0, venta: 0, beneficio: 0 }; const c = fzCalc(v); e.n++; if (v.unidad === 't') e.tn += v.cantidad; e.compra += c.compra; e.flete += c.flete; e.venta += c.venta; e.beneficio += c.beneficio; g.set(k, e); });
-    return [...g.values()].sort(orden || ((a, b) => b.beneficio - a.beneficio)).map(e => ({ ...e, etq: etiqueta(e.k) }));
-  };
-  const tabla = (titulo, filas, primera) => `<div class="card cg-compacta" style="padding:0;overflow:hidden;margin-bottom:14px;"><div style="padding:12px 16px;font-family:var(--display);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid var(--border);">${titulo}</div><div style="overflow-x:auto;"><table class="tf-table">
-    <thead><tr>${thSort(primera, 'text')}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Toneladas', 'number', 'style="text-align:right;"')}${thSort('Compra', 'number', 'style="text-align:right;"')}${thSort('Flete', 'number', 'style="text-align:right;"')}${thSort('Venta', 'number', 'style="text-align:right;"')}${thSort('Beneficio', 'number', 'style="text-align:right;"')}</tr></thead>
-    <tbody>${filas.map(e => `<tr class="cg-row"><td data-sort-value="${esc(e.k)}"><b>${esc(e.etq)}</b></td><td data-sort-value="${e.n}" style="text-align:right;">${e.n}</td><td data-sort-value="${e.tn}" style="text-align:right;white-space:nowrap;">${fzNum(e.tn, 1)}</td><td data-sort-value="${fzR2(e.compra)}" style="text-align:right;white-space:nowrap;">${fzEur(fzR2(e.compra))}</td><td data-sort-value="${fzR2(e.flete)}" style="text-align:right;white-space:nowrap;">${fzEur(fzR2(e.flete))}</td><td data-sort-value="${fzR2(e.venta)}" style="text-align:right;white-space:nowrap;">${fzEur(fzR2(e.venta))}</td><td data-sort-value="${fzR2(e.beneficio)}" style="text-align:right;white-space:nowrap;font-weight:700;color:${e.beneficio < 0 ? 'var(--danger)' : 'var(--success)'};">${fzEur(fzR2(e.beneficio))}</td></tr>`).join('')}</tbody></table></div></div>`;
-  const meses = grupo(v => String(v.fecha).slice(0, 7), k => `${FZ_MESES[Number(k.slice(5)) - 1]} ${k.slice(0, 4)}`, (a, b) => String(b.k).localeCompare(String(a.k)));
-  return `
+// ---------------------------------------------------------------- Dashboard
+/* Mismo estilo que los dashboards de Almacén y Transporte: periodo y filtros arriba, cifras con su comparación con el periodo anterior,
+   gráficos (beneficio mes a mes, precios por tonelada, reparto por producto), rankings de clientes, proveedores, regiones y camiones,
+   avisos de lo pendiente y unas conclusiones escritas con los datos. Debajo, el detalle en tablas. */
+const FZ_PERIODOS = [['mes', 'Este mes'], ['mes_ant', 'Mes anterior'], ['trim', 'Últimos 3 meses'], ['12m', 'Últimos 12 meses'], ['anio', 'Este año'], ['anio_ant', 'Año anterior'], ['todo', 'Todo'], ['pers', 'Personalizado']];
+const FZ_PALETA = ['#1B3A6B', '#2F7F86', '#C0721A', '#7C5CBF', '#3F8F5F', '#C1443D', '#5C6670', '#D9A72C'];
+const FZ_VERDE = '#3F8F5F';
+const fzIso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const fzFecha = s => new Date(s + 'T00:00:00');
+const fzSumaDias = (s, n) => { const d = fzFecha(s); d.setDate(d.getDate() + n); return fzIso(d); };
+function fzRango(){
+  const S = fzS(), hoy = today(), y = Number(hoy.slice(0, 4)), m = Number(hoy.slice(5, 7)) - 1, dia = Number(hoy.slice(8, 10)), p = S.dp || '12m';
+  const ini = (yy, mm) => fzIso(new Date(yy, mm, 1)), ult = (yy, mm) => fzIso(new Date(yy, mm + 1, 0));
+  let d = null, h = null, ant = null;
+  if (p === 'mes') { d = ini(y, m); h = ult(y, m); ant = [ini(y, m - 1), fzIso(new Date(y, m - 1, Math.min(dia, new Date(y, m, 0).getDate())))]; }   // el mes en curso se compara con el mismo tramo del mes anterior
+  else if (p === 'mes_ant') { d = ini(y, m - 1); h = ult(y, m - 1); ant = [ini(y, m - 2), ult(y, m - 2)]; }
+  else if (p === 'trim') { d = ini(y, m - 2); h = ult(y, m); ant = [ini(y, m - 5), ult(y, m - 3)]; }
+  else if (p === '12m') { d = ini(y, m - 11); h = ult(y, m); ant = [ini(y, m - 23), ult(y, m - 12)]; }
+  else if (p === 'anio') { d = `${y}-01-01`; h = `${y}-12-31`; ant = [`${y - 1}-01-01`, `${y - 1}-${hoy.slice(5)}`]; }   // lo que va de año contra lo mismo del año anterior
+  else if (p === 'anio_ant') { d = `${y - 1}-01-01`; h = `${y - 1}-12-31`; ant = [`${y - 2}-01-01`, `${y - 2}-12-31`]; }
+  else if (p === 'pers') { d = S.dd || null; h = S.dh || null; if (d && h && d <= h) { const n = Math.round((fzFecha(h) - fzFecha(d)) / 86400000) + 1; ant = [fzSumaDias(d, -n), fzSumaDias(d, -1)]; } }
+  return { d, h, ant };
+}
+function fzFiltrar(d, h){
+  const S = fzS(), f = S.df;
+  return S.viajes.filter(v => (!d || v.fecha >= d) && (!h || v.fecha <= h) && (!f.producto || v.productoId === f.producto) && (!f.formato || v.formato === f.formato)
+    && (!f.prov || v.proveedorId === f.prov) && (!f.cli || v.clienteId === f.cli) && (!f.reg || v.zonaCarga === f.reg || v.zonaDescarga === f.reg));
+}
+function fzDashPeriodo(v){ fzS().dp = v; renderTab(); }
+function fzDashFechas(k, v){ fzS()[k] = v; renderTab(); }
+function fzDashFiltro(k, v){ fzS().df[k] = v; renderTab(); }
+function fzDashLimpiar(){ fzS().df = { producto: '', formato: '', prov: '', cli: '', reg: '' }; renderTab(); }
+function fzIrPend(){ const S = fzS(); S.pend = true; S.periodo = ''; S.producto = ''; S.formato = ''; S.q = ''; fzIr('viajes'); }
+// Totales con los datos «por tonelada» (solo los viajes en toneladas: las balas no se mezclan)
+function fzTot(list){
+  const t = fzTotales(list); t.tnT = 0; t.compraT = 0; t.ventaT = 0; t.fleteT = 0;
+  list.forEach(v => { if (v.unidad === 'balas') return; const c = fzCalc(v); t.tnT += v.cantidad; t.compraT += c.compra; t.ventaT += c.venta; t.fleteT += c.flete; });
+  t.benT = fzR2(t.ventaT - t.compraT - t.fleteT);
+  return t;
+}
+function fzGrupo(lista, clave, etiqueta){
+  const g = new Map();
+  lista.forEach(v => {
+    const k = clave(v), e = g.get(k) || { k, n: 0, tn: 0, tnT: 0, compra: 0, flete: 0, venta: 0, beneficio: 0, benT: 0, compraT: 0, ventaT: 0 }, c = fzCalc(v);
+    e.n++; e.compra += c.compra; e.flete += c.flete; e.venta += c.venta; e.beneficio += c.beneficio;
+    if (v.unidad !== 'balas') { e.tn += v.cantidad; e.tnT += v.cantidad; e.benT += c.beneficio; e.compraT += c.compra; e.ventaT += c.venta; }
+    g.set(k, e);
+  });
+  return [...g.values()].sort((a, b) => b.beneficio - a.beneficio).map(e => ({ ...e, etq: etiqueta(e.k) }));
+}
+// Cubos de tiempo para los gráficos: semanas si el periodo es corto, meses si no
+function fzCubos(list, d, h){
+  const fechas = list.map(v => v.fecha).sort();
+  const desde = d || fechas[0], hasta = h || fechas[fechas.length - 1];
+  if (!desde || !hasta) return { cubos: [], mensual: true };
+  const dias = Math.round((fzFecha(hasta) - fzFecha(desde)) / 86400000) + 1, mensual = dias > 75;
+  const nuevo = (k, label, tit) => ({ k, label, tit, n: 0, tn: 0, tnT: 0, compra: 0, flete: 0, venta: 0, beneficio: 0, compraT: 0, ventaT: 0, fleteT: 0 });
+  const cubos = [], mapa = new Map();
+  if (mensual) {
+    let y = Number(desde.slice(0, 4)), m = Number(desde.slice(5, 7)) - 1;
+    const yf = Number(hasta.slice(0, 4)), mf = Number(hasta.slice(5, 7)) - 1;
+    while (y < yf || (y === yf && m <= mf)) {
+      const k = `${y}-${String(m + 1).padStart(2, '0')}`, c = nuevo(k, `${FZ_MESES[m].slice(0, 3)} ${String(y).slice(2)}`, `${FZ_MESES[m].charAt(0).toUpperCase() + FZ_MESES[m].slice(1)} ${y}`);
+      cubos.push(c); mapa.set(k, c); if (++m > 11) { m = 0; y++; }
+    }
+  } else {
+    const lunes = s => { const x = fzFecha(s); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return fzIso(x); };
+    for (let s = lunes(desde); s <= hasta; s = fzSumaDias(s, 7)) { const c = nuevo(s, `${s.slice(8)}/${s.slice(5, 7)}`, `Semana del ${s.slice(8)}/${s.slice(5, 7)}`); cubos.push(c); mapa.set(s, c); }
+  }
+  list.forEach(v => {
+    const k = mensual ? v.fecha.slice(0, 7) : (() => { const x = fzFecha(v.fecha); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return fzIso(x); })();
+    const c = mapa.get(k); if (!c) return;
+    const q = fzCalc(v); c.n++; c.compra += q.compra; c.flete += q.flete; c.venta += q.venta; c.beneficio += q.beneficio;
+    if (v.unidad !== 'balas') { c.tn += v.cantidad; c.tnT += v.cantidad; c.compraT += q.compra; c.ventaT += q.venta; c.fleteT += q.flete; }
+  });
+  return { cubos, mensual };
+}
+function fzBarrasApiladasSvg(bk){
+  const W = 760, H = 250, pl = 48, pr = 8, pt = 22, pb = 28;
+  const pos = v => Math.max(0, v);
+  const max = Math.max(1, ...bk.map(b => pos(b.compra) + pos(b.flete) + pos(b.beneficio)));
+  const n = Math.max(1, bk.length), paso = (W - pl - pr) / n, bw = Math.min(44, paso * 0.66), cada = n > 16 ? Math.ceil(n / 12) : 1;
+  const y = v => pt + (H - pt - pb) * (1 - v / max);
+  const ticks = [0, .5, 1].map(f => ({ v: max * f, y: y(max * f) }));
+  const partes = [['compra', DASH_COLORES.mov, 'Compra'], ['flete', DASH_COLORES.oper, 'Flete'], ['beneficio', FZ_VERDE, 'Beneficio']];
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;" role="img" aria-label="Compra, flete y beneficio de cada periodo">
+    ${ticks.map(t => `<line x1="${pl}" x2="${W - pr}" y1="${t.y.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="var(--border)"/><text x="${pl - 6}" y="${(t.y + 3.5).toFixed(1)}" text-anchor="end" font-size="10.5" fill="var(--mutedFaint)">${dashCorto(t.v)}</text>`).join('')}
+    ${bk.map((b, i) => {
+      const x0 = pl + i * paso + paso / 2; let acc = 0;
+      const segs = partes.map(([k, col, t]) => { const v = pos(b[k]); if (!(v > 0)) return ''; const y1 = y(acc + v), h = y(acc) - y1; acc += v; return `<rect x="${(x0 - bw / 2).toFixed(1)}" y="${y1.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, h).toFixed(1)}" fill="${col}"></rect>`; }).join('');
+      return `${segs}<rect x="${(x0 - paso / 2).toFixed(1)}" y="${pt}" width="${paso.toFixed(1)}" height="${(H - pt - pb).toFixed(1)}" fill="transparent"><title>${esc(b.tit)}: ${b.n} viaje${b.n === 1 ? '' : 's'} · compra ${dashEur(b.compra)} · flete ${dashEur(b.flete)} · venta ${dashEur(b.venta)} · beneficio ${dashEur(b.beneficio)}</title></rect>
+      ${n <= 14 && b.n ? `<text x="${x0.toFixed(1)}" y="${(y(acc) - 4).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="${b.beneficio < 0 ? 'var(--danger)' : 'var(--muted)'}">${dashCorto(b.beneficio)}</text>` : ''}
+      ${i % cada === 0 ? `<text x="${x0.toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="var(--mutedFaint)">${esc(b.label)}</text>` : ''}`;
+    }).join('')}
+  </svg>`;
+}
+function fzLineasSvg(bk, series){
+  const W = 760, H = 230, pl = 48, pr = 14, pt = 16, pb = 28;
+  const vals = series.flatMap(s => bk.map(s.f)).filter(v => v != null && isFinite(v));
+  if (!vals.length) return '<div class="dash-vacio">Sin viajes en toneladas en este periodo.</div>';
+  let min = Math.min(0, ...vals), max = Math.max(...vals); if (max <= min) max = min + 1;
+  const n = bk.length, cada = n > 16 ? Math.ceil(n / 12) : 1;
+  const x = i => pl + (n === 1 ? (W - pl - pr) / 2 : i * (W - pl - pr) / (n - 1)), y = v => pt + (H - pt - pb) * (1 - (v - min) / (max - min));
+  const ticks = [0, .25, .5, .75, 1].map(f => min + (max - min) * f);
+  const trazo = s => { let d = '', abierto = false; bk.forEach((b, i) => { const v = s.f(b); if (v == null || !isFinite(v)) { abierto = false; return; } d += `${abierto ? 'L' : 'M'}${x(i).toFixed(1)} ${y(v).toFixed(1)} `; abierto = true; }); return d; };
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;" role="img" aria-label="Precios por tonelada">
+    ${ticks.map(v => `<line x1="${pl}" x2="${W - pr}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="var(--border)"/><text x="${pl - 6}" y="${(y(v) + 3.5).toFixed(1)}" text-anchor="end" font-size="10.5" fill="var(--mutedFaint)">${Math.round(v)}</text>`).join('')}
+    ${min < 0 ? `<line x1="${pl}" x2="${W - pr}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="var(--mutedFaint)" stroke-dasharray="3 3"/>` : ''}
+    ${series.map(s => `<path d="${trazo(s)}" fill="none" stroke="${s.color}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>${bk.map((b, i) => { const v = s.f(b); return v == null || !isFinite(v) ? '' : `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3.2" fill="${s.color}"><title>${esc(b.tit)} · ${s.nombre}: ${fzNum(v, 1)} €/t</title></circle>`; }).join('')}`).join('')}
+    ${bk.map((b, i) => i % cada === 0 ? `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="var(--mutedFaint)">${esc(b.label)}</text>` : '').join('')}
+  </svg>`;
+}
+function fzRankHtml(filas, campo, max, onclick, color){
+  if (!filas.length) return '<div class="dash-vacio">Sin datos en este periodo.</div>';
+  const tot = filas.reduce((s, e) => s + Math.max(0, e.beneficio), 0);
+  return filas.map((e, i) => `
+    <div class="dash-cli" ${onclick && e.k ? `onclick="${onclick}('${esc(e.k)}')" title="Pulsa para ver solo esto"` : ''} style="${onclick && e.k ? '' : 'cursor:default;'}">
+      <span class="dash-rank">${i + 1}</span>
+      <div class="dash-cli-c"><div class="dash-cli-n"><b title="${esc(e.etq)}">${esc(e.etq)}</b><span style="color:${e.beneficio < 0 ? 'var(--danger)' : 'inherit'};">${dashEur(e.beneficio)}<small>${tot > 0 && e.beneficio > 0 ? (e.beneficio / tot * 100).toFixed(0) + ' %' : ''}</small></span></div>
+        <div class="dash-barra" style="width:${Math.max(2, Math.min(100, Math.abs(e.beneficio) / max * 100)).toFixed(1)}%;"><i style="flex:1;background:${e.beneficio < 0 ? 'var(--danger)' : (color || FZ_VERDE)};"></i></div>
+        <div class="cg-ref">${e.n} viaje${e.n === 1 ? '' : 's'}${e.tnT ? ` · ${fzNum(e.tnT, 1)} t · ${dashEur(e.benT / e.tnT)}/t` : ''}</div></div>
+    </div>`).join('');
+}
+function fzDashTabla(titulo, filas, primera){
+  return `<div class="card cg-compacta" style="padding:0;overflow:hidden;margin-bottom:14px;"><div style="padding:12px 16px;font-family:var(--display);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid var(--border);">${titulo}</div><div style="overflow-x:auto;"><table class="tf-table">
+    <thead><tr>${thSort(primera, 'text')}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Toneladas', 'number', 'style="text-align:right;"')}${thSort('Compra', 'number', 'style="text-align:right;"')}${thSort('Flete', 'number', 'style="text-align:right;"')}${thSort('Venta', 'number', 'style="text-align:right;"')}${thSort('Beneficio', 'number', 'style="text-align:right;"')}${thSort('€/t', 'number', 'style="text-align:right;"')}</tr></thead>
+    <tbody>${filas.map(e => `<tr class="cg-row"><td data-sort-value="${esc(e.k)}"><b>${esc(e.etq)}</b></td><td data-sort-value="${e.n}" style="text-align:right;">${e.n}</td><td data-sort-value="${e.tn}" style="text-align:right;white-space:nowrap;">${fzNum(e.tn, 1)}</td><td data-sort-value="${fzR2(e.compra)}" style="text-align:right;white-space:nowrap;">${fzEur(fzR2(e.compra))}</td><td data-sort-value="${fzR2(e.flete)}" style="text-align:right;white-space:nowrap;">${fzEur(fzR2(e.flete))}</td><td data-sort-value="${fzR2(e.venta)}" style="text-align:right;white-space:nowrap;">${fzEur(fzR2(e.venta))}</td><td data-sort-value="${fzR2(e.beneficio)}" style="text-align:right;white-space:nowrap;font-weight:700;color:${e.beneficio < 0 ? 'var(--danger)' : 'var(--success)'};">${fzEur(fzR2(e.beneficio))}</td><td data-sort-value="${e.tnT ? fzR2(e.benT / e.tnT) : -1e9}" style="text-align:right;white-space:nowrap;">${e.tnT ? fzEur(e.benT / e.tnT) : '—'}</td></tr>`).join('')}</tbody></table></div></div>`;
+}
+// Conclusiones escritas con los datos del periodo
+function fzConclusiones(list, T, TA, cubos, M){
+  const out = [], eur = dashEur;
+  if (!list.length) return out;
+  const marg = T.venta ? T.beneficio / T.venta * 100 : 0;
+  out.push(`Se han ganado <b>${eur(T.beneficio)}</b> en ${T.n} viaje${T.n === 1 ? '' : 's'}: el <b>${fzNum(marg, 1)} %</b> de lo vendido${T.tnT ? `, <b>${eur(T.benT / T.tnT)}</b> por tonelada` : ''}.`);
+  if (TA && TA.n) {
+    const p = dashPct(T.beneficio, TA.beneficio);
+    if (p != null && isFinite(p)) out.push(`Frente al periodo anterior (${eur(TA.beneficio)}), el beneficio ${p >= 0 ? 'sube' : 'baja'} un <b>${fzNum(Math.abs(p), 1)} %</b>; los viajes pasan de ${TA.n} a ${T.n}${TA.tnT && T.tnT ? ` y el margen por tonelada de ${eur(TA.benT / TA.tnT)} a ${eur(T.benT / T.tnT)}` : ''}.`);
+  }
+  if (T.venta > 0) out.push(`El flete se come el <b>${fzNum(T.flete / T.venta * 100, 1)} %</b> de la venta (${eur(T.flete / T.n)} por viaje de media).`);
+  const prod = fzGrupo(list, v => v.productoId || '', k => (M.prod.get(k) || {}).nombre || 'Sin producto').filter(e => e.tnT > 0 && e.n >= 3 && e.k);
+  if (prod.length >= 2) {
+    const p = prod.slice().sort((a, b) => b.benT / b.tnT - a.benT / a.tnT), a = p[0], z = p[p.length - 1];
+    out.push(`Por tonelada, el producto que más deja es <b>${esc(a.etq)}</b> (${eur(a.benT / a.tnT)}/t en ${a.n} viajes) y el que menos <b>${esc(z.etq)}</b> (${eur(z.benT / z.tnT)}/t).`);
+  }
+  const cli = fzGrupo(list, v => v.clienteId || '', k => (M.cli.get(k) || {}).nombre || 'Sin cliente').filter(e => e.k);
+  const totPos = cli.reduce((s, e) => s + Math.max(0, e.beneficio), 0);
+  if (cli.length && totPos > 0) {
+    const top = cli[0], tres = cli.slice(0, 3).reduce((s, e) => s + Math.max(0, e.beneficio), 0);
+    out.push(`<b>${esc(top.etq)}</b> es el cliente que más beneficio deja (${eur(top.beneficio)}, el ${(top.beneficio / totPos * 100).toFixed(0)} %).${cli.length >= 4 ? ` Los 3 primeros suman el <b>${(tres / totPos * 100).toFixed(0)} %</b>: ${tres / totPos > 0.8 ? 'mucha dependencia de pocos clientes.' : 'la venta está repartida.'}` : ''}`);
+  }
+  const prov = fzGrupo(list, v => v.proveedorId || '', k => (M.prov.get(k) || {}).nombre || 'Sin proveedor').filter(e => e.k);
+  const totC = prov.reduce((s, e) => s + e.compra, 0);
+  if (prov.length >= 2 && totC > 0) { const t = prov.slice().sort((a, b) => b.compra - a.compra)[0]; out.push(`A <b>${esc(t.etq)}</b> se le compra el <b>${(t.compra / totC * 100).toFixed(0)} %</b> de la mercancía (${eur(t.compra)}).`); }
+  const conDatos = cubos.filter(c => c.n);
+  if (conDatos.length >= 3) { const mejor = conDatos.slice().sort((a, b) => b.beneficio - a.beneficio)[0], peor = conDatos.slice().sort((a, b) => a.beneficio - b.beneficio)[0]; out.push(`El periodo más rentable fue <b>${esc(mejor.tit)}</b> (${eur(mejor.beneficio)}) y el menos <b>${esc(peor.tit)}</b> (${eur(peor.beneficio)}).`); }
+  const perd = list.filter(v => fzCalc(v).beneficio < 0);
+  if (perd.length) out.push(`<b>${perd.length}</b> viaje${perd.length === 1 ? '' : 's'} con pérdidas: ${eur(perd.reduce((s, v) => s + fzCalc(v).beneficio, 0))} en total.`);
+  return out;
+}
+function fzDashboardHtml(){
+  const S = fzS(), M = fzMaps(), R = fzRango(), f = S.df;
+  const list = fzFiltrar(R.d, R.h), T = fzTot(list);
+  const listAnt = R.ant ? fzFiltrar(R.ant[0], R.ant[1]) : null, TA = listAnt ? fzTot(listAnt) : null;
+  const { cubos, mensual } = fzCubos(list, R.d, R.h);
+  const hayFiltro = Object.values(f).some(Boolean);
+  const sel = (id, k, vacio, lista) => `<select id="${id}" onchange="fzDashFiltro('${k}', this.value)" style="width:auto;flex:0 1 190px;min-width:140px;"><option value="">${vacio}</option>${lista.map(([v, t]) => `<option value="${esc(v)}"${f[k] === v ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
+  const regiones = [...new Set(S.viajes.flatMap(v => [v.zonaCarga, v.zonaDescarga]).filter(Boolean))].sort();
+  const banner = `
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.list, 26, '#fff', 1.8)}</span>
-      <div style="min-width:0;flex:1 1 260px;"><div class="deca-banner-title">Dashboard</div><div class="deca-banner-sub">Cuánto se ha comprado, vendido y ganado: por mes, por producto, por proveedor y por cliente.</div></div>
-      <div class="deca-banner-actions"><select onchange="fzResPeriodo(this.value)" style="width:auto;min-width:150px;"><option value="">Todo el periodo</option>${anios.map(a => `<option value="${a}"${per === a ? ' selected' : ''}>Año ${a}</option>`).join('')}</select></div>
+      <div style="min-width:0;flex:1 1 260px;"><div class="deca-banner-title">Dashboard</div><div class="deca-banner-sub">Lo comprado, vendido y ganado: cifras frente al periodo anterior, gráficos, rankings, avisos y conclusiones.</div></div>
+    </div>`;
+  const barra = `<div class="card deca-toolbar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <select onchange="fzDashPeriodo(this.value)" style="width:auto;flex:0 0 175px;">${FZ_PERIODOS.map(([v, t]) => `<option value="${v}"${(S.dp || '12m') === v ? ' selected' : ''}>${t}</option>`).join('')}</select>
+    ${S.dp === 'pers' ? `<input type="date" value="${esc(S.dd)}" onchange="fzDashFechas('dd', this.value)" style="width:150px;" /><span style="color:var(--muted);font-size:12.5px;">a</span><input type="date" value="${esc(S.dh)}" onchange="fzDashFechas('dh', this.value)" style="width:150px;" />` : ''}
+    ${sel('fzd-prod', 'producto', 'Todos los productos', S.productos.map(p => [p.id, p.nombre]))}
+    ${sel('fzd-fmt', 'formato', 'Todos los formatos', FZ_FORMATOS.map(x => [x, x]))}
+    ${sel('fzd-prov', 'prov', 'Todos los proveedores', S.proveedores.map(p => [p.id, p.nombre]))}
+    ${sel('fzd-cli', 'cli', 'Todos los clientes', S.clientes.map(c => [c.id, c.nombre]))}
+    ${sel('fzd-reg', 'reg', 'Todas las regiones', regiones.map(r => [r, r]))}
+    ${hayFiltro ? `<button class="btn btn-ghost" onclick="fzDashLimpiar()">Quitar filtros</button>` : ''}
+    <span style="margin-left:auto;font-size:12.5px;color:var(--muted);">${R.d ? `${fmtDateDMY(R.d)} – ${fmtDateDMY(R.h)}` : 'Todas las fechas'}</span>
+  </div>`;
+  if (!S.viajes.length) return banner + barra + `<div class="card"><div class="dash-vacio" style="padding:30px;text-align:center;">Todavía no hay viajes.</div></div>`;
+  const ref = TA ? 'vs periodo anterior' : '';
+  const kpi = (icono, titulo, valor, sub, delta, spark, color, alIr) => `
+    <div class="dash-kpi${alIr ? ' clic' : ''}" ${alIr ? `onclick="${alIr}"` : ''}>
+      <div class="dash-kpi-h"><span class="dash-ico" style="background:${color}1F;color:${color};">${homeIcon(HOME_ICON_PATHS[icono] || HOME_ICON_PATHS.box, 17, 'currentColor', 2)}</span><small>${titulo}</small>${alIr ? '<em>ver →</em>' : ''}</div>
+      <b>${valor}</b>
+      <div class="dash-kpi-s">${delta || ''}<span>${sub}</span></div>
+      ${spark || ''}
+    </div>`;
+  const marg = T.venta ? T.beneficio / T.venta * 100 : 0, margA = TA && TA.venta ? TA.beneficio / TA.venta * 100 : null;
+  const dpp = (a, b) => b == null ? '' : `<span class="dash-delta ${a - b > 0.05 ? 'up' : a - b < -0.05 ? 'down' : 'flat'}">${a - b > 0.05 ? '▲' : a - b < -0.05 ? '▼' : '■'} ${fzNum(Math.abs(a - b), 1)} pts <i>${ref}</i></span>`;
+  const hero = `
+    <div class="dash-hero">
+      <div class="dash-kpi-h"><span class="dash-ico" style="background:rgba(255,255,255,.18);color:#fff;">${homeIcon(HOME_ICON_PATHS.tag, 17, 'currentColor', 2)}</span><small>Beneficio del periodo</small></div>
+      <b>${dashEur(T.beneficio)}</b>
+      <div class="dash-hero-b"><i style="width:${Math.max(0, Math.min(100, marg)).toFixed(1)}%;"></i></div>
+      <div class="dash-hero-s"><span>Margen <b>${fzNum(marg, 1)} %</b></span><span>sobre <b>${dashEur(T.venta)}</b> vendidos</span><span><b>${T.n}</b> viaje${T.n === 1 ? '' : 's'}</span></div>
+      <div class="dash-hero-c">${TA ? dashDelta(dashPct(T.beneficio, TA.beneficio), ref + ' (' + dashEur(TA.beneficio) + ')') : ''}</div>
+    </div>`;
+  const kpis = `<div class="dash-top">${hero}
+    ${kpi('tag', 'Venta', dashEur(T.venta), `${dashEur(T.compra)} de compra y ${dashEur(T.flete)} de flete`, TA ? dashDelta(dashPct(T.venta, TA.venta), ref) : '', dashSpark(cubos.map(c => c.venta), DASH_COLORES.mov), DASH_COLORES.mov)}
+    ${kpi('truck', 'Toneladas', fzNum(T.tn, 1), T.balas ? `+ ${fzNum(T.balas, 0)} balas · ${T.n} viajes` : `${T.n} viajes`, TA ? dashDelta(dashPct(T.tn, TA.tn), ref, true) : '', dashSpark(cubos.map(c => c.tn), DASH_COLORES.oper), DASH_COLORES.oper)}
+    ${kpi('list', 'Viajes', String(T.n), T.n ? `${fzNum(T.tn / Math.max(1, T.n), 1)} t de media` : '', TA ? dashDelta(dashPct(T.n, TA.n), ref, true) : '', dashSpark(cubos.map(c => c.n), '#7C5CBF'), '#7C5CBF', "fzIr('viajes')")}
+  </div>`;
+  const kpis2 = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:14px;">
+    ${kpi('file', 'Margen por tonelada', T.tnT ? dashEur(T.benT / T.tnT) : '—', 'beneficio ÷ toneladas', TA && TA.tnT && T.tnT ? dashDelta(dashPct(T.benT / T.tnT, TA.benT / TA.tnT), ref) : '', '', FZ_VERDE)}
+    ${kpi('tag', 'Margen sobre venta', `${fzNum(marg, 1)} %`, 'beneficio ÷ venta', margA == null ? '' : dpp(marg, margA), '', FZ_VERDE)}
+    ${kpi('box', 'Compra media', T.tnT ? `${dashEur(T.compraT / T.tnT)}<small>/t</small>` : '—', 'lo que pagamos por tonelada', TA && TA.tnT && T.tnT ? dashDelta(dashPct(T.compraT / T.tnT, TA.compraT / TA.tnT), ref, true) : '', '', DASH_COLORES.mov)}
+    ${kpi('box', 'Venta media', T.tnT ? `${dashEur(T.ventaT / T.tnT)}<small>/t</small>` : '—', 'lo que cobramos por tonelada', TA && TA.tnT && T.tnT ? dashDelta(dashPct(T.ventaT / T.tnT, TA.ventaT / TA.tnT), ref, true) : '', '', DASH_COLORES.serv)}
+    ${kpi('truck', 'Flete medio', T.n ? dashEur(T.flete / T.n) : '—', T.tnT ? `${dashEur(T.fleteT / T.tnT)} por tonelada` : 'por viaje', TA && TA.n && T.n ? dashDelta(dashPct(T.flete / T.n, TA.flete / TA.n), ref, true) : '', '', DASH_COLORES.oper)}
+    ${kpi('tag', 'Beneficio por viaje', T.n ? dashEur(T.beneficio / T.n) : '—', 'media de cada camión', TA && TA.n && T.n ? dashDelta(dashPct(T.beneficio / T.n, TA.beneficio / TA.n), ref) : '', '', FZ_VERDE)}
+  </div>`;
+  // ---- Gráficos
+  const cardBen = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('tag', mensual ? 'Beneficio mes a mes' : 'Beneficio por semanas', 'De lo vendido, cuánto es compra, flete y beneficio')}
+      <div class="deca-card-body">${cubos.length ? fzBarrasApiladasSvg(cubos) : '<div class="dash-vacio">Sin viajes en este periodo.</div>'}
+        <div class="dash-leyenda"><span><i style="background:${DASH_COLORES.mov}"></i>Compra</span><span><i style="background:${DASH_COLORES.oper}"></i>Flete</span><span><i style="background:${FZ_VERDE}"></i>Beneficio</span></div></div>
+    </div>`;
+  const cardPrecios = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('list', 'Precios por tonelada', 'Compra, venta y margen medios de cada periodo (solo viajes en toneladas)')}
+      <div class="deca-card-body">${fzLineasSvg(cubos, [
+        { nombre: 'Compra', color: DASH_COLORES.mov, f: b => b.tnT ? b.compraT / b.tnT : null },
+        { nombre: 'Venta', color: DASH_COLORES.serv, f: b => b.tnT ? b.ventaT / b.tnT : null },
+        { nombre: 'Margen', color: FZ_VERDE, f: b => b.tnT ? (b.ventaT - b.compraT - b.fleteT) / b.tnT : null }])}
+        <div class="dash-leyenda"><span><i style="background:${DASH_COLORES.mov}"></i>Compra €/t</span><span><i style="background:${DASH_COLORES.serv}"></i>Venta €/t</span><span><i style="background:${FZ_VERDE}"></i>Margen €/t</span></div></div>
+    </div>`;
+  const gCli = fzGrupo(list, v => v.clienteId || '', k => (M.cli.get(k) || {}).nombre || 'Sin cliente');
+  const gProv = fzGrupo(list, v => v.proveedorId || '', k => (M.prov.get(k) || {}).nombre || 'Sin proveedor');
+  const gProd = fzGrupo(list, v => v.productoId || '', k => (M.prod.get(k) || {}).nombre || 'Sin producto');
+  const gReg = fzGrupo(list, v => v.zonaCarga || '', k => k || 'Sin región');
+  const gRegD = fzGrupo(list, v => v.zonaDescarga || '', k => k || 'Sin región');
+  const gCam = fzGrupo(list, v => String(v.camionCarga || '').trim().toUpperCase(), k => k || 'Sin camión').filter(e => e.k);
+  const maxOf = g => Math.max(1, ...g.map(e => Math.abs(e.beneficio)));
+  const cardRank = (titulo, sub, g, onclick, icono) => `
+    <div class="card deca-card dash-card">
+      ${decaCardHead(icono || 'home', titulo, sub)}
+      <div class="deca-card-body dash-cli-lista">${fzRankHtml(g.slice(0, 40), 'beneficio', maxOf(g), onclick)}</div>
+    </div>`;
+  // ---- Lateral: conclusiones, avisos, reparto por producto
+  const concl = fzConclusiones(list, T, TA, cubos, M);
+  const cardConcl = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('info', 'Conclusiones', 'Lo que dicen los números de este periodo')}
+      <div class="deca-card-body">${concl.length ? concl.map(t => `<div class="dash-alerta"><i></i><span>${t}</span></div>`).join('') : '<div class="dash-vacio">Sin viajes en este periodo.</div>'}</div>
+    </div>`;
+  const base = fzFiltrar(null, null), sinP = base.filter(v => !v.facturadoProveedor), sinC = base.filter(v => !v.facturadoCliente);
+  const perd = list.filter(v => fzCalc(v).beneficio < 0), faltan = (fn) => list.filter(fn).length;
+  const alertas = [
+    sinP.length ? { cls: 'warn', txt: `<b>${sinP.length}</b> viaje${sinP.length === 1 ? '' : 's'} sin facturar por el proveedor · ${dashEur(fzTotales(sinP).compra)} de compra`, go: 'fzIrPend()' } : null,
+    sinC.length ? { cls: 'warn', txt: `<b>${sinC.length}</b> viaje${sinC.length === 1 ? '' : 's'} sin facturar al cliente · ${dashEur(fzTotales(sinC).venta)} de venta`, go: 'fzIrPend()' } : null,
+    perd.length ? { cls: 'bad', txt: `<b>${perd.length}</b> viaje${perd.length === 1 ? '' : 's'} con pérdidas este periodo · ${dashEur(perd.reduce((s, v) => s + fzCalc(v).beneficio, 0))}`, go: 'fzIr(\'viajes\')' } : null,
+    faltan(v => !v.zonaCarga || !v.zonaDescarga) ? { cls: 'warn', txt: `<b>${faltan(v => !v.zonaCarga || !v.zonaDescarga)}</b> viajes sin región de carga o de descarga`, go: 'fzIr(\'viajes\')' } : null,
+    faltan(v => !v.proveedorId || !v.clienteId || !v.productoId) ? { cls: 'warn', txt: `<b>${faltan(v => !v.proveedorId || !v.clienteId || !v.productoId)}</b> viajes sin proveedor, cliente o producto`, go: 'fzIr(\'viajes\')' } : null,
+  ].filter(Boolean);
+  const cardAten = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('check', 'Requiere atención', alertas.length ? alertas.length + ' aviso' + (alertas.length === 1 ? '' : 's') : 'Todo en orden')}
+      <div class="deca-card-body">${alertas.length ? alertas.map(a => `<div class="dash-alerta ${a.cls}" onclick="${a.go}" style="cursor:pointer;"><i></i><span>${a.txt}</span><em>→</em></div>`).join('') + '<div class="dash-nota">Las facturas pendientes cuentan todos los viajes (con los filtros de arriba), no solo el periodo.</div>' : '<div class="dash-ok">✓ Todo facturado y sin pérdidas ni datos incompletos.</div>'}</div>
+    </div>`;
+  const pos = gProd.filter(e => e.beneficio > 0);
+  const partes = pos.slice(0, 7).map((e, i) => ({ t: e.etq, v: e.beneficio, color: FZ_PALETA[i] }));
+  const resto = pos.slice(7).reduce((s, e) => s + e.beneficio, 0); if (resto > 0) partes.push({ t: 'Otros', v: resto, color: FZ_PALETA[7] });
+  const totD = partes.reduce((s, p) => s + p.v, 0);
+  const cardProd = `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('box', 'Beneficio por producto', 'Cómo se reparte lo ganado')}
+      <div class="deca-card-body">${totD > 0 ? `<div class="dash-donut">${dashDonutSvg(partes, totD)}<div class="dash-donut-l">${partes.map(p => `<div><i style="background:${p.color}"></i><span>${esc(p.t)}</span><b>${dashEur(p.v)}</b><em>${(p.v / totD * 100).toFixed(0)} %</em></div>`).join('')}</div></div>` : '<div class="dash-vacio">Sin beneficio en este periodo.</div>'}</div>
+    </div>`;
+  const regCard = (t, sub, g) => `<div class="card deca-card dash-card">${decaCardHead('pin', t, sub)}<div class="deca-card-body dash-cli-lista" style="max-height:360px;">${fzRankHtml(g.slice(0, 30), 'beneficio', maxOf(g), 'fzDashRegion')}</div></div>`;
+  // ---- Detalle en tablas
+  const detalle = list.length ? `
+    <div style="margin-top:22px;font-family:var(--display);font-weight:800;font-size:15px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px;">Detalle</div>
+    ${fzDashTabla('Por mes', fzGrupo(list, v => v.fecha.slice(0, 7), k => `${FZ_MESES[Number(k.slice(5)) - 1]} ${k.slice(0, 4)}`).sort((a, b) => String(b.k).localeCompare(String(a.k))), 'Mes')}
+    ${fzDashTabla('Por producto', gProd, 'Producto')}
+    ${list.some(v => v.formato) ? fzDashTabla('Por formato de bala', fzGrupo(list, v => v.formato || '', k => k || 'Sin formato'), 'Formato') : ''}
+    ${fzDashTabla('Por proveedor', gProv, 'Proveedor')}
+    ${fzDashTabla('Por cliente', gCli, 'Cliente')}
+    ${gCam.length ? fzDashTabla('Por camión o conductor (carga)', gCam, 'Camión') : ''}` : '';
+  return `${banner}${barra}
+    ${kpis}${kpis2}
+    <div class="dash-grid">
+      <div class="dash-main">${cardBen}${cardPrecios}${cardRank('Clientes', 'Beneficio de cada cliente · pulsa uno para filtrar', gCli, 'fzDashCli', 'home')}${cardRank('Proveedores', 'Beneficio por proveedor · pulsa uno para filtrar', gProv, 'fzDashProv', 'users')}</div>
+      <div class="dash-side">${cardConcl}${cardAten}${cardProd}${regCard('Regiones de carga', 'De dónde sale la mercancía', gReg)}${regCard('Regiones de descarga', 'A dónde va', gRegD)}${gCam.length ? cardRank('Camiones y conductores', 'Viajes y beneficio de cada uno (carga)', gCam, null, 'truck') : ''}</div>
     </div>
-    <div class="fz-tiles">
-      ${tile('Viajes', T.n, T.n ? `${fzNum(T.tn / Math.max(1, T.n), 1)} t de media` : '')}
-      ${tile('Toneladas', fzNum(T.tn, 1), T.balas ? `+ ${fzNum(T.balas, 0)} balas` : '')}
-      ${tile('Compra', fzEur(T.compra), '')}${tile('Flete', fzEur(T.flete), '')}${tile('Venta', fzEur(T.venta), '')}
-      ${tile('Beneficio', fzEur(T.beneficio), T.tn ? `${fzEur(T.beneficio / T.tn)} por tonelada` : '', T.beneficio < 0 ? 'var(--danger)' : 'var(--success)')}
-      ${tile('Sin facturar por el proveedor', sinFacProv.length, sinFacProv.length ? `${fzEur(fzTotales(sinFacProv).compra)} de compra` : 'todo facturado')}
-      ${tile('Sin facturar al cliente', sinFacCli.length, sinFacCli.length ? `${fzEur(fzTotales(sinFacCli).venta)} de venta` : 'todo facturado')}
-    </div>
-    ${lista.length ? `${tabla('Por mes', meses, 'Mes')}
-    ${tabla('Por producto', grupo(v => v.productoId || '', k => (M.prod.get(k) || {}).nombre || 'Sin producto'), 'Producto')}
-    ${lista.some(v => v.formato) ? tabla('Por formato de bala', grupo(v => v.formato || '', k => k || 'Sin formato'), 'Formato') : ''}
-    ${lista.some(v => v.zonaCarga) ? tabla('Por región de carga', grupo(v => v.zonaCarga || '', k => k || 'Sin región'), 'Región') : ''}
-    ${lista.some(v => v.zonaDescarga) ? tabla('Por región de descarga', grupo(v => v.zonaDescarga || '', k => k || 'Sin región'), 'Región') : ''}
-    ${tabla('Por proveedor', grupo(v => v.proveedorId || '', k => (M.prov.get(k) || {}).nombre || 'Sin proveedor'), 'Proveedor')}
-    ${tabla('Por cliente', grupo(v => v.clienteId || '', k => (M.cli.get(k) || {}).nombre || 'Sin cliente'), 'Cliente')}` : '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">No hay viajes en ese periodo.</div>'}`;
+    ${detalle}`;
 }
+const fzDashCli = id => fzDashFiltro('cli', id), fzDashProv = id => fzDashFiltro('prov', id), fzDashRegion = r => fzDashFiltro('reg', r);
 
 
 
