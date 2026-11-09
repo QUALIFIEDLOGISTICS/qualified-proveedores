@@ -19939,10 +19939,11 @@ function closeModal(){ document.getElementById('modal-slot').innerHTML = ''; }
    ==================================================================================================== */
 const FZ_PAGOS = ['Efectivo', 'Factura contado', 'Factura 15 días', 'Factura 30 días'];
 const FZ_SECCIONES = [['viajes', 'Viajes'], ['proveedores', 'Proveedores'], ['clientes', 'Clientes'], ['productos', 'Productos'], ['resumen', 'Resumen']];
+const FZ_FORMATOS = ['Redonda', 'Rectangular', 'Ensilada'];   // formato de la bala
 const FZ_MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 function fzS(){
   return (window.__fz = window.__fz || { cargado: false, cargando: false, error: '', sec: 'viajes', view: 'lista', viajes: [], proveedores: [], clientes: [], productos: [],
-    q: '', periodo: '', producto: '', pend: false, cq: '', archivados: false, resPeriodo: '', form: null, formDirty: false });
+    q: '', periodo: '', producto: '', formato: '', pend: false, cq: '', archivados: false, resPeriodo: '', form: null, formDirty: false });
 }
 const fzR2 = n => Math.round((Number(n) || 0) * 100) / 100;
 const fzNorm = s => String(s == null ? '' : s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -19950,7 +19951,7 @@ const fzNum = (n, dec) => Number(n || 0).toLocaleString('es-ES', { maximumFracti
 const fzUd = (u, n) => (u === 'balas' ? (Number(n) === 1 ? 'bala' : 'balas') : 't');
 function fzViajeDeFila(r){
   return { id: r.id, numero: r.numero, fecha: r.fecha, proveedorId: r.proveedor_id || '', clienteId: r.cliente_id || '', zonaCarga: r.zona_carga || '', zonaDescarga: r.zona_descarga || '',
-    camionCarga: r.camion_carga || '', camionDescarga: r.camion_descarga || '', productoId: r.producto_id || '', cantidad: Number(r.cantidad) || 0, unidad: r.unidad || 't',
+    camionCarga: r.camion_carga || '', camionDescarga: r.camion_descarga || '', productoId: r.producto_id || '', formato: r.formato || '', cantidad: Number(r.cantidad) || 0, unidad: r.unidad || 't',
     pagoProveedor: r.pago_proveedor || '', facturadoProveedor: !!r.facturado_proveedor, facturaProveedor: r.factura_proveedor || '', telCarga: r.tel_carga || '',
     pagoCliente: r.pago_cliente || '', facturadoCliente: !!r.facturado_cliente, facturaCliente: r.factura_cliente || '', telDescarga: r.tel_descarga || '',
     precioCompra: Number(r.precio_compra) || 0, flete: Number(r.flete) || 0, precioVenta: Number(r.precio_venta) || 0, notas: r.notas || '' };
@@ -20046,10 +20047,11 @@ function fzViajesFiltrados(){
   return S.viajes.filter(v => {
     if (S.periodo && !String(v.fecha).startsWith(S.periodo)) return false;
     if (S.producto && v.productoId !== S.producto) return false;
+    if (S.formato && v.formato !== S.formato) return false;
     if (S.pend && v.facturadoProveedor && v.facturadoCliente) return false;
     if (q) {
       const p = M.prov.get(v.proveedorId), c = M.cli.get(v.clienteId), pr = M.prod.get(v.productoId);
-      const txt = fzNorm([v.numero, p && p.nombre, c && c.nombre, pr && pr.nombre, v.camionCarga, v.camionDescarga, v.zonaCarga, v.zonaDescarga, v.facturaProveedor, v.facturaCliente, v.notas].join(' '));
+      const txt = fzNorm([v.numero, p && p.nombre, c && c.nombre, pr && pr.nombre, v.formato, v.camionCarga, v.camionDescarga, v.zonaCarga, v.zonaDescarga, v.facturaProveedor, v.facturaCliente, v.notas].join(' '));
       if (!txt.includes(q)) return false;
     }
     return true;
@@ -20072,7 +20074,7 @@ function fzViajesTablaHtml(){
       <td data-sort-value="${esc(v.fecha)}" style="white-space:nowrap;">${esc(fmtDateDMY(v.fecha))}</td>
       <td data-sort-value="${esc(p ? p.nombre : '')}"><b>${esc(p ? p.nombre : '—')}</b><div class="cg-ref">${esc(sub(v.zonaCarga, v.camionCarga))}</div></td>
       <td data-sort-value="${esc(c ? c.nombre : '')}"><b>${esc(c ? c.nombre : '—')}</b><div class="cg-ref">${esc(sub(v.zonaDescarga, v.camionDescarga))}</div></td>
-      <td data-sort-value="${esc(pr ? pr.nombre : '')}">${esc(pr ? pr.nombre : '—')}</td>
+      <td data-sort-value="${esc((pr ? pr.nombre : '') + ' ' + v.formato)}">${esc(pr ? pr.nombre : '—')}${v.formato ? `<div class="cg-ref">${esc(v.formato)}</div>` : ''}</td>
       <td data-sort-value="${v.cantidad}" style="text-align:right;white-space:nowrap;">${fzNum(v.cantidad, 3)} ${fzUd(v.unidad, v.cantidad)}</td>
       <td data-sort-value="${k.compra}" style="text-align:right;white-space:nowrap;">${fzEur(k.compra)}</td>
       <td data-sort-value="${k.flete}" style="text-align:right;white-space:nowrap;">${fzEur(k.flete)}</td>
@@ -20113,6 +20115,7 @@ function fzViajesHtml(){
       <div class="deca-search" style="flex:1 1 240px;"><input id="fz-q" placeholder="Buscar por proveedor, cliente, camión, factura…" value="${esc(S.q)}" oninput="fzFiltro('q', this.value)" autocomplete="off" /><span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span></div>
       <select id="fz-periodo" onchange="fzFiltro('periodo', this.value)" style="width:auto;flex:0 1 190px;">${fzPeriodoOpciones(S.viajes).replace(`value="${S.periodo}"`, `value="${S.periodo}" selected`)}</select>
       <select id="fz-producto" onchange="fzFiltro('producto', this.value)" style="width:auto;flex:0 1 200px;"><option value="">Todos los productos</option>${S.productos.filter(p => !p.archived || p.id === S.producto).map(p => opt(p.id, p.nombre, p.id === S.producto)).join('')}</select>
+      <select id="fz-formato-f" onchange="fzFiltro('formato', this.value)" style="width:auto;flex:0 1 170px;"><option value="">Todos los formatos</option>${FZ_FORMATOS.map(f => opt(f, f, f === S.formato)).join('')}</select>
       <label class="dr-chk" style="margin:0;white-space:nowrap;"><input type="checkbox" ${S.pend ? 'checked' : ''} onchange="fzFiltro('pend', this.checked)" /> Pendientes de facturar</label>
       <button class="btn btn-ghost" style="background:var(--panel);" onclick="fzExportarCsv()" title="Descarga en Excel (CSV) los viajes que se ven">Exportar</button>
     </div>
@@ -20120,11 +20123,11 @@ function fzViajesHtml(){
 }
 function fzExportarCsv(){
   const M = fzMaps(), list = fzViajesFiltrados().slice().sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)) || (Number(a.numero) || 0) - (Number(b.numero) || 0));
-  const cab = ['Nº', 'Fecha', 'Zona carga', 'Camión carga', 'Proveedor', 'Pago proveedor', 'Facturado proveedor', 'Teléfono carga', 'Zona descarga', 'Camión descarga', 'Cliente', 'Pago cliente', 'Facturado cliente', 'Teléfono descarga', 'Producto', 'Cantidad', 'Unidad', 'Precio compra', 'Compra', 'Flete', 'Precio venta', 'Venta', 'Beneficio', 'Notas'];
+  const cab = ['Nº', 'Fecha', 'Zona carga', 'Camión carga', 'Proveedor', 'Pago proveedor', 'Facturado proveedor', 'Teléfono carga', 'Zona descarga', 'Camión descarga', 'Cliente', 'Pago cliente', 'Facturado cliente', 'Teléfono descarga', 'Producto', 'Formato', 'Cantidad', 'Unidad', 'Precio compra', 'Compra', 'Flete', 'Precio venta', 'Venta', 'Beneficio', 'Notas'];
   const cel = x => { const s = String(x == null ? '' : x); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const dec = n => String(n).replace('.', ',');
   const filas = list.map(v => { const p = M.prov.get(v.proveedorId), c = M.cli.get(v.clienteId), pr = M.prod.get(v.productoId), k = fzCalc(v);
-    return [v.numero, fmtDateDMY(v.fecha), v.zonaCarga, v.camionCarga, p ? p.nombre : '', v.pagoProveedor, v.facturadoProveedor ? (v.facturaProveedor || 'SI') : 'NO', v.telCarga, v.zonaDescarga, v.camionDescarga, c ? c.nombre : '', v.pagoCliente, v.facturadoCliente ? (v.facturaCliente || 'SI') : 'NO', v.telDescarga, pr ? pr.nombre : '', dec(v.cantidad), v.unidad, dec(v.precioCompra), dec(k.compra), dec(k.flete), dec(v.precioVenta), dec(k.venta), dec(k.beneficio), v.notas].map(cel).join(';'); });
+    return [v.numero, fmtDateDMY(v.fecha), v.zonaCarga, v.camionCarga, p ? p.nombre : '', v.pagoProveedor, v.facturadoProveedor ? (v.facturaProveedor || 'SI') : 'NO', v.telCarga, v.zonaDescarga, v.camionDescarga, c ? c.nombre : '', v.pagoCliente, v.facturadoCliente ? (v.facturaCliente || 'SI') : 'NO', v.telDescarga, pr ? pr.nombre : '', v.formato, dec(v.cantidad), v.unidad, dec(v.precioCompra), dec(k.compra), dec(k.flete), dec(v.precioVenta), dec(k.venta), dec(k.beneficio), v.notas].map(cel).join(';'); });
   const csv = '﻿' + [cab.map(cel).join(';'), ...filas].join('\r\n');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = `forrajes-viajes-${today()}.csv`;
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
@@ -20133,7 +20136,7 @@ function fzExportarCsv(){
 function fzSiguienteNumero(){ return (fzS().viajes.reduce((m, v) => Math.max(m, Number(v.numero) || 0), 0)) + 1; }
 function fzNuevoViaje(){
   const S = fzS();
-  S.form = { id: null, numero: fzSiguienteNumero(), fecha: today(), proveedorId: '', clienteId: '', zonaCarga: '', zonaDescarga: '', camionCarga: '', camionDescarga: '', productoId: '', cantidad: '', unidad: 't',
+  S.form = { id: null, numero: fzSiguienteNumero(), fecha: today(), proveedorId: '', clienteId: '', zonaCarga: '', zonaDescarga: '', camionCarga: '', camionDescarga: '', productoId: '', formato: '', cantidad: '', unidad: 't',
     pagoProveedor: '', facturadoProveedor: false, facturaProveedor: '', telCarga: '', pagoCliente: '', facturadoCliente: false, facturaCliente: '', telDescarga: '', precioCompra: '', flete: '', precioVenta: '', notas: '' };
   S.view = 'form'; S.formDirty = false;
   renderHeader(); renderTab(); window.scrollTo(0, 0);
@@ -20200,6 +20203,7 @@ function fzFormHtml(){
         ${sec(3, 'Mercancía y precios', 'Cantidad y €/unidad de compra y de venta')}
         <div class="dr-g">
           <div class="field"><label>Producto ${nuevo('productos')}</label>${fzSelHtml('fz-prod', prod, f.productoId, 'Elige el producto…', 'fzFormPrecios()')}</div>
+          <div class="field"><label>Formato de la bala</label><select id="fz-formato"><option value="">—</option>${FZ_FORMATOS.map(x => `<option value="${x}"${f.formato === x ? ' selected' : ''}>${x}</option>`).join('')}</select></div>
           <div class="field"><label>Cantidad <span class="dc-req">*</span></label><input id="fz-cant" inputmode="decimal" maxlength="12" placeholder="16,5" style="text-align:right;" oninput="fzFormCalc()" value="${esc(f.cantidad)}" /></div>
           <div class="field"><label>Unidad</label><select id="fz-ud" onchange="fzFormCalc()"><option value="t"${f.unidad === 't' ? ' selected' : ''}>Toneladas (€/t)</option><option value="balas"${f.unidad === 'balas' ? ' selected' : ''}>Balas (€/bala)</option></select></div>
           <div class="field"><label>Precio de compra <small id="fz-pc-h" style="color:var(--mutedFaint);font-weight:400;"></small></label><input id="fz-pcu" inputmode="decimal" maxlength="12" style="text-align:right;" oninput="fzFormCalc()" value="${esc(f.precioCompra)}" /></div>
@@ -20267,7 +20271,7 @@ async function fzGuardarViaje(){
   const row = {
     numero: num === '' ? fzSiguienteNumero() : parseInt(num, 10) || null, fecha,
     proveedor_id: fzV('fz-prov') || null, cliente_id: fzV('fz-cli') || null, zona_carga: fzV('fz-zc') || null, zona_descarga: fzV('fz-zd') || null,
-    camion_carga: fzV('fz-cc') || null, camion_descarga: fzV('fz-cd') || null, producto_id: fzV('fz-prod') || null, cantidad, unidad: fzV('fz-ud') || 't',
+    camion_carga: fzV('fz-cc') || null, camion_descarga: fzV('fz-cd') || null, producto_id: fzV('fz-prod') || null, formato: fzV('fz-formato') || null, cantidad, unidad: fzV('fz-ud') || 't',
     pago_proveedor: fzV('fz-pp') || null, facturado_proveedor: fp, factura_proveedor: fp ? (fzV('fz-fpn') || null) : null, tel_carga: fzV('fz-tc') || null,
     pago_cliente: fzV('fz-pc') || null, facturado_cliente: fc, factura_cliente: fc ? (fzV('fz-fcn') || null) : null, tel_descarga: fzV('fz-td') || null,
     precio_compra: nums[0], precio_venta: nums[1], flete: nums[2], notas: fzV('fz-notas') || null,
@@ -20276,7 +20280,7 @@ async function fzGuardarViaje(){
   const q = f.id ? supabaseClient.from('forraje_viajes').update(row).eq('id', f.id).select().single() : supabaseClient.from('forraje_viajes').insert({ ...row, created_by: currentUserEmail() }).select().single();
   const { data, error } = await q;
   if (btn) btn.disabled = false;
-  if (error || !data) { err.textContent = 'No se pudo guardar: ' + ((error && error.message) || 'error desconocido.'); return; }
+  if (error || !data) { err.textContent = 'No se pudo guardar: ' + (/formato/i.test((error && error.message) || '') ? 'falta ejecutar el SQL «forrajes-formato.sql» en Supabase.' : ((error && error.message) || 'error desconocido.')); return; }
   const nuevo = fzViajeDeFila(data), i = S.viajes.findIndex(x => x.id === nuevo.id);
   if (i >= 0) S.viajes[i] = nuevo; else S.viajes.push(nuevo);
   fzOrdenar();
@@ -20399,7 +20403,7 @@ function fzGuardarBorradorForm(){
   const g = (id, k) => { const el = document.getElementById(id); if (el) f[k] = el.type === 'checkbox' ? el.checked : el.value; };
   [['fz-fecha', 'fecha'], ['fz-num', 'numero'], ['fz-cc', 'camionCarga'], ['fz-prov', 'proveedorId'], ['fz-zc', 'zonaCarga'], ['fz-tc', 'telCarga'], ['fz-pp', 'pagoProveedor'], ['fz-fpn', 'facturaProveedor'],
     ['fz-cli', 'clienteId'], ['fz-cd', 'camionDescarga'], ['fz-zd', 'zonaDescarga'], ['fz-td', 'telDescarga'], ['fz-pc', 'pagoCliente'], ['fz-fcn', 'facturaCliente'],
-    ['fz-prod', 'productoId'], ['fz-cant', 'cantidad'], ['fz-ud', 'unidad'], ['fz-pcu', 'precioCompra'], ['fz-pvu', 'precioVenta'], ['fz-flete', 'flete'], ['fz-notas', 'notas']].forEach(([id, k]) => g(id, k));
+    ['fz-prod', 'productoId'], ['fz-formato', 'formato'], ['fz-cant', 'cantidad'], ['fz-ud', 'unidad'], ['fz-pcu', 'precioCompra'], ['fz-pvu', 'precioVenta'], ['fz-flete', 'flete'], ['fz-notas', 'notas']].forEach(([id, k]) => g(id, k));
   const fp = document.getElementById('fz-fp'), fc = document.getElementById('fz-fc'); if (fp) f.facturadoProveedor = fp.checked; if (fc) f.facturadoCliente = fc.checked;
 }
 async function fzCatArchivar(archivar){
@@ -20455,6 +20459,7 @@ function fzResumenHtml(){
     </div>
     ${lista.length ? `${tabla('Por mes', meses, 'Mes')}
     ${tabla('Por producto', grupo(v => v.productoId || '', k => (M.prod.get(k) || {}).nombre || 'Sin producto'), 'Producto')}
+    ${lista.some(v => v.formato) ? tabla('Por formato de bala', grupo(v => v.formato || '', k => k || 'Sin formato'), 'Formato') : ''}
     ${tabla('Por proveedor', grupo(v => v.proveedorId || '', k => (M.prov.get(k) || {}).nombre || 'Sin proveedor'), 'Proveedor')}
     ${tabla('Por cliente', grupo(v => v.clienteId || '', k => (M.cli.get(k) || {}).nombre || 'Sin cliente'), 'Cliente')}` : '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">No hay viajes en ese periodo.</div>'}`;
 }
