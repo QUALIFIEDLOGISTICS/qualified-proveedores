@@ -20360,6 +20360,7 @@ function fzCatForm(tipo, id, desdeViaje){
         <div id="fzc-error" style="color:var(--danger);font-size:12.5px;min-height:16px;margin-bottom:8px;"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">
           ${e ? `<button class="btn btn-ghost" style="margin-right:auto;" onclick="fzCatArchivar(${e.archived ? 'false' : 'true'})">${e.archived ? 'Recuperar' : 'Archivar'}</button>` : ''}
+          ${e && e.archived && !S.viajes.some(v => v[c.campo] === e.id) ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="fzCatEliminar()" title="Solo se puede eliminar lo archivado que no tiene ningún viaje">Eliminar</button>` : ''}
           <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
           <button class="btn btn-primary" onclick="fzCatGuardar()">${e ? 'Guardar' : 'Crear'}</button>
         </div>
@@ -20407,6 +20408,19 @@ async function fzCatArchivar(archivar){
   if (error) { const e = document.getElementById('fzc-error'); if (e) e.textContent = 'No se pudo: ' + error.message; return; }
   const e = S[ctx.tipo].find(x => x.id === ctx.id); if (e) e.archived = !!archivar;
   closeModal(); appToast(archivar ? `${c.unoT} archivado: ya no sale al crear viajes.` : `${c.unoT} recuperado.`, 'ok'); renderTab();
+}
+// Eliminar: solo lo que está archivado y no tiene ningún viaje
+async function fzCatEliminar(){
+  const S = fzS(), ctx = window.__fzCat || {}, c = FZ_CAT[ctx.tipo]; if (!c || !ctx.id) return;
+  const e = S[ctx.tipo].find(x => x.id === ctx.id); if (!e) return;
+  const err = document.getElementById('fzc-error');
+  if (!e.archived) { if (err) err.textContent = 'Primero hay que archivarlo.'; return; }
+  if (S.viajes.some(v => v[c.campo] === e.id)) { if (err) err.textContent = 'Tiene viajes: no se puede eliminar (déjalo archivado).'; return; }
+  if (!(await appConfirm({ title: `Eliminar ${c.uno}`, name: e.nombre, message: 'No tiene ningún viaje. Se borra y no se puede recuperar.', confirmLabel: 'Eliminar', tone: 'danger', icon: 'trash' }))) return;
+  const { error } = await supabaseClient.from(c.tabla).delete().eq('id', e.id);
+  if (error) { if (err) err.textContent = 'No se pudo eliminar: ' + error.message; return; }
+  S[ctx.tipo] = S[ctx.tipo].filter(x => x.id !== e.id);
+  closeModal(); appToast(`${c.unoT} eliminado.`, 'ok'); renderTab();
 }
 // ---------------------------------------------------------------- Resumen
 function fzResPeriodo(v){ fzS().resPeriodo = v; renderTab(); }
