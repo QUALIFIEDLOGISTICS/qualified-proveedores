@@ -6069,10 +6069,14 @@ function sgaCamposAlbaranCliente(clienteId){
 }
 // Columnas del albarán de un cliente, en su orden: todas las elige el cliente en su ficha SGA (campos.__albaran_cols).
 // Mientras no lo haya decidido, valen las de siempre (las tres de serie, los datos extra que tuviera marcados y Cajas y Peso).
-const SGA_ALB_COLS = { '@codigo': 'Código de artículo', '@descripcion': 'Descripción', '@medidas': 'Medidas', '@cajas': 'Cajas', '@peso': 'Peso' };
+const SGA_ALB_COLS = { '@codigo': 'Código de artículo', '@descripcion': 'Descripción', '@medidas': 'Medidas', '@cajas': 'Palets y cajas', '@peso': 'Peso' };
 function sgaAlbColumnaNombre(k){
-  if (k === '@cajas') { const el = document.getElementById('sgac-bultos'); return (el ? el.checked : sgaClienteConBultos(window.__sgacFor)) ? 'Cajas' : sgaCap(sgaUnidadCfg(window.__sgacFor).p); }   // sin bultos por palet, la cantidad son palets
+  if (k === '@cajas') { const el = document.getElementById('sgac-bultos'); return (el ? el.checked : sgaClienteConBultos(window.__sgacFor)) ? sgaCap(sgaUnidadCfg(window.__sgacFor).p) + ' y cajas' : sgaCap(sgaUnidadCfg(window.__sgacFor).p); }   // sin bultos por palet, la cantidad son palets
   return SGA_ALB_COLS[k] || ((sgaCampos.find(f => f.clave === k) || {}).nombre || k); }
+// La columna de cantidad del albarán: siempre PALETS y, si el cliente cuenta por bultos, además CAJAS (las dos, una al lado de la otra)
+function sgaAlbExpandir(colList, conBultos){
+  return colList.flatMap(k => k === '@cajas' ? (conBultos ? ['@palets', '@cajas'] : ['@palets']) : [k]);
+}
 function sgaAlbColumnasCliente(clienteId){
   const cc = sgaClienteCfg(clienteId).campos || {};
   const validos = new Set([...Object.keys(SGA_ALB_COLS), ...sgaCamposPropios().filter(sgaCampoAlbaranElegible).map(f => f.clave)]);
@@ -13121,18 +13125,18 @@ async function sgaAlbaranDatos(id){
     const art = sgaArticulos.find(x => x.id === p.articulo_id);
     const mod = Math.abs(Number(m.cantidad));
     const cajas = conBultos && m.bultos != null ? Math.abs(Number(m.bultos)) : mod;   // sin bultos por palet, la cantidad son los palets
-    const linea = { producto: p.descripcion || sgaProdTxt(p.producto_id), modelo: p.referencia || '', medidas: art ? art.medidas : '', codigo: p.codigo || '', cajas, peso: art && art.peso != null ? sgaR2(art.peso * mod) : null,
+    const linea = { producto: p.descripcion || sgaProdTxt(p.producto_id), modelo: p.referencia || '', medidas: art ? art.medidas : '', codigo: p.codigo || '', palets: mod, cajas, peso: art && art.peso != null ? sgaR2(art.peso * mod) : null,
       extra: camposAlb.map(f => sgaCampoMostrar(sgaCampoDef(f), (art && art.atributos && art.atributos[f.clave] != null && art.atributos[f.clave] !== '') ? art.atributos[f.clave] : (SGA_CAMPOS_COLUMNA.includes(f.clave) ? p[f.clave] : (p.atributos || {})[f.clave]))) };
     // Varias unidades iguales (2 carpas del mismo artículo) con cajas o medidas por unidad: una línea por unidad, cada una con sus medidas y sus cajas
     const n = Math.round(mod);
     const porUnidad = n > 1 && n <= 200 && n === mod && (conBultos || (art && catMedidasLineas(art.medidas).length > 1));
-    return porUnidad ? Array.from({ length: n }, () => ({ ...linea, cajas: sgaR2(cajas / n), peso: art && art.peso != null ? sgaR2(art.peso) : null })) : [linea];
+    return porUnidad ? Array.from({ length: n }, () => ({ ...linea, palets: 1, cajas: sgaR2(cajas / n), peso: art && art.peso != null ? sgaR2(art.peso) : null })) : [linea];
   });
   // Campos que salen en el albarán: los que ha elegido el cliente en su ficha SGA
   const extraCols = camposAlb.map((f, k) => ({ nombre: f.nombre, k, clave: f.clave }));
-  const totCajas = sgaR2(lineas.reduce((s, l) => s + l.cajas, 0));
+  const totCajas = sgaR2(lineas.reduce((s, l) => s + l.cajas, 0)), totPalets = sgaR2(lineas.reduce((s, l) => s + l.palets, 0));
   const totPeso = sgaR2(lineas.reduce((s, l) => s + (l.peso || 0), 0));
-  return { a, conBultos, colList, lineas, extraCols, totCajas, totPeso };
+  return { a, conBultos, colList, lineas, extraCols, totCajas, totPalets, totPeso };
 }
 /* ---- Imprimir y descargar desde el móvil ----
    Los móviles no pueden imprimir desde un marco invisible (lo que hace el ordenador): ahí el albarán se genera como PDF y se comparte o se
@@ -13180,7 +13184,7 @@ async function sgaAlbaranImprimir(id){
   }
   const D = await sgaAlbaranDatos(id);
   if (!D) return;
-  const { a, conBultos, colList, lineas, extraCols, totCajas, totPeso } = D;
+  const { a, conBultos, colList, lineas, extraCols, totCajas, totPalets, totPeso } = D;
   const w = allWarehouses.find(x => x.id === a.warehouseId);
   const logoPropio = new URL('logo-full.png', location.href).href;   // ruta absoluta: el iframe del albarán no conoce la de la página
   const mat = sgaMatriculaSplit(a.matricula);
@@ -13228,9 +13232,10 @@ async function sgaAlbaranImprimir(id){
   `;
   // columnas que ha elegido el cliente en su ficha SGA, en su orden
   const colDef = Object.assign({}, { '@codigo': { th: 'Código de artículo', td: l => `<td><b>${esc(l.producto)}</b>${l.codigo ? `<div style="font-size:10.5px;color:#444;">Código: ${esc(l.codigo)}</div>` : ''}</td>` }, '@descripcion': { th: 'Descripción', td: l => `<td>${esc(l.modelo) || '—'}</td>` }, '@medidas': { th: 'Medidas', td: l => { const ls = catMedidasLineas(l.medidas); return `<td>${ls.length ? ls.map(x => `<div style="margin-bottom:2px;">${esc(x)}</div>`).join('') : '—'}</td>`; } },
-    '@cajas': { th: conBultos ? 'Cajas' : sgaCap(sgaUnidadCfg(a.clienteId).p), r: true, td: l => `<td class="r"><b>${sgaNumTxt(l.cajas)}</b></td>`, tot: sgaNumTxt(totCajas) }, '@peso': { th: sgaPesoLabel(false), r: true, td: l => `<td class="r">${l.peso != null ? sgaNumTxt(l.peso) + ' kg' : '—'}</td>`, tot: totPeso ? sgaNumTxt(totPeso) + ' kg' : '—' } });
+    '@palets': { th: sgaCap(sgaUnidadCfg(a.clienteId).p), r: true, td: l => `<td class="r"><b>${sgaNumTxt(l.palets)}</b></td>`, tot: sgaNumTxt(totPalets) },
+    '@cajas': { th: 'Cajas', r: true, td: l => `<td class="r"><b>${sgaNumTxt(l.cajas)}</b></td>`, tot: sgaNumTxt(totCajas) }, '@peso': { th: sgaPesoLabel(false), r: true, td: l => `<td class="r">${l.peso != null ? sgaNumTxt(l.peso) + ' kg' : '—'}</td>`, tot: totPeso ? sgaNumTxt(totPeso) + ' kg' : '—' } });
   extraCols.forEach(c => { colDef[c.clave] = { th: c.nombre, td: l => `<td>${esc(l.extra[c.k])}</td>` }; });
-  const colOrden = colList.filter(k => colDef[k]);
+  const colOrden = sgaAlbExpandir(colList, conBultos).filter(k => colDef[k]);
   const filas = lineas.length ? lineas.map(l => `<tr>${colOrden.map(k => colDef[k].td(l)).join('')}</tr>`).join('') : `<tr><td colspan="${colOrden.length}">Sin líneas.</td></tr>`;
   const dirAlm = w ? sgaDirHtml(sgaDirLineas(w)) : '';
   // si la expedición tiene DeCA, su QR sale en el albarán (el mismo que lleva el PDF del DeCA)
@@ -13290,7 +13295,7 @@ async function sgaAlbaranImprimir(id){
 async function sgaAlbaranPdfBytes(id){
   const D = await sgaAlbaranDatos(id);
   if (!D) throw new Error('no se encuentra el albarán.');
-  const { a, conBultos, colList, lineas, extraCols, totCajas, totPeso } = D;
+  const { a, conBultos, colList, lineas, extraCols, totCajas, totPalets, totPeso } = D;
   const { PDFDocument, StandardFonts, rgb } = PDFLib;
   const pdf = await PDFDocument.create();
   const num = sgaNumAlbaran(a);
@@ -13387,11 +13392,12 @@ async function sgaAlbaranPdfBytes(id){
     '@codigo': { th: 'Código de artículo', wt: 2, b0: true, ls: l => [l.producto, ...(l.codigo ? ['Código: ' + l.codigo] : [])] },
     '@descripcion': { th: 'Descripción', wt: 2, ls: l => [l.modelo || '—'] },
     '@medidas': { th: 'Medidas', wt: 2.2, ls: l => { const m = catMedidasLineas(l.medidas); return m.length ? m : ['—']; } },
-    '@cajas': { th: conBultos ? 'Cajas' : sgaCap(sgaUnidadCfg(a.clienteId).p), wt: 0.9, r: true, b: true, ls: l => [sgaNumTxt(l.cajas)], tot: sgaNumTxt(totCajas) },
+    '@palets': { th: sgaCap(sgaUnidadCfg(a.clienteId).p), wt: 0.9, r: true, b: true, ls: l => [sgaNumTxt(l.palets)], tot: sgaNumTxt(totPalets) },
+    '@cajas': { th: 'Cajas', wt: 0.9, r: true, b: true, ls: l => [sgaNumTxt(l.cajas)], tot: sgaNumTxt(totCajas) },
     '@peso': { th: sgaPesoLabel(false), wt: 1, r: true, ls: l => [l.peso != null ? sgaNumTxt(l.peso) + ' kg' : '—'], tot: totPeso ? sgaNumTxt(totPeso) + ' kg' : '—' },
   };
   extraCols.forEach(c => { cols[c.clave] = { th: c.nombre, wt: 1.4, ls: l => [l.extra[c.k]] }; });
-  const orden = colList.filter(k => cols[k]);
+  const orden = sgaAlbExpandir(colList, conBultos).filter(k => cols[k]);
   const wsum = orden.reduce((s, k) => s + cols[k].wt, 0);
   const cwid = orden.map(k => W * cols[k].wt / wsum);
   const PAD = 5, FS = 9, LH = 11;
