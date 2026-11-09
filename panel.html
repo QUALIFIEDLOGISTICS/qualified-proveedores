@@ -20012,7 +20012,7 @@ const FZ_FORMATOS = ['Redonda', 'Rectangular', 'Ensilada'];   // formato de la b
 const FZ_MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 function fzS(){
   return (window.__fz = window.__fz || { cargado: false, cargando: false, error: '', sec: 'viajes', view: 'lista', viajes: [], proveedores: [], clientes: [], productos: [],
-    q: '', periodo: '', producto: '', formato: '', pend: false, cq: '', archivados: false, dp: '12m', dd: '', dh: '', df: { producto: '', formato: '', prov: '', cli: '', reg: '' }, form: null, formDirty: false });
+    q: '', anio: today().slice(0, 4), mes: today().slice(5, 7), fprov: '', fcli: '', producto: '', formato: '', pend: false, cq: '', archivados: false, dp: '12m', dd: '', dh: '', df: { producto: '', formato: '', prov: '', cli: '', reg: '' }, form: null, formDirty: false });
 }
 const fzR2 = n => Math.round((Number(n) || 0) * 100) / 100;
 const fzNorm = s => String(s == null ? '' : s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -20101,22 +20101,25 @@ function tplForrajes(){
   return `<div style="--bn-accent:var(--primary);--dc-accent:var(--primary);">${S.view === 'form' ? '' : fzBarHtml()}${cuerpo}</div>`;
 }
 // ---------------------------------------------------------------- Viajes
-function fzPeriodoOpciones(lista){
-  const meses = [...new Set(lista.map(v => String(v.fecha).slice(0, 7)))].sort().reverse();
-  const anios = [...new Set(meses.map(m => m.slice(0, 4)))];
-  let o = '<option value="">Todo el periodo</option>';
-  anios.forEach(a => {
-    o += `<option value="${a}">Año ${a}</option>`;
-    meses.filter(m => m.startsWith(a)).forEach(m => { o += `<option value="${m}">&nbsp;&nbsp;${FZ_MESES[Number(m.slice(5)) - 1]} ${a}</option>`; });
-  });
-  return o;
+// Año y mes se filtran por separado: «Marzo» sin año enseña los marzos de todos los años
+function fzAniosOpciones(S){
+  const anios = [...new Set(S.viajes.map(v => String(v.fecha).slice(0, 4)))].sort().reverse();
+  if (S.anio && !anios.includes(S.anio)) anios.push(S.anio);
+  return `<option value="">Todos los años</option>${anios.map(a => `<option value="${a}"${a === S.anio ? ' selected' : ''}>${a}</option>`).join('')}`;
+}
+function fzMesesOpciones(S){
+  return `<option value="">Todos los meses</option>${FZ_MESES.map((m, i) => { const v = String(i + 1).padStart(2, '0'); return `<option value="${v}"${v === S.mes ? ' selected' : ''}>${m.charAt(0).toUpperCase() + m.slice(1)}</option>`; }).join('')}`;
 }
 function fzViajesFiltrados(){
   const S = fzS(), M = fzMaps(), q = fzNorm(S.q).trim();
   return S.viajes.filter(v => {
-    if (S.periodo && !String(v.fecha).startsWith(S.periodo)) return false;
+    const f = String(v.fecha);
+    if (S.anio && f.slice(0, 4) !== S.anio) return false;
+    if (S.mes && f.slice(5, 7) !== S.mes) return false;
     if (S.producto && v.productoId !== S.producto) return false;
     if (S.formato && v.formato !== S.formato) return false;
+    if (S.fprov && v.proveedorId !== S.fprov) return false;
+    if (S.fcli && v.clienteId !== S.fcli) return false;
     if (S.pend && v.facturadoProveedor && v.facturadoCliente) return false;
     if (q) {
       const p = M.prov.get(v.proveedorId), c = M.cli.get(v.clienteId), pr = M.prod.get(v.productoId);
@@ -20168,7 +20171,7 @@ function fzViajesTablaHtml(){
     <div class="card cg-compacta" style="padding:0;overflow:hidden;"><div style="overflow-x:auto;"><table class="tf-table">
       <thead><tr>${thSort('Nº', 'number')}${thSort('Fecha', 'date')}${thSort('Proveedor (carga)', 'text')}${thSort('Región carga', 'text')}${thSort('Cliente (descarga)', 'text')}${thSort('Región descarga', 'text')}${thSort('Producto', 'text')}${thSort('Cantidad', 'number', 'style="text-align:right;"')}${thSort('Compra', 'number', 'style="text-align:right;"')}${thSort('Flete', 'number', 'style="text-align:right;"')}${thSort('Venta', 'number', 'style="text-align:right;"')}${thSort('Beneficio', 'number', 'style="text-align:right;"')}${thSort('Facturado', 'number')}<th class="td-acc"></th></tr></thead>
       <tbody>${filas}</tbody></table></div></div>
-    ${list.length > MAX ? `<div class="dash-nota" style="margin-top:8px;">Se enseñan los ${MAX} viajes más recientes de ${list.length}: afina con el buscador o el periodo para ver el resto.</div>` : ''}`;
+    ${list.length > MAX ? `<div class="dash-nota" style="margin-top:8px;">Se enseñan los ${MAX} viajes más recientes de ${list.length}: afina con el buscador o los filtros (año, mes…) para ver el resto.</div>` : ''}`;
 }
 function fzViajesHtml(){
   const S = fzS(), T = fzTotales(S.viajes);
@@ -20184,9 +20187,12 @@ function fzViajesHtml(){
     </div>
     <div class="card deca-toolbar">
       <div class="deca-search" style="flex:1 1 240px;"><input id="fz-q" placeholder="Buscar por proveedor, cliente, camión, factura…" value="${esc(S.q)}" oninput="fzFiltro('q', this.value)" autocomplete="off" /><span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span></div>
-      <select id="fz-periodo" onchange="fzFiltro('periodo', this.value)" style="width:auto;flex:0 1 190px;">${fzPeriodoOpciones(S.viajes).replace(`value="${S.periodo}"`, `value="${S.periodo}" selected`)}</select>
+      <select id="fz-anio" onchange="fzFiltro('anio', this.value)" style="width:auto;flex:0 1 140px;">${fzAniosOpciones(S)}</select>
+      <select id="fz-mes" onchange="fzFiltro('mes', this.value)" style="width:auto;flex:0 1 150px;">${fzMesesOpciones(S)}</select>
       <select id="fz-producto" onchange="fzFiltro('producto', this.value)" style="width:auto;flex:0 1 200px;"><option value="">Todos los productos</option>${S.productos.filter(p => !p.archived || p.id === S.producto).map(p => opt(p.id, p.nombre, p.id === S.producto)).join('')}</select>
       <select id="fz-formato-f" onchange="fzFiltro('formato', this.value)" style="width:auto;flex:0 1 170px;"><option value="">Todos los formatos</option>${FZ_FORMATOS.map(f => opt(f, f, f === S.formato)).join('')}</select>
+      <select id="fz-fprov" onchange="fzFiltro('fprov', this.value)" style="width:auto;flex:0 1 200px;"><option value="">Todos los proveedores</option>${S.proveedores.filter(p => !p.archived || p.id === S.fprov).map(p => opt(p.id, p.nombre, p.id === S.fprov)).join('')}</select>
+      <select id="fz-fcli" onchange="fzFiltro('fcli', this.value)" style="width:auto;flex:0 1 200px;"><option value="">Todos los clientes</option>${S.clientes.filter(c => !c.archived || c.id === S.fcli).map(c => opt(c.id, c.nombre, c.id === S.fcli)).join('')}</select>
       <label class="dr-chk" style="margin:0;white-space:nowrap;"><input type="checkbox" ${S.pend ? 'checked' : ''} onchange="fzFiltro('pend', this.checked)" /> Pendientes de facturar</label>
       <button class="btn btn-ghost" style="background:var(--panel);" onclick="fzExportarCsv()" title="Descarga en Excel (CSV) los viajes que se ven">Exportar</button>
     </div>
@@ -20538,7 +20544,7 @@ function fzDashPeriodo(v){ fzS().dp = v; renderTab(); }
 function fzDashFechas(k, v){ fzS()[k] = v; renderTab(); }
 function fzDashFiltro(k, v){ fzS().df[k] = v; renderTab(); }
 function fzDashLimpiar(){ fzS().df = { producto: '', formato: '', prov: '', cli: '', reg: '' }; renderTab(); }
-function fzIrPend(){ const S = fzS(); S.pend = true; S.periodo = ''; S.producto = ''; S.formato = ''; S.q = ''; fzIr('viajes'); }
+function fzIrPend(){ const S = fzS(); S.pend = true; S.anio = ''; S.mes = ''; S.producto = ''; S.formato = ''; S.fprov = ''; S.fcli = ''; S.q = ''; fzIr('viajes'); }
 // Totales con los datos «por tonelada» (solo los viajes en toneladas: las balas no se mezclan)
 function fzTot(list){
   const t = fzTotales(list); t.tnT = 0; t.compraT = 0; t.ventaT = 0; t.fleteT = 0;
