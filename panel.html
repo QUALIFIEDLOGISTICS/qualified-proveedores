@@ -11313,6 +11313,40 @@ function sgaDestinatariosOptionsHtml(){
   return direcciones.filter(d => !d.archived).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
     .map(d => `<option value="${esc(d.nombre)}" label="${esc([d.ciudad, d.pais].filter(Boolean).join(', '))}">`).join('');
 }
+// Dirección del destinatario escrita a mano → calle, CP, población y país (la orden de carga los necesita por separado).
+// Sirve «calle, 28001 Madrid, España», «calle 5, Manresa 08240», «calle, 08240 Manresa (Barcelona)»… y, sin código postal,
+// «calle, Manresa» o «calle, Manresa, España» (la población es lo último que no sea un país).
+const SGA_PAISES_RE = /^(españa|spain|francia|france|portugal|italia|italy|alemania|germany|andorra|marruecos|reino unido|uk|es|fr|pt|it|de|ad)$/i;
+function sgaDestinoManual(nombre, texto){
+  const partes = String(texto || '').split(/\s*,\s*/).map(s => s.trim()).filter(Boolean);
+  const salida = (direccion, cp, poblacion, pais) => ({ empresa: nombre, direccion, cp, poblacion, pais });
+  const k = partes.findIndex(p => /(^|\D)\d{4,6}(\D|$)/.test(p));
+  if (k >= 0) {
+    const m = partes[k].match(/(\d{4,6})/);
+    let resto = partes[k].replace(m[1], ' ').replace(/\([^)]*\)/g, ' ').replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim(), sig = partes.slice(k + 1);   // «Manresa (Barcelona)» → Manresa
+    if (!resto && sig.length) { resto = sig[0]; sig = sig.slice(1); }
+    return salida(partes.slice(0, k).join(', '), m[1], resto, sig.join(', '));
+  }
+  if (partes.length >= 2) {
+    const ultimo = partes[partes.length - 1];
+    if (SGA_PAISES_RE.test(ultimo) && partes.length >= 3) return salida(partes.slice(0, -2).join(', '), '', partes[partes.length - 2], ultimo);
+    if (!SGA_PAISES_RE.test(ultimo)) return salida(partes.slice(0, -1).join(', '), '', ultimo, '');
+  }
+  return salida(partes.join(', '), '', '', '');
+}
+// Lo que se va a leer de la dirección del destinatario, para enseñarlo bajo la casilla cuando se genera la orden de carga
+function sgaSalidaOcDirAyuda(){
+  const el = document.getElementById('sl-dest-oc-ayuda'); if (!el) return;
+  const on = (document.getElementById('sl-oc-on') || {}).checked;
+  const nombre = ((document.getElementById('sl-dest') || {}).value || '').trim(), dir = ((document.getElementById('sl-destdir') || {}).value || '').trim();
+  if (!on || !nombre || sgaDireccionPorNombre(nombre)) { el.style.display = 'none'; return; }
+  const x = sgaDestinoManual(nombre, dir);
+  el.style.display = '';
+  el.style.color = x.poblacion ? 'var(--success)' : 'var(--danger)';
+  el.innerHTML = x.poblacion
+    ? `Orden de carga, descarga: <b>${esc(x.direccion) || '—'}</b> · CP <b>${esc(x.cp) || '—'}</b> · población <b>${esc(x.poblacion)}</b>${x.pais ? ' · ' + esc(x.pais) : ''}`
+    : 'Para la orden de carga hace falta la población: escribe la dirección como «calle, 28001 Madrid, España».';
+}
 // Destinatario de la lista de Direcciones: su dirección se rellena sola (y no se toca). Escrito a mano (no está en la lista): la dirección se escribe.
 function sgaSalidaDestinatarioCambio(){
   const txt = ((document.getElementById('sl-dest') || {}).value || '').trim();
@@ -11332,6 +11366,7 @@ function sgaSalidaDestinatarioCambio(){
     ok.style.color = d ? 'var(--success)' : 'var(--muted)';
     ok.textContent = d ? '✓ Vinculado a una dirección' : 'Escrito a mano: no está en Direcciones; escribe su dirección a la derecha.';
   }
+  sgaSalidaOcDirAyuda();
   window.__stockDirty = true;
 }
 function sgaSalidaModalidad(m){
@@ -11532,7 +11567,7 @@ function tplStockSalidaPage(){
             <div class="field" style="flex:1;min-width:240px;"><label>Para (destinatario) <small style="color:var(--mutedFaint);font-weight:400;">· elige de Direcciones o escríbelo a mano</small></label>${sgaSalidaPuedeCrearDireccion() ? decaCampoConCrearHtml(decaInputIcon('users', `<input id="sl-dest" data-combo="sl-destinatarios-datalist" autocomplete="off" maxlength="150" placeholder="Elige entre tus direcciones" oninput="sgaSalidaDestinatarioCambio()" />`), 'sgaSalidaIrACrearDireccion()', 'Crear una dirección nueva (no está en la lista)') : decaInputIcon('users', `<input id="sl-dest" data-combo="sl-destinatarios-datalist" autocomplete="off" maxlength="150" placeholder="Elige entre tus direcciones" oninput="sgaSalidaDestinatarioCambio()" />`)}
               <datalist id="sl-destinatarios-datalist">${sgaDestinatariosOptionsHtml()}</datalist>
               <div id="sl-dest-ok" style="display:none;font-size:11.5px;color:var(--success);margin-top:4px;">✓ Vinculado a una dirección</div></div>
-            <div class="field" style="flex:2;min-width:260px;"><label>Dirección del destinatario</label>${decaInputIcon('pin', `<input id="sl-destdir" maxlength="250" placeholder="Se rellena sola al elegir un destinatario de la lista; si lo escribes a mano, escribe aquí su dirección" />`)}</div>
+            <div class="field" style="flex:2;min-width:260px;"><label>Dirección del destinatario</label>${decaInputIcon('pin', `<input id="sl-destdir" maxlength="250" oninput="sgaSalidaOcDirAyuda()" placeholder="Se rellena sola al elegir un destinatario de la lista; si lo escribes a mano, escribe aquí su dirección" />`)}<div id="sl-dest-oc-ayuda" style="display:none;font-size:11.5px;margin-top:4px;"></div></div>
           </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:0;">
             <div class="field" style="flex:1;min-width:200px;"><label>Transportista</label>${decaInputIcon('truck', `<input id="sl-transp" data-mayusc data-combo="sl-transp-datalist" autocomplete="off" style="text-transform:uppercase;" maxlength="120" placeholder="Escribe o elige un proveedor de transporte" />`)}<datalist id="sl-transp-datalist">${contactos.filter(c => !c.archived && c.esTransportista).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).map(c => `<option value="${esc(c.nombre.toUpperCase())}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('')}</datalist></div>
@@ -12952,6 +12987,7 @@ function sgaSalidaOcToggle(){
   const box = document.getElementById('sl-oc-campos');
   if (box) box.style.display = on ? '' : 'none';
   sgaSalidaOcRefrescar();
+  sgaSalidaOcDirAyuda();
 }
 // Mientras no se escriba a mano, el cliente de transporte es el cliente de la expedición (si también lo es de Transporte)
 function sgaSalidaOcRefrescar(){
@@ -12978,6 +13014,14 @@ function sgaSalidaOcErrores(d){
   if (pc != null && (!isFinite(pc) || pc < 0)) e.push('Orden de carga: lo que se cobra al cliente tiene que ser un número.');
   if (!d.transportista) e.push('Orden de carga: escribe el transportista.');
   if (!d.destinatario) e.push('Orden de carga: elige el destinatario (es la descarga).');
+  // Que la orden de carga se pueda crear: se comprueba ahora, antes de guardar, para no dejar la expedición hecha y la orden sin crear
+  const almacen = allWarehouses.find(x => x.id === sgaSalidaWh());
+  if (almacen && !almacen.ciudad) e.push('Orden de carga: el almacén de salida no tiene población en su ficha (Almacén → Configuración).');
+  if (d.destinatario) {
+    const dd0 = sgaDireccionPorNombre(d.destinatario);
+    if (dd0 && !dd0.ciudad) e.push('Orden de carga: el destinatario no tiene población en su dirección (Transporte → Direcciones).');
+    else if (!dd0 && !sgaDestinoManual(d.destinatario, d.destinatarioDireccion).poblacion) e.push('Orden de carga: no se lee la población de la dirección del destinatario. Escríbela así: «calle, 28001 Madrid, España».');
+  }
   return e;
 }
 // Crea la orden de carga de una expedición (si ya se creó su DeCA, la orden queda enlazada a él)
@@ -12994,12 +13038,7 @@ async function sgaCrearOcExpedicion(albaranId, d, sale, decaId){
   const punto = (empresa, o, extra) => Object.assign({ empresa, direccion: [o.calle1, o.calle2].filter(Boolean).join(', '), cp: o.codigoPostal || '', poblacion: o.ciudad || '', pais: o.pais || '' }, extra);
   const carga = punto([emp.nombre || 'Qualified', w && w.name].filter(Boolean).join(' · '), w || {}, { fecha: d.fecha });
   // Destinatario escrito a mano: su dirección («calle, 28001 Madrid, España») se reparte en calle, CP, población y país
-  const manual = (() => {
-    const partes = String(d.destinatarioDireccion || '').split(/\s*,\s*/).filter(Boolean), k = partes.findIndex(p => /^\d{4,6}\b/.test(p));
-    if (k < 0) return { empresa: d.destinatario, direccion: partes.join(', '), cp: '', poblacion: '', pais: '' };
-    const m = partes[k].match(/^(\d{4,6})\s*(.*)$/);
-    return { empresa: d.destinatario, direccion: partes.slice(0, k).join(', '), cp: m[1], poblacion: m[2] || '', pais: partes.slice(k + 1).join(', ') };
-  })();
+  const manual = sgaDestinoManual(d.destinatario, d.destinatarioDireccion);
   const descarga = dd ? punto(dd.nombre, dd, { horario: dd.horarios || '', maps: dd.mapsUrl || '', observaciones: dd.observacionesOc || '' }) : manual;
   if (!carga.poblacion) throw new Error('el almacén no tiene población en su ficha.');
   if (!descarga.poblacion) throw new Error(dd ? 'el destinatario no tiene población en su dirección.' : 'no se pudo leer la población de la dirección escrita a mano (usa el formato «calle, 28001 Madrid, España»).');
