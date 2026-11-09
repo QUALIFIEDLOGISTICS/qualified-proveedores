@@ -6701,7 +6701,21 @@ async function loadSgaStock(){
   window.__sgaLineasAlb = {};   // mercancía de cada expedición: [{ txt, cantidad }], para verla en el listado sin entrar
   const ids = sgaAlbaranes.map(x => x.id);
   if (ids.length) {
-    const m = await supabaseClient.from('sga_movimientos').select('albaran_id,partida_id,cantidad').in('albaran_id', ids);
+    // Supabase devuelve como mucho 1000 filas por consulta: los movimientos se piden por tandas de albaranes y por páginas, para que
+    // ningún albarán se quede sin sus palets (si no, en la lista salía «—» en los que quedaban fuera del corte)
+    const m = { data: [] };
+    try {
+      const tandas = [];
+      for (let i = 0; i < ids.length; i += 100) tandas.push(ids.slice(i, i + 100));
+      await Promise.all(tandas.map(async tanda => {
+        for (let desde = 0; ; desde += 1000) {
+          const r = await supabaseClient.from('sga_movimientos').select('albaran_id,partida_id,cantidad').in('albaran_id', tanda).order('id').range(desde, desde + 999);
+          if (r.error) throw r.error;
+          (r.data || []).forEach(f => m.data.push(f));
+          if ((r.data || []).length < 1000) break;
+        }
+      }));
+    } catch (e) { console.warn('No se pudieron cargar todos los movimientos de los albaranes', e); }
     (m.data || []).forEach(r => { sgaMovsAlbaran[r.albaran_id] = (sgaMovsAlbaran[r.albaran_id] || 0) + Number(r.cantidad); });
     try {
       const tipoDe = {}; sgaAlbaranes.forEach(x => { tipoDe[x.id] = x.tipo; });
