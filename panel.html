@@ -2274,6 +2274,8 @@
     .hd-menu-item{padding-top:12px;padding-bottom:12px;}
     .dash-mes button{min-width:38px;min-height:38px;}
     .deca-act{min-width:38px;min-height:38px;}
+    .alb-menu button{padding:12px 12px;}
+    .alb-mn-b{min-width:40px;min-height:40px;}
     /* Banner de cada pantalla: las cifras en una fila y el botón principal debajo, a todo el ancho */
     .deca-banner-actions{margin-left:0;flex:1 1 100%;}
     .deca-banner-actions .deca-new-btn{flex:1 1 100%;justify-content:center;}
@@ -7813,7 +7815,7 @@ function catExportPdf(cols, filas, tot, nombre, E){
   f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
   document.body.appendChild(f);
   const doc = f.contentWindow.document; doc.open(); doc.write(html); doc.close();
-  setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 3000); }, 200);
+  setTimeout(() => imprimirIframe(f), 200);
 }
 // Clientes de pieza única (cada palet es distinto): el inventario se ve palet a palet, no por artículo.
 // Se activa solo cuando el cliente da un código propio a cada palet (ficha SGA); en los demás se elige a mano con el selector de arriba
@@ -12552,7 +12554,7 @@ function sgaResumenImprimir(){
   document.body.appendChild(f);
   const doc = f.contentWindow.document;
   doc.open(); doc.write(html); doc.close();
-  setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 3000); }, 300);
+  setTimeout(() => imprimirIframe(f), 300);
 }
 
 /* ---- SGA · Albarán de expedición imprimible, anular albaranes y regularizar stock ---- */
@@ -12690,7 +12692,7 @@ async function sgaEtiquetaImprimir(id){
   document.body.appendChild(f);
   const doc = f.contentWindow.document; doc.open(); doc.write(html); doc.close();
   try { localStorage.setItem('qualified.sga.etqPos', String(((pos - 1 + n) % 4) + 1)); } catch (e) { /* sin almacenamiento: no pasa nada */ }
-  setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 3000); }, 250);
+  setTimeout(() => imprimirIframe(f), 250);
 }
 /* ---- DeCA dentro de la expedición ----
    Como en la orden de carga: en el formulario hay un interruptor «Generar también el DeCA». Al confirmar la expedición se crea el DeCA
@@ -13053,7 +13055,50 @@ async function sgaAlbaranDatos(id){
   const totPeso = sgaR2(lineas.reduce((s, l) => s + (l.peso || 0), 0));
   return { a, conBultos, colList, lineas, extraCols, totCajas, totPeso };
 }
+/* ---- Imprimir y descargar desde el móvil ----
+   Los móviles no pueden imprimir desde un marco invisible (lo que hace el ordenador): ahí el albarán se genera como PDF y se comparte o se
+   descarga, y el resto de documentos se abren en una pestaña nueva, desde cuyo menú del navegador se guardan en PDF o se imprimen. */
+function esMovilTactil(){
+  const ua = navigator.userAgent || '';
+  return /Android|iPhone|iPad|iPod/i.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua)) || (window.matchMedia && window.matchMedia('(pointer:coarse)').matches && window.innerWidth <= 900);
+}
+// Guarda o comparte un PDF: primero el menú de compartir del móvil (guardar en Archivos, WhatsApp, correo…) y, si no lo hay, la descarga normal
+async function guardarPdfMovil(bytes, nombre){
+  const blob = new Blob([bytes], { type: 'application/pdf' });
+  try {
+    const file = new File([blob], nombre, { type: 'application/pdf' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: nombre }); return true; }
+  } catch (e) { if (e && e.name === 'AbortError') return true; /* si compartir falla, se descarga */ }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = nombre; a.rel = 'noopener';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 120000);
+  return true;
+}
+// Imprime lo que hay en un marco invisible (ordenador) o, en el móvil, abre el documento en una pestaña nueva para guardarlo en PDF o imprimirlo
+async function imprimirIframe(f){
+  if (!esMovilTactil()) { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 3000); return; }
+  let html = '<!doctype html>' + f.contentDocument.documentElement.outerHTML;
+  f.remove();
+  if (!/name="viewport"/i.test(html)) html = html.replace(/<head>/i, '<head><meta name="viewport" content="width=820, initial-scale=0.45, user-scalable=yes">');
+  if (!(await appConfirm({ title: 'Imprimir o guardar en PDF', message: 'El móvil no puede imprimir desde aquí. Se abrirá el documento en una pestaña nueva: desde el menú del navegador (Compartir o Imprimir) lo guardas como PDF o lo imprimes.', confirmLabel: 'Abrir documento', cancelLabel: 'Cancelar' }))) return;
+  const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+  const w = window.open(url, '_blank');
+  if (!w) appToast('El navegador ha bloqueado la pestaña nueva: permite las ventanas emergentes de esta página y vuelve a pulsar.', 'error');
+  setTimeout(() => URL.revokeObjectURL(url), 300000);
+}
 async function sgaAlbaranImprimir(id){
+  if (esMovilTactil()) {   // en el móvil no se puede imprimir desde un marco invisible: se genera el PDF y se comparte o se descarga
+    const al = sgaAlbaranes.find(x => x.id === id);
+    if (!al) return;
+    appToast('Preparando el PDF del albarán…', 'info');
+    try {
+      const bytes = await sgaAlbaranPdfBytes(id);
+      await guardarPdfMovil(bytes, `Albaran-${String(sgaNumAlbaran(al)).replace(/[^\w.-]+/g, '_')}.pdf`);
+    } catch (e) { appToast('No se pudo generar el PDF del albarán: ' + ((e && e.message) || 'error desconocido') + '.', 'error'); }
+    return;
+  }
   const D = await sgaAlbaranDatos(id);
   if (!D) return;
   const { a, conBultos, colList, lineas, extraCols, totCajas, totPeso } = D;
@@ -32042,7 +32087,7 @@ function liqImprimir(){
   f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
   document.body.appendChild(f);
   const doc = f.contentWindow.document; doc.open(); doc.write(html); doc.close();
-  setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 3000); }, 300);
+  setTimeout(() => imprimirIframe(f), 300);
 }
 function openDriversList(){
   window.__autonomosView = 'lista';
@@ -32826,11 +32871,7 @@ function printResumenLiquidacion(driverId){
   document.body.appendChild(f);
   const doc = f.contentWindow.document;
   doc.open(); doc.write(html); doc.close();
-  setTimeout(() => {
-    f.contentWindow.focus();
-    f.contentWindow.print();
-    setTimeout(() => f.remove(), 3000);
-  }, 300);
+  setTimeout(() => imprimirIframe(f), 300);
 }
 function tplAnotacionesSection(driverId, filteredNotes, readOnly){
   return `
