@@ -20082,7 +20082,7 @@ function fzIr(sec){
 }
 function fzConfirmLeave(){
   const S = fzS();
-  if (currentTab === 'forrajes' && S.view === 'form' && S.formDirty) return leaveGuard();
+  if (currentTab === 'forrajes' && (S.view === 'form' || S.view === 'cat') && S.formDirty) return leaveGuard();
   return true;
 }
 function fzBarHtml(){
@@ -20098,10 +20098,11 @@ function tplForrajes(){
   if (S.error) cuerpo = `<div class="card" style="color:var(--danger);padding:24px;text-align:center;">${esc(S.error)}<div style="margin-top:14px;"><button class="btn btn-ghost" onclick="fzS().error=''; fzCargar(true)">Reintentar</button></div></div>`;
   else if (!S.cargado) cuerpo = `<div class="card dash-sk" style="height:260px;"></div>`;
   else if (S.view === 'form') { cuerpo = fzFormHtml(); setTimeout(() => { if (fzS().view === 'form') fzFormPrecios(); }, 0); }
+  else if (S.view === 'cat') cuerpo = fzProvPantallaHtml();
   else if (S.sec === 'viajes') cuerpo = fzViajesHtml();
   else if (S.sec === 'dashboard') cuerpo = fzDashboardHtml();
   else cuerpo = fzCatalogoHtml(S.sec);
-  return `<div style="--bn-accent:var(--primary);--dc-accent:var(--primary);">${S.view === 'form' ? '' : fzBarHtml()}${cuerpo}</div>`;
+  return `<div style="--bn-accent:var(--primary);--dc-accent:var(--primary);">${S.view === 'form' || S.view === 'cat' ? '' : fzBarHtml()}${cuerpo}</div>`;
 }
 // ---------------------------------------------------------------- Viajes
 // Año y mes se filtran por separado: «Marzo» sin año enseña los marzos de todos los años
@@ -20229,7 +20230,7 @@ function fzEditarViaje(id){
 }
 function fzVolver(){
   if (!fzConfirmLeave()) return;
-  const S = fzS(); S.view = 'lista'; S.form = null; S.formDirty = false;
+  const S = fzS(); S.view = 'lista'; S.form = null; S.catEdit = null; S.formDirty = false;
   renderHeader(); renderTab();
 }
 function fzDirty(){ fzS().formDirty = true; }
@@ -20518,13 +20519,71 @@ async function fzPrecioQuitar(id){
   fzPreciosRefrescar();
   if (S.sec === 'proveedores') { const l = document.getElementById('fz-cat-lista'); if (l) l.innerHTML = fzCatTablaHtml('proveedores'); }
 }
+/* Un proveedor se crea y se edita en pantalla completa (con sus productos y precios); clientes y productos, y un proveedor nuevo desde el
+   formulario de un viaje, usan la ventana pequeña. */
+function fzProvPantallaHtml(){
+  const S = fzS(), ce = S.catEdit || {}, c = FZ_CAT.proveedores, e = ce.id ? S.proveedores.find(x => x.id === ce.id) : null;
+  const volver = `<button class="btn btn-ghost" style="background:var(--panel);" onclick="fzVolver()">← Volver a proveedores</button>`;
+  if (ce.id && !e) return `<div class="deca-banner"><div style="flex:1;"><div class="deca-banner-title">Proveedor no encontrado</div></div><div class="deca-banner-actions">${volver}</div></div>`;
+  const sec = (n, t, s) => `<div class="dr-sec"><span class="dr-n">${n}</span><div><b>${t}</b>${s ? `<small>${s}</small>` : ''}</div></div>`;
+  const pagos = FZ_PAGOS.slice(); if (e && e.formaPago && !pagos.includes(e.formaPago)) pagos.push(e.formaPago);
+  const tieneViajes = e && S.viajes.some(v => v[c.campo] === e.id);
+  return `
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.users, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 260px;"><div class="deca-banner-title">${e ? esc(e.nombre) : 'Nuevo proveedor'}${e && e.archived ? ' <span class="cg-chip">Archivado</span>' : ''}</div><div class="deca-banner-sub">${e ? 'Sus datos y los productos que vende, con sus precios y fechas.' : 'Crea el proveedor y después podrás apuntar los productos que vende y sus precios.'}</div></div>
+      <div class="deca-banner-actions">${volver}</div>
+    </div>
+    <div class="dr-page" style="max-width:980px;margin:0;" oninput="fzDirtyProv(event)" onchange="fzDirtyProv(event)">
+      <div class="card dr-card">
+        ${sec(1, 'Datos del proveedor', 'De quién se compra: nombre, teléfono y forma de pago habitual. La región (FR31, ES25…) se apunta en cada viaje.')}
+        <div class="dr-g">
+          <div class="field dr-w2"><label>Nombre <span class="dc-req">*</span></label><input id="fzc-nombre" maxlength="120" value="${esc(e ? e.nombre : '')}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); fzCatGuardar(); }" /></div>
+          <div class="field"><label>Teléfono</label><input id="fzc-tel" inputmode="tel" maxlength="40" value="${esc(e ? e.telefono : '')}" /></div>
+          <div class="field"><label>Forma de pago habitual</label><select id="fzc-pago"><option value="">—</option>${pagos.map(p => `<option value="${esc(p)}"${e && e.formaPago === p ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></div>
+          <div class="field dr-w3"><label>Notas</label><textarea id="fzc-notas" rows="2" maxlength="400">${esc(e ? e.notas : '')}</textarea></div>
+        </div>
+      </div>
+      ${e ? `<div class="card dr-card">
+        ${sec(2, 'Productos que vende y sus precios', 'Informativo: no cambia los viajes. Para actualizar un precio, añade una línea nueva con su fecha y la anterior queda en el historial.')}
+        <div id="fzc-precios">${fzPreciosHtml(e.id)}</div>
+      </div>` : ''}
+      <div id="fzc-error" class="dr-err"></div>
+      <div class="dr-bar" style="max-width:980px;">
+        <div style="margin-right:auto;display:flex;gap:8px;flex-wrap:wrap;">
+          ${e ? `<button class="btn btn-ghost" onclick="fzCatArchivar(${e.archived ? 'false' : 'true'})">${e.archived ? 'Recuperar' : 'Archivar'}</button>` : ''}
+          ${e && e.archived && !tieneViajes ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="fzCatEliminar()" title="Solo se puede eliminar lo archivado que no tiene ningún viaje">Eliminar</button>` : ''}
+        </div>
+        <button class="btn btn-ghost" onclick="fzVolver()">Cancelar</button>
+        <button class="btn btn-primary" onclick="fzCatGuardar()">${e ? 'Guardar cambios' : 'Crear proveedor'}</button>
+      </div>
+    </div>`;
+}
+// Lo que se escribe en la línea de «añadir precio» no cuenta como cambio sin guardar de la ficha
+function fzDirtyProv(ev){ if (!((ev && ev.target && ev.target.id) || '').startsWith('fzp-')) fzDirty(); }
+// Cierra la edición de un catálogo: la ventana pequeña o, si es la pantalla del proveedor, vuelve a la lista
+function fzCatCerrar(){
+  const S = fzS();
+  closeModal();
+  if (S.view === 'cat') { S.view = 'lista'; S.catEdit = null; S.formDirty = false; renderHeader(); }
+  renderTab();
+  if (S.view === 'lista') window.scrollTo(0, 0);
+}
 function fzCatForm(tipo, id, desdeViaje){
+  if (tipo === 'proveedores' && !desdeViaje) {
+    const S0 = fzS();
+    window.__fzCat = { tipo, id: id || null, desdeViaje: false, pantalla: true };
+    S0.view = 'cat'; S0.catEdit = { tipo, id: id || null }; S0.formDirty = false;
+    renderHeader(); renderTab(); window.scrollTo(0, 0);
+    setTimeout(() => { const i = document.getElementById('fzc-nombre'); if (i && !id) i.focus(); }, 30);
+    return;
+  }
   const S = fzS(), c = FZ_CAT[tipo], e = id ? S[tipo].find(x => x.id === id) : null, esProd = tipo === 'productos';
   const pagos = FZ_PAGOS.slice(); if (e && e.formaPago && !pagos.includes(e.formaPago)) pagos.push(e.formaPago);
   window.__fzCat = { tipo, id: id || null, desdeViaje: !!desdeViaje };
   document.getElementById('modal-slot').innerHTML = `
     <div class="modal-overlay" onclick="if(event.target===this) closeModal()">
-      <div class="modal-box" style="max-width:${tipo === 'proveedores' && e ? 860 : 520}px;">
+      <div class="modal-box" style="max-width:520px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;"><h3 class="modal-title">${e ? esc(e.nombre) : 'Nuevo ' + c.uno}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
         <div class="field"><label>Nombre <span class="dc-req">*</span></label><input id="fzc-nombre" maxlength="120" value="${esc(e ? e.nombre : '')}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); fzCatGuardar(); }" /></div>
         ${esProd ? '' : `
@@ -20533,9 +20592,7 @@ function fzCatForm(tipo, id, desdeViaje){
         </div>
         <div class="field"><label>Forma de pago habitual</label><select id="fzc-pago"><option value="">—</option>${pagos.map(p => `<option value="${esc(p)}"${e && e.formaPago === p ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></div>
         <div class="field"><label>Notas</label><textarea id="fzc-notas" rows="2" maxlength="400">${esc(e ? e.notas : '')}</textarea></div>
-        ${tipo === 'proveedores' ? (e
-          ? `<div class="field"><label>Productos que vende y sus precios <small style="color:var(--mutedFaint);font-weight:400;">· informativo: no cambia los viajes. Para actualizar un precio, añade una línea nueva con su fecha y la anterior queda en el historial.</small></label><div id="fzc-precios">${fzPreciosHtml(e.id)}</div></div>`
-          : '<div style="font-size:12.5px;color:var(--mutedFaint);margin:-4px 0 12px;">Crea el proveedor y después podrás apuntar los productos que vende y sus precios.</div>') : ''}`}
+        ${tipo === 'proveedores' ? '<div style="font-size:12.5px;color:var(--mutedFaint);margin:-4px 0 12px;">Crea el proveedor y después podrás apuntar los productos que vende y sus precios.</div>' : ''}`}
         <div id="fzc-error" style="color:var(--danger);font-size:12.5px;min-height:16px;margin-bottom:8px;"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">
           ${e ? `<button class="btn btn-ghost" style="margin-right:auto;" onclick="fzCatArchivar(${e.archived ? 'false' : 'true'})">${e.archived ? 'Recuperar' : 'Archivar'}</button>` : ''}
@@ -20563,6 +20620,7 @@ async function fzCatGuardar(){
   lista.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
   closeModal();
   appToast(`${c.unoT} guardado.`, 'ok');
+  if (S.view === 'cat' && !ctx.id) { S.formDirty = false; fzCatForm('proveedores', nuevo.id); return; }   // recién creado: se queda en su pantalla para apuntar sus productos y precios
   if (ctx.desdeViaje && S.view === 'form') {   // viene del formulario de un viaje: se recoge lo escrito, se repinta y queda elegido
     const f = S.form; f.fecha = fzV('fz-fecha') || f.fecha;
     fzGuardarBorradorForm();
@@ -20570,7 +20628,7 @@ async function fzCatGuardar(){
     renderTab();
     if (ctx.tipo === 'proveedores') fzFormProveedor(); else if (ctx.tipo === 'clientes') fzFormCliente(); else fzFormPrecios();
     S.formDirty = true;
-  } else renderTab();
+  } else fzCatCerrar();
 }
 // Guarda en S.form lo que haya en las casillas del formulario (para repintarlo sin perder lo escrito)
 function fzGuardarBorradorForm(){
@@ -20586,7 +20644,7 @@ async function fzCatArchivar(archivar){
   const { error } = await supabaseClient.from(c.tabla).update({ archived: !!archivar }).eq('id', ctx.id);
   if (error) { const e = document.getElementById('fzc-error'); if (e) e.textContent = 'No se pudo: ' + error.message; return; }
   const e = S[ctx.tipo].find(x => x.id === ctx.id); if (e) e.archived = !!archivar;
-  closeModal(); appToast(archivar ? `${c.unoT} archivado: ya no sale al crear viajes.` : `${c.unoT} recuperado.`, 'ok'); renderTab();
+  appToast(archivar ? `${c.unoT} archivado: ya no sale al crear viajes.` : `${c.unoT} recuperado.`, 'ok'); fzCatCerrar();
 }
 // Eliminar: solo lo que está archivado y no tiene ningún viaje
 async function fzCatEliminar(){
@@ -20599,7 +20657,7 @@ async function fzCatEliminar(){
   const { error } = await supabaseClient.from(c.tabla).delete().eq('id', e.id);
   if (error) { if (err) err.textContent = 'No se pudo eliminar: ' + error.message; return; }
   S[ctx.tipo] = S[ctx.tipo].filter(x => x.id !== e.id);
-  closeModal(); appToast(`${c.unoT} eliminado.`, 'ok'); renderTab();
+  appToast(`${c.unoT} eliminado.`, 'ok'); fzCatCerrar();
 }
 // ---------------------------------------------------------------- Dashboard
 /* Mismo estilo que los dashboards de Almacén y Transporte: periodo y filtros arriba, cifras con su comparación con el periodo anterior,
