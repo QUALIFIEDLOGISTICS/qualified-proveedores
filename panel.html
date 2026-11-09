@@ -2266,6 +2266,9 @@
   .fz-kpis span,.fz-tile span{font-size:12px;color:var(--mutedFaint);}
   .fz-kpis .ben{border-color:color-mix(in srgb,var(--primary) 35%,var(--border));background:color-mix(in srgb,var(--primary) 5%,var(--panel));}
   .fz-calc{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:6px;}
+  .fz-seg{display:inline-flex;gap:2px;flex-wrap:wrap;background:var(--panel2);border:1px solid var(--border);border-radius:11px;padding:3px;}
+  .fz-seg button{border:none;background:none;padding:7px 14px;border-radius:8px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;font-family:var(--body);white-space:nowrap;}
+  .fz-seg button.on{background:var(--panel);color:var(--primary);box-shadow:0 1px 3px rgba(27,58,107,.16);}
   /* Formulario de viaje: pasos a la izquierda y resumen fijo a la derecha */
   .fz-vj{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:0 20px;align-items:start;}
   .fz-vj-main{min-width:0;}
@@ -20040,7 +20043,7 @@ const FZ_FORMATOS = ['Redonda', 'Rectangular', 'Ensilada'];   // formato de la b
 const FZ_MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 function fzS(){
   return (window.__fz = window.__fz || { cargado: false, cargando: false, error: '', sec: 'viajes', view: 'lista', viajes: [], proveedores: [], clientes: [], productos: [], precios: [], preciosOk: true,
-    q: '', anio: today().slice(0, 4), mes: today().slice(5, 7), fprov: '', fcli: '', producto: '', formato: '', pend: false, cq: '', archivados: false, da: today().slice(0, 4), dm: '', df: { producto: '', formato: '', prov: '', cli: '', reg: '' }, form: null, formDirty: false });
+    q: '', anio: today().slice(0, 4), mes: today().slice(5, 7), fprov: '', fcli: '', producto: '', formato: '', pend: false, cq: '', archivados: false, da: today().slice(0, 4), dm: '', dvista: 'resumen', dmet: 'beneficio', dtramo: false, df: { producto: '', formato: '', prov: '', cli: '', reg: '' }, form: null, formDirty: false });
 }
 const fzR2 = n => Math.round((Number(n) || 0) * 100) / 100;
 const fzNorm = s => String(s == null ? '' : s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -20912,6 +20915,144 @@ function fzConclusiones(list, T, TA, cubos, M){
   if (perd.length) out.push(`<b>${perd.length}</b> viaje${perd.length === 1 ? '' : 's'} con pérdidas: ${eur(perd.reduce((s, v) => s + fzCalc(v).beneficio, 0))} en total.`);
   return out;
 }
+/* ---- Comparar años ----
+   Mismo Dashboard, otra vista: cada año frente a los demás (con los filtros de producto, formato, proveedor, cliente y región).
+   Una sola medida a la vez (beneficio, margen, toneladas, venta o beneficio por tonelada) para el gráfico, el mes a mes y las tablas. */
+const FZ_METRICAS = [['beneficio', 'Beneficio'], ['margen', 'Margen %'], ['tn', 'Toneladas'], ['venta', 'Venta'], ['bent', 'Beneficio por t']];
+function fzDashVista(v){ fzS().dvista = v; renderTab(); }
+function fzDashMetrica(m){ fzS().dmet = m; renderTab(); }
+function fzDashTramo(on){ fzS().dtramo = !!on; renderTab(); }
+// Valor de una medida en un grupo de viajes (resultado de fzTot o de fzGrupo)
+const fzMetVal = (m, e) => !e ? null : m === 'margen' ? (e.venta > 0 ? e.beneficio / e.venta * 100 : null) : m === 'bent' ? (e.tnT > 0 ? e.benT / e.tnT : null) : m === 'tn' ? e.tn : m === 'venta' ? e.venta : e.beneficio;
+const fzMetTxt = (m, v) => v == null || !isFinite(v) ? '—' : m === 'margen' ? fzNum(v, 1) + ' %' : m === 'tn' ? fzNum(v, 1) + ' t' : m === 'bent' ? dashEur(v) + '/t' : dashEur(v);
+const fzMetEje = (m, v) => m === 'margen' ? Math.round(v) + ' %' : m === 'tn' ? fzNum(v, 0) : dashCorto(v);
+const fzColorAnio = i => FZ_PALETA[i % FZ_PALETA.length];
+function fzBarrasAniosSvg(items, m){
+  const W = 760, H = 240, pl = 58, pr = 10, pt = 26, pb = 30;
+  const vals = items.map(i => i.v).filter(v => v != null && isFinite(v));
+  if (!vals.length) return '<div class="dash-vacio">Sin datos para esta medida.</div>';
+  const min = Math.min(0, ...vals), max = Math.max(0, ...vals), span = (max - min) || 1, mejor = Math.max(...vals);
+  const y = v => pt + (H - pt - pb) * (1 - (v - min) / span);
+  const n = items.length, paso = (W - pl - pr) / n, bw = Math.min(76, paso * 0.62);
+  const ticks = [0, .5, 1].map(f => min + span * f);
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;" role="img" aria-label="${esc(FZ_METRICAS.find(x => x[0] === m)[1])} de cada año">
+    ${ticks.map(v => `<line x1="${pl}" x2="${W - pr}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="var(--border)"/><text x="${pl - 6}" y="${(y(v) + 3.5).toFixed(1)}" text-anchor="end" font-size="10.5" fill="var(--mutedFaint)">${fzMetEje(m, v)}</text>`).join('')}
+    ${items.map((it, i) => {
+      const x0 = pl + i * paso + paso / 2, lab = `<text x="${x0.toFixed(1)}" y="${H - 9}" text-anchor="middle" font-size="12" font-weight="700" fill="var(--muted)">${esc(it.etq)}</text>`;
+      if (it.v == null || !isFinite(it.v)) return lab;
+      const y0 = y(0), y1 = y(it.v), top = Math.min(y0, y1), alto = Math.max(1.5, Math.abs(y0 - y1));
+      const col = it.v < 0 ? 'var(--danger)' : (it.v === mejor && vals.length > 1 ? FZ_VERDE : DASH_COLORES.mov || FZ_PALETA[0]);
+      return `<rect x="${(x0 - bw / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${alto.toFixed(1)}" rx="4" fill="${col}" opacity="${it.parcial ? .55 : 1}"><title>${esc(it.etq)}${it.parcial ? ' (en curso)' : ''}: ${esc(fzMetTxt(m, it.v))}</title></rect>
+        <text x="${x0.toFixed(1)}" y="${(it.v >= 0 ? top - 6 : top + alto + 13).toFixed(1)}" text-anchor="middle" font-size="12" font-weight="800" fill="${it.v < 0 ? 'var(--danger)' : 'var(--text)'}">${esc(fzMetTxt(m, it.v))}</text>${lab}`;
+    }).join('')}
+  </svg>`;
+}
+const FZ_MES3 = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+function fzLineasAniosSvg(series, m){
+  const W = 760, H = 250, pl = 58, pr = 14, pt = 16, pb = 28;
+  const vals = series.flatMap(s => s.pts).filter(v => v != null && isFinite(v));
+  if (!vals.length) return '<div class="dash-vacio">Sin datos para esta medida.</div>';
+  let min = Math.min(0, ...vals), max = Math.max(...vals); if (max <= min) max = min + 1;
+  const x = i => pl + i * (W - pl - pr) / 11, y = v => pt + (H - pt - pb) * (1 - (v - min) / (max - min));
+  const ticks = [0, .25, .5, .75, 1].map(f => min + (max - min) * f);
+  const trazo = s => { let d = '', ab = false; s.pts.forEach((v, i) => { if (v == null || !isFinite(v)) { ab = false; return; } d += `${ab ? 'L' : 'M'}${x(i).toFixed(1)} ${y(v).toFixed(1)} `; ab = true; }); return d; };
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;" role="img" aria-label="Mes a mes, año contra año">
+    ${ticks.map(v => `<line x1="${pl}" x2="${W - pr}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="var(--border)"/><text x="${pl - 6}" y="${(y(v) + 3.5).toFixed(1)}" text-anchor="end" font-size="10.5" fill="var(--mutedFaint)">${fzMetEje(m, v)}</text>`).join('')}
+    ${min < 0 ? `<line x1="${pl}" x2="${W - pr}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="var(--mutedFaint)" stroke-dasharray="3 3"/>` : ''}
+    ${series.map(s => `<path d="${trazo(s)}" fill="none" stroke="${s.color}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>${s.pts.map((v, i) => v == null || !isFinite(v) ? '' : `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3.4" fill="${s.color}"><title>${esc(s.nombre)} · ${FZ_MES3[i]}: ${esc(fzMetTxt(m, v))}</title></circle>`).join('')}`).join('')}
+    ${FZ_MES3.map((t, i) => `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="var(--mutedFaint)">${t}</text>`).join('')}
+  </svg>`;
+}
+// Tabla de «cada fila (producto, formato, cliente…) en cada año» con la medida elegida; en verde el mejor año de cada fila
+function fzMatrizAniosHtml(titulo, sub, list, clave, etiqueta, anios, m, primera, maxFilas){
+  const total = fzGrupo(list, clave, etiqueta);
+  const orden = total.slice().sort((a, b) => (fzMetVal(m, b) == null ? -Infinity : fzMetVal(m, b)) - (fzMetVal(m, a) == null ? -Infinity : fzMetVal(m, a)));
+  const filas = maxFilas ? orden.slice(0, maxFilas) : orden;
+  if (!filas.length) return '';
+  const porAnio = Object.fromEntries(anios.map(y => [y, new Map(fzGrupo(list.filter(v => v.fecha.startsWith(y)), clave, etiqueta).map(e => [e.k, e]))]));
+  const cuerpo = filas.map(f => {
+    const vs = anios.map(y => fzMetVal(m, porAnio[y].get(f.k))), validos = vs.filter(v => v != null && isFinite(v)), mejor = validos.length > 1 ? Math.max(...validos) : null;
+    return `<tr class="cg-row"><td data-sort-value="${esc(f.etq)}"><b>${esc(f.etq)}</b></td>${vs.map(v => `<td data-sort-value="${v == null ? '' : v}" style="text-align:right;white-space:nowrap;${v != null && v === mejor ? 'font-weight:800;color:var(--success);' : v == null ? 'color:var(--mutedFaint);' : ''}">${esc(fzMetTxt(m, v))}</td>`).join('')}<td data-sort-value="${fzMetVal(m, f) == null ? '' : fzMetVal(m, f)}" style="text-align:right;white-space:nowrap;font-weight:700;border-left:1px solid var(--border);">${esc(fzMetTxt(m, fzMetVal(m, f)))}</td></tr>`;
+  }).join('');
+  return `<div class="card cg-compacta" style="padding:0;overflow:hidden;margin-bottom:14px;"><div style="padding:12px 16px;border-bottom:1px solid var(--border);"><div style="font-family:var(--display);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:.3px;">${titulo}</div>${sub ? `<div style="font-size:12px;color:var(--muted);margin-top:2px;">${sub}</div>` : ''}</div><div style="overflow-x:auto;"><table class="tf-table">
+    <thead><tr>${thSort(primera, 'text')}${anios.map(y => thSort(y, 'number', 'style="text-align:right;"')).join('')}${thSort('Total', 'number', 'style="text-align:right;border-left:1px solid var(--border);"')}</tr></thead>
+    <tbody>${cuerpo}</tbody></table></div>${maxFilas && orden.length > maxFilas ? `<div class="dash-nota" style="padding:0 16px 12px;">Se enseñan los ${maxFilas} primeros de ${orden.length}.</div>` : ''}</div>`;
+}
+function fzAniosHtml(){
+  const S = fzS(), M = fzMaps(), hoy = today(), m = S.dmet || 'beneficio', anioAct = hoy.slice(0, 4);
+  let list = fzFiltrar(null, null, '');
+  if (S.dtramo) list = list.filter(v => v.fecha.slice(5) <= hoy.slice(5));   // cada año solo hasta el mismo día de hoy: así el año en curso se compara en igualdad
+  const anios = [...new Set(list.map(v => v.fecha.slice(0, 4)))].sort();
+  const dmy = `${hoy.slice(8)}/${hoy.slice(5, 7)}`;
+  const chips = `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+      <div class="fz-seg">${FZ_METRICAS.map(([k, t]) => `<button type="button" class="${m === k ? 'on' : ''}" onclick="fzDashMetrica('${k}')">${t}</button>`).join('')}</div>
+      <label class="dr-chk" style="margin:0;white-space:nowrap;" title="Compara cada año solo hasta el ${dmy}, para que el año en curso no salga ventaja ni desventaja"><input type="checkbox" ${S.dtramo ? 'checked' : ''} onchange="fzDashTramo(this.checked)" /> Cada año solo hasta el ${dmy}</label>
+    </div>`;
+  if (!anios.length) return chips + '<div class="card"><div class="dash-vacio" style="padding:30px;text-align:center;">No hay viajes con estos filtros.</div></div>';
+  const datos = anios.map((y, i) => { const l = list.filter(v => v.fecha.startsWith(y)); return { y, l, T: fzTot(l), parcial: y === anioAct && !S.dtramo, color: fzColorAnio(i) }; });
+  const val = d => fzMetVal(m, d.T);
+  const mejorDe = fn => { const v = datos.map(fn).filter(x => x != null && isFinite(x)); return v.length > 1 ? Math.max(...v) : null; };
+  const mejBen = mejorDe(d => d.T.beneficio), mejMar = mejorDe(d => fzMetVal('margen', d.T)), mejTn = mejorDe(d => d.T.tn), mejBt = mejorDe(d => fzMetVal('bent', d.T));
+  const etqAnio = d => d.y + (d.parcial ? ' (en curso)' : '');
+  // ---- Tabla resumen por año
+  const filaAnio = (d, i) => {
+    const T = d.T, mar = fzMetVal('margen', T), bt = fzMetVal('bent', T), ant = i > 0 ? datos[i - 1].T : null, p = ant && ant.beneficio ? (T.beneficio - ant.beneficio) / Math.abs(ant.beneficio) * 100 : null;
+    const top = (v, mejor) => v != null && v === mejor ? ' style="text-align:right;white-space:nowrap;font-weight:800;color:var(--success);"' : ' style="text-align:right;white-space:nowrap;"';
+    return `<tr class="cg-row"><td data-sort-value="${d.y}"><b>${esc(etqAnio(d))}</b></td>
+      <td data-sort-value="${T.n}" style="text-align:right;">${T.n}</td>
+      <td data-sort-value="${T.tn}"${top(T.tn, mejTn)}>${fzNum(T.tn, 1)} t</td>
+      <td data-sort-value="${T.venta}" style="text-align:right;white-space:nowrap;">${dashEur(T.venta)}</td>
+      <td data-sort-value="${T.compra}" style="text-align:right;white-space:nowrap;">${dashEur(T.compra)}</td>
+      <td data-sort-value="${T.flete}" style="text-align:right;white-space:nowrap;">${dashEur(T.flete)}</td>
+      <td data-sort-value="${T.beneficio}"${top(T.beneficio, mejBen)}>${dashEur(T.beneficio)}</td>
+      <td data-sort-value="${mar == null ? '' : mar}"${top(mar, mejMar)}>${fzMetTxt('margen', mar)}</td>
+      <td data-sort-value="${bt == null ? '' : bt}"${top(bt, mejBt)}>${fzMetTxt('bent', bt)}</td>
+      <td data-sort-value="${p == null ? '' : p}" style="text-align:right;white-space:nowrap;color:${p == null ? 'var(--mutedFaint)' : p >= 0 ? 'var(--success)' : 'var(--danger)'};">${p == null ? '—' : (p >= 0 ? '▲ ' : '▼ ') + fzNum(Math.abs(p), 1) + ' %'}</td></tr>`;
+  };
+  const tablaAnios = `<div class="card cg-compacta" style="padding:0;overflow:hidden;margin-bottom:14px;"><div style="padding:12px 16px;border-bottom:1px solid var(--border);"><div style="font-family:var(--display);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:.3px;">Año por año</div><div style="font-size:12px;color:var(--muted);margin-top:2px;">En verde, el mejor año de cada columna. ${datos.some(d => d.parcial) ? `${anioAct} está en curso: no es un año completo (marca «Cada año solo hasta el ${dmy}» para compararlo en igualdad).` : ''}</div></div><div style="overflow-x:auto;"><table class="tf-table">
+    <thead><tr>${thSort('Año', 'number')}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Toneladas', 'number', 'style="text-align:right;"')}${thSort('Venta', 'number', 'style="text-align:right;"')}${thSort('Compra', 'number', 'style="text-align:right;"')}${thSort('Flete', 'number', 'style="text-align:right;"')}${thSort('Beneficio', 'number', 'style="text-align:right;"')}${thSort('Margen', 'number', 'style="text-align:right;"')}${thSort('Beneficio por t', 'number', 'style="text-align:right;"')}${thSort('Beneficio vs año anterior', 'number', 'style="text-align:right;"')}</tr></thead>
+    <tbody>${datos.map(filaAnio).join('')}</tbody></table></div></div>`;
+  // ---- Gráficos
+  const nomM = FZ_METRICAS.find(x => x[0] === m)[1];
+  const cardBarras = `<div class="card deca-card dash-card">${decaCardHead('list', `${nomM} de cada año`, 'El año más alto, en verde · el año en curso sale más claro')}
+    <div class="deca-card-body">${fzBarrasAniosSvg(datos.map(d => ({ etq: d.y, v: val(d), parcial: d.parcial })), m)}</div></div>`;
+  const mesAct = Number(hoy.slice(5, 7));
+  const series = datos.map(d => ({ nombre: d.y, color: d.color, ult: Math.max(0, ...d.l.map(v => Number(v.fecha.slice(5, 7)))), pts: [] }));
+  series.forEach(s => { const d = datos.find(x => x.y === s.nombre); s.pts = Array.from({ length: 12 }, (_, i) => {
+    if (i + 1 > s.ult || (d.y === anioAct && i + 1 > mesAct)) return null;   // después del último mes con viajes (o de los meses que aún no han llegado) no se pinta
+    const lm = d.l.filter(v => Number(v.fecha.slice(5, 7)) === i + 1);
+    return m === 'margen' || m === 'bent' ? (lm.length ? fzMetVal(m, fzTot(lm)) : null) : fzMetVal(m, fzTot(lm)); }); });
+  const cardMeses = `<div class="card deca-card dash-card">${decaCardHead('calendar', `${nomM}, mes a mes`, 'Cada línea es un año: se ve en qué meses se gana más y si mejora o empeora año tras año')}
+    <div class="deca-card-body">${fzLineasAniosSvg(series, m)}<div class="dash-leyenda">${datos.map(d => `<span><i style="background:${d.color}"></i>${esc(etqAnio(d))}</span>`).join('')}</div></div></div>`;
+  // ---- Conclusiones
+  const concl = [];
+  const mejor = (fn) => datos.filter(d => fn(d) != null && isFinite(fn(d))).sort((a, b) => fn(b) - fn(a))[0];
+  if (datos.length < 2) concl.push(`Solo hay viajes de <b>${datos[0].y}</b>: cuando haya más de un año, aquí se compararán.`);
+  else {
+    const b = mejor(d => d.T.beneficio), mg = mejor(d => fzMetVal('margen', d.T)), t = mejor(d => d.T.tn);
+    if (b) concl.push(`El año que más <b>beneficio</b> dejó fue <b>${esc(etqAnio(b))}</b>: ${dashEur(b.T.beneficio)} en ${b.T.n} viajes.`);
+    if (mg) concl.push(`El de mayor <b>margen</b> fue <b>${esc(etqAnio(mg))}</b>: ${fzMetTxt('margen', fzMetVal('margen', mg.T))} de lo vendido${mg.T.tnT ? ` (${dashEur(mg.T.benT / mg.T.tnT)} por tonelada)` : ''}.`);
+    if (t) concl.push(`Se movió más forraje en <b>${esc(etqAnio(t))}</b>: ${fzNum(t.T.tn, 1)} toneladas.`);
+    const u = datos[datos.length - 1], a = datos[datos.length - 2];
+    if (a.T.beneficio) { const p = (u.T.beneficio - a.T.beneficio) / Math.abs(a.T.beneficio) * 100; concl.push(`${esc(etqAnio(u))} frente a ${esc(etqAnio(a))}: el beneficio ${p >= 0 ? 'sube' : 'baja'} un <b>${fzNum(Math.abs(p), 1)} %</b> (${dashEur(a.T.beneficio)} → ${dashEur(u.T.beneficio)})${u.parcial ? ', aunque ' + u.y + ' aún no ha terminado' : ''}.`); }
+    const mu = fzMetVal('margen', u.T), ma = fzMetVal('margen', a.T);
+    if (mu != null && ma != null) concl.push(`El margen ${mu >= ma ? 'mejora' : 'empeora'} de ${fzMetTxt('margen', ma)} a <b>${fzMetTxt('margen', mu)}</b>.`);
+  }
+  const cardConcl = `<div class="card deca-card dash-card">${decaCardHead('info', 'Lo que dicen los años', 'Resumen escrito con los números de arriba')}<div class="deca-card-body">${concl.map(t => `<div class="dash-alerta"><i></i><span>${t}</span></div>`).join('')}</div></div>`;
+  // ---- Tablas por producto, formato, cliente y proveedor
+  const tProd = fzMatrizAniosHtml('Por producto', `${nomM} de cada producto en cada año`, list, v => v.productoId || '', k => (M.prod.get(k) || {}).nombre || 'Sin producto', anios.map(String), m, 'Producto');
+  const tForm = list.some(v => v.formato) ? fzMatrizAniosHtml('Por formato de bala', `${nomM} de cada formato en cada año`, list, v => v.formato || '', k => k || 'Sin formato', anios.map(String), m, 'Formato') : '';
+  const tCli = fzMatrizAniosHtml('Por cliente', `${nomM} de cada cliente en cada año`, list, v => v.clienteId || '', k => (M.cli.get(k) || {}).nombre || 'Sin cliente', anios.map(String), m, 'Cliente', 20);
+  const tProv = fzMatrizAniosHtml('Por proveedor', `${nomM} de cada proveedor en cada año`, list, v => v.proveedorId || '', k => (M.prov.get(k) || {}).nombre || 'Sin proveedor', anios.map(String), m, 'Proveedor', 20);
+  return `${chips}
+    ${tablaAnios}
+    <div class="dash-grid">
+      <div class="dash-main">${cardBarras}${cardMeses}</div>
+      <div class="dash-side">${cardConcl}</div>
+    </div>
+    <div style="margin-top:22px;font-family:var(--display);font-weight:800;font-size:15px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px;">Detalle por año</div>
+    ${tProd}${tForm}${tCli}${tProv}`;
+}
 function fzDashboardHtml(){
   const S = fzS(), M = fzMaps(), R = fzRango(), f = S.df;
   const list = fzFiltrar(R.d, R.h, R.mes), T = fzTot(list);
@@ -20927,19 +21068,21 @@ function fzDashboardHtml(){
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.list, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;"><div class="deca-banner-title">Dashboard</div><div class="deca-banner-sub">Lo comprado, vendido y ganado: cifras frente al periodo anterior, gráficos, rankings, avisos y conclusiones.</div></div>
+      <div class="deca-banner-actions"><div class="fz-seg"><button type="button" class="${S.dvista !== 'anios' ? 'on' : ''}" onclick="fzDashVista('resumen')">Resumen</button><button type="button" class="${S.dvista === 'anios' ? 'on' : ''}" onclick="fzDashVista('anios')">Comparar años</button></div></div>
     </div>`;
   const barra = `<div class="card deca-toolbar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-    ${selT('da', 'Todos los años', anios.map(a => [a, a]))}
-    ${selT('dm', 'Todos los meses', FZ_MESES.map((m, i) => [String(i + 1).padStart(2, '0'), m.charAt(0).toUpperCase() + m.slice(1)]))}
+    ${S.dvista === 'anios' ? '' : `${selT('da', 'Todos los años', anios.map(a => [a, a]))}
+    ${selT('dm', 'Todos los meses', FZ_MESES.map((m, i) => [String(i + 1).padStart(2, '0'), m.charAt(0).toUpperCase() + m.slice(1)]))}`}
     ${sel('fzd-prod', 'producto', 'Todos los productos', S.productos.map(p => [p.id, p.nombre]))}
     ${sel('fzd-fmt', 'formato', 'Todos los formatos', FZ_FORMATOS.map(x => [x, x]))}
     ${sel('fzd-prov', 'prov', 'Todos los proveedores', S.proveedores.map(p => [p.id, p.nombre]))}
     ${sel('fzd-cli', 'cli', 'Todos los clientes', S.clientes.map(c => [c.id, c.nombre]))}
     ${sel('fzd-reg', 'reg', 'Todas las regiones', regiones.map(r => [r, r]))}
     ${hayFiltro ? `<button class="btn btn-ghost" onclick="fzDashLimpiar()">Quitar filtros</button>` : ''}
-    <span style="margin-left:auto;font-size:12.5px;color:var(--muted);">${R.d ? `${fmtDateDMY(R.d)} – ${fmtDateDMY(R.h)}` : R.mes ? `${FZ_MESES[Number(R.mes) - 1]} de todos los años` : 'Todas las fechas'}</span>
+    <span style="margin-left:auto;font-size:12.5px;color:var(--muted);">${S.dvista === 'anios' ? 'Todos los años' : R.d ? `${fmtDateDMY(R.d)} – ${fmtDateDMY(R.h)}` : R.mes ? `${FZ_MESES[Number(R.mes) - 1]} de todos los años` : 'Todas las fechas'}</span>
   </div>`;
   if (!S.viajes.length) return banner + barra + `<div class="card"><div class="dash-vacio" style="padding:30px;text-align:center;">Todavía no hay viajes.</div></div>`;
+  if (S.dvista === 'anios') return banner + barra + fzAniosHtml();
   const ref = TA ? 'vs periodo anterior' : '';
   const kpi = (icono, titulo, valor, sub, delta, spark, color, alIr) => `
     <div class="dash-kpi${alIr ? ' clic' : ''}" ${alIr ? `onclick="${alIr}"` : ''}>
