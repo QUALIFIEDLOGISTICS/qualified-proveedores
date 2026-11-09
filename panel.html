@@ -2258,6 +2258,14 @@
     main{padding:16px !important;min-width:0 !important;}
     .fin-table{min-width:1220px;}
   }
+  /* Forrajes: cifras de arriba, tarjetas del resumen y cuadro de beneficio del formulario */
+  .fz-kpis,.fz-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px;}
+  .fz-kpis>div,.fz-tile,.fz-calc>div{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:10px 14px;display:flex;flex-direction:column;gap:2px;min-width:0;}
+  .fz-kpis small,.fz-tile small,.fz-calc small{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);}
+  .fz-kpis b,.fz-tile b,.fz-calc b{font-family:var(--display);font-size:19px;font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .fz-kpis span,.fz-tile span{font-size:12px;color:var(--mutedFaint);}
+  .fz-kpis .ben{border-color:color-mix(in srgb,var(--primary) 35%,var(--border));background:color-mix(in srgb,var(--primary) 5%,var(--panel));}
+  .fz-calc{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:6px;}
   /* ===== Móvil y pantallas táctiles =====
      Solo manejo (zonas de pulsación, zoom del teclado, desbordes, ventanas); el contenido no cambia. */
   html{-webkit-text-size-adjust:100%;text-size-adjust:100%;}
@@ -2279,6 +2287,7 @@
     .tl-cols{flex-direction:column;}
     .tl-col{flex:0 0 auto !important;}
     .tl-col.tl-ocultar{display:none;}
+    .dr-g > .field{min-width:0;}
     /* Listas de recepciones y expediciones: la columna de acciones (Albarán, Confirmar, ⋮) se queda fija a la derecha, sin tener que deslizar toda la tabla */
     .tf-table th.td-acc,.tf-table td.td-acc{position:sticky;right:0;z-index:2;background:var(--panel);box-shadow:-10px 0 10px -10px rgba(15,30,60,.28);}
     .tf-table th.td-acc{background:var(--panel2);}
@@ -3887,6 +3896,7 @@ const TABS = [
   {id:'comercial', label:'Comercial', group:'Comercial'},
   {id:'administracion', label:'Contactos', group:'Administración'},
   {id:'fichajes', label:'Fichajes', group:'Administración'},
+  {id:'forrajes', label:'Forrajes', group:'Forrajes'},
 ];
 const ADMIN_TAB = {id:'admin', label:'Gestión de Permisos', group:'Configuración'};
 // Apartados de Transporte y Comercial que se dan por separado. Se guardan en
@@ -3959,6 +3969,7 @@ function switchWarehouse(id){
 }
 function goHome(){
   if (!crmConfirmLeaveForm()) return;
+  if (!fzConfirmLeave()) return;
   if (window.__showingContactoDetail && !contactoConfirmLeaveEdit()) return;
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
@@ -3986,6 +3997,7 @@ async function setTab(id){
   if (id !== 'admin' && !allowed.includes(id)) return;
   if (id === 'admin' && !PROFILE.isAdmin) return;
   if (!crmConfirmLeaveForm()) return;
+  if (!fzConfirmLeave()) return;
   if (window.__showingContactoDetail && !contactoConfirmLeaveEdit()) return;
   if (!decaConfirmLeaveForm()) return;
   if (!direccionConfirmLeaveForm()) return;
@@ -4021,6 +4033,7 @@ async function setTab(id){
   if (id === 'trafico') traficoEnterSection((moduleAllowedSections('trafico')[0] || TRAFICO_SECTIONS[0]).id);
   if (id === 'comercial') { window.__comercialSection = (moduleAllowedSections('comercial')[0] || COMERCIAL_SECTIONS[0]).id; window.__comercialView = 'home'; window.__showingContactoDetail = false; resetComercialClientesState(); resetTarifasState(); }
   if (id === 'clientes') { window.__clientesFilterOpen = false; }
+  if (id === 'forrajes') { const S = fzS(); S.sec = 'viajes'; S.view = 'lista'; S.form = null; S.formDirty = false; fzCargar(true); }   // al entrar se vuelven a leer los datos
   if (id === 'admin') {
     window.__adminView = 'list'; window.__adminEditMode = false; window.__adminSearch = '';
     window.__adminFilters = []; window.__adminFilterOpen = false; window.__adminFormDirty = false;
@@ -4043,6 +4056,7 @@ function headerNavItems(){
   // Autónomos ya no tiene entrada propia: está dentro de Transporte (quien solo tiene Autónomos entra a Transporte directamente en él)
   if (has('trafico') || has('autonomos')) items.push({ label: 'Transporte', go: has('trafico') ? "setTab('trafico')" : "setTab('autonomos')", on: cur === 'trafico' || cur === 'autonomos' });
   if (has('comercial')) items.push({ label: 'Comercial', go: "setTab('comercial')", on: cur === 'comercial' });
+  if (has('forrajes')) items.push({ label: 'Forrajes', go: "setTab('forrajes')", on: cur === 'forrajes' });
   // Administración reúne Contactos, Flota y Fichajes (cada uno con su permiso).
   const secs = has('administracion') ? [sectionAllowedFor(PROFILE, 'administracion', 'contactos') && 'contactos', sectionAllowedFor(PROFILE, 'administracion', 'flota') && 'flota'].filter(Boolean) : [];
   if (has('fichajes')) secs.push('fichajes');
@@ -4109,7 +4123,7 @@ function renderHeader(){
   // Los módulos con banner propio en cada pantalla (Almacén, Transporte, Comercial, Administración)
   // no repiten el título grande: ya se ve en la barra de arriba y en el banner.
   const titleWrap = document.getElementById('page-title-wrap');
-  if (titleWrap) titleWrap.style.display = (!window.__kioskMode && ['inicio', 'clientes', 'citas', 'stock', 'almacendash', 'documentos', 'almacenconfig', 'trafico', 'autonomos', 'comercial', 'administracion', 'admin'].includes(currentTab)) ? 'none' : '';
+  if (titleWrap) titleWrap.style.display = (!window.__kioskMode && ['inicio', 'clientes', 'citas', 'stock', 'almacendash', 'documentos', 'almacenconfig', 'trafico', 'autonomos', 'comercial', 'forrajes', 'administracion', 'admin'].includes(currentTab)) ? 'none' : '';
   const titleRow = document.getElementById('wh-title-row');
   if (currentTab === 'inicio') {
     titleRow.innerHTML = `<div style="${PLAIN_TITLE_STYLE}">Inicio</div>`;
@@ -4136,6 +4150,11 @@ function renderHeader(){
     document.getElementById('wh-sub').textContent = 'Jornadas fichadas por cada conductor, con opción de corregirlas · Qualified Logistics';
     return;
   }
+  if (currentTab === 'forrajes') {
+    titleRow.innerHTML = `<div style="${PLAIN_TITLE_STYLE}">Forrajes</div>`;
+    document.getElementById('wh-sub').textContent = '';
+    return;
+  }
   if (currentTab === 'comercial') {
     titleRow.innerHTML = `<div style="${PLAIN_TITLE_STYLE}">Comercial</div>`;
     document.getElementById('wh-sub').textContent = '';
@@ -4156,6 +4175,7 @@ function homeIcon(inner, size, color, strokeWidth){
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="${strokeWidth||2}" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
 }
 const HOME_ICON_PATHS = {
+  leaf: '<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"></path><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"></path>',
   users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line>',
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line>',
@@ -4213,6 +4233,7 @@ const HOME_MODULES = {
   admin: { color: '#1B3A6B', icon: 'shield', description: 'Usuarios y permisos de acceso al panel.' },
   administracion: { color: '#5C6670', icon: 'settings', description: 'Razón social, NIF y dirección de tus contactos.' },
   flota: { color: '#C1443D', icon: 'truck', description: 'Tractoras y remolques con sus vencimientos.' },
+  forrajes: { color: '#6B8E23', icon: 'leaf', description: 'Compra y venta de paja y forrajes sin stock: viajes, proveedores, clientes y beneficio.' },
 };
 const HOME_GROUPS = {
   'Almacén': { icon: 'home' },
@@ -14398,6 +14419,7 @@ function renderTab(){
   else if (currentTab === 'autonomos') bodyHtml = tplAutonomos();
   else if (currentTab === 'trafico') bodyHtml = tplTrafico();
   else if (currentTab === 'comercial') bodyHtml = tplComercial();
+  else if (currentTab === 'forrajes') bodyHtml = tplForrajes();
   else if (currentTab === 'admin') bodyHtml = tplAdmin();
   else if (currentTab === 'fichajes') bodyHtml = tplFichajes();
   else if (currentTab === 'administracion') bodyHtml = tplAdministracion();
@@ -14409,7 +14431,7 @@ function renderTab(){
   const traficoBar = ((currentTab === 'trafico' || currentTab === 'autonomos') && !window.__showingContactoDetail) ? tplTraficoBar() : '';
   const comercialBar = (currentTab === 'comercial' && !window.__showingContactoDetail) ? tplComercialBar() : '';
   const moduleBar = almacenBar || traficoBar || comercialBar;
-  const hideBreadcrumb = (currentTab === 'inicio' && !window.__showingContactoDetail) || (almacenBar && !almacenIsSubpage()) || (traficoBar && !traficoIsSubpage()) || (comercialBar && !comercialIsSubpage()) || (currentTab === 'admin' && window.__adminView !== 'ficha' && !window.__showingContactoDetail);
+  const hideBreadcrumb = currentTab === 'forrajes' || (currentTab === 'inicio' && !window.__showingContactoDetail) || (almacenBar && !almacenIsSubpage()) || (traficoBar && !traficoIsSubpage()) || (comercialBar && !comercialIsSubpage()) || (currentTab === 'admin' && window.__adminView !== 'ficha' && !window.__showingContactoDetail);
   const breadcrumb = hideBreadcrumb ? '' : renderBreadcrumbHtml();
   el.innerHTML = moduleBar + breadcrumb + bodyHtml;
   // en el móvil la barra de secciones se desliza: la sección activa queda a la vista
@@ -19909,6 +19931,519 @@ function kpi(label, value, sub, compact, onclick){
 /* ============================= ACCIONES ============================= */
 /* ============================= MODALES ============================= */
 function closeModal(){ document.getElementById('modal-slot').innerHTML = ''; }
+
+/* ====================================================================================================
+   FORRAJES — negocio paralelo de compra y venta de paja y forrajes, sin stock.
+   Cada viaje: un camión carga en un proveedor y descarga en un cliente. Se compra (€/t), se vende (€/t), se paga el flete y queda el beneficio:
+   beneficio = venta − (compra + flete). Tablas: forraje_viajes, forraje_proveedores, forraje_clientes, forraje_productos (forrajes-schema.sql).
+   ==================================================================================================== */
+const FZ_PAGOS = ['Efectivo', 'Factura contado', 'Factura 15 días', 'Factura 30 días'];
+const FZ_SECCIONES = [['viajes', 'Viajes'], ['proveedores', 'Proveedores'], ['clientes', 'Clientes'], ['productos', 'Productos'], ['resumen', 'Resumen']];
+const FZ_MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+function fzS(){
+  return (window.__fz = window.__fz || { cargado: false, cargando: false, error: '', sec: 'viajes', view: 'lista', viajes: [], proveedores: [], clientes: [], productos: [],
+    q: '', periodo: '', producto: '', pend: false, cq: '', archivados: false, resPeriodo: '', form: null, formDirty: false });
+}
+const fzR2 = n => Math.round((Number(n) || 0) * 100) / 100;
+const fzNorm = s => String(s == null ? '' : s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const fzNum = (n, dec) => Number(n || 0).toLocaleString('es-ES', { maximumFractionDigits: dec == null ? 2 : dec });
+const fzUd = (u, n) => (u === 'balas' ? (Number(n) === 1 ? 'bala' : 'balas') : 't');
+function fzViajeDeFila(r){
+  return { id: r.id, numero: r.numero, fecha: r.fecha, proveedorId: r.proveedor_id || '', clienteId: r.cliente_id || '', zonaCarga: r.zona_carga || '', zonaDescarga: r.zona_descarga || '',
+    camionCarga: r.camion_carga || '', camionDescarga: r.camion_descarga || '', productoId: r.producto_id || '', cantidad: Number(r.cantidad) || 0, unidad: r.unidad || 't',
+    pagoProveedor: r.pago_proveedor || '', facturadoProveedor: !!r.facturado_proveedor, facturaProveedor: r.factura_proveedor || '', telCarga: r.tel_carga || '',
+    pagoCliente: r.pago_cliente || '', facturadoCliente: !!r.facturado_cliente, facturaCliente: r.factura_cliente || '', telDescarga: r.tel_descarga || '',
+    precioCompra: Number(r.precio_compra) || 0, flete: Number(r.flete) || 0, precioVenta: Number(r.precio_venta) || 0, notas: r.notas || '' };
+}
+const fzCatDeFila = r => ({ id: r.id, nombre: r.nombre || '', telefono: r.telefono || '', zona: r.zona || '', formaPago: r.forma_pago || '', notas: r.notas || '', archived: !!r.archived });
+async function fzCargar(forzar){
+  const S = fzS();
+  if (S.cargando || (S.cargado && !forzar)) return;
+  S.cargando = true; S.error = '';
+  // Supabase devuelve como mucho 1000 filas por consulta: se pide por tandas
+  const todo = async mk => {
+    const out = [];
+    for (let from = 0; ; from += 1000) {
+      const r = await mk().range(from, from + 999);
+      if (r.error) throw r.error;
+      (r.data || []).forEach(x => out.push(x));
+      if ((r.data || []).length < 1000) break;
+    }
+    return out;
+  };
+  try {
+    const [v, p, c, pr] = await Promise.all([
+      todo(() => supabaseClient.from('forraje_viajes').select('*').order('fecha', { ascending: false }).order('id')),
+      todo(() => supabaseClient.from('forraje_proveedores').select('*').order('nombre').order('id')),
+      todo(() => supabaseClient.from('forraje_clientes').select('*').order('nombre').order('id')),
+      todo(() => supabaseClient.from('forraje_productos').select('*').order('nombre').order('id')),
+    ]);
+    S.viajes = v.map(fzViajeDeFila); fzOrdenar();
+    S.proveedores = p.map(fzCatDeFila); S.clientes = c.map(fzCatDeFila); S.productos = pr.map(fzCatDeFila);
+    S.cargado = true;
+  } catch (e) {
+    S.error = /relation|does not exist|schema cache/i.test((e && e.message) || '') ? 'Falta ejecutar el SQL «forrajes-schema.sql» en Supabase.' : ((e && e.message) || 'No se pudieron cargar los datos.');
+  }
+  S.cargando = false;
+  if (currentTab === 'forrajes') renderTab();
+}
+function fzOrdenar(){ fzS().viajes.sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)) || (Number(b.numero) || 0) - (Number(a.numero) || 0)); }
+function fzMaps(){
+  const S = fzS(), m = new Map(); const mk = a => { const x = new Map(); a.forEach(e => x.set(e.id, e)); return x; };
+  return { prov: mk(S.proveedores), cli: mk(S.clientes), prod: mk(S.productos), _: m };
+}
+function fzCalc(v){
+  const compra = fzR2(v.cantidad * v.precioCompra), venta = fzR2(v.cantidad * v.precioVenta), flete = fzR2(v.flete);
+  return { compra, venta, flete, beneficio: fzR2(venta - compra - flete) };
+}
+function fzTotales(list){
+  const t = { n: list.length, tn: 0, balas: 0, compra: 0, flete: 0, venta: 0, beneficio: 0 };
+  list.forEach(v => { const c = fzCalc(v); if (v.unidad === 'balas') t.balas += v.cantidad; else t.tn += v.cantidad; t.compra += c.compra; t.flete += c.flete; t.venta += c.venta; t.beneficio += c.beneficio; });
+  ['compra', 'flete', 'venta', 'beneficio'].forEach(k => { t[k] = fzR2(t[k]); });
+  return t;
+}
+function fzIr(sec){
+  if (!fzConfirmLeave()) return;
+  const S = fzS(); S.sec = sec; S.view = 'lista'; S.form = null; S.formDirty = false;
+  renderHeader(); renderTab();
+}
+function fzConfirmLeave(){
+  const S = fzS();
+  if (currentTab === 'forrajes' && S.view === 'form' && S.formDirty) return leaveGuard();
+  return true;
+}
+function fzBarHtml(){
+  const S = fzS();
+  return `<div class="mod-bar" style="display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
+    <div class="mod-bar-t" style="display:flex;gap:2px;flex-wrap:wrap;">${FZ_SECCIONES.map(([id, t]) => moduleTabBtnHtml(`fzIr('${id}')`, t, S.sec === id && S.view !== 'form' || (S.view === 'form' && id === 'viajes'))).join('')}</div>
+  </div>`;
+}
+function tplForrajes(){
+  const S = fzS();
+  if (!S.cargado && !S.cargando && !S.error) setTimeout(() => fzCargar(), 0);
+  let cuerpo;
+  if (S.error) cuerpo = `<div class="card" style="color:var(--danger);padding:24px;text-align:center;">${esc(S.error)}<div style="margin-top:14px;"><button class="btn btn-ghost" onclick="fzS().error=''; fzCargar(true)">Reintentar</button></div></div>`;
+  else if (!S.cargado) cuerpo = `<div class="card dash-sk" style="height:260px;"></div>`;
+  else if (S.view === 'form') { cuerpo = fzFormHtml(); setTimeout(() => { if (fzS().view === 'form') fzFormPrecios(); }, 0); }
+  else if (S.sec === 'viajes') cuerpo = fzViajesHtml();
+  else if (S.sec === 'resumen') cuerpo = fzResumenHtml();
+  else cuerpo = fzCatalogoHtml(S.sec);
+  return `<div style="--bn-accent:var(--primary);">${S.view === 'form' ? '' : fzBarHtml()}${cuerpo}</div>`;
+}
+// ---------------------------------------------------------------- Viajes
+function fzPeriodoOpciones(lista){
+  const meses = [...new Set(lista.map(v => String(v.fecha).slice(0, 7)))].sort().reverse();
+  const anios = [...new Set(meses.map(m => m.slice(0, 4)))];
+  let o = '<option value="">Todo el periodo</option>';
+  anios.forEach(a => {
+    o += `<option value="${a}">Año ${a}</option>`;
+    meses.filter(m => m.startsWith(a)).forEach(m => { o += `<option value="${m}">&nbsp;&nbsp;${FZ_MESES[Number(m.slice(5)) - 1]} ${a}</option>`; });
+  });
+  return o;
+}
+function fzViajesFiltrados(){
+  const S = fzS(), M = fzMaps(), q = fzNorm(S.q).trim();
+  return S.viajes.filter(v => {
+    if (S.periodo && !String(v.fecha).startsWith(S.periodo)) return false;
+    if (S.producto && v.productoId !== S.producto) return false;
+    if (S.pend && v.facturadoProveedor && v.facturadoCliente) return false;
+    if (q) {
+      const p = M.prov.get(v.proveedorId), c = M.cli.get(v.clienteId), pr = M.prod.get(v.productoId);
+      const txt = fzNorm([v.numero, p && p.nombre, c && c.nombre, pr && pr.nombre, v.camionCarga, v.camionDescarga, v.zonaCarga, v.zonaDescarga, v.facturaProveedor, v.facturaCliente, v.notas].join(' '));
+      if (!txt.includes(q)) return false;
+    }
+    return true;
+  });
+}
+function fzFiltro(k, val){ const S = fzS(); S[k] = val; fzRefrescarLista(); }
+function fzRefrescarLista(){
+  const el = document.getElementById('fz-lista'); if (!el) return;
+  el.innerHTML = fzViajesTablaHtml();
+}
+const fzEur = n => eur2(n);
+function fzViajesTablaHtml(){
+  const S = fzS(), M = fzMaps(), list = fzViajesFiltrados(), T = fzTotales(list), MAX = 500, shown = list.slice(0, MAX);
+  const chip = (ok, t) => `<span class="cg-chip" style="${ok ? '' : 'background:color-mix(in srgb,var(--danger) 12%,var(--panel));color:var(--danger);'}" title="${ok ? t + ': facturado' : t + ': sin facturar'}">${t} ${ok ? '✓' : '✗'}</span>`;
+  const filas = shown.map(v => {
+    const p = M.prov.get(v.proveedorId), c = M.cli.get(v.clienteId), pr = M.prod.get(v.productoId), k = fzCalc(v);
+    const sub = (z, cam) => [z, cam].filter(Boolean).join(' · ');
+    return `<tr class="cg-row" style="cursor:pointer;" onclick="fzEditarViaje('${v.id}')">
+      <td data-sort-value="${Number(v.numero) || 0}">${v.numero != null ? v.numero : '—'}</td>
+      <td data-sort-value="${esc(v.fecha)}" style="white-space:nowrap;">${esc(fmtDateDMY(v.fecha))}</td>
+      <td data-sort-value="${esc(p ? p.nombre : '')}"><b>${esc(p ? p.nombre : '—')}</b><div class="cg-ref">${esc(sub(v.zonaCarga, v.camionCarga))}</div></td>
+      <td data-sort-value="${esc(c ? c.nombre : '')}"><b>${esc(c ? c.nombre : '—')}</b><div class="cg-ref">${esc(sub(v.zonaDescarga, v.camionDescarga))}</div></td>
+      <td data-sort-value="${esc(pr ? pr.nombre : '')}">${esc(pr ? pr.nombre : '—')}</td>
+      <td data-sort-value="${v.cantidad}" style="text-align:right;white-space:nowrap;">${fzNum(v.cantidad, 3)} ${fzUd(v.unidad, v.cantidad)}</td>
+      <td data-sort-value="${k.compra}" style="text-align:right;white-space:nowrap;">${fzEur(k.compra)}</td>
+      <td data-sort-value="${k.flete}" style="text-align:right;white-space:nowrap;">${fzEur(k.flete)}</td>
+      <td data-sort-value="${k.venta}" style="text-align:right;white-space:nowrap;">${fzEur(k.venta)}</td>
+      <td data-sort-value="${k.beneficio}" style="text-align:right;white-space:nowrap;font-weight:700;color:${k.beneficio < 0 ? 'var(--danger)' : 'var(--success)'};">${fzEur(k.beneficio)}</td>
+      <td data-sort-value="${(v.facturadoProveedor ? 1 : 0) + (v.facturadoCliente ? 1 : 0)}" style="white-space:nowrap;">${chip(v.facturadoProveedor, 'Prov.')} ${chip(v.facturadoCliente, 'Cli.')}</td>
+      <td class="td-acc" style="text-align:right;white-space:nowrap;"><button type="button" class="deca-act" title="Editar este viaje" onclick="event.stopPropagation(); fzEditarViaje('${v.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button><button type="button" class="deca-act danger" title="Eliminar este viaje" onclick="event.stopPropagation(); fzEliminarViaje('${v.id}')">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button></td>
+    </tr>`;
+  }).join('');
+  const resumen = `<div class="fz-kpis">
+    <div><small>Viajes</small><b>${T.n}</b></div>
+    <div><small>Toneladas</small><b>${fzNum(T.tn, 2)}</b>${T.balas ? `<span>+ ${fzNum(T.balas, 0)} balas</span>` : ''}</div>
+    <div><small>Compra</small><b>${fzEur(T.compra)}</b></div>
+    <div><small>Flete</small><b>${fzEur(T.flete)}</b></div>
+    <div><small>Venta</small><b>${fzEur(T.venta)}</b></div>
+    <div class="ben"><small>Beneficio</small><b style="color:${T.beneficio < 0 ? 'var(--danger)' : 'var(--success)'};">${fzEur(T.beneficio)}</b>${T.tn ? `<span>${fzEur(T.beneficio / T.tn)} / t</span>` : ''}</div>
+  </div>`;
+  if (!list.length) return resumen + `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${S.viajes.length ? 'Ningún viaje coincide con el filtro.' : 'Todavía no hay ningún viaje. Pulsa «Nuevo viaje» para empezar.'}</div>`;
+  return `${resumen}
+    <div class="card cg-compacta" style="padding:0;overflow:hidden;"><div style="overflow-x:auto;"><table class="tf-table">
+      <thead><tr>${thSort('Nº', 'number')}${thSort('Fecha', 'date')}${thSort('Proveedor (carga)', 'text')}${thSort('Cliente (descarga)', 'text')}${thSort('Producto', 'text')}${thSort('Cantidad', 'number', 'style="text-align:right;"')}${thSort('Compra', 'number', 'style="text-align:right;"')}${thSort('Flete', 'number', 'style="text-align:right;"')}${thSort('Venta', 'number', 'style="text-align:right;"')}${thSort('Beneficio', 'number', 'style="text-align:right;"')}${thSort('Facturado', 'number')}<th class="td-acc"></th></tr></thead>
+      <tbody>${filas}</tbody></table></div></div>
+    ${list.length > MAX ? `<div class="dash-nota" style="margin-top:8px;">Se enseñan los ${MAX} viajes más recientes de ${list.length}: afina con el buscador o el periodo para ver el resto.</div>` : ''}`;
+}
+function fzViajesHtml(){
+  const S = fzS(), T = fzTotales(S.viajes);
+  const opt = (v, t, sel) => `<option value="${esc(v)}"${sel ? ' selected' : ''}>${esc(t)}</option>`;
+  return `
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.leaf, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 260px;"><div class="deca-banner-title">Viajes de forrajes</div><div class="deca-banner-sub">Cada camión que carga en un proveedor y descarga en un cliente: se compra, se vende y queda el beneficio. Sin stock.</div></div>
+      <div class="deca-banner-actions">
+        <div class="deca-stat"><b>${T.n}</b><span>Viajes</span></div><div class="deca-stat"><b>${fzNum(T.tn, 0)}</b><span>Toneladas</span></div>
+        <button class="btn btn-primary deca-new-btn" onclick="fzNuevoViaje()">${homeIcon(HOME_ICON_PATHS.leaf, 17, 'currentColor', 1.8)}<span>Nuevo viaje</span></button>
+      </div>
+    </div>
+    <div class="card deca-toolbar">
+      <div class="deca-search" style="flex:1 1 240px;"><input id="fz-q" placeholder="Buscar por proveedor, cliente, camión, factura…" value="${esc(S.q)}" oninput="fzFiltro('q', this.value)" autocomplete="off" /><span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span></div>
+      <select id="fz-periodo" onchange="fzFiltro('periodo', this.value)" style="width:auto;flex:0 1 190px;">${fzPeriodoOpciones(S.viajes).replace(`value="${S.periodo}"`, `value="${S.periodo}" selected`)}</select>
+      <select id="fz-producto" onchange="fzFiltro('producto', this.value)" style="width:auto;flex:0 1 200px;"><option value="">Todos los productos</option>${S.productos.filter(p => !p.archived || p.id === S.producto).map(p => opt(p.id, p.nombre, p.id === S.producto)).join('')}</select>
+      <label class="dr-chk" style="margin:0;white-space:nowrap;"><input type="checkbox" ${S.pend ? 'checked' : ''} onchange="fzFiltro('pend', this.checked)" /> Pendientes de facturar</label>
+      <button class="btn btn-ghost" style="background:var(--panel);" onclick="fzExportarCsv()" title="Descarga en Excel (CSV) los viajes que se ven">Exportar</button>
+    </div>
+    <div id="fz-lista">${fzViajesTablaHtml()}</div>`;
+}
+function fzExportarCsv(){
+  const M = fzMaps(), list = fzViajesFiltrados().slice().sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)) || (Number(a.numero) || 0) - (Number(b.numero) || 0));
+  const cab = ['Nº', 'Fecha', 'Zona carga', 'Camión carga', 'Proveedor', 'Pago proveedor', 'Facturado proveedor', 'Teléfono carga', 'Zona descarga', 'Camión descarga', 'Cliente', 'Pago cliente', 'Facturado cliente', 'Teléfono descarga', 'Producto', 'Cantidad', 'Unidad', 'Precio compra', 'Compra', 'Flete', 'Precio venta', 'Venta', 'Beneficio', 'Notas'];
+  const cel = x => { const s = String(x == null ? '' : x); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const dec = n => String(n).replace('.', ',');
+  const filas = list.map(v => { const p = M.prov.get(v.proveedorId), c = M.cli.get(v.clienteId), pr = M.prod.get(v.productoId), k = fzCalc(v);
+    return [v.numero, fmtDateDMY(v.fecha), v.zonaCarga, v.camionCarga, p ? p.nombre : '', v.pagoProveedor, v.facturadoProveedor ? (v.facturaProveedor || 'SI') : 'NO', v.telCarga, v.zonaDescarga, v.camionDescarga, c ? c.nombre : '', v.pagoCliente, v.facturadoCliente ? (v.facturaCliente || 'SI') : 'NO', v.telDescarga, pr ? pr.nombre : '', dec(v.cantidad), v.unidad, dec(v.precioCompra), dec(k.compra), dec(k.flete), dec(v.precioVenta), dec(k.venta), dec(k.beneficio), v.notas].map(cel).join(';'); });
+  const csv = '﻿' + [cab.map(cel).join(';'), ...filas].join('\r\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = `forrajes-viajes-${today()}.csv`;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+// ---------------------------------------------------------------- Formulario de un viaje
+function fzSiguienteNumero(){ return (fzS().viajes.reduce((m, v) => Math.max(m, Number(v.numero) || 0), 0)) + 1; }
+function fzNuevoViaje(){
+  const S = fzS();
+  S.form = { id: null, numero: fzSiguienteNumero(), fecha: today(), proveedorId: '', clienteId: '', zonaCarga: '', zonaDescarga: '', camionCarga: '', camionDescarga: '', productoId: '', cantidad: '', unidad: 't',
+    pagoProveedor: '', facturadoProveedor: false, facturaProveedor: '', telCarga: '', pagoCliente: '', facturadoCliente: false, facturaCliente: '', telDescarga: '', precioCompra: '', flete: '', precioVenta: '', notas: '' };
+  S.view = 'form'; S.formDirty = false;
+  renderHeader(); renderTab(); window.scrollTo(0, 0);
+}
+function fzEditarViaje(id){
+  const S = fzS(), v = S.viajes.find(x => x.id === id); if (!v) return;
+  S.form = { ...v, cantidad: String(v.cantidad).replace('.', ','), precioCompra: String(v.precioCompra).replace('.', ','), precioVenta: String(v.precioVenta).replace('.', ','), flete: String(v.flete).replace('.', ',') };
+  S.view = 'form'; S.formDirty = false;
+  renderHeader(); renderTab(); window.scrollTo(0, 0);
+}
+function fzVolver(){
+  if (!fzConfirmLeave()) return;
+  const S = fzS(); S.view = 'lista'; S.form = null; S.formDirty = false;
+  renderHeader(); renderTab();
+}
+function fzDirty(){ fzS().formDirty = true; }
+function fzSelHtml(id, lista, sel, vacio, onchange){
+  return `<select id="${id}"${onchange ? ` onchange="${onchange}"` : ''}><option value="">${esc(vacio)}</option>${lista.map(e => `<option value="${e.id}"${e.id === sel ? ' selected' : ''}>${esc(e.nombre)}</option>`).join('')}</select>`;
+}
+function fzPagosOpts(sel){
+  const l = FZ_PAGOS.slice(); if (sel && !l.includes(sel)) l.push(sel);
+  return `<option value="">—</option>${l.map(p => `<option value="${esc(p)}"${p === sel ? ' selected' : ''}>${esc(p)}</option>`).join('')}`;
+}
+function fzDatalist(id, valores){ return `<datalist id="${id}">${[...new Set(valores.filter(Boolean))].sort().map(v => `<option value="${esc(v)}"></option>`).join('')}</datalist>`; }
+function fzFormHtml(){
+  const S = fzS(), f = S.form; if (!f) return '';
+  const sec = (n, t, s) => `<div class="dr-sec"><span class="dr-n">${n}</span><div><b>${t}</b>${s ? `<small>${s}</small>` : ''}</div></div>`;
+  const prov = S.proveedores.filter(p => !p.archived || p.id === f.proveedorId), cli = S.clientes.filter(c => !c.archived || c.id === f.clienteId), prod = S.productos.filter(p => !p.archived || p.id === f.productoId);
+  const camiones = S.viajes.flatMap(v => [v.camionCarga, v.camionDescarga]), zonas = S.viajes.flatMap(v => [v.zonaCarga, v.zonaDescarga]);
+  const nuevo = (tipo) => `<button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;margin-left:8px;" onclick="fzCatForm('${tipo}', null, true)">+ Nuevo</button>`;
+  return `
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.leaf, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 260px;"><div class="deca-banner-title">${f.id ? 'Viaje nº ' + esc(f.numero == null ? '' : f.numero) : 'Nuevo viaje'}</div><div class="deca-banner-sub">Rellena la carga, la descarga y los precios: el beneficio se calcula solo.</div></div>
+      <div class="deca-banner-actions"><button class="btn btn-ghost" style="background:var(--panel);" onclick="fzVolver()">← Volver a los viajes</button></div>
+    </div>
+    ${fzDatalist('fz-dl-cam', camiones)}${fzDatalist('fz-dl-zona', zonas)}
+    <div class="dr-page" style="max-width:980px;margin:0;" oninput="fzDirty()" onchange="fzDirty()">
+      <div class="card dr-card">
+        ${sec(1, 'Carga', 'De quién se compra la mercancía')}
+        <div class="dr-g">
+          <div class="field"><label>Fecha <span class="dc-req">*</span></label><input id="fz-fecha" type="date" value="${esc(f.fecha)}" /></div>
+          <div class="field"><label>Nº de viaje</label><input id="fz-num" inputmode="numeric" value="${esc(f.numero == null ? '' : f.numero)}" /></div>
+          <div class="field"><label>Camión / conductor</label><input id="fz-cc" list="fz-dl-cam" maxlength="40" placeholder="Q-28, T-134…" value="${esc(f.camionCarga)}" /></div>
+          <div class="field dr-w2"><label>Proveedor ${nuevo('proveedores')}</label>${fzSelHtml('fz-prov', prov, f.proveedorId, 'Elige el proveedor…', 'fzFormProveedor()')}</div>
+          <div class="field"><label>Zona de carga</label><input id="fz-zc" list="fz-dl-zona" maxlength="30" placeholder="F-31" value="${esc(f.zonaCarga)}" /></div>
+          <div class="field"><label>Teléfono de carga</label><input id="fz-tc" inputmode="tel" maxlength="40" value="${esc(f.telCarga)}" /></div>
+          <div class="field"><label>Forma de pago al proveedor</label><select id="fz-pp">${fzPagosOpts(f.pagoProveedor)}</select></div>
+          <div class="field"><label>¿Facturado por el proveedor?</label><label class="dr-chk"><input type="checkbox" id="fz-fp" ${f.facturadoProveedor ? 'checked' : ''} onchange="fzFactura('fp')" /> Sí${' '}<input id="fz-fpn" placeholder="Nº de factura" maxlength="40" value="${esc(f.facturaProveedor)}" style="${f.facturadoProveedor ? '' : 'display:none;'}flex:1;min-width:0;width:100%;" /></label></div>
+        </div>
+      </div>
+      <div class="card dr-card">
+        ${sec(2, 'Descarga', 'A quién se vende')}
+        <div class="dr-g">
+          <div class="field dr-w2"><label>Cliente ${nuevo('clientes')}</label>${fzSelHtml('fz-cli', cli, f.clienteId, 'Elige el cliente…', 'fzFormCliente()')}</div>
+          <div class="field"><label>Camión / conductor de la descarga</label><input id="fz-cd" list="fz-dl-cam" maxlength="40" placeholder="Si es otro distinto al de la carga" value="${esc(f.camionDescarga)}" /></div>
+          <div class="field"><label>Zona de descarga</label><input id="fz-zd" list="fz-dl-zona" maxlength="30" placeholder="E-25" value="${esc(f.zonaDescarga)}" /></div>
+          <div class="field"><label>Teléfono de descarga</label><input id="fz-td" inputmode="tel" maxlength="40" value="${esc(f.telDescarga)}" /></div>
+          <div class="field"><label>Forma de pago del cliente</label><select id="fz-pc">${fzPagosOpts(f.pagoCliente)}</select></div>
+          <div class="field dr-w3"><label>¿Facturado al cliente?</label><label class="dr-chk"><input type="checkbox" id="fz-fc" ${f.facturadoCliente ? 'checked' : ''} onchange="fzFactura('fc')" /> Sí${' '}<input id="fz-fcn" placeholder="Nº de factura" maxlength="40" value="${esc(f.facturaCliente)}" style="${f.facturadoCliente ? '' : 'display:none;'}max-width:240px;min-width:0;width:100%;" /></label></div>
+        </div>
+      </div>
+      <div class="card dr-card">
+        ${sec(3, 'Mercancía y precios', 'Cantidad y €/unidad de compra y de venta')}
+        <div class="dr-g">
+          <div class="field"><label>Producto ${nuevo('productos')}</label>${fzSelHtml('fz-prod', prod, f.productoId, 'Elige el producto…', 'fzFormPrecios()')}</div>
+          <div class="field"><label>Cantidad <span class="dc-req">*</span></label><input id="fz-cant" inputmode="decimal" maxlength="12" placeholder="16,5" style="text-align:right;" oninput="fzFormCalc()" value="${esc(f.cantidad)}" /></div>
+          <div class="field"><label>Unidad</label><select id="fz-ud" onchange="fzFormCalc()"><option value="t"${f.unidad === 't' ? ' selected' : ''}>Toneladas (€/t)</option><option value="balas"${f.unidad === 'balas' ? ' selected' : ''}>Balas (€/bala)</option></select></div>
+          <div class="field"><label>Precio de compra <small id="fz-pc-h" style="color:var(--mutedFaint);font-weight:400;"></small></label><input id="fz-pcu" inputmode="decimal" maxlength="12" style="text-align:right;" oninput="fzFormCalc()" value="${esc(f.precioCompra)}" /></div>
+          <div class="field"><label>Precio de venta <small id="fz-pv-h" style="color:var(--mutedFaint);font-weight:400;"></small></label><input id="fz-pvu" inputmode="decimal" maxlength="12" style="text-align:right;" oninput="fzFormCalc()" value="${esc(f.precioVenta)}" /></div>
+          <div class="field"><label>Flete (€ del viaje)</label><input id="fz-flete" inputmode="decimal" maxlength="12" style="text-align:right;" oninput="fzFormCalc()" value="${esc(f.flete)}" /></div>
+        </div>
+        <div class="fz-calc" id="fz-calc"></div>
+      </div>
+      <div class="card dr-card">
+        <div class="field" style="margin:0;"><label>Notas</label><textarea id="fz-notas" rows="2" maxlength="600" placeholder="Incidencias, pesos, descuentos…">${esc(f.notas)}</textarea></div>
+      </div>
+      <div id="fz-error" class="dr-err"></div>
+      <div class="dr-bar" style="max-width:980px;">
+        ${f.id ? `<div style="margin-right:auto;"><button class="btn btn-ghost" style="color:var(--danger);" onclick="fzEliminarViaje('${f.id}')">Eliminar viaje</button></div>` : ''}
+        <button class="btn btn-ghost" onclick="fzVolver()">Cancelar</button>
+        <button class="btn btn-primary" onclick="fzGuardarViaje()">${f.id ? 'Guardar cambios' : 'Crear viaje'}</button>
+      </div>
+    </div>`;
+}
+function fzFactura(k){
+  const on = document.getElementById('fz-' + k).checked, n = document.getElementById('fz-' + k + 'n');
+  if (n) { n.style.display = on ? '' : 'none'; if (!on) n.value = ''; }
+}
+const fzV = id => ((document.getElementById(id) || {}).value || '').trim();
+const fzN = id => { const t = fzV(id).replace(/\s/g, '').replace(',', '.'); return t === '' ? 0 : Number(t); };
+function fzFormProveedor(){
+  const p = fzMaps().prov.get(fzV('fz-prov'));
+  if (p) { document.getElementById('fz-zc').value = p.zona; document.getElementById('fz-tc').value = p.telefono; document.getElementById('fz-pp').innerHTML = fzPagosOpts(p.formaPago); }
+  fzFormPrecios(); fzDirty();
+}
+function fzFormCliente(){
+  const c = fzMaps().cli.get(fzV('fz-cli'));
+  if (c) { document.getElementById('fz-zd').value = c.zona; document.getElementById('fz-td').value = c.telefono; document.getElementById('fz-pc').innerHTML = fzPagosOpts(c.formaPago); }
+  fzFormPrecios(); fzDirty();
+}
+// El último precio de compra a ese proveedor (y de venta a ese cliente) para ese producto: se propone si la casilla está vacía
+function fzFormPrecios(){
+  const S = fzS(), prod = fzV('fz-prod'), prov = fzV('fz-prov'), cli = fzV('fz-cli'), f = S.form || {};
+  const ult = (campo, quien, id) => S.viajes.find(v => v[quien] === id && v.productoId === prod && v.id !== f.id && v[campo] > 0);
+  const hc = document.getElementById('fz-pc-h'), hv = document.getElementById('fz-pv-h');
+  const uc = prod && prov ? ult('precioCompra', 'proveedorId', prov) : null, uv = prod && cli ? ult('precioVenta', 'clienteId', cli) : null;
+  const pc = document.getElementById('fz-pcu'), pv = document.getElementById('fz-pvu');
+  if (uc && pc && fzV('fz-pcu') === '') pc.value = String(uc.precioCompra).replace('.', ',');
+  if (uv && pv && fzV('fz-pvu') === '') pv.value = String(uv.precioVenta).replace('.', ',');
+  if (hc) hc.textContent = uc ? `· último con este proveedor: ${fzNum(uc.precioCompra, 4)}` : '';
+  if (hv) hv.textContent = uv ? `· último con este cliente: ${fzNum(uv.precioVenta, 4)}` : '';
+  fzFormCalc();
+}
+function fzFormCalc(){
+  const el = document.getElementById('fz-calc'); if (!el) return;
+  const v = { cantidad: fzN('fz-cant'), unidad: fzV('fz-ud') || 't', precioCompra: fzN('fz-pcu'), precioVenta: fzN('fz-pvu'), flete: fzN('fz-flete') }, k = fzCalc(v);
+  const u = v.unidad === 'balas' ? 'bala' : 't';
+  const caja = (t, val, extra) => `<div><small>${t}</small><b${extra ? ` style="${extra}"` : ''}>${fzEur(val)}</b></div>`;
+  el.innerHTML = `${caja('Compra', k.compra)}${caja('Flete', k.flete)}${caja('Venta', k.venta)}${caja('Beneficio', k.beneficio, `color:${k.beneficio < 0 ? 'var(--danger)' : 'var(--success)'};`)}${v.cantidad > 0 ? `<div><small>Beneficio por ${u}</small><b>${fzEur(k.beneficio / v.cantidad)}</b></div>` : ''}`;
+}
+async function fzGuardarViaje(){
+  const S = fzS(), f = S.form, err = document.getElementById('fz-error'); if (!f || !err) return;
+  err.textContent = '';
+  const fecha = fzV('fz-fecha'), cantidad = fzN('fz-cant');
+  if (!fecha) { err.textContent = 'Indica la fecha del viaje.'; return; }
+  if (!(cantidad > 0)) { err.textContent = 'Indica la cantidad (toneladas o balas).'; document.getElementById('fz-cant').focus(); return; }
+  const nums = ['fz-pcu', 'fz-pvu', 'fz-flete'].map(fzN);
+  if (nums.some(n => !isFinite(n) || n < 0)) { err.textContent = 'Los precios y el flete tienen que ser números (sin signo negativo).'; return; }
+  const num = fzV('fz-num'), fp = document.getElementById('fz-fp').checked, fc = document.getElementById('fz-fc').checked;
+  const row = {
+    numero: num === '' ? fzSiguienteNumero() : parseInt(num, 10) || null, fecha,
+    proveedor_id: fzV('fz-prov') || null, cliente_id: fzV('fz-cli') || null, zona_carga: fzV('fz-zc') || null, zona_descarga: fzV('fz-zd') || null,
+    camion_carga: fzV('fz-cc') || null, camion_descarga: fzV('fz-cd') || null, producto_id: fzV('fz-prod') || null, cantidad, unidad: fzV('fz-ud') || 't',
+    pago_proveedor: fzV('fz-pp') || null, facturado_proveedor: fp, factura_proveedor: fp ? (fzV('fz-fpn') || null) : null, tel_carga: fzV('fz-tc') || null,
+    pago_cliente: fzV('fz-pc') || null, facturado_cliente: fc, factura_cliente: fc ? (fzV('fz-fcn') || null) : null, tel_descarga: fzV('fz-td') || null,
+    precio_compra: nums[0], precio_venta: nums[1], flete: nums[2], notas: fzV('fz-notas') || null,
+  };
+  const btn = document.querySelector('.dr-bar .btn-primary'); if (btn) btn.disabled = true;
+  const q = f.id ? supabaseClient.from('forraje_viajes').update(row).eq('id', f.id).select().single() : supabaseClient.from('forraje_viajes').insert({ ...row, created_by: currentUserEmail() }).select().single();
+  const { data, error } = await q;
+  if (btn) btn.disabled = false;
+  if (error || !data) { err.textContent = 'No se pudo guardar: ' + ((error && error.message) || 'error desconocido.'); return; }
+  const nuevo = fzViajeDeFila(data), i = S.viajes.findIndex(x => x.id === nuevo.id);
+  if (i >= 0) S.viajes[i] = nuevo; else S.viajes.push(nuevo);
+  fzOrdenar();
+  S.view = 'lista'; S.form = null; S.formDirty = false;
+  appToast(f.id ? 'Viaje actualizado.' : `Viaje nº ${nuevo.numero == null ? '' : nuevo.numero} creado.`, 'ok');
+  renderHeader(); renderTab(); window.scrollTo(0, 0);
+}
+async function fzEliminarViaje(id){
+  const S = fzS(), v = S.viajes.find(x => x.id === id); if (!v) return;
+  const M = fzMaps(), c = M.cli.get(v.clienteId);
+  if (!(await appConfirm({ title: 'Eliminar viaje', name: `Nº ${v.numero == null ? '—' : v.numero} · ${fmtDateDMY(v.fecha)}${c ? ' · ' + c.nombre : ''}`, message: 'Se borra el viaje y no se puede recuperar.', confirmLabel: 'Eliminar', tone: 'danger', icon: 'trash' }))) return;
+  const { error } = await supabaseClient.from('forraje_viajes').delete().eq('id', id);
+  if (error) { appToast('No se pudo eliminar: ' + error.message, 'error'); return; }
+  S.viajes = S.viajes.filter(x => x.id !== id);
+  S.view = 'lista'; S.form = null; S.formDirty = false;
+  appToast('Viaje eliminado.', 'ok');
+  renderHeader(); renderTab();
+}
+// ---------------------------------------------------------------- Proveedores, clientes y productos
+const FZ_CAT = {
+  proveedores: { tabla: 'forraje_proveedores', uno: 'proveedor', unoT: 'Proveedor', plural: 'Proveedores', campo: 'proveedorId', sub: 'De quién se compra: nombre, teléfono, zona y forma de pago habitual.' },
+  clientes: { tabla: 'forraje_clientes', uno: 'cliente', unoT: 'Cliente', plural: 'Clientes', campo: 'clienteId', sub: 'A quién se vende: nombre, teléfono, zona y forma de pago habitual.' },
+  productos: { tabla: 'forraje_productos', uno: 'producto', unoT: 'Producto', plural: 'Productos', campo: 'productoId', sub: 'Lo que se compra y se vende (paja, fenc cuadrado, alfalfa…).' },
+};
+function fzCatEstad(tipo){
+  const c = FZ_CAT[tipo], est = new Map();
+  fzS().viajes.forEach(v => { const id = v[c.campo]; if (!id) return; const e = est.get(id) || { n: 0, tn: 0, beneficio: 0 }; const k = fzCalc(v); e.n++; if (v.unidad === 't') e.tn += v.cantidad; e.beneficio += k.beneficio; est.set(id, e); });
+  return est;
+}
+function fzCatBuscar(v){ fzS().cq = v; const el = document.getElementById('fz-cat-lista'); if (el) el.innerHTML = fzCatTablaHtml(fzS().sec); }
+function fzCatArch(v){ fzS().archivados = !!v; const el = document.getElementById('fz-cat-lista'); if (el) el.innerHTML = fzCatTablaHtml(fzS().sec); }
+function fzCatTablaHtml(tipo){
+  const S = fzS(), c = FZ_CAT[tipo], est = fzCatEstad(tipo), q = fzNorm(S.cq).trim();
+  const lista = S[tipo].filter(e => (S.archivados || !e.archived) && (!q || fzNorm([e.nombre, e.zona, e.telefono, e.formaPago, e.notas].join(' ')).includes(q)));
+  if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${S[tipo].length ? 'Ninguno coincide con la búsqueda.' : `Todavía no hay ${c.plural.toLowerCase()}.`}</div>`;
+  const esProd = tipo === 'productos';
+  const filas = lista.map(e => { const s = est.get(e.id) || { n: 0, tn: 0, beneficio: 0 };
+    return `<tr class="cg-row${e.archived ? ' arch' : ''}" style="cursor:pointer;" onclick="fzCatForm('${tipo}', '${e.id}')">
+      <td data-sort-value="${esc(e.nombre)}"><b>${esc(e.nombre)}</b>${e.archived ? ' <span class="cg-chip">Archivado</span>' : ''}${e.notas ? `<div class="cg-ref">${esc(e.notas)}</div>` : ''}</td>
+      ${esProd ? '' : `<td data-sort-value="${esc(e.zona)}">${esc(e.zona) || '<span style="color:var(--mutedFaint);">—</span>'}</td><td data-sort-value="${esc(e.telefono)}" style="white-space:nowrap;">${esc(e.telefono) || '<span style="color:var(--mutedFaint);">—</span>'}</td><td data-sort-value="${esc(e.formaPago)}">${esc(e.formaPago) || '<span style="color:var(--mutedFaint);">—</span>'}</td>`}
+      <td data-sort-value="${s.n}" style="text-align:right;">${s.n}</td>
+      <td data-sort-value="${s.tn}" style="text-align:right;white-space:nowrap;">${fzNum(s.tn, 1)} t</td>
+      <td data-sort-value="${fzR2(s.beneficio)}" style="text-align:right;white-space:nowrap;font-weight:700;color:${s.beneficio < 0 ? 'var(--danger)' : 'var(--success)'};">${fzEur(s.beneficio)}</td>
+      <td class="td-acc" style="text-align:right;white-space:nowrap;"><button type="button" class="deca-act" title="Editar" onclick="event.stopPropagation(); fzCatForm('${tipo}', '${e.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button></td>
+    </tr>`; }).join('');
+  return `<div class="card cg-compacta" style="padding:0;overflow:hidden;"><div style="overflow-x:auto;"><table class="tf-table">
+    <thead><tr>${thSort(c.unoT, 'text')}${esProd ? '' : `${thSort('Zona', 'text')}${thSort('Teléfono', 'text')}${thSort('Forma de pago', 'text')}`}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Toneladas', 'number', 'style="text-align:right;"')}${thSort('Beneficio', 'number', 'style="text-align:right;"')}<th class="td-acc"></th></tr></thead>
+    <tbody>${filas}</tbody></table></div></div>`;
+}
+function fzCatalogoHtml(tipo){
+  const S = fzS(), c = FZ_CAT[tipo], act = S[tipo].filter(e => !e.archived).length;
+  return `
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.users, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 260px;"><div class="deca-banner-title">${c.plural}</div><div class="deca-banner-sub">${c.sub}</div></div>
+      <div class="deca-banner-actions"><div class="deca-stat"><b>${act}</b><span>Activos</span></div><button class="btn btn-primary deca-new-btn" onclick="fzCatForm('${tipo}', null)"><span>+ Nuevo ${c.uno}</span></button></div>
+    </div>
+    <div class="card deca-toolbar">
+      <div class="deca-search" style="flex:1 1 240px;"><input placeholder="Buscar…" value="${esc(S.cq)}" oninput="fzCatBuscar(this.value)" autocomplete="off" /><span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span></div>
+      <label class="dr-chk" style="margin:0;white-space:nowrap;"><input type="checkbox" ${S.archivados ? 'checked' : ''} onchange="fzCatArch(this.checked)" /> Ver archivados</label>
+    </div>
+    <div id="fz-cat-lista">${fzCatTablaHtml(tipo)}</div>`;
+}
+// volverAlViaje: se abrió desde el formulario de un viaje («+ Nuevo»): al guardar se queda elegido en el viaje
+function fzCatForm(tipo, id, desdeViaje){
+  const S = fzS(), c = FZ_CAT[tipo], e = id ? S[tipo].find(x => x.id === id) : null, esProd = tipo === 'productos';
+  const pagos = FZ_PAGOS.slice(); if (e && e.formaPago && !pagos.includes(e.formaPago)) pagos.push(e.formaPago);
+  window.__fzCat = { tipo, id: id || null, desdeViaje: !!desdeViaje };
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeModal()">
+      <div class="modal-box" style="max-width:520px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;"><h3 class="modal-title">${e ? esc(e.nombre) : 'Nuevo ' + c.uno}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+        <div class="field"><label>Nombre <span class="dc-req">*</span></label><input id="fzc-nombre" maxlength="120" value="${esc(e ? e.nombre : '')}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); fzCatGuardar(); }" /></div>
+        ${esProd ? '' : `
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;"><label>Zona</label><input id="fzc-zona" maxlength="30" placeholder="F-31 / E-25…" value="${esc(e ? e.zona : '')}" /></div>
+          <div class="field" style="flex:1;"><label>Teléfono</label><input id="fzc-tel" inputmode="tel" maxlength="40" value="${esc(e ? e.telefono : '')}" /></div>
+        </div>
+        <div class="field"><label>Forma de pago habitual</label><select id="fzc-pago"><option value="">—</option>${pagos.map(p => `<option value="${esc(p)}"${e && e.formaPago === p ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></div>
+        <div class="field"><label>Notas</label><textarea id="fzc-notas" rows="2" maxlength="400">${esc(e ? e.notas : '')}</textarea></div>`}
+        <div id="fzc-error" style="color:var(--danger);font-size:12.5px;min-height:16px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">
+          ${e ? `<button class="btn btn-ghost" style="margin-right:auto;" onclick="fzCatArchivar(${e.archived ? 'false' : 'true'})">${e.archived ? 'Recuperar' : 'Archivar'}</button>` : ''}
+          <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" onclick="fzCatGuardar()">${e ? 'Guardar' : 'Crear'}</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const i = document.getElementById('fzc-nombre'); if (i) i.focus(); }, 30);
+}
+async function fzCatGuardar(){
+  const S = fzS(), ctx = window.__fzCat || {}, c = FZ_CAT[ctx.tipo], err = document.getElementById('fzc-error'); if (!c || !err) return;
+  err.textContent = '';
+  const nombre = fzV('fzc-nombre').replace(/\s+/g, ' ');
+  if (!nombre) { err.textContent = 'Escribe el nombre.'; return; }
+  if (S[ctx.tipo].some(e => e.id !== ctx.id && fzNorm(e.nombre) === fzNorm(nombre))) { err.textContent = `Ya existe un ${c.uno} con ese nombre.`; return; }
+  const row = { nombre };
+  if (ctx.tipo !== 'productos') { row.zona = fzV('fzc-zona') || null; row.telefono = fzV('fzc-tel') || null; row.forma_pago = fzV('fzc-pago') || null; row.notas = fzV('fzc-notas') || null; }
+  const q = ctx.id ? supabaseClient.from(c.tabla).update(row).eq('id', ctx.id).select().single() : supabaseClient.from(c.tabla).insert(ctx.tipo === 'productos' ? row : { ...row, created_by: currentUserEmail() }).select().single();
+  const { data, error } = await q;
+  if (error || !data) { err.textContent = 'No se pudo guardar: ' + (error && error.code === '23505' ? 'ya existe uno con ese nombre.' : ((error && error.message) || 'error desconocido.')); return; }
+  const nuevo = fzCatDeFila(data), lista = S[ctx.tipo], i = lista.findIndex(x => x.id === nuevo.id);
+  if (i >= 0) lista[i] = nuevo; else lista.push(nuevo);
+  lista.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  closeModal();
+  appToast(`${c.unoT} guardado.`, 'ok');
+  if (ctx.desdeViaje && S.view === 'form') {   // viene del formulario de un viaje: se recoge lo escrito, se repinta y queda elegido
+    const f = S.form; f.fecha = fzV('fz-fecha') || f.fecha;
+    fzGuardarBorradorForm();
+    f[c.campo] = nuevo.id;
+    renderTab();
+    if (ctx.tipo === 'proveedores') fzFormProveedor(); else if (ctx.tipo === 'clientes') fzFormCliente(); else fzFormPrecios();
+    S.formDirty = true;
+  } else renderTab();
+}
+// Guarda en S.form lo que haya en las casillas del formulario (para repintarlo sin perder lo escrito)
+function fzGuardarBorradorForm(){
+  const f = fzS().form; if (!f) return;
+  const g = (id, k) => { const el = document.getElementById(id); if (el) f[k] = el.type === 'checkbox' ? el.checked : el.value; };
+  [['fz-fecha', 'fecha'], ['fz-num', 'numero'], ['fz-cc', 'camionCarga'], ['fz-prov', 'proveedorId'], ['fz-zc', 'zonaCarga'], ['fz-tc', 'telCarga'], ['fz-pp', 'pagoProveedor'], ['fz-fpn', 'facturaProveedor'],
+    ['fz-cli', 'clienteId'], ['fz-cd', 'camionDescarga'], ['fz-zd', 'zonaDescarga'], ['fz-td', 'telDescarga'], ['fz-pc', 'pagoCliente'], ['fz-fcn', 'facturaCliente'],
+    ['fz-prod', 'productoId'], ['fz-cant', 'cantidad'], ['fz-ud', 'unidad'], ['fz-pcu', 'precioCompra'], ['fz-pvu', 'precioVenta'], ['fz-flete', 'flete'], ['fz-notas', 'notas']].forEach(([id, k]) => g(id, k));
+  const fp = document.getElementById('fz-fp'), fc = document.getElementById('fz-fc'); if (fp) f.facturadoProveedor = fp.checked; if (fc) f.facturadoCliente = fc.checked;
+}
+async function fzCatArchivar(archivar){
+  const S = fzS(), ctx = window.__fzCat || {}, c = FZ_CAT[ctx.tipo]; if (!c || !ctx.id) return;
+  const { error } = await supabaseClient.from(c.tabla).update({ archived: !!archivar }).eq('id', ctx.id);
+  if (error) { const e = document.getElementById('fzc-error'); if (e) e.textContent = 'No se pudo: ' + error.message; return; }
+  const e = S[ctx.tipo].find(x => x.id === ctx.id); if (e) e.archived = !!archivar;
+  closeModal(); appToast(archivar ? `${c.unoT} archivado: ya no sale al crear viajes.` : `${c.unoT} recuperado.`, 'ok'); renderTab();
+}
+// ---------------------------------------------------------------- Resumen
+function fzResPeriodo(v){ fzS().resPeriodo = v; renderTab(); }
+function fzResumenHtml(){
+  const S = fzS(), M = fzMaps(), per = S.resPeriodo;
+  const lista = S.viajes.filter(v => !per || String(v.fecha).startsWith(per)), T = fzTotales(lista);
+  const anios = [...new Set(S.viajes.map(v => String(v.fecha).slice(0, 4)))].sort().reverse();
+  const tile = (t, v, sub, color) => `<div class="fz-tile"><small>${t}</small><b${color ? ` style="color:${color};"` : ''}>${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
+  const sinFacProv = lista.filter(v => !v.facturadoProveedor), sinFacCli = lista.filter(v => !v.facturadoCliente);
+  const grupo = (clave, etiqueta, orden) => {
+    const g = new Map();
+    lista.forEach(v => { const k = clave(v); const e = g.get(k) || { k, n: 0, tn: 0, compra: 0, flete: 0, venta: 0, beneficio: 0 }; const c = fzCalc(v); e.n++; if (v.unidad === 't') e.tn += v.cantidad; e.compra += c.compra; e.flete += c.flete; e.venta += c.venta; e.beneficio += c.beneficio; g.set(k, e); });
+    return [...g.values()].sort(orden || ((a, b) => b.beneficio - a.beneficio)).map(e => ({ ...e, etq: etiqueta(e.k) }));
+  };
+  const tabla = (titulo, filas, primera) => `<div class="card cg-compacta" style="padding:0;overflow:hidden;margin-bottom:14px;"><div style="padding:12px 16px;font-family:var(--display);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid var(--border);">${titulo}</div><div style="overflow-x:auto;"><table class="tf-table">
+    <thead><tr>${thSort(primera, 'text')}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Toneladas', 'number', 'style="text-align:right;"')}${thSort('Compra', 'number', 'style="text-align:right;"')}${thSort('Flete', 'number', 'style="text-align:right;"')}${thSort('Venta', 'number', 'style="text-align:right;"')}${thSort('Beneficio', 'number', 'style="text-align:right;"')}</tr></thead>
+    <tbody>${filas.map(e => `<tr class="cg-row"><td data-sort-value="${esc(e.k)}"><b>${esc(e.etq)}</b></td><td data-sort-value="${e.n}" style="text-align:right;">${e.n}</td><td data-sort-value="${e.tn}" style="text-align:right;white-space:nowrap;">${fzNum(e.tn, 1)}</td><td data-sort-value="${fzR2(e.compra)}" style="text-align:right;white-space:nowrap;">${fzEur(fzR2(e.compra))}</td><td data-sort-value="${fzR2(e.flete)}" style="text-align:right;white-space:nowrap;">${fzEur(fzR2(e.flete))}</td><td data-sort-value="${fzR2(e.venta)}" style="text-align:right;white-space:nowrap;">${fzEur(fzR2(e.venta))}</td><td data-sort-value="${fzR2(e.beneficio)}" style="text-align:right;white-space:nowrap;font-weight:700;color:${e.beneficio < 0 ? 'var(--danger)' : 'var(--success)'};">${fzEur(fzR2(e.beneficio))}</td></tr>`).join('')}</tbody></table></div></div>`;
+  const meses = grupo(v => String(v.fecha).slice(0, 7), k => `${FZ_MESES[Number(k.slice(5)) - 1]} ${k.slice(0, 4)}`, (a, b) => String(b.k).localeCompare(String(a.k)));
+  return `
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.list, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 260px;"><div class="deca-banner-title">Resumen</div><div class="deca-banner-sub">Cuánto se ha comprado, vendido y ganado: por mes, por producto, por proveedor y por cliente.</div></div>
+      <div class="deca-banner-actions"><select onchange="fzResPeriodo(this.value)" style="width:auto;min-width:150px;"><option value="">Todo el periodo</option>${anios.map(a => `<option value="${a}"${per === a ? ' selected' : ''}>Año ${a}</option>`).join('')}</select></div>
+    </div>
+    <div class="fz-tiles">
+      ${tile('Viajes', T.n, T.n ? `${fzNum(T.tn / Math.max(1, T.n), 1)} t de media` : '')}
+      ${tile('Toneladas', fzNum(T.tn, 1), T.balas ? `+ ${fzNum(T.balas, 0)} balas` : '')}
+      ${tile('Compra', fzEur(T.compra), '')}${tile('Flete', fzEur(T.flete), '')}${tile('Venta', fzEur(T.venta), '')}
+      ${tile('Beneficio', fzEur(T.beneficio), T.tn ? `${fzEur(T.beneficio / T.tn)} por tonelada` : '', T.beneficio < 0 ? 'var(--danger)' : 'var(--success)')}
+      ${tile('Sin facturar por el proveedor', sinFacProv.length, sinFacProv.length ? `${fzEur(fzTotales(sinFacProv).compra)} de compra` : 'todo facturado')}
+      ${tile('Sin facturar al cliente', sinFacCli.length, sinFacCli.length ? `${fzEur(fzTotales(sinFacCli).venta)} de venta` : 'todo facturado')}
+    </div>
+    ${lista.length ? `${tabla('Por mes', meses, 'Mes')}
+    ${tabla('Por producto', grupo(v => v.productoId || '', k => (M.prod.get(k) || {}).nombre || 'Sin producto'), 'Producto')}
+    ${tabla('Por proveedor', grupo(v => v.proveedorId || '', k => (M.prov.get(k) || {}).nombre || 'Sin proveedor'), 'Proveedor')}
+    ${tabla('Por cliente', grupo(v => v.clienteId || '', k => (M.cli.get(k) || {}).nombre || 'Sin cliente'), 'Cliente')}` : '<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">No hay viajes en ese periodo.</div>'}`;
+}
 
 
 
