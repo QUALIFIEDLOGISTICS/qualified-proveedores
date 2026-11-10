@@ -323,8 +323,9 @@
   .sgac-sg button{padding:5px 14px;font-size:12.5px;}
   .sgac-m2-c,.sgac-m2-f{display:grid;grid-template-columns:minmax(110px,1fr) 130px 160px minmax(150px,2fr);gap:10px;align-items:center;}
   .sgac-m2-c{font-size:12px;color:var(--muted);font-weight:600;margin-bottom:4px;} .sgac-m2-f{margin-bottom:8px;}
-  .sgac-m2-f b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;}
-  @media (max-width:760px){ .sgac-m2-c{display:none;} .sgac-m2-f{grid-template-columns:1fr 1fr;} .sgac-m2-f b{grid-column:1 / -1;} }
+  .sgac-m2-nm{display:flex;flex-direction:column;align-items:flex-start;gap:1px;min-width:0;}
+  .sgac-m2-f b{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;}
+  @media (max-width:760px){ .sgac-m2-c{display:none;} .sgac-m2-f{grid-template-columns:1fr 1fr;} .sgac-m2-nm{grid-column:1 / -1;} }
   .sgac-h{flex-basis:100%;font-size:12px;line-height:1.4;color:var(--muted);}
   .sgac-h b{color:var(--text);}
   .sgac-h.fl{display:flex;align-items:center;gap:7px;}
@@ -5040,12 +5041,14 @@ function sgaM2CardHtml(clienteId){
     ${sinRepartir ? '<div class="sgac-h" style="margin:0 0 12px;color:var(--danger);">Hay m² «sin repartir» entre los almacenes del cliente. Guarda los m² de cada almacén (abajo): el dashboard los cuenta por almacén.</div>' : ''}
     <div class="sgac-m2-t">
       ${(() => {
-        const lista = ws.length ? ws.map(w => ({ id: w.id, nombre: w.name })) : [{ id: '', nombre: '' }];
-        const cab = `<div class="sgac-m2-c"><span>${ws.length ? 'Almacén' : ''}</span><span>m² contratados</span><span>Desde el día</span><span>Nota <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></span></div>`;
+        // Los almacenes asignados al cliente y, además, cualquiera que aún tenga m² aunque ya no esté asignado (si no, no habría forma de quitárselos)
+        const extra = act ? [...act.porAlmacen.entries()].filter(([k, x]) => k && x.m2 > 0 && !ws.some(w => w.id === k)).map(([k]) => ({ id: k, nombre: whNombre(k) + ' (ya no asignado)' })) : [];
+        const lista = ws.length || extra.length ? ws.map(w => ({ id: w.id, nombre: w.name })).concat(extra) : [{ id: '', nombre: '' }];
+        const cab =`<div class="sgac-m2-c"><span>${ws.length ? 'Almacén' : ''}</span><span>m² contratados</span><span>Desde el día</span><span>Nota <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></span></div>`;
         return cab + lista.map((w, i) => {
           const cur = act ? act.porAlmacen.get(w.id) : null, v = cur ? String(cur.m2).replace('.', ',') : '';
           return `<div class="sgac-m2-f">
-            <b title="${esc(w.nombre)}">${esc(w.nombre) || '&nbsp;'}</b>
+            <span class="sgac-m2-nm"><b title="${esc(w.nombre)}">${esc(w.nombre) || '&nbsp;'}</b>${w.id && cur && cur.m2 > 0 ? `<button type="button" class="crm-link" style="font-size:11.5px;" onclick="sgaM2Quitar('${esc(w.id)}', ${i})" title="Pone a 0 los m² de este almacén desde el día indicado a la derecha; los meses anteriores no cambian">Quitar los m²</button>` : ''}</span>
             <input id="sgac-m2-n-${i}" class="sgac-m2-i" data-w="${esc(w.id)}" data-orig="${esc(v)}" value="${esc(v)}" inputmode="decimal" maxlength="9" placeholder="Ej. 250" style="text-align:right;" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaM2ContratoGuardar(); }" />
             <input id="sgac-m2-d-${i}" type="date" value="${today()}" />
             <input id="sgac-m2-nota-${i}" maxlength="120" placeholder="Ej. Amplía una nave" />
@@ -5058,6 +5061,24 @@ function sgaM2CardHtml(clienteId){
     ${hist.length ? `<div class="sgac-tit" style="margin-top:14px;">Histórico</div>
       <table class="tf-table" style="margin-top:6px;"><thead><tr><th>Desde</th><th>Almacén</th><th style="text-align:right;">m²</th><th>Nota</th><th>Registrado</th></tr></thead>
       <tbody>${hist.map((x, i) => `<tr${i === 0 ? ' style="font-weight:700;"' : ''}><td style="white-space:nowrap;">${esc(fmtDateDMY(x.desde))}</td><td>${x.warehouseId ? esc(nomAlm(x.warehouseId)) : '<span style="color:var(--mutedFaint);">Sin repartir</span>'}</td><td class="tf-precio">${esc(sgaNumTxt(x.m2))}</td><td>${esc(x.nota) || '<span style="color:var(--mutedFaint);">—</span>'}</td><td style="color:var(--muted);font-size:12.5px;">${quien(x.por)}${x.creadoEn ? ' · ' + esc(fmtDateDMY(String(x.creadoEn).slice(0, 10))) : ''}</td></tr>`).join('')}</tbody></table>` : ''}`;
+}
+// Quitar los m² de un almacén: se anota un cambio a 0 desde el día indicado (el histórico se conserva: los meses anteriores se siguen cobrando con los m² que había)
+async function sgaM2Quitar(wid, i){
+  const id = window.__sgaClienteFormId, err = document.getElementById('sgac-m2-error');
+  if (!id || !wid) return;
+  if (err) err.textContent = '';
+  const desde = (document.getElementById(`sgac-m2-d-${i}`) || {}).value || '';
+  if (!desde) { if (err) err.textContent = 'Indica en la fecha de esa fila desde qué día se quitan los m².'; return; }
+  const cur = sgaM2ContratoPorAlmacen(id, desde).get(wid);
+  if (!cur || !(cur.m2 > 0)) { if (err) err.textContent = `En ${whNombre(wid)} no hay m² vigentes en esa fecha.`; return; }
+  if (!(await appConfirm({ title: 'Quitar los m² del almacén', message: `Los ${sgaNumTxt(cur.m2)} m² de ${whNombre(wid)} pasan a 0 desde el ${fmtDateDMY(desde)}. Los meses anteriores a esa fecha no cambian; el cambio queda en el histórico.`, confirmLabel: 'Quitar los m²', cancelLabel: 'Cancelar', tone: 'warn', icon: 'warn' }))) return;
+  const nota = ((document.getElementById(`sgac-m2-nota-${i}`) || {}).value || '').trim() || 'Quitados los m² de este almacén';
+  const { data, error } = await supabaseClient.from('sga_m2_contrato').insert({ cliente_id: id, m2: 0, vigente_desde: desde, nota, created_by: currentUserEmail(), warehouse_id: wid }).select();
+  if (error || !data) { if (err) err.textContent = 'No se pudo guardar: ' + ((error && error.message) || 'error desconocido.'); return; }
+  data.forEach(r => sgaM2Historial.push(sgaM2ContratoDeFila(r))); sgaM2Ordenar();
+  const card = document.getElementById('sgac-m2'); if (card) card.innerHTML = sgaM2CardHtml(id);
+  await logContactoHistorial(id, `SGA · m² contratados: ${whNombre(wid)} 0 m² desde el ${fmtDateDMY(desde)} (se quitan los ${sgaNumTxt(cur.m2)} m² que tenía).`);
+  appToast(`Quitados los m² de ${whNombre(wid)}.`, 'ok');
 }
 async function sgaM2ContratoGuardar(){
   const id = window.__sgaClienteFormId;
