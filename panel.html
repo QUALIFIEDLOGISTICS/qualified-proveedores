@@ -4391,6 +4391,7 @@ function computeBreadcrumbSegments(){
   if (currentTab === 'stock' && window.__stockView === 'operativa') return [{label:'Control Stock SGA', onclick:'sgaOperativaCancelar()'}, {label: (window.__opForm && window.__opForm.id) ? 'Editar operativa' : 'Nueva operativa', onclick:null}];
   if (currentTab === 'stock' && window.__stockView === 'actividad') return [{label:'Control Stock SGA', onclick:'sgaActividadCancelar()'}, {label:'Nueva actividad', onclick:null}];
   if (currentTab === 'stock' && window.__stockView === 'regul') return [{label:'Control Stock SGA', onclick:'sgaRegulCancelar()'}, {label:'Ajustes de stock', onclick:null}];
+  if (currentTab === 'stock' && window.__stockView === 'sitio') return [{label:'Control Stock SGA', onclick:'sgaSitioCancelar()'}, {label:'Ajustes de stock', onclick:null}];
   if (currentTab === ALMACEN_CONFIG_TAB) {
     if (window.__sgaPage && window.__sgaPage.kind === 'campo') {
       const cp = window.__sgaPage.id ? sgaCampos.find(x => x.id === window.__sgaPage.id) : null;
@@ -9534,6 +9535,7 @@ function tplStock(){
   if (window.__stockView === 'entrada') return tplStockEntradaPage();
   if (window.__stockView === 'salida') return tplStockSalidaPage();
   if (window.__stockView === 'regul') return tplStockRegulPage();
+  if (window.__stockView === 'sitio') return tplStockSitioPage();
   if (window.__stockView === 'actividad') return tplStockActividadPage();
   if (window.__stockView === 'operativa') return tplStockOperativaPage();
   if (window.__stockView === 'catedit') return tplCatEditPage();
@@ -9555,7 +9557,7 @@ function tplStock(){
     ${seg === 'operativas' ? '' : `<div class="sga-acc-grid">
       ${acc('#1B3A6B', 'entrada', 'Nueva recepción', 'Recibir mercancía de un cliente', 'sgaEntradaAbrir()', 'Registrar la mercancía que llega al almacén')}
       ${acc('#C0721A', 'salida', 'Nueva expedición', 'Sacar mercancía y emitir albarán', 'sgaSalidaAbrir()', 'Sacar mercancía del almacén y generar el albarán')}
-      ${acc('#2F7F86', 'regul', 'Ajustes de stock', 'Stock inicial y regularización', 'sgaRegulAbrir()', 'Dar de alta la mercancía que ya hay en el almacén o ajustar las existencias a lo contado')}
+      ${acc('#2F7F86', 'regul', 'Ajustes de stock', 'Stock inicial, regularización y cambios de sitio', 'sgaRegulAbrir()', 'Dar de alta la mercancía que ya hay en el almacén, ajustar las existencias a lo contado o cambiarla de almacén o de ubicación sin movimientos')}
       ${acc('#7A4FA3', 'actividad', 'Nueva actividad', 'Un trabajo que se cobra, sin mover stock', 'sgaActividadAbrir()', 'Anotar un trabajo hecho para un cliente (verificación de inventario, recuento…) y cobrarlo')}
     </div>`}
     ${seg === 'operativas' ? '' : `<div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('actividades', 'Actividades')}${segBtn('liquidaciones', 'Liquidaciones')}</div>`}
@@ -13638,16 +13640,17 @@ async function sgaAnularConfirmar(){
 /* ---- Ajustes de stock: un solo formulario con la opción de arriba («Alta de stock inicial» o «Regularización de inventario») ---- */
 function sgaAjustesToggleHtml(modo){
   const b = (m, t) => `<button type="button" class="${modo === m ? 'on' : ''}" onclick="sgaAjustesModo('${m}')">${t}</button>`;
-  return `<div class="aj-modo"><span>¿Qué quieres hacer?</span><div class="doc-seg">${b('alta', 'Alta de stock inicial')}${b('regul', 'Regularización de inventario')}</div></div>`;
+  return `<div class="aj-modo"><span>¿Qué quieres hacer?</span><div class="doc-seg">${b('alta', 'Alta de stock inicial')}${b('regul', 'Regularización de inventario')}${b('sitio', 'Cambio de almacén o ubicación')}</div></div>`;
 }
 // Cambiar de opción conserva el cliente elegido y avisa si ya hay algo escrito
 async function sgaAjustesModo(modo){
-  const enAlta = window.__stockView === 'entrada' && !!window.__seInicial;
-  if ((modo === 'alta') === enAlta) return;
+  const actual = window.__stockView === 'entrada' && !!window.__seInicial ? 'alta' : window.__stockView === 'sitio' ? 'sitio' : 'regul';
+  if (modo === actual) return;
   if (window.__stockDirty && !(await appConfirm({ title: 'Cambiar de opción', message: 'Has empezado a rellenar esta pantalla. Si cambias de opción, se pierde lo escrito.', confirmLabel: 'Cambiar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
-  const cliente = enAlta ? sgaEntradaClienteId() : sgaRegulCliente();
+  const cliente = actual === 'alta' ? sgaEntradaClienteId() : actual === 'sitio' ? sgaSitioCliente() : sgaRegulCliente();
   window.__stockDirty = false;
   if (modo === 'alta') sgaEntradaAbrir(true, cliente);
+  else if (modo === 'sitio') { window.__seInicial = false; sgaSitioAbrir(cliente); }
   else { window.__seInicial = false; sgaRegulAbrir(cliente); }
 }
 /* ---- Regularización de inventario: se escribe lo que realmente hay y el SGA calcula la diferencia ---- */
@@ -13801,6 +13804,184 @@ async function sgaRegulConfirmar(){
   await loadSgaStock();
   appToast('Regularización registrada.', 'ok');
   window.__stockSeg = 'entradas';
+  stockVolver();
+}
+
+/* ---- Cambio de almacén o de ubicación: la mercancía cambia de sitio (otro almacén, otra zona u otra ubicación) sin movimientos ni cobros ----
+   Para reorganizaciones internas del cliente. No toca cantidades ni fechas de recepción; queda anotado en el historial. */
+function sgaSitioCliente(){ const el = document.getElementById('st-cliente'); return el ? el.value : ''; }
+function sgaSitioOrigen(){ const el = document.getElementById('st-origen'); return el && el.value ? el.value : ''; }
+function sgaSitioDestino(){ const el = document.getElementById('st-destino'); return el && el.value ? el.value : ''; }
+function sgaSitioAbrir(clienteId){
+  window.__stockView = 'sitio';
+  window.__stockDirty = false;
+  renderHeader(); renderTab();
+  window.scrollTo(0, 0);
+  if (clienteId) { const s = document.getElementById('st-cliente'); if (s) { s.value = clienteId; sgaSitioClienteCambio(); } }
+}
+async function sgaSitioCancelar(){
+  if (window.__stockDirty && !(await appConfirm({ title: 'Descartar el cambio', message: 'Has empezado a rellenar esta pantalla. Si sales, se pierde lo escrito.', confirmLabel: 'Descartar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
+  stockVolver();
+}
+function sgaSitioClienteCambio(){
+  const clienteId = sgaSitioCliente(), ori = document.getElementById('st-origen'), des = document.getElementById('st-destino');
+  const ids = [...new Set(sgaStockCliente(clienteId).map(p => p.warehouseId))];
+  const whs = allWarehouses.filter(w => ids.includes(w.id));
+  ori.innerHTML = !clienteId ? '<option value="">Elige primero el cliente</option>' : !whs.length ? '<option value="">Este cliente no tiene stock</option>' : `${whs.length === 1 ? '' : '<option value="">Elige el almacén…</option>'}${whs.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}`;
+  if (whs.length === 1) ori.value = whs[0].id;
+  const todos = allWarehouses.filter(w => !w.archived || ids.includes(w.id)).slice().sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  des.innerHTML = clienteId ? `<option value="">Elige el almacén…</option>${todos.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}` : '<option value="">Elige primero el cliente</option>';
+  sgaSitioTabla();
+}
+// Ubicaciones libres de una zona de estantería: sin las ocupadas por otra mercancía (la de esta pantalla no cuenta: se mueve) y sin las ya elegidas en otra fila
+function sgaSitioUbicHtml(zonaId, sel, pidActual){
+  const z = sgaZonaDe(zonaId);
+  if (!z || z.tipo !== 'estanteria') return '<option value="">—</option>';
+  const enPantalla = new Set([...document.querySelectorAll('.st-row')].map(tr => tr.dataset.pid));
+  const ocupadas = new Set(sgaPartidas.filter(p => p.actual > 0 && p.ubicacionId && !enPantalla.has(p.id)).map(p => p.ubicacionId));
+  document.querySelectorAll('.st-row').forEach(tr => { if (tr.dataset.pid === pidActual) return; const u = document.getElementById(`st-u-${tr.dataset.pid}`); if (u && u.value) ocupadas.add(u.value); });
+  const libres = sgaUbicacionesDe(zonaId).filter(u => !ocupadas.has(u.id) || u.id === sel);
+  return `<option value="">Ubicación (opcional)</option>${libres.map(u => `<option value="${u.id}" ${u.id === sel ? 'selected' : ''}>${esc(u.codigo)}</option>`).join('')}`;
+}
+function sgaSitioZonaOpts(wid, sel){
+  const zs = sgaZonasActivas(wid);
+  return `<option value="">${zs.length ? 'Sin ubicar' : 'Sin zonas creadas'}</option>${zs.map(z => `<option value="${z.id}" ${z.id === sel ? 'selected' : ''}>${esc(sgaZonaNombre(z))}${z.tipo === 'estanteria' ? ' (estantería)' : ''}</option>`).join('')}`;
+}
+function sgaSitioTabla(){
+  const clienteId = sgaSitioCliente(), ori = sgaSitioOrigen(), des = sgaSitioDestino(), cont = document.getElementById('st-stock');
+  if (!cont) return;
+  if (!clienteId || !ori || !des) { cont.innerHTML = `<div style="color:var(--mutedFaint);font-size:12.5px;">${!clienteId ? 'Elige primero el cliente.' : !ori ? 'Elige el almacén donde está ahora la mercancía.' : 'Elige el almacén al que pasa (puede ser el mismo, si solo cambia de zona o de ubicación).'}</div>`; sgaSitioRefrescar(); return; }
+  const ps = sgaStockCliente(clienteId, ori), mismo = ori === des;
+  const sitio = ps.some(p => { const s = sgaSitioTxt(p); return s && s !== '—'; }), desc = ps.some(p => p.descripcion), tipo = ps.some(p => p.productoId), refCol = ps.some(p => p.referencia || p.codigo);
+  const claves = sgaUnicoCampos(clienteId);
+  cont.innerHTML = `
+    <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+      <div class="field" style="flex:1;min-width:240px;max-width:380px;margin-bottom:0;"><label>Zona de destino para todas las marcadas</label><select id="st-zona-todas" onchange="sgaSitioZonaTodas(this.value)">${sgaSitioZonaOpts(des, '')}</select></div>
+      <div style="font-size:12.5px;color:var(--muted);flex:2;min-width:240px;">${mismo ? 'Es el mismo almacén: solo se cambia de zona o de ubicación lo que elijas distinto de lo que ya tiene.' : 'Si no eliges zona, la mercancía pasa al almacén nuevo «sin ubicar» y la colocas después.'}</div>
+    </div>
+    ${ps.length > 8 ? sgaBuscadorFilasHtml('st-buscar', '#st-stock .tc-hist-box table', 'Buscar en el stock: artículo, descripción, código, sitio…') : ''}
+    <div class="tc-hist-box" style="max-height:480px;"><table class="tf-table" style="min-width:760px;">
+      <thead><tr><th style="width:34px;"><input type="checkbox" id="st-todas" checked onchange="sgaSitioMarcarTodas(this.checked)" title="Marcar o desmarcar todas" /></th>${thSort('Recepción', 'date')}${desc ? '<th>Artículo</th>' : ''}${tipo ? thSort('Tipo de carga', 'text') : ''}${refCol ? thSort('Referencia', 'text') : ''}${claves.map(f => thSort(esc(f.nombre), f.tipo === 'numero' ? 'number' : 'text')).join('')}${sitio ? '<th>Sitio actual</th>' : ''}<th style="text-align:right;">Cantidad</th><th>Zona nueva</th><th>Ubicación nueva</th></tr></thead>
+      <tbody>${ps.map(p => `
+        <tr class="st-row" data-pid="${p.id}">
+          <td><input type="checkbox" class="st-chk" checked onchange="sgaSitioRefrescar()" /></td>
+          <td style="white-space:nowrap;" data-sort-value="${esc(p.fechaEntrada)}">${fmtDateDMY(p.fechaEntrada)}</td>
+          ${desc ? `<td>${esc(p.descripcion) || '—'}</td>` : ''}
+          ${tipo ? `<td data-sort-value="${esc(sgaProdTxt(p.productoId))}">${esc(sgaProdTxt(p.productoId))}</td>` : ''}
+          ${refCol ? `<td data-sort-value="${esc(p.referencia)}">${esc(p.referencia) || '—'}${p.codigo ? `<div style="font-family:var(--mono);font-size:11px;color:var(--muted);">${esc(p.codigo)}</div>` : ''}</td>` : ''}
+          ${claves.map(f => `<td data-sort-value="${esc(sgaClaveValorTxt(f, p))}"><b>${esc(sgaClaveValorTxt(f, p))}</b></td>`).join('')}
+          ${sitio ? `<td>${esc(sgaSitioTxt(p))}</td>` : ''}
+          <td class="tf-precio">${p.actual}</td>
+          <td style="min-width:170px;"><select class="st-z" id="st-z-${p.id}" onchange="sgaSitioZonaFila('${p.id}')">${sgaSitioZonaOpts(des, mismo ? p.zonaId : '')}</select></td>
+          <td style="min-width:150px;"><select class="st-u" id="st-u-${p.id}" onchange="sgaSitioRefrescar()">${sgaSitioUbicHtml(mismo ? p.zonaId : '', mismo ? p.ubicacionId : '', p.id)}</select></td>
+        </tr>`).join('')}</tbody>
+    </table></div>`;
+  sgaSitioRefrescar();
+}
+function sgaSitioMarcarTodas(on){ document.querySelectorAll('.st-chk').forEach(c => { c.checked = on; }); window.__stockDirty = true; sgaSitioRefrescar(); }
+function sgaSitioZonaFila(pid){
+  const z = document.getElementById(`st-z-${pid}`), u = document.getElementById(`st-u-${pid}`);
+  if (z && u) u.innerHTML = sgaSitioUbicHtml(z.value, '', pid);
+  sgaSitioRefrescar();
+}
+function sgaSitioZonaTodas(v){
+  document.querySelectorAll('.st-row').forEach(tr => {
+    if (!tr.querySelector('.st-chk').checked) return;
+    const z = document.getElementById(`st-z-${tr.dataset.pid}`), u = document.getElementById(`st-u-${tr.dataset.pid}`);
+    if (z) z.value = v;
+    if (u) u.innerHTML = sgaSitioUbicHtml(v, '', tr.dataset.pid);
+  });
+  window.__stockDirty = true; sgaSitioRefrescar();
+}
+// Lo que se va a cambiar: las filas marcadas (si es el mismo almacén, solo las que cambian de zona o de ubicación)
+function sgaSitioLeer(){
+  const ori = sgaSitioOrigen(), des = sgaSitioDestino(), items = [];
+  document.querySelectorAll('.st-row').forEach(tr => {
+    if (!tr.querySelector('.st-chk').checked) return;
+    const p = sgaPartidas.find(x => x.id === tr.dataset.pid); if (!p) return;
+    const zona = (document.getElementById(`st-z-${p.id}`) || {}).value || '', ubic = (document.getElementById(`st-u-${p.id}`) || {}).value || '';
+    if (ori === des && zona === (p.zonaId || '') && ubic === (p.ubicacionId || '')) return;
+    items.push({ p, zona, ubic });
+  });
+  return { clienteId: sgaSitioCliente(), ori, des, fecha: (document.getElementById('st-fecha') || {}).value || '', motivo: ((document.getElementById('st-motivo') || {}).value || '').trim(), items };
+}
+function sgaSitioRefrescar(){
+  const d = sgaSitioLeer(), t = document.getElementById('st-total');
+  if (!t) return;
+  const u = d.items.reduce((s, x) => s + x.p.actual, 0);
+  t.innerHTML = d.items.length ? `Se cambian de sitio <b>${d.items.length}</b> partida${d.items.length !== 1 ? 's' : ''} (<b>${sgaNumTxt(u)}</b> en total)${d.ori !== d.des ? ` de <b>${esc(whNombre(d.ori))}</b> a <b>${esc(whNombre(d.des))}</b>` : ''}. No se crea ningún movimiento ni ningún cobro.` : 'Todavía no hay nada que cambiar de sitio.';
+}
+function tplStockSitioPage(){
+  const clientes = sgaClientesAlmacenLista();
+  return `
+    <div style="--bn-accent:var(--primary);">
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.edit, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 260px;">
+        <div class="deca-banner-title">Ajustes de stock</div>
+        <div class="deca-banner-sub">Cambio de almacén o de ubicación: cuando el cliente reorganiza su material (lo pasa a otro almacén, zona o ubicación). Solo cambia dónde está: no se crean movimientos ni cobros, y queda anotado.</div>
+      </div>
+    </div>
+    ${sgaAjustesToggleHtml('sitio')}
+    <div class="deca-form" oninput="window.__stockDirty=true;" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
+      <div class="card deca-card">
+        ${decaCardHead('file', 'Datos del cambio', 'De qué cliente, de qué almacén a cuál y por qué')}
+        <div class="deca-card-body">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <div class="field" style="flex:2;min-width:240px;"><label>Cliente <span class="dc-req">*</span></label><select id="st-cliente" onchange="sgaSitioClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos en el SGA'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
+            <div class="field" style="flex:1;min-width:190px;"><label>Almacén donde está <span class="dc-req">*</span></label><select id="st-origen" onchange="sgaSitioTabla()"><option value="">Elige primero el cliente</option></select></div>
+            <div class="field" style="flex:1;min-width:190px;"><label>Almacén al que pasa <span class="dc-req">*</span></label><select id="st-destino" onchange="sgaSitioTabla()"><option value="">Elige primero el cliente</option></select></div>
+            <div class="field" style="flex:1;min-width:150px;"><label>Fecha <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="st-fecha" type="date" value="${today()}" />`)}</div>
+          </div>
+          <div class="field" style="margin-bottom:0;"><label>Motivo <span class="dc-req">*</span></label>${decaInputIcon('file', `<input id="st-motivo" maxlength="200" value="Cambio interno de almacén por reorganización del cliente" />`)}</div>
+        </div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('box', 'Qué se cambia de sitio', 'Marca las partidas que cambian; por defecto van todas')}
+        <div class="deca-card-body"><div id="st-stock"><div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div></div><div id="st-total" style="margin-top:10px;font-size:13px;color:var(--muted);"></div></div>
+      </div>
+    </div>
+    <div class="deca-actions" style="max-width:1180px;">
+      <div id="st-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
+      <div class="deca-actions-row">
+        <button class="btn btn-ghost deca-cancel" onclick="sgaSitioCancelar()">Cancelar</button>
+        <button class="btn btn-primary deca-submit st-save" onclick="sgaSitioConfirmar()">Confirmar cambio</button>
+      </div>
+    </div>
+    </div>`;
+}
+async function sgaSitioConfirmar(){
+  const errEl = document.getElementById('st-error');
+  errEl.textContent = '';
+  const d = sgaSitioLeer(), errores = [];
+  if (!d.clienteId) errores.push('Elige el cliente.');
+  if (d.clienteId && !d.ori) errores.push('Elige el almacén donde está ahora la mercancía.');
+  if (d.clienteId && !d.des) errores.push('Elige el almacén al que pasa.');
+  if (!d.fecha) errores.push('Indica la fecha.');
+  if (!d.motivo) errores.push('Escribe el motivo del cambio.');
+  if (!errores.length && !d.items.length) errores.push(d.ori === d.des ? 'No has cambiado ninguna zona ni ubicación.' : 'No hay ninguna partida marcada.');
+  if (errores.length) { errEl.textContent = errores.join('\n'); return; }
+  const u = d.items.reduce((s, x) => s + x.p.actual, 0), cli = contactos.find(c => c.id === d.clienteId);
+  const nom = cli ? ((cli.nombreComercial || '').trim() || cli.nombre) : 'el cliente';
+  if (!(await appConfirm({ title: 'Cambiar de sitio la mercancía', message: `${d.items.length} partida${d.items.length !== 1 ? 's' : ''} de ${nom} (${sgaNumTxt(u)} en total)${d.ori !== d.des ? ` pasan de ${whNombre(d.ori)} a ${whNombre(d.des)}` : ' cambian de zona o de ubicación'}. No se crea ningún movimiento ni ningún cobro, y no se puede deshacer desde aquí (habría que hacer otro cambio).`, confirmLabel: 'Confirmar cambio', cancelLabel: 'Revisar', tone: 'warn', icon: 'warn' }))) return;
+  const btn = document.querySelector('.st-save');
+  if (btn) btn.disabled = true;
+  const payload = {
+    cambio: { created_by: currentUserEmail(), cliente_id: d.clienteId, fecha: d.fecha, motivo: d.motivo, warehouse_destino: d.des },
+    items: d.items.map(x => ({ partida_id: x.p.id, zona_id: x.zona || null, ubicacion_id: x.ubic || null })),
+  };
+  const { error } = await supabaseClient.rpc('sga_cambiar_sitio', { p: payload });
+  if (error) {
+    const m = error.message || 'error desconocido.';
+    errEl.textContent = 'No se pudo guardar: ' + (/function .*sga_cambiar_sitio|sga_cambios_sitio|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL del cambio de almacén en Supabase (sga-cambio-sitio.sql).' : m);
+    if (btn) btn.disabled = false;
+    return;
+  }
+  const resumen = `Cambio de sitio de ${nom}: ${d.items.length} partida${d.items.length !== 1 ? 's' : ''} (${sgaNumTxt(u)}) ${d.ori !== d.des ? `de ${whNombre(d.ori)} a ${whNombre(d.des)}` : 'de zona o ubicación'}. Motivo: ${d.motivo}.`;
+  try { await logWarehouseHistorial(d.des, resumen); if (d.ori !== d.des) await logWarehouseHistorial(d.ori, resumen); } catch (e) { /* el historial no es imprescindible */ }
+  await loadSgaStock();
+  appToast('Cambio de sitio registrado.', 'ok');
+  window.__stockSeg = 'catalogo';
   stockVolver();
 }
 
