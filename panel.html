@@ -5062,6 +5062,16 @@ function sgaM2CardHtml(clienteId){
       <table class="tf-table" style="margin-top:6px;"><thead><tr><th>Desde</th><th>Almacén</th><th style="text-align:right;">m²</th><th>Nota</th><th>Registrado</th></tr></thead>
       <tbody>${hist.map((x, i) => `<tr${i === 0 ? ' style="font-weight:700;"' : ''}><td style="white-space:nowrap;">${esc(fmtDateDMY(x.desde))}</td><td>${x.warehouseId ? esc(nomAlm(x.warehouseId)) : '<span style="color:var(--mutedFaint);">Sin repartir</span>'}</td><td class="tf-precio">${esc(sgaNumTxt(x.m2))}</td><td>${esc(x.nota) || '<span style="color:var(--mutedFaint);">—</span>'}</td><td style="color:var(--muted);font-size:12.5px;">${quien(x.por)}${x.creadoEn ? ' · ' + esc(fmtDateDMY(String(x.creadoEn).slice(0, 10))) : ''}</td></tr>`).join('')}</tbody></table>` : ''}`;
 }
+// Un cliente con m² contratados en un almacén no puede perderlo: si no, esos m² seguirían contando sin que se pudieran editar.
+// Devuelve el texto del aviso si alguno de esos almacenes aún tiene m² vigentes hoy; si no, ''.
+function sgaM2BloqueaQuitar(clienteId, whIds){
+  if (!clienteId || !(whIds || []).length) return '';
+  const act = sgaM2ContratoPorAlmacen(clienteId, today());
+  const bl = whIds.map(w => ({ w, m2: (act.get(w) || { m2: 0 }).m2 })).filter(x => x.m2 > 0);
+  if (!bl.length) return '';
+  const c = contactos.find(x => x.id === clienteId), nom = c ? ((c.nombreComercial || '').trim() || c.nombre) : 'el cliente';
+  return `No se puede quitar ${bl.map(x => `${whNombre(x.w)} (${sgaNumTxt(x.m2)} m²)`).join(' ni ')} a ${nom}: tiene m² contratados ahí. Primero quítalos en su ficha de Control Stock SGA → Superficie contratada («Quitar los m²») y después quita el almacén.`;
+}
 // Quitar los m² de un almacén: se anota un cambio a 0 desde el día indicado (el histórico se conserva: los meses anteriores se siguen cobrando con los m² que había)
 async function sgaM2Quitar(wid, i){
   const id = window.__sgaClienteFormId, err = document.getElementById('sgac-m2-error');
@@ -14398,6 +14408,8 @@ async function saveWarehouseClientes(whId){
   const added = [...draft].filter(id => !before.has(id));
   const removed = [...before].filter(id => !draft.has(id));
   if (!added.length && !removed.length) { closeModal(); return; }
+  const bloqueos = removed.map(cid => sgaM2BloqueaQuitar(cid, [whId])).filter(Boolean);   // un cliente con m² contratados en este almacén no puede salir de él
+  if (bloqueos.length) { if (errEl) errEl.textContent = bloqueos.join('\n'); return; }
   const btns = [...document.querySelectorAll('.wcl-save-btn')];
   btns.forEach(b => b.disabled = true);
   try {
@@ -17726,6 +17738,8 @@ async function saveContactoWarehouses(id){
   const removed = before.filter(w => !ids.includes(w));
   const finish = () => { window.__contactoDetailEditMode = false; window.__contactoFormDirty = false; renderTab(); };
   if (!added.length && !removed.length) { finish(); return; }
+  const bloqueo = sgaM2BloqueaQuitar(id, removed);
+  if (bloqueo) { if (errEl) errEl.textContent = bloqueo; return; }
   document.querySelectorAll('#tab-content button').forEach(b => { b.disabled = true; });
   try {
     if (removed.length) {
@@ -18169,6 +18183,7 @@ async function submitContactoForm(editId){
   const prevContacto = editId ? contactos.find(x=>x.id===editId) : null;
   const prevWarehouseIds = prevContacto ? (prevContacto.warehouseIds || []).slice() : [];
   const warehouseIds = !esClienteAlmacen ? [] : prevContacto ? prevWarehouseIds : ((window.__contactoDetailPreset && window.__contactoDetailPreset.warehouseIds) || []);
+  if (editId && !esClienteAlmacen && prevWarehouseIds.length) { const bloqueo = sgaM2BloqueaQuitar(editId, prevWarehouseIds); if (bloqueo) { showFormError(errEl, bloqueo.replace(/^No se puede quitar/, 'No puede dejar de ser cliente de almacén: no se puede quitar')); return; } }
   const calle1 = document.getElementById('ct-calle1').value.trim();
   const calle2 = document.getElementById('ct-calle2').value.trim();
   const codigoPostal = document.getElementById('ct-cp').value.trim();
