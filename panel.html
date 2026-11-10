@@ -17424,6 +17424,7 @@ function closeContactoDetail(){
     window.__decaFormDraft = null;
     return;
   }
+  window.__drReturnContacto = false;   // si venía del formulario del conductor, se vuelve a él con lo escrito (queda en su borrador)
   renderHeader(); renderTab();
 }
 // Cambia de pestaña dentro de la ficha (Datos generales / Almacén / Comercial / Transporte / Autónomos).
@@ -18268,6 +18269,7 @@ async function submitContactoForm(editId){
     if (changeLines.length) await logContactoHistorial(contactoId, changeLines.join('\n'));
     await Promise.all([loadClients(), loadCompanies()]);
     if (!editId && window.__ocReturnContacto) { ocVolverDesdeContacto(contactos.find(x=>x.id===contactoId)); return; }
+    if (!editId && window.__drReturnContacto) { drVolverDesdeContacto(contactos.find(x=>x.id===contactoId)); return; }
     if (!editId && window.__decaReturnContactoRole) { decaVolverDesdeContacto(contactos.find(x=>x.id===contactoId)); return; }
     if (!editId && window.__tarifaClienteReturnPending) { window.__tarifaClienteReturnPending = false; openTarifaForm(null, null, contactoId); return; }
     openContactoModal(contactoId);
@@ -34975,7 +34977,7 @@ async function deleteCommissionRate(id){
 // (openContactoModal/archiveContacto/unarchiveContacto) — ver Administración.
 
 // Alta / edición de conductor, a página completa: datos, empresa (de Proveedores Transporte), modalidad, tarifas y pactos
-const DR_CAMPOS = ['dr-name', 'dr-dni', 'dr-company', 'dr-fleet', 'dr-plate', 'dr-modality', 'dr-t-from', 'dr-t-day', 'dr-t-km', 'dr-t-hour', 'dr-t-maxkm', 'dr-t-maxh', 'dr-m-from', 'dr-m-pct', 'dr-pactos'];
+const DR_CAMPOS = ['dr-name', 'dr-dni', 'dr-company', 'dr-fleet', 'dr-plate', 'dr-residencia', 'dr-modality', 'dr-t-from', 'dr-t-day', 'dr-t-km', 'dr-t-hour', 'dr-t-maxkm', 'dr-t-maxh', 'dr-m-from', 'dr-m-pct', 'dr-pactos'];
 // Lo escrito en el formulario se guarda como borrador antes de abrir una ventana (tarifa, comisión), para no perderlo al repintar la página
 function drDraftSave(){
   if (window.__autonomosView !== 'conductorForm') return;
@@ -34984,6 +34986,20 @@ function drDraftSave(){
   const ix = document.getElementById('dr-t-idx');
   if (ix) d['dr-t-idx'] = ix.checked ? '1' : '';
   window.__drDraft = d;
+}
+// Crear el proveedor de transporte desde el formulario del conductor: se va a la ficha real de «Nuevo contacto» (ya como transportista) y, al guardar
+// o cancelar, se vuelve al formulario con todo lo que ya estaba escrito (y el proveedor nuevo elegido). Mismo patrón que en las órdenes de carga.
+function drIrACrearProveedor(){
+  drDraftSave();
+  window.__drReturnContacto = true;
+  window.__contactoNavContext = { label: 'Proveedores Transporte', ids: [] };
+  openContactoModal(null, contactoPresetForNavLabel('Proveedores Transporte'));
+}
+function drVolverDesdeContacto(contactoCreado){
+  window.__drReturnContacto = false;
+  if (contactoCreado) { const d = window.__drDraft || {}; d['dr-company'] = contactoCreado.id; window.__drDraft = d; }
+  window.__contactoFormDirty = false;   // ya se ha guardado: no preguntar por cambios sin guardar
+  closeContactoDetail();
 }
 function openDriverForm(editId){
   window.__drDraft = null;
@@ -35105,8 +35121,8 @@ function tplDriverForm(){
 
       <div class="card dr-card">
         ${sec(2, 'Proveedor de transporte', 'La empresa para la que trabaja; se coge de Proveedores Transporte')}
-        <div class="field" style="max-width:560px;"><label>Empresa *</label><select id="dr-company">${coOptions}</select></div>
-        <div class="dr-hint">${coList.length ? 'Solo salen los contactos marcados como <b>transportista</b>.' : '<b style="color:var(--danger);">Todavía no hay ningún proveedor de transporte.</b>'} Si la empresa no está, tiene que crearse antes${puedeProv ? ` en <a href="#" onclick="event.preventDefault(); setTab('trafico').then(() => setTraficoSection('transportistas'));">Proveedores Transporte</a>` : ' en Proveedores Transporte'}.</div>
+        <div class="field" style="max-width:560px;"><label>Empresa *</label>${puedeProv ? decaCampoConCrearHtml(`<select id="dr-company" style="flex:1;min-width:0;">${coOptions}</select>`, 'drIrACrearProveedor()', 'Crear un proveedor de transporte nuevo (no está en la lista)') : `<select id="dr-company">${coOptions}</select>`}</div>
+        <div class="dr-hint">${coList.length ? 'Solo salen los contactos marcados como <b>transportista</b>.' : '<b style="color:var(--danger);">Todavía no hay ningún proveedor de transporte.</b>'} ${puedeProv ? 'Si la empresa no está, créala con el botón <b>+</b> de al lado: al guardarla vuelves aquí con todo lo que ya habías escrito.' : 'Si la empresa no está, tiene que crearse antes en Proveedores Transporte.'}</div>
       </div>
 
       <div class="card dr-card">
