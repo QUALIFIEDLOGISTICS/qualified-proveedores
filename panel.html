@@ -25692,7 +25692,7 @@ function crmTituloAuto(o){
   let puesto = false;
   return cs.map(x => x.t !== 'transporte' || nTr < 2 ? crmLineaTxt(x) : puesto ? '' : (puesto = true, 'Transportes varios')).filter(Boolean).join(' + ');
 }
-const crmTitulo = o => (o.titulo || '').trim() || crmTituloAuto(o) || 'Cotización';
+const crmTitulo = o => (o.titulo || '').replace(/\s+/g, ' ').trim() || crmTituloAuto(o) || 'Cotización';   // en listas, asunto del correo, etc. el detalle sale en una sola línea; en el PDF respeta los saltos de línea
 // Servicio (transporte / almacén / mixto) deducido de lo elegido
 function crmServicioDe(conceptos, actual){
   const t = conceptos.some(x => x.t === 'transporte'), a = conceptos.some(x => x.t === 'almacen' || x.t === 'operativa');
@@ -27533,7 +27533,7 @@ function crmFormHtml(o){
       ${blk('al')}
       ${blk('op')}
       ${paso(3, 'Condiciones', 'Lo que saldrá en la oferta en PDF')}
-      <div class="field"><label>Detalle <small style="font-weight:400;color:var(--mutedFaint);">· frecuencia, condiciones, lo que quieras recordar (opcional)</small></label><input id="crm-f-tit" maxlength="140" placeholder="Ej. 2 camiones a la semana" value="${esc(o ? o.titulo : '')}" /></div>
+      <div class="field"><label>Detalle y condiciones <small style="font-weight:400;color:var(--mutedFaint);">· frecuencia, condiciones, lo que quieras que salga en la oferta (opcional)</small></label><textarea id="crm-f-tit" rows="7" maxlength="2000" style="min-height:140px;resize:vertical;line-height:1.5;" placeholder="Ej. 2 camiones a la semana&#10;Carga los lunes y los jueves&#10;Con Intro puedes escribir en varias líneas">${esc(o ? o.titulo : '')}</textarea></div>
       <div class="crm-g3">
         <div class="field"><label>Fecha de la cotización</label><input id="crm-f-fec" type="date" value="${o ? o.fechaCot : today()}" /></div>
         <div class="field"><label>Validez de la oferta (días)</label><input id="crm-f-val" inputmode="numeric" maxlength="3" placeholder="${CRM_OFERTA_VALIDEZ_DIAS}" value="${o && o.validezDias ? o.validezDias : CRM_OFERTA_VALIDEZ_DIAS}" /></div>
@@ -28001,12 +28001,20 @@ async function crmOfertaPdfBytes(o, num, lang){
   // ---- Observaciones y condiciones ----
   const obs = (o.titulo || '').trim();
   if (obs) {
-    const ls = wrap(obs, font, 8.8, CW - 22), h = 24 + ls.length * 11.5;
-    asegurar(h + 10);
-    rr(M, y, CW, h, 5, SOFT);
-    txt(L.obs.toUpperCase(), M + 11, y - 13, 6.8, bold, MUTED);
-    ls.forEach((l, i) => txt(l, M + 11, y - 26 - i * 11.5, 8.8, font, INK));
-    y -= h + 12;
+    // Respeta los saltos de línea escritos con Intro (y las líneas en blanco); si es largo, la caja continúa en la página siguiente
+    let ls = [];
+    obs.split(/\r?\n/).forEach(p => { ls = ls.concat(p.trim() ? wrap(p.trim(), font, 8.8, CW - 22) : ['']); });
+    while (ls.length && ls[ls.length - 1] === '') ls.pop();
+    let primero = true;
+    while (ls.length) {
+      asegurar(24 + 3 * 11.5 + 10);
+      const cab = primero ? 24 : 12, caben = Math.max(1, Math.floor((y - BOTTOM - cab - 10) / 11.5));
+      const trozo = ls.splice(0, caben), h = cab + trozo.length * 11.5;
+      rr(M, y, CW, h, 5, SOFT);
+      if (primero) txt(L.obs.toUpperCase(), M + 11, y - 13, 6.8, bold, MUTED);
+      trozo.forEach((l, i) => { if (l) txt(l, M + 11, y - cab - 2 - i * 11.5, 8.8, font, INK); });
+      y -= h + 12; primero = false;
+    }
   }
   asegurar(30 + condiciones.length * 12);
   txt(L.cond.toUpperCase(), M, y - 8, 6.8, bold, MUTED); y -= 20;
