@@ -321,7 +321,9 @@
   .sgac-rq{flex:1 1 230px;font-size:13.5px;font-weight:600;color:var(--text);}
   .sgac-rq small{font-weight:400;color:var(--muted);font-size:12px;}
   .sgac-sg button{padding:5px 14px;font-size:12.5px;}
-  .sgac-m2-c,.sgac-m2-f{display:grid;grid-template-columns:minmax(110px,1fr) 130px 160px minmax(150px,2fr);gap:10px;align-items:center;}
+  .sgac-m2-c,.sgac-m2-f{display:grid;grid-template-columns:minmax(110px,1fr) 130px 160px minmax(150px,2fr) 30px;gap:10px;align-items:center;}
+  .sgac-m2-x{width:30px;height:30px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--muted);font-size:14px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;}
+  .sgac-m2-x:hover{border-color:var(--danger);color:var(--danger);background:color-mix(in srgb,var(--danger) 8%,var(--panel));}
   .sgac-m2-c{font-size:12px;color:var(--muted);font-weight:600;margin-bottom:4px;} .sgac-m2-f{margin-bottom:8px;}
   .sgac-m2-nm{display:flex;flex-direction:column;align-items:flex-start;gap:1px;min-width:0;}
   .sgac-m2-f b{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;}
@@ -5044,14 +5046,15 @@ function sgaM2CardHtml(clienteId){
         // Los almacenes asignados al cliente y, además, cualquiera que aún tenga m² aunque ya no esté asignado (si no, no habría forma de quitárselos)
         const extra = act ? [...act.porAlmacen.entries()].filter(([k, x]) => k && x.m2 > 0 && !ws.some(w => w.id === k)).map(([k]) => ({ id: k, nombre: whNombre(k) + ' (ya no asignado)' })) : [];
         const lista = ws.length || extra.length ? ws.map(w => ({ id: w.id, nombre: w.name })).concat(extra) : [{ id: '', nombre: '' }];
-        const cab =`<div class="sgac-m2-c"><span>${ws.length ? 'Almacén' : ''}</span><span>m² contratados</span><span>Desde el día</span><span>Nota <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></span></div>`;
+        const cab =`<div class="sgac-m2-c"><span>${ws.length ? 'Almacén' : ''}</span><span>m² contratados</span><span>Desde el día</span><span>Nota <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></span><span></span></div>`;
         return cab + lista.map((w, i) => {
           const cur = act ? act.porAlmacen.get(w.id) : null, v = cur ? String(cur.m2).replace('.', ',') : '';
           return `<div class="sgac-m2-f">
-            <span class="sgac-m2-nm"><b title="${esc(w.nombre)}">${esc(w.nombre) || '&nbsp;'}</b>${w.id && cur && cur.m2 > 0 ? `<button type="button" class="crm-link" style="font-size:11.5px;" onclick="sgaM2Quitar('${esc(w.id)}', ${i})" title="Pone a 0 los m² de este almacén desde el día indicado a la derecha; los meses anteriores no cambian">Quitar los m²</button>` : ''}</span>
+            <span class="sgac-m2-nm"><b title="${esc(w.nombre)}">${esc(w.nombre) || '&nbsp;'}</b></span>
             <input id="sgac-m2-n-${i}" class="sgac-m2-i" data-w="${esc(w.id)}" data-orig="${esc(v)}" value="${esc(v)}" inputmode="decimal" maxlength="9" placeholder="Ej. 250" style="text-align:right;" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaM2ContratoGuardar(); }" />
             <input id="sgac-m2-d-${i}" type="date" value="${today()}" />
             <input id="sgac-m2-nota-${i}" maxlength="120" placeholder="Ej. Amplía una nave" />
+            ${w.id && cur && cur.m2 > 0 ? `<button type="button" class="sgac-m2-x" onclick="sgaM2Quitar('${esc(w.id)}', ${i})" title="Quitar los m² de este almacén desde el día indicado en la fila (los meses anteriores no cambian)" aria-label="Quitar los m² de ${esc(w.nombre)}">✕</button>` : '<span></span>'}
           </div>`;
         }).join('');
       })()}
@@ -5083,7 +5086,7 @@ async function sgaQuitarAlmacenBloqueo(clienteId, whIds){
   }).filter(Boolean);
   if (!motivos.length) return '';
   const c = contactos.find(x => x.id === clienteId), nom = c ? ((c.nombreComercial || '').trim() || c.nombre) : 'el cliente';
-  return `No se puede quitar ${motivos.join(' ni ')} a ${nom}. Solo se puede quitar un almacén cuando el cliente no tiene stock ni m² contratados en él (los m² se quitan en su ficha de Control Stock SGA → Superficie contratada, «Quitar los m²»). Lo ya registrado se conserva.`;
+  return `No se puede quitar ${motivos.join(' ni ')} a ${nom}. Solo se puede quitar un almacén cuando el cliente no tiene stock ni m² contratados en él (los m² se quitan en su ficha de Control Stock SGA → Superficie contratada, con la ✕ de la fila de ese almacén). Lo ya registrado se conserva.`;
 }
 // Quitar los m² de un almacén: se anota un cambio a 0 desde el día indicado (el histórico se conserva: los meses anteriores se siguen cobrando con los m² que había)
 async function sgaM2Quitar(wid, i){
@@ -5113,7 +5116,8 @@ async function sgaM2ContratoGuardar(){
   let malo = '';
   document.querySelectorAll('#sgac-m2 .sgac-m2-i').forEach(el => {
     const i = el.id.replace('sgac-m2-n-', '');
-    const t = el.value.trim();
+    let t = el.value.trim();
+    if (t === '' && (el.dataset.orig || '') !== '' && Number((el.dataset.orig || '0').replace(',', '.')) > 0) t = '0';   // dejar la casilla vacía = quitar los m² (se anota 0 desde el día de la fila)
     if (t === '' || t === (el.dataset.orig || '')) return;
     const n = Number(t.replace(',', '.'));
     const desde = (document.getElementById(`sgac-m2-d-${i}`) || {}).value || '';
