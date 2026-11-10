@@ -27632,11 +27632,33 @@ function crmEurLang(n, L){
   const s = Number(n).toLocaleString(L.loc, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/[  ]/g, ' ');
   return L.euroDelante ? '€' + s : s + ' €';
 }
+/* Plazo de pago: es texto libre, pero los de la lista desplegable («Transferencia a 30 días», «60 días fecha factura», «Pago al contado», «Pago anticipado»…)
+   se traducen al idioma del PDF. Si se ha escrito otra cosa a mano, sale tal cual está escrito. */
+const CRM_PLAZO_TXT = {
+  es: { contado: 'Pago al contado', anticipado: 'Pago anticipado', transf: n => `Transferencia a ${n} días`, ff: n => `${n} días fecha factura`, transfFf: n => `Transferencia a ${n} días fecha factura` },
+  ca: { contado: 'Pagament al comptat', anticipado: 'Pagament anticipat', transf: n => `Transferència a ${n} dies`, ff: n => `${n} dies data factura`, transfFf: n => `Transferència a ${n} dies data factura` },
+  en: { contado: 'Cash payment', anticipado: 'Advance payment', transf: n => `Bank transfer at ${n} days`, ff: n => `${n} days from invoice date`, transfFf: n => `Bank transfer at ${n} days from invoice date` },
+  fr: { contado: 'Paiement comptant', anticipado: 'Paiement anticipé', transf: n => `Virement à ${n} jours`, ff: n => `${n} jours date de facture`, transfFf: n => `Virement à ${n} jours date de facture` }
+};
+function crmPlazoLang(txt, lang){
+  const T = CRM_PLAZO_TXT[lang], t0 = String(txt || '').trim();
+  if (!T || lang === 'es') return t0;
+  const t = t0.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[.\s]+$/, '').replace(/\s+/g, ' ');
+  let m;
+  if (/^pago (al )?contado$|^contado$/.test(t)) return T.contado;
+  if (/^pago anticipado$|^anticipado$|^pago por adelantado$/.test(t)) return T.anticipado;
+  if ((m = t.match(/^(?:transferencia(?: bancaria)?|giro)?\s*(?:a\s*)?(\d+) dias(?: (?:de )?(?:fecha|f\.?) ?(?:de )?(?:factura|fra\.?|f\.?))?$/))) {
+    const conTransf = /^(transferencia|giro)/.test(t), conFf = /(fecha|f\.?) ?(de )?(factura|fra|f)\.?$/.test(t);
+    return conTransf ? (conFf ? T.transfFf(m[1]) : T.transf(m[1])) : (conFf ? T.ff(m[1]) : T.transf(m[1]));
+  }
+  return t0;
+}
 // Condiciones que salen al pie de la oferta: las fijas (se cambian aquí) y las que dependen de lo marcado en la cotización
 function crmOfertaCondiciones(o, L){
   L = L || CRM_PDF_IDIOMAS.es;
+  const lang = Object.keys(CRM_PDF_IDIOMAS).find(k => CRM_PDF_IDIOMAS[k] === L) || 'es';
   const c = [L.iva, L.validez(crmOfertaDias(o))];
-  if (o.plazoPago) c.push(L.pago(o.plazoPago.replace(/[.\s]+$/, '')));
+  if (o.plazoPago) c.push(L.pago(crmPlazoLang(o.plazoPago, lang).replace(/[.\s]+$/, '')));
   if ((o.conceptos || []).some(x => x.t === 'transporte') && o.gasoil) c.push(o.gasoil === 'si' ? L.gasSi : L.gasNo);
   return c;
 }
