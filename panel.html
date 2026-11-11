@@ -6847,6 +6847,12 @@ async function sgaBultosRestantes(){
     ps.forEach(p => { if (!falta.has(p.id)) p.bultosAct = Math.max(0, Math.round((p.bultos + (suma[p.id] || 0)) * 100) / 100); });
   } catch (e) { ps.forEach(p => { p.bultosAct = null; }); }
 }
+// Cronómetro de una confirmación (recepción, expedición…): cada llamada apunta lo que ha tardado desde la anterior. Se ve con Ctrl + Alt + T.
+function sgaConfMedir(tipo){
+  let ult = performance.now(); const pasos = [];
+  window.__ultimaConfirmacion = { tipo, pasos };
+  return nombre => { const n = performance.now(); pasos.push([nombre, Math.round(n - ult)]); ult = n; };
+}
 async function loadSgaStock(){
   if (window.__dash) window.__dash.datos = null;   // el dashboard se vuelve a calcular con los datos nuevos
   // La base de datos devuelve como mucho 1000 filas por consulta: las partidas se piden por páginas. Si no, con más de 1000 partidas en el almacén
@@ -11288,6 +11294,7 @@ async function sgaEntradaConfirmar(){
     partidas, servicios: inicial ? [] : servicios, cobros: !inicial && calc.activo ? calc.cobros : [],
   };
   const editE = window.__seEdit;
+  const mc = sgaConfMedir(editE ? 'Editar recepción' : 'Recepción');   // mide qué paso tarda más (Ctrl + Alt + T)
   // Stock inicial con varios almacenes: un alta (y un albarán de apertura) por almacén
   const grupos = porLinea && !editE ? [...new Set(partidas.map(p => p.warehouse_id))].map(w => ({ wid: w, ps: partidas.filter(p => p.warehouse_id === w) })) : [{ wid: payload.albaran.warehouse_id, ps: partidas }];
   const guardados = [];
@@ -11313,7 +11320,9 @@ async function sgaEntradaConfirmar(){
     if (btn) btn.disabled = false;
     return;
   }
+  mc('guardar en la base de datos');
   await loadSgaStock();
+  mc('recargar el stock');
   const total = partidas.reduce((s, p) => s + p.cantidad, 0);
   if (editE) {
     window.__seEdit = null;
@@ -12109,6 +12118,7 @@ async function sgaSalidaConfirmar(comoBorrador){
     servicios, cobros: calc.activo && !comoBorrador ? calc.cobros : [],   // un borrador no cobra hasta que se confirma
   };
   const edit = window.__slEdit;
+  const mc = sgaConfMedir(edit ? (comoBorrador ? 'Guardar borrador' : 'Editar/confirmar expedición') : (comoBorrador ? 'Nuevo borrador' : 'Expedición'));   // mide qué paso tarda más (Ctrl + Alt + T)
   const { data: albId, error } = edit
     ? await supabaseClient.rpc('sga_editar_salida', { p_id: edit.id, p: payload })
     : await supabaseClient.rpc('sga_confirmar_salida', { p: payload });
@@ -12118,7 +12128,9 @@ async function sgaSalidaConfirmar(comoBorrador){
     if (btn) btn.disabled = false;
     return;
   }
+  mc('guardar en la base de datos');
   await loadSgaStock();
+  mc('recargar el stock');
   const total = sale.reduce((s, x) => s + x.n, 0);
   const numAlb = (sgaAlbaranes.find(x => x.id === albId) || {}).numeroTexto || '';
   const albDeca = albId || (edit && edit.id);
@@ -12143,6 +12155,7 @@ async function sgaSalidaConfirmar(comoBorrador){
     } catch (err) { appToast('La expedición se ha guardado, pero la orden de carga no se pudo crear: ' + (err && err.message ? err.message : 'error desconocido.') + ' Ábrela con «Editar» para reintentarlo.', 'error'); }
   }
   if (albDeca) await sgaFranjaExpedicionSync(albDeca, d, numAlb || (edit ? sgaNumAlbaran(edit.albaran) : ''));   // franja horaria del día de salida (borrador o confirmada)
+  mc('DeCA, orden de carga y franja horaria');
   if (edit) {
     window.__slEdit = null;   // el stock ya está recargado de la base de datos
     const eraBorrador = !!edit.albaran.borrador;
@@ -37025,6 +37038,8 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
       if (!(ev.ctrlKey && ev.altKey && String(ev.key).toLowerCase() === 't')) return;
       ev.preventDefault();
       const t = window.__tiempos || {}, lineas = Object.keys(t).sort((a, b) => parseInt(t[b]) - parseInt(t[a])).map(k => `${k.padEnd(30)} ${t[k]}`);
+      const uc = window.__ultimaConfirmacion;
+      if (uc) { lineas.push('', `Última confirmación: ${uc.tipo}`); uc.pasos.forEach(([n, ms]) => lineas.push(`  ${n.padEnd(36)} ${ms} ms`)); }
       document.getElementById('modal-slot').innerHTML = `<div class="modal-overlay" onclick="if(event.target===this) closeModal()"><div class="modal-box" style="max-width:520px;width:100%;">
         <div style="font-weight:700;font-size:16px;margin-bottom:6px;">Lo que ha tardado cada carga al abrir la web</div>
         <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">Primero las más lentas. Selecciona el texto, cópialo y pégalo en el chat.</div>
