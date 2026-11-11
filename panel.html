@@ -5153,12 +5153,42 @@ async function sgaM2ContratoGuardar(){
   await logContactoHistorial(id, `SGA · m² contratados: ${resumen.join(' · ')}.`);
   appToast(`m² guardados: ${resumen.join(' · ')}.`, 'ok');
 }
+// Todos los artículos de todos los clientes. La base de datos devuelve como máximo 1000 filas por petición: se piden de 1000 en 1000 para que no
+// falte ninguno (un artículo que existe pero no se carga no se ve en el catálogo y, aun así, la base de datos no deja crear otro igual).
+async function sgaArticulosTodos(){
+  const filas = [];
+  for (let desde = 0; ; desde += 1000) {
+    const r = await supabaseClient.from('sga_articulos').select('*').order('nombre', { ascending: true }).order('id', { ascending: true }).range(desde, desde + 999);
+    if (r.error) return { data: filas, error: r.error };
+    filas.push(...(r.data || []));
+    if ((r.data || []).length < 1000) break;
+  }
+  return { data: filas, error: null };
+}
+// Cuando la base de datos rechaza un código «duplicado», se busca cuál es en la propia base de datos (no en lo que hay cargado en pantalla) para explicarlo
+// con claridad y, si no se veía, se carga en el catálogo de la pantalla. Devuelve '' si no encuentra ninguno.
+async function sgaArticuloDuplicadoTxt(clienteId, nombres){
+  const bd = [];
+  for (let d = 0; ; d += 1000) {
+    const r = await supabaseClient.from('sga_articulos').select('*').eq('cliente_id', clienteId).order('id').range(d, d + 999);
+    if (r.error) return '';
+    bd.push(...(r.data || []));
+    if ((r.data || []).length < 1000) break;
+  }
+  const claves = new Set((nombres || []).map(n => String(n).trim().toLowerCase()));
+  const coinciden = bd.filter(r => claves.has(String(r.nombre || '').trim().toLowerCase()));
+  if (!coinciden.length) return '';
+  const sinCargar = coinciden.filter(r => !sgaArticulos.some(a => a.id === r.id));
+  sinCargar.forEach(r => sgaArticulos.push(sgaArticuloDeFila(r)));   // no se veía en pantalla: ya queda cargado
+  const lista = coinciden.slice(0, 5).map(r => `«${r.nombre}»`).join(', ') + (coinciden.length > 5 ? ` y ${coinciden.length - 5} más` : '');
+  return `${coinciden.length === 1 ? 'ya existe' : 'ya existen'} en la base de datos: ${lista}${sinCargar.length ? '. No salía en el catálogo de la pantalla; ya está cargado, revísalo y vuelve a intentarlo' : coinciden.length === 1 && coinciden[0].created_at ? ` (creado el ${fmtDateDMY(String(coinciden[0].created_at).slice(0, 10))})` : ''}.`;
+}
 async function loadSgaConfig(){
   const [z, u, cl, ar, cp, m2c, nv] = await Promise.all([
     supabaseClient.from('sga_zonas').select('*').order('orden', { ascending: true }).order('nombre', { ascending: true }),
     supabaseClient.from('sga_ubicaciones').select('*').order('codigo', { ascending: true }),
     supabaseClient.from('sga_clientes').select('*'),
-    supabaseClient.from('sga_articulos').select('*').order('nombre', { ascending: true }),
+    sgaArticulosTodos(),
     supabaseClient.from('sga_campos').select('*').order('orden', { ascending: true }).order('created_at', { ascending: true }),
     supabaseClient.from('sga_m2_contrato').select('*'),
     supabaseClient.from('sga_naves').select('*'),   // si falta el SQL «sga-naves.sql» simplemente no hay naves registradas
@@ -8795,7 +8825,11 @@ async function catGuardarFilaNueva(tr){
   if (Object.keys(atributos).length) row.atributos = atributos;
   if (claveExtra) row.clave_extra = claveExtra;
   const { data, error } = await supabaseClient.from('sga_articulos').insert(row).select().single();
-  if (error || !data) { appToast('No se pudo crear «' + nombre + '»: ' + (error ? sgaArticuloErrorTxt(error, cid) : 'error desconocido.'), 'error'); return false; }
+  if (error || !data) {
+    const dup = error && /duplicate key|unique/i.test(error.message || '') ? await sgaArticuloDuplicadoTxt(cid, [nombre]) : '';
+    appToast('No se pudo crear «' + nombre + '»: ' + (dup || (error ? sgaArticuloErrorTxt(error, cid) : 'error desconocido.')), 'error');
+    return false;
+  }
   sgaArticulos.push({ id: data.id, clienteId: cid, nombre, referencia, productoId: row.producto_id || '', zonaId: '', bultos, metrosLineales: ml, peso, medidas, finalidad: '', atributos, claveExtra, archived: false });
   tr.classList.remove('cg-new');
   return true;
@@ -12351,7 +12385,13 @@ async function sgaArtRapidaCrear(){
   if (btn) btn.disabled = true;
   const filas = nuevos.map(i => ({ cliente_id: pg.clienteId, nombre: i.nombre, referencia: i.referencia || null, producto_id: productoId, zona_id: null, bultos_por_unidad: i.bultos, metros_lineales: i.ml, peso: i.peso, medidas: i.medidas || null, ...(i.finalidad ? { atributos: { finalidad: i.finalidad } } : {}) }));
   const { data, error } = await supabaseClient.from('sga_articulos').insert(filas).select();
-  if (error || !data) { errEl.textContent = 'No se pudo guardar (no se ha creado ninguno): ' + (error && error.message ? error.message : 'error desconocido.'); if (btn) btn.disabled = false; return; }
+  if (error || !data) {
+    const dup = error && /duplicate key|unique/i.test(error.message || '') ? await sgaArticuloDuplicadoTxt(pg.clienteId, nuevos.map(i => i.nombre)) : '';
+    errEl.textContent = 'No se pudo guardar (no se ha creado ninguno): ' + (dup || (error && error.message ? error.message : 'error desconocido.'));
+    if (dup && typeof sgaArtRapidaRevisar === 'function') sgaArtRapidaRevisar();   // con lo que acaba de cargarse, la revisión marca los que ya existían
+    if (btn) btn.disabled = false;
+    return;
+  }
   data.forEach(r => sgaArticulos.push(sgaArticuloDeFila(r)));
   appToast(`${data.length} artículo${data.length !== 1 ? 's creados' : ' creado'}.`, 'ok');
   sgaArtRapidaCerrar();
