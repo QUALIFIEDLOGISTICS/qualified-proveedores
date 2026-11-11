@@ -9976,6 +9976,7 @@ function sgaRevisionBodyHtml(){
   else {
     const sin = sgaRevCandidatos().filter(a => !st.conCobro.has(a.id)).sort((a, b) => b.fecha.localeCompare(a.fecha));
     st.nSin = sin.length;
+    st.sinPorCliente = {}; sin.forEach(a => { st.sinPorCliente[a.clienteId] = (st.sinPorCliente[a.clienteId] || 0) + 1; });
     cuerpoB = sin.length ? `<table class="tf-table" data-fk="rev-sin-cobro"><thead><tr>${thSort('Nº', 'text')}${thSort('Fecha', 'date')}${thSort('Cliente', 'text')}${thSort('Tipo', 'text')}${thSort('Palets', 'number', 'style="text-align:right;"')}<th></th></tr></thead><tbody>${sin.map(a => { const c = contactos.find(x => x.id === a.clienteId) || {}; return `
       <tr><td data-sort-value="${esc(sgaNumAlbaran(a))}"><b>${esc(sgaNumAlbaran(a))}</b></td><td style="white-space:nowrap;" data-sort-value="${esc(a.fecha)}">${fmtDateDMY(a.fecha)}</td>
         <td data-sort-value="${esc(c.nombre || '')}">${esc((c.nombreComercial || '').trim() || c.nombre || '—')}</td><td data-sort-value="${a.tipo}">${a.tipo === 'salida' ? 'Expedición' : 'Recepción'}</td>
@@ -9984,7 +9985,28 @@ function sgaRevisionBodyHtml(){
       <div class="dash-nota" style="margin-top:8px;">Son albaranes de clientes con tarifa de movimientos que no tienen ningún cobro de movimiento. Si el cliente paga solo por m², es normal; si no, falta el tipo de carga, el tipo de palet o la tarifa. Al abrir uno y guardarlo se recalculan sus cobros.</div>` : '<div class="dash-ok">✓ Todos los albaranes confirmados del periodo tienen su cobro.</div>';
   }
   const cardB = `<div class="card deca-card dash-card">${decaCardHead('tag', 'Albaranes sin cobro', st.conCobro ? ((st.nSin || 0) ? `${st.nSin} por revisar` : 'Todo en orden') : 'Comprobando…')}<div class="deca-card-body">${cuerpoB}</div></div>`;
-  return cardA + cardB;
+  // ---- C · estado de cada cliente (para comprobar de un vistazo que la regla del tipo de palet se aplica bien a todos)
+  const filasC = sgaClientesAlmacenLista().map(c => {
+    const tipos = sgaSubtiposMov(c.id), regla = tipos.length > 1 ? 'Obligatorio' : tipos.length === 1 ? 'Automático' : 'Sin tipos';
+    const detalle = [...new Set(sgaMovProductos(c.id).flatMap(p => sgaMovFamilia(c.id, p).map(e => `${almacenajeProductoTexto(e.prod)}${e.t.subtipo ? ' (subtipo ' + e.t.subtipo + ')' : ''} → ${e.label || 'sin tipo'}`)))];
+    const arts = sgaArticulosDe(c.id), artsSin = tipos.length > 1 ? arts.filter(a => !(a.atributos || {}).subtipo).length : 0;
+    const palSin = tipos.length > 1 ? sgaPartidas.filter(p => p.clienteId === c.id && p.actual > 0 && !sgaSubtipoPartida(p)).reduce((s, p) => s + p.actual, 0) : 0;
+    const sinCobro = st.conCobro ? (st.sinPorCliente || {})[c.id] || 0 : null;
+    return { c, tipos, regla, detalle, artsSin, palSin, sinCobro, ok: !artsSin && !palSin && !sinCobro };
+  }).sort((a, b) => (a.ok - b.ok) || ((a.c.nombreComercial || '').trim() || a.c.nombre).localeCompare(((b.c.nombreComercial || '').trim() || b.c.nombre), 'es'));
+  const malos = filasC.filter(x => !x.ok).length;
+  const cardC = `<div class="card deca-card dash-card" style="margin-bottom:14px;">
+    ${decaCardHead('home', 'Estado de cada cliente', malos ? `${malos} cliente${malos === 1 ? '' : 's'} con algo por revisar` : 'Todos los clientes en orden')}
+    <div class="deca-card-body"><table class="tf-table"><thead><tr>${thSort('Cliente', 'text')}${thSort('Tipos de palet', 'text')}${thSort('Regla', 'text')}${thSort('Artículos sin tipo', 'number', 'style="text-align:right;"')}${thSort('Palets sin tipo', 'number', 'style="text-align:right;"')}${thSort('Albaranes sin cobro', 'number', 'style="text-align:right;"')}${thSort('Estado', 'text')}</tr></thead><tbody>${filasC.map(x => `
+      <tr><td data-sort-value="${esc(x.c.nombre)}"><b>${esc((x.c.nombreComercial || '').trim() || x.c.nombre)}</b></td>
+        <td data-sort-value="${esc(x.tipos.join(' '))}" ${x.detalle.length ? `title="${esc('Así se han deducido los tipos de su tarifa:\n' + x.detalle.join('\n'))}"` : ''}>${x.tipos.length ? esc(x.tipos.join(' · ')) : '<span style="color:var(--mutedFaint);">—</span>'}</td>
+        <td data-sort-value="${x.regla}">${x.regla}</td>
+        <td class="tf-precio" data-sort-value="${x.artsSin}">${x.regla === 'Obligatorio' ? x.artsSin : '—'}</td>
+        <td class="tf-precio" data-sort-value="${x.palSin}">${x.regla === 'Obligatorio' ? sgaNumTxt(x.palSin) : '—'}</td>
+        <td class="tf-precio" data-sort-value="${x.sinCobro == null ? -1 : x.sinCobro}">${x.sinCobro == null ? '…' : x.sinCobro}</td>
+        <td data-sort-value="${x.ok ? 1 : 0}">${x.ok ? '<span style="color:var(--success);font-weight:600;">✓ En orden</span>' : '<span style="color:var(--danger);font-weight:600;">Revisar</span>'}</td></tr>`).join('')}</tbody></table>
+      <div class="dash-nota" style="margin-top:8px;">«Tipos de palet» sale de las líneas de tarifa de entrada y salida de cada cliente (pasa el ratón por encima para ver de qué línea sale cada uno). Si un cliente sale con tipos que no son los suyos, la causa está en cómo están escritas sus tarifas: dímelo y se corrige.</div></div></div>`;
+  return cardC + cardA + cardB;
 }
 function sgaRevIrCatalogo(cid){
   window.__catSel = cid; try { localStorage.setItem('qualified.sga.catCliente', cid); } catch (e) { /* sin almacenamiento */ }
