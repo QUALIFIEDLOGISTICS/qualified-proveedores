@@ -7506,6 +7506,7 @@ function tplCatEditPage(){
             <button type="button" id="cat-undo" onclick="catHistAplicar(-1)" ${catHist().u.length ? '' : 'disabled'} title="Deshacer el último cambio (Ctrl+Z)" aria-label="Deshacer">↶</button>
             <button type="button" id="cat-redo" onclick="catHistAplicar(1)" ${catHist().r.length ? '' : 'disabled'} title="Rehacer (Ctrl+Y)" aria-label="Rehacer">↷</button>
           </span>
+          ${cid ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);color:var(--danger);" onclick="catEliminarSinMovimientos()" title="Elimina del catálogo de este cliente todos los artículos que nunca han tenido entradas ni salidas. Los que tienen stock o movimientos no se tocan.">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}<span>Eliminar sin movimientos</span></button>` : ''}
           <button class="btn btn-primary" onclick="catGuardarTodo()" title="Guardar todos los cambios">${homeIcon(HOME_ICON_PATHS.check, 16, 'currentColor', 2)}<span>Guardar</span></button>`}
       </div>
     </div>
@@ -8687,6 +8688,58 @@ async function catEliminarArticulo(id){
   catActualizarContador();
   catRefrescarFiltros();
   appToast(`Artículo «${a.nombre}» eliminado.`, 'ok');
+}
+// Elimina de una vez todos los artículos del catálogo del cliente que NUNCA han tenido entradas ni salidas (sin stock y sin ninguna partida, ni siquiera agotada).
+// Los que tienen movimientos se quedan siempre: son los que explican el histórico y los cobros. La base de datos también lo impide (clave foránea).
+async function catEliminarSinMovimientos(){
+  const cid = catClienteSel();
+  if (!cid || window.__catLocked || !sgaPuedeEditarStock()) return;
+  const c = contactos.find(x => x.id === cid), nombreCli = c ? ((c.nombreComercial || '').trim() || c.nombre) : '';
+  const delCliente = sgaArticulos.filter(a => a.clienteId === cid && !a.virtual);
+  if (!delCliente.length) { appToast('Este cliente no tiene artículos en el catálogo.', 'info'); return; }
+  // Qué artículos tienen alguna partida (también agotada): se pregunta a la base de datos, de 1000 en 1000 porque en pantalla solo están las activas
+  const conPartida = new Set();
+  for (let desde = 0; ; desde += 1000) {
+    const r = await supabaseClient.from('sga_partidas').select('articulo_id').eq('cliente_id', cid).not('articulo_id', 'is', null).order('id').range(desde, desde + 999);
+    if (r.error) { appToast('No se pudo comprobar qué artículos tienen movimientos: ' + r.error.message, 'error'); return; }
+    (r.data || []).forEach(p => conPartida.add(p.articulo_id));
+    if ((r.data || []).length < 1000) break;
+  }
+  const conStock = new Set(sgaPartidas.filter(p => p.clienteId === cid && p.actual > 0 && p.articuloId).map(p => p.articuloId));
+  const borrables = delCliente.filter(a => !conPartida.has(a.id) && !conStock.has(a.id));
+  const quedan = delCliente.length - borrables.length;
+  if (!borrables.length) { appToast(delCliente.length === 1 ? `No se puede eliminar: el artículo de ${nombreCli} tiene stock o movimientos.` : `Ninguno se puede eliminar: los ${delCliente.length} artículos de ${nombreCli} tienen stock o movimientos.`, 'info'); return; }
+  const ejemplos = borrables.slice(0, 6).map(a => a.nombre).join(', ') + (borrables.length > 6 ? '…' : '');
+  const ok = await appConfirm({
+    title: 'Eliminar artículos sin movimientos', name: nombreCli,
+    message: `Se van a eliminar ${borrables.length} artículo${borrables.length === 1 ? '' : 's'} del catálogo de ${nombreCli} (${ejemplos}): ninguno ha tenido nunca entradas ni salidas.${quedan ? ` Los otros ${quedan} se quedan porque tienen stock o movimientos.` : ''} Esta acción no se puede deshacer.`,
+    confirmLabel: `Eliminar ${borrables.length}`, tone: 'danger', icon: 'trash',
+  });
+  if (!ok) return;
+  const quitados = new Set();
+  let fallo = '';
+  for (let i = 0; i < borrables.length; i += 100) {
+    const grupo = borrables.slice(i, i + 100).map(a => a.id);
+    const r = await supabaseClient.from('sga_articulos').delete().in('id', grupo).select('id');
+    if (!r.error) { (r.data || []).forEach(x => quitados.add(x.id)); continue; }
+    // si alguno del grupo resulta tener movimientos, la base de datos rechaza el grupo entero: se prueba de uno en uno
+    for (const id of grupo) {
+      const u = await supabaseClient.from('sga_articulos').delete().eq('id', id).select('id');
+      if (!u.error) (u.data || []).forEach(x => quitados.add(x.id)); else fallo = fallo || u.error.message || 'error desconocido';
+    }
+  }
+  quitados.forEach(id => {
+    const i = sgaArticulos.findIndex(x => x.id === id);
+    if (i > -1) sgaArticulos.splice(i, 1);
+    Object.keys(window.__catDirty || {}).forEach(k => { if (k.startsWith(id + '|')) delete window.__catDirty[k]; });
+    const tr = document.querySelector(`#stock-body tr.cg-row[data-id="${id}"]`);
+    if (tr) tr.remove();
+  });
+  catActualizarContador();
+  catRefrescarFiltros();
+  if (!quitados.size) { appToast('No se pudo eliminar ninguno' + (fallo && !/foreign key|violates/i.test(fallo) ? ': ' + fallo : '. Si no tienes permiso de borrado, falta ejecutar el SQL «sga-articulos-eliminar.sql» en Supabase.'), 'error'); return; }
+  await logContactoHistorial(cid, `SGA · catálogo: eliminados ${quitados.size} artículo${quitados.size === 1 ? '' : 's'} sin entradas ni salidas.`);
+  appToast(`${quitados.size} artículo${quitados.size === 1 ? '' : 's'} eliminado${quitados.size === 1 ? '' : 's'}.${quitados.size < borrables.length ? ` ${borrables.length - quitados.size === 1 ? 'Otro no se pudo eliminar.' : `${borrables.length - quitados.size} no se pudieron eliminar.`}` : ''}`, quitados.size < borrables.length ? 'info' : 'ok');
 }
 function catActualizarContador(){
   const n = catNumCambios();
