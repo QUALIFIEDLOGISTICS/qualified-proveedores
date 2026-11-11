@@ -7266,9 +7266,13 @@ function catCeldaInput(a, campo, valor, extra){
 function thSortCat(label, type, extra){
   return thSort(label, type, extra).replace('sortTableByHeader(this)', 'catOrdenar(this)');
 }
+// La misma cabecera con su embudo para filtrar las filas como en Excel (se esconden las que no coinciden y se guardan igual)
+function thSortCatF(label, type, extra){
+  return thSortCat(label, type, extra).replace(/<\/th>$/, fdEmbudoBtn() + '</th>');
+}
 // «⇩» junto al título «Tipo de carga» de «Editar catálogo» (con la tabla desbloqueada): pone en todas las filas el tipo de carga de la primera.
 function catThTipoCarga(){
-  const th = thSortCat('Tipo de carga', 'text');
+  const th = thSortCatF('Tipo de carga', 'text');
   if (window.__catLocked) return th;
   const b = `<button type="button" class="se-fill" style="margin-left:6px;" onclick="event.stopPropagation(); catRellenarTipoCarga()" title="Poner en todas las filas el tipo de carga de la primera fila">⇩</button>`;
   return th.replace('<span class="th-sort-arrow">', b + '<span class="th-sort-arrow">');
@@ -7325,6 +7329,7 @@ function catEditarTodo(){
   const nuevo = catSinNada(catClienteSel()) && sgaPuedeEditarStock();
   window.__stockSearch = '';
   window.__catEditAll = true;
+  if (window.__fdFil) delete window.__fdFil['catalogo-edit'];   // cada vez que se abre la edición empieza sin filtros de columna
   window.__catLocked = !sgaPuedeEditarStock();    // un solo clic en «Editar» y ya se puede escribir (se vuelve a bloquear al guardar o cancelar)
   window.__catDirty = {}; window.__catHist = null;
   window.__stockView = 'catedit';
@@ -7716,31 +7721,37 @@ function thFilD(label, type, extra){
   return thFil('', label, type, extra).replace('catColAbrir(this)', 'fdAbrir(this)').replace(/ data-k=""/, '');
 }
 function fdEstado(table){ const o = (window.__fdFil = window.__fdFil || {}); return (o[table.dataset.fk] = o[table.dataset.fk] || {}); }
+// Tablas con casillas editables (líneas de una recepción y «Editar catálogo»): el valor de una celda es lo que hay elegido o escrito ahora mismo
+const FD_TABLAS_EDITABLES = 'table[data-fk="entrada-lineas"], table[data-fk="catalogo-edit"]';
 function fdTexto(td){
-  if (td && td.closest && td.closest('table[data-fk="entrada-lineas"]')) return fdValorCasilla(td);
+  if (td && td.closest && td.closest(FD_TABLAS_EDITABLES)) return fdValorCasilla(td);
   return td ? td.textContent.replace(/\s+/g, ' ').trim() : '';
 }
-// Líneas de una recepción: las casillas son desplegables y cajas de texto, así que el valor es lo que hay elegido o escrito ahora mismo
 function fdValorCasilla(td){
-  const s = td.querySelector('select');   // (el desplegable oculto del artículo también vale: lleva su nombre)
+  if (td.classList.contains('cg-stock')) { const v = td.getAttribute('data-sort-value'); return v === '0' ? 'Sin stock' : (v || ''); }   // «Editar catálogo»: el stock no se edita, el número va en la celda
+  const s = td.querySelector('select');   // (el desplegable oculto del artículo de la recepción también vale: lleva su nombre)
   if (s) return s.value === '' ? '' : ((s.options[s.selectedIndex] || {}).text || '').replace(/\s+/g, ' ').trim();
   const i = td.querySelector('input:not([type=hidden])');
-  if (i) return String(i.value || '').trim();
+  if (i) return i.type === 'checkbox' ? (i.checked ? 'Sí' : 'No') : String(i.value || '').trim();
   return td.textContent.replace(/\s+/g, ' ').trim();
 }
-// Aviso sobre la tabla de la recepción mientras hay líneas escondidas por un filtro (se guardan igual)
-function sgaEntradaFiltroAviso(table){
-  const el = document.getElementById('se-fil-aviso'); if (!el) return;
+// Aviso sobre la tabla mientras hay filas escondidas por un filtro (siguen ahí y se guardan igual)
+const FD_AVISOS = { 'entrada-lineas': { id: 'se-fil-aviso', cosa: 'líneas', fin: 'con la recepción' }, 'catalogo-edit': { id: 'cat-fil-aviso', cosa: 'artículos', fin: 'con los demás cambios' } };
+function fdAvisoFiltro(table){
+  const cfg = FD_AVISOS[table.dataset.fk]; if (!cfg) return;
+  const el = document.getElementById(cfg.id); if (!el) return;
   const filas = [...table.tBodies[0].rows], ocultas = filas.filter(tr => tr.classList.contains('fil-oculta')).length;
   if (!ocultas) { el.style.display = 'none'; el.innerHTML = ''; return; }
   el.style.display = '';
-  el.innerHTML = `Filtro puesto: se ven <b>${filas.length - ocultas}</b> de ${filas.length} líneas. Las ${ocultas === 1 ? 'oculta' : ocultas + ' ocultas'} también se guarda${ocultas === 1 ? '' : 'n'} con la recepción. <button type="button" class="btn btn-ghost" style="padding:3px 10px;font-size:12px;" onclick="sgaEntradaFiltroQuitar()">Quitar filtros</button>`;
+  el.innerHTML = `Filtro puesto: se ven <b>${filas.length - ocultas}</b> de ${filas.length} ${cfg.cosa}. Los ocultos siguen ahí y se guardan igual ${cfg.fin}. <button type="button" class="btn btn-ghost" style="padding:3px 10px;font-size:12px;" onclick="fdFiltrosQuitar('${table.dataset.fk}')">Quitar filtros</button>`;
 }
-function sgaEntradaFiltroQuitar(){
-  const t = document.querySelector('table[data-fk="entrada-lineas"]'); if (!t) return;
-  if (window.__fdFil) delete window.__fdFil['entrada-lineas'];
+function fdFiltrosQuitar(fk){
+  const t = document.querySelector(`table[data-fk="${fk}"]`); if (!t) return;
+  if (window.__fdFil) delete window.__fdFil[fk];
   catColCerrar(); fdAplicar(t);
 }
+// El botón del embudo para las cabeceras de las tablas editables
+function fdEmbudoBtn(){ return `<button type="button" class="th-fil" onclick="event.stopPropagation(); fdAbrir(this)" title="Filtrar las filas por esta columna" aria-label="Filtrar esta columna"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 4h18l-7 8.5V20l-4-2v-5.5z"/></svg></button>`; }
 function fdActivos(table, salvo){
   const st = fdEstado(table), ths = [...table.tHead.rows[0].cells];
   return ths.map((th, i) => ({ i, e: colsEtiqueta(th) })).filter(x => x.e !== salvo && st[x.e] && st[x.e].length).map(x => ({ i: x.i, ex: new Set(st[x.e]) }));
@@ -7748,9 +7759,9 @@ function fdActivos(table, salvo){
 function fdAplicar(table){
   if (!table.tHead || !table.tBodies[0]) return;
   const act = fdActivos(table), st = fdEstado(table);
-  [...table.tBodies[0].rows].forEach(tr => tr.classList.toggle('fil-oculta', act.some(a => a.ex.has(fdTexto(tr.cells[a.i])))));
+  [...table.tBodies[0].rows].forEach(tr => tr.classList.toggle('fil-oculta', !tr.classList.contains('cg-new') && act.some(a => a.ex.has(fdTexto(tr.cells[a.i])))));   // la fila nueva que se está escribiendo no se esconde
   [...table.tHead.rows[0].cells].forEach(th => { const b = th.querySelector('.th-fil'); if (b) b.classList.toggle('on', !!(st[colsEtiqueta(th)] || []).length); });
-  if (table.dataset.fk === 'entrada-lineas') sgaEntradaFiltroAviso(table);
+  fdAvisoFiltro(table);
 }
 function fdAbrir(btn){
   const th = btn.closest('th'), table = th && th.closest('table');
@@ -7761,7 +7772,7 @@ function fdAbrir(btn){
   if (mismo) return;
   const idx = [...th.parentElement.cells].indexOf(th), act = fdActivos(table, etiqueta);
   const cuenta = new Map(), orden = new Map();
-  [...table.tBodies[0].rows].filter(tr => !act.some(a => a.ex.has(fdTexto(tr.cells[a.i])))).forEach(tr => {
+  [...table.tBodies[0].rows].filter(tr => !tr.classList.contains('cg-new') && !act.some(a => a.ex.has(fdTexto(tr.cells[a.i])))).forEach(tr => {
     const c = tr.cells[idx], v = fdTexto(c);
     cuenta.set(v, (cuenta.get(v) || 0) + 1);
     if (!orden.has(v)) orden.set(v, c && c.hasAttribute('data-sort-value') ? c.getAttribute('data-sort-value') : v);
@@ -8208,10 +8219,11 @@ function stockCatalogoTablaHtml(){
   const vacio = !lista.length ? `<div style="color:var(--mutedFaint);font-size:13px;padding:22px 16px;text-align:center;">${!window.__catEditAll && catColNum() && listaTodas.length ? 'Ningún artículo coincide con los filtros de columna.' : q ? 'Ningún artículo coincide con la búsqueda.' + (filtro === 'stock' ? ' Ahora solo se buscan los que tienen stock: pulsa «Todos» para incluir los demás.' : '') : filtro === 'stock' ? 'Ningún artículo tiene stock ahora mismo.' : filtro === 'sin' ? 'Todos los artículos tienen stock.' : cid ? (window.__catLocked ? 'Este cliente todavía no tiene artículos. Pulsa «Editar» para crear el primero o «Pegar desde Excel».' : 'Escribe el primer artículo en la fila nueva de abajo.') : 'Todavía no hay artículos. Elige un cliente para crear el primero.'}</div>` : '';
   return `
     ${cid ? '' : `<div class="card" style="padding:11px 16px;margin-bottom:12px;font-size:13.5px;color:var(--text);border-left:4px solid var(--primary);">Estás viendo los artículos de <b>todos los clientes</b>. Para <b>crear</b> uno, elige primero el cliente en el desplegable de arriba.</div>`}
+    ${window.__catEditAll ? '<div id="cat-fil-aviso" class="se-fil-aviso" style="display:none;"></div>' : ''}
     <div class="card${window.__catEditAll ? '' : ' cg-compacta'}" style="padding:0;">
       <div class="tc-hist-box" style="max-height:${window.__catEditAll ? 'calc(100vh - 290px)' : 'max(420px, calc(100vh - 380px))'};min-height:${window.__catEditAll ? '320px' : '0'};border:none;border-radius:10px;">
-        <table class="tf-table cg-tabla${window.__catEditAll ? ' cg-todo' : catDens() === 'compacto' ? ' cg-dens-c' : ''}">
-          <thead><tr>${window.__catEditAll ? `${thSortCat(catPrincipalTit(cols), 'text')}${cols.referencia ? thSortCat('Descripción', 'text') : ''}${cols.tipo ? catThTipoCarga() : ''}${cols.bultos ? thSortCat('Bultos / palet', 'number') : ''}${cols.ml ? thSortCat('M. lineales', 'number') : ''}${cols.peso ? thSortCat(sgaPesoLabel(), 'number') : ''}${cols.medidas ? thSortCat('Medidas', 'text') : ''}${cols.x.map(f => thSortCat(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${cols.ubic ? thSortCat('Ubicación', 'text', 'style="text-align:center;"') : ''}${thSortCat('Stock actual', 'number')}` : `${conCliente ? thFil('a:cli', 'Cliente', 'text') : ''}${thFil('a:cod', catPrincipalTit(cols), 'text')}${cols.tipo ? thFil('a:tipo', 'Tipo de carga', 'text') : ''}${cols.bultos ? thFil('a:bul', 'Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thFil('a:ml', 'M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thFil('a:peso', sgaPesoLabel(), 'number', 'style="text-align:right;"') : ''}${cols.medidas ? thFil('a:med', 'Medidas', 'text') : ''}${cols.x.map(f => thFil('a:x:' + f.id, f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${cols.ubic ? thFil('a:ubic', 'Ubicación', 'text', 'style="text-align:center;"') : ''}${thFil('a:stock', 'Stock actual', 'number')}`}</tr></thead>
+        <table class="tf-table cg-tabla${window.__catEditAll ? ' cg-todo' : catDens() === 'compacto' ? ' cg-dens-c' : ''}"${window.__catEditAll ? ' data-fk="catalogo-edit"' : ''}>
+          <thead><tr>${window.__catEditAll ? `${thSortCatF(catPrincipalTit(cols), 'text')}${cols.referencia ? thSortCatF('Descripción', 'text') : ''}${cols.tipo ? catThTipoCarga() : ''}${cols.bultos ? thSortCatF('Bultos / palet', 'number') : ''}${cols.ml ? thSortCatF('M. lineales', 'number') : ''}${cols.peso ? thSortCatF(sgaPesoLabel(), 'number') : ''}${cols.medidas ? thSortCatF('Medidas', 'text') : ''}${cols.x.map(f => thSortCatF(f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${cols.ubic ? thSortCatF('Ubicación', 'text', 'style="text-align:center;"') : ''}${thSortCatF('Stock actual', 'number')}` : `${conCliente ? thFil('a:cli', 'Cliente', 'text') : ''}${thFil('a:cod', catPrincipalTit(cols), 'text')}${cols.tipo ? thFil('a:tipo', 'Tipo de carga', 'text') : ''}${cols.bultos ? thFil('a:bul', 'Bultos / palet', 'number', 'style="text-align:right;"') : ''}${cols.ml ? thFil('a:ml', 'M. lineales', 'number', 'style="text-align:right;"') : ''}${cols.peso ? thFil('a:peso', sgaPesoLabel(), 'number', 'style="text-align:right;"') : ''}${cols.medidas ? thFil('a:med', 'Medidas', 'text') : ''}${cols.x.map(f => thFil('a:x:' + f.id, f.label, f.tipo === 'numero' ? 'number' : 'text')).join('')}${cols.ubic ? thFil('a:ubic', 'Ubicación', 'text', 'style="text-align:center;"') : ''}${thFil('a:stock', 'Stock actual', 'number')}`}</tr></thead>
           <tbody>
             ${lista.map(a => catFilaHtml(a, cols, conCliente)).join('')}
           </tbody>
@@ -8410,7 +8422,7 @@ document.addEventListener('keydown', e => {
   if (!td || !tr) return;
   const idx = td.cellIndex;
   let prev = tr.previousElementSibling, src = null;
-  while (prev && !src) { const celda = prev.cells && prev.cells[idx]; src = celda ? celda.querySelector('input, select, textarea') : null; if (!src) prev = prev.previousElementSibling; }
+  while (prev && !src) { const celda = prev.cells && !prev.classList.contains('fil-oculta') && prev.cells[idx]; src = celda ? celda.querySelector('input, select, textarea') : null; if (!src) prev = prev.previousElementSibling; }   // las filas escondidas por un filtro no cuentan
   if (!src) { appToast('No hay una casilla de arriba de la que copiar.', 'info'); return; }
   if (el.tagName === 'SELECT' && ![...el.options].some(o => o.value === src.value)) { appToast('Ese valor no está disponible aquí.', 'info'); return; }
   el.value = src.value;
