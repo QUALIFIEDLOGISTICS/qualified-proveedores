@@ -1832,6 +1832,9 @@
   .dash-rank{width:24px;height:24px;border-radius:8px;background:var(--panel2);color:var(--muted);font-size:12px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;}
   .dash-cli-c{flex:1;min-width:0;} .dash-cli-n{display:flex;justify-content:space-between;gap:10px;font-size:13.5px;} .dash-cli-n b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} .dash-cli-n span{font-family:var(--mono);font-weight:700;white-space:nowrap;} .dash-cli-n small{font-family:var(--body);font-weight:500;color:var(--muted);margin-left:8px;}
   .dash-barra{display:flex;height:9px;border-radius:6px;overflow:hidden;background:var(--panel2);margin-top:6px;min-width:6px;} .dash-barra i{display:block;height:100%;}
+  .dash-alm-f{padding:9px 8px;border-radius:10px;} .dash-alm-f + .dash-alm-f{border-top:1px solid var(--border);}
+  .dash-alm-f .t{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:13.5px;} .dash-alm-f .t b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} .dash-alm-f .t span{font-family:var(--mono);font-weight:700;white-space:nowrap;} .dash-alm-f .t small{font-family:var(--body);font-weight:500;color:var(--muted);margin-left:8px;}
+  .dash-alm-f .s{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:3px;align-items:center;} .dash-alm-f .s b{font-family:var(--mono);font-weight:600;color:var(--text);}
   .dash-edad{display:flex;height:14px;border-radius:8px;overflow:hidden;background:var(--panel2);gap:2px;} .dash-edad i{display:block;height:100%;}
   .dash-alerta{display:flex;align-items:flex-start;gap:10px;padding:9px 10px;border-radius:10px;font-size:13px;margin-bottom:7px;background:var(--panel2);} .dash-alerta:last-child{margin-bottom:0;} .dash-alerta:hover{filter:brightness(.97);}
   .dash-alerta i{width:8px;height:8px;border-radius:50%;margin-top:6px;flex:0 0 auto;background:var(--mutedFaint);} .dash-alerta.warn i{background:#C98A2E;} .dash-alerta.bad i{background:#C1443D;} .dash-alerta span{flex:1;} .dash-alerta em{font-style:normal;color:var(--mutedFaint);}
@@ -9494,6 +9497,64 @@ function dashMesesSvg(meses){
     }).join('')}
   </svg>`;
 }
+/* ---- Ingreso por almacén: compara los almacenes entre sí (total, almacenaje y movimientos) ----
+   Ignora el filtro de almacén de la barra (la idea es verlos todos juntos) pero respeta el periodo y el cliente elegidos. Cada almacén se calcula
+   igual que si se eligiera él solo en el filtro. Las operativas y las cuotas de m² sin repartir no pertenecen a ningún almacén: salen en una nota. */
+function dashPorAlmacen(st, periodos, anual, todos, previo){
+  const wh = allWarehouses.filter(w => !w.archived);
+  const calc = (ps, wid) => ps.map((p, i) => dashCalcularPeriodo(p, Object.assign({}, st, { wid }), anual ? { primerMes: i === 0 } : undefined));
+  const sumar = meses => {
+    const conceptos = { mov: 0, alm: 0, oper: 0, serv: 0 }; let total = 0;
+    meses.forEach(items => items.forEach(x => { total += x.total; DASH_CONCEPTOS.forEach(([k]) => { conceptos[k] += x.conceptos[k]; }); }));
+    DASH_CONCEPTOS.forEach(([k]) => { conceptos[k] = sgaR2(conceptos[k]); });
+    return { total: sgaR2(total), conceptos };
+  };
+  const filas = wh.map(w => { const s = sumar(calc(periodos, w.id)); return { w, total: s.total, conceptos: s.conceptos, ant: previo ? sumar(calc([previo], w.id)).total : null }; });
+  const sinAsignar = sgaR2(sumar(todos || calc(periodos, '')).total - filas.reduce((s, f) => s + f.total, 0));
+  return { filas: filas.sort((a, b) => b.total - a.total || a.w.name.localeCompare(b.w.name, 'es')), sinAsignar };
+}
+const DASH_ALM_SERIES = [['Total', '#5B6B82', f => f.total], ['Almacenaje', DASH_COLORES.alm, f => f.conceptos.alm], ['Movimientos', DASH_COLORES.mov, f => f.conceptos.mov]];
+function dashAlmacenesSvg(filas){
+  const W = 760, H = 250, pl = 44, pr = 8, pt = 20, pb = 36;
+  const max = Math.max(1, ...filas.flatMap(f => DASH_ALM_SERIES.map(s => s[2](f))));
+  const paso = (W - pl - pr) / filas.length, bw = Math.min(34, paso * 0.24), sep = 3;
+  const y = v => pt + (H - pt - pb) * (1 - v / max);
+  const ticks = [0, .5, 1].map(q => ({ v: max * q, y: y(max * q) }));
+  const maxCar = Math.max(8, Math.floor(paso / 6.5));
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;" role="img" aria-label="Ingreso de cada almacén: total, almacenaje y movimientos">
+    ${ticks.map(t => `<line x1="${pl}" x2="${W - pr}" y1="${t.y.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="var(--border)"/><text x="${pl - 6}" y="${(t.y + 3.5).toFixed(1)}" text-anchor="end" font-size="10.5" fill="var(--mutedFaint)">${dashCorto(t.v)}</text>`).join('')}
+    ${filas.map((f, i) => {
+      const x0 = pl + i * paso + paso / 2, nom = f.w.name;
+      const barras = DASH_ALM_SERIES.map(([t, color, val], j) => {
+        const v = val(f), bx = x0 + (j - 1) * (bw + sep) - bw / 2;
+        return `<rect x="${bx.toFixed(1)}" y="${y(v).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(v > 0 ? 1.5 : 0, y(0) - y(v)).toFixed(1)}" fill="${color}" rx="2"><title>${esc(nom)} · ${t}: ${dashEur(v)}</title></rect>`
+          + (v > 0 && bw >= 14 ? `<text x="${(bx + bw / 2).toFixed(1)}" y="${(y(v) - 4).toFixed(1)}" text-anchor="middle" font-size="9.5" font-weight="700" fill="var(--muted)">${dashCorto(v)}</text>` : '');
+      }).join('');
+      return `${barras}<text x="${x0.toFixed(1)}" y="${H - 12}" text-anchor="middle" font-size="11" font-weight="600" fill="var(--muted)"><title>${esc(nom)}</title>${esc(nom.length > maxCar ? nom.slice(0, maxCar - 1) + '…' : nom)}</text>`;
+    }).join('')}
+  </svg>`;
+}
+// opts: { anual, previo (mes anterior, para comparar), sub }
+function dashCardAlmacenes(st, periodos, todos, opts){
+  if (allWarehouses.filter(w => !w.archived).length < 2) return '';
+  const { filas, sinAsignar } = dashPorAlmacen(st, periodos, !!opts.anual, todos, opts.previo);
+  const totalW = sgaR2(filas.reduce((s, f) => s + f.total, 0));
+  const cuerpo = (totalW > 0 || filas.some(f => f.conceptos.alm > 0 || f.conceptos.mov > 0))
+    ? `${dashAlmacenesSvg(filas)}
+      <div class="dash-leyenda">${DASH_ALM_SERIES.map(([t, c]) => `<span><i style="background:${c}"></i>${t}</span>`).join('')}</div>
+      <div style="margin-top:8px;">${filas.map(f => `
+        <div class="dash-alm-f">
+          <div class="t"><b>${esc(f.w.name)}</b><span>${dashEur(f.total)}<small>${totalW > 0 ? (f.total / totalW * 100).toFixed(0) : 0} %</small></span></div>
+          <div class="s"><span>Almacenaje <b>${dashEur(f.conceptos.alm)}</b></span><span>Movimientos <b>${dashEur(f.conceptos.mov)}</b></span>${f.conceptos.serv > 0 ? `<span>Servicios <b>${dashEur(f.conceptos.serv)}</b></span>` : ''}${f.ant != null ? dashDelta(dashPct(f.total, f.ant), 'vs mes anterior') : ''}</div>
+        </div>`).join('')}</div>`
+    : '<div class="dash-vacio">Todavía no hay ingresos en ningún almacén en este periodo.</div>';
+  const nota = Math.abs(sinAsignar) >= 0.01 ? `<div class="dash-nota">Además hay ${dashEur(sinAsignar)} que no pertenecen a ningún almacén (operativas y cuotas de m² sin repartir entre almacenes): no salen aquí, pero sí cuentan en el total de arriba.</div>` : '';
+  return `
+    <div class="card deca-card dash-card">
+      ${decaCardHead('home', 'Ingreso por almacén', opts.sub)}
+      <div class="deca-card-body">${cuerpo}${nota}</div>
+    </div>`;
+}
 // El dashboard de un año completo: la suma de los doce meses (cada mes se calcula igual que en la vista de un mes)
 function stockDashboardAnioHtml(st){
   const D = st.datos, hoy = today(), anio = st.periodo.slice(0, 4), esteAnio = anio === hoy.slice(0, 4);
@@ -9573,11 +9634,12 @@ function stockDashboardAnioHtml(st){
       ${decaCardHead('box', 'Recepciones y expediciones', 'Palets que entran y salen cada mes')}
       <div class="deca-card-body">${dashBarrasSvg(serieRE, { etq: s => s.corto, cada: 1, tit: s => s.nombre })}<div class="dash-leyenda"><span><i style="background:${DASH_COLORES.mov}"></i>Recibidos · ${sgaNumTxt(palRec)}</span><span><i style="background:${DASH_COLORES.oper}"></i>Expedidos · ${sgaNumTxt(palExp)}</span></div></div>
     </div>`;
+  const cardAlmacenes = dashCardAlmacenes(st, pers, st.wid ? null : porMes, { anual: true, sub: `Comparación de los almacenes en ${anio} (no le afecta el filtro de almacén)` });
   const { cardClientes, cardEdad, cardAtencion } = dashTarjetasComunes(st, D, items, total, borradores, hoy, `Pulsa un cliente para ver su resumen mensual en ${anio}`);
   const nota = '<div class="dash-nota" style="margin-top:10px;">En el año, cada operativa cuenta en el mes de su fecha (las que venían de antes de enero, en enero), para no sumarla dos veces.' + (st.wid ? ' Con un almacén elegido, el almacenaje por m² cuenta los m² contratados de ese almacén (se anotan por almacén en la ficha de cada cliente). Las operativas y las cuotas fijas, que no pertenecen a un almacén, todavía no se cuentan.' : '') + '</div>';
   return `${kpis}
     <div class="dash-grid">
-      <div class="dash-main">${cardMeses}${cardRE}${cardClientes}</div>
+      <div class="dash-main">${cardMeses}${cardAlmacenes}${cardRE}${cardClientes}</div>
       <div class="dash-side">${cardConcepto}${cardAtencion}${cardEdad}</div>
     </div>${nota}`;
 }
@@ -9664,11 +9726,12 @@ function stockDashboardBodyHtml(){
       ${decaCardHead('box', 'Recepciones y expediciones', 'Palets que entran y salen cada día')}
       <div class="deca-card-body">${dashBarrasSvg(serieRE)}<div class="dash-leyenda"><span><i style="background:${DASH_COLORES.mov}"></i>Recibidos · ${sgaNumTxt(palRec)}</span><span><i style="background:${DASH_COLORES.oper}"></i>Expedidos · ${sgaNumTxt(palExp)}</span></div></div>
     </div>`;
+  const cardAlmacenes = dashCardAlmacenes(st, [st.periodo], st.wid ? null : [items], { anual: false, previo: D.ant, sub: `Comparación de los almacenes en ${nombreMes} (no le afecta el filtro de almacén)` });
   const { cardClientes, cardEdad, cardAtencion } = dashTarjetasComunes(st, D, items, total, borradores, hoy, `Pulsa un cliente para ver su resumen mensual`);
   const nota = st.wid ? '<div class="dash-nota" style="margin-top:10px;">Con un almacén elegido, el almacenaje por m² cuenta los m² contratados de ese almacén (se anotan por almacén en la ficha de cada cliente). Las operativas y las cuotas fijas, que no pertenecen a un almacén, todavía no se cuentan.</div>' : '';
   return `${kpis}
     <div class="dash-grid">
-      <div class="dash-main">${cardIngreso}${cardRE}${cardClientes}</div>
+      <div class="dash-main">${cardIngreso}${cardAlmacenes}${cardRE}${cardClientes}</div>
       <div class="dash-side">${cardConcepto}${cardAtencion}${cardEdad}</div>
     </div>${nota}`;
 }
