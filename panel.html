@@ -7055,7 +7055,18 @@ function stockBodyHtml(){
   if (stockSeg() !== 'stock') {
     const esSal = stockSeg() === 'salidas';
     const emp = stockEmpActual(stockSeg()), est = window.__stockEstado || '';
-    const lista = sgaAlbaranes.filter(a => (!wid || a.warehouseId === wid) && (!emp || a.clienteId === emp) && (!est || sgaAlbaranEstadoClave(a) === est) && (esSal ? a.tipo === 'salida' : a.tipo !== 'salida' && a.tipo !== 'actividad')).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && (okCli(c) || (q && ((esSal && (a.destinatario || '').toLowerCase().includes(q)) || (a.referencia || '').toLowerCase().includes(q) || sgaLineasAlb(a).some(l => (l.nombre + ' ' + l.desc).toLowerCase().includes(q))))); });
+    const listaTodo = sgaAlbaranes.filter(a => (!wid || a.warehouseId === wid) && (!emp || a.clienteId === emp) && (!est || sgaAlbaranEstadoClave(a) === est) && (esSal ? a.tipo === 'salida' : a.tipo !== 'salida' && a.tipo !== 'actividad')).filter(a => { const c = contactos.find(x => x.id === a.clienteId); return c && (okCli(c) || (q && ((esSal && (a.destinatario || '').toLowerCase().includes(q)) || (a.referencia || '').toLowerCase().includes(q) || sgaLineasAlb(a).some(l => (l.nombre + ' ' + l.desc).toLowerCase().includes(q))))); });
+    // Por norma solo salen los albaranes de los últimos 2 meses (la lista se mantiene corta aunque el histórico crezca). Con un filtro activo
+    // (cliente, estado o búsqueda) salen todos los que coinciden, y con el botón «Ver todo el histórico» también. Los borradores sin confirmar salen siempre.
+    const filtrando = !!(emp || est || q), todoHist = filtrando || !!window.__stockHistTodo;
+    const desdeHist = (() => { const [y, m, d] = today().split('-').map(Number), dt = new Date(y, m - 3, d); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`; })();
+    const lista = todoHist ? listaTodo : listaTodo.filter(a => a.fecha >= desdeHist || (a.borrador && a.estado === 'confirmado'));
+    const ocultas = listaTodo.length - lista.length;
+    const btnHist = (v, t) => `<button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="window.__stockHistTodo=${v}; refreshStockBody();">${t}</button>`;
+    const barraHist = `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;font-size:12.5px;color:var(--muted);">${
+      filtrando ? '<span>Mostrando todo el histórico porque hay un filtro activo.</span>'
+      : todoHist ? `<span>Mostrando todo el histórico (${listaTodo.length}).</span>${btnHist(false, 'Solo los últimos 2 meses')}`
+      : `<span>Mostrando los últimos 2 meses (desde el ${fmtDateDMY(desdeHist)})${ocultas ? ` · hay ${ocultas} más antiguo${ocultas === 1 ? '' : 's'}` : ''}.</span>${ocultas ? btnHist(true, 'Ver todo el histórico') : ''}`}</div>`;
     // Revisando borradores: primero los que ya han pasado (el más reciente arriba y bajando hacia los más antiguos, que son los que más
     // urge confirmar) y después los que todavía están por venir, del más próximo al más lejano
     if (esSal && est === 'borrador') {
@@ -7066,7 +7077,7 @@ function stockBodyHtml(){
         return (px ? y.fecha.localeCompare(x.fecha) : x.fecha.localeCompare(y.fecha)) || (y.numero - x.numero);
       });
     }
-    if (!lista.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q || emp || est ? 'Ningún albarán coincide con la búsqueda o el filtro.' : esSal ? 'Todavía no hay expediciones. Registra la primera con «Nueva expedición».' : 'Todavía no hay recepciones. Registra la primera con «Nueva recepción».'}</div>`;
+    if (!lista.length) return (ocultas ? barraHist : '') + `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${ocultas ? 'No hay nada en los últimos 2 meses. Pulsa «Ver todo el histórico» para ver lo anterior.' : q || emp || est ? 'Ningún albarán coincide con la búsqueda o el filtro.' : esSal ? 'Todavía no hay expediciones. Registra la primera con «Nueva expedición».' : 'Todavía no hay recepciones. Registra la primera con «Nueva recepción».'}</div>`;
     // Solo se enseñan las columnas que tienen algo: las que no tienen dato en ninguna fila de la lista se ocultan
     const conDR = lista.some(a => esSal ? a.destinatario : a.referencia), conRefSal = esSal && lista.some(a => a.referencia), conMerc = lista.some(a => sgaMercanciaResumen(a));
     const conModal = lista.some(a => a.tipo === 'regularizacion' || a.tipo === 'apertura' || (a.modalidad && a.modalidad !== 'palet'));
@@ -7074,7 +7085,7 @@ function stockBodyHtml(){
     // coinciden; si se mezclan, «Palets» y cada cifra lleva el nombre de la suya
     const unidades = [...new Set(lista.map(a => sgaCap(sgaUnidadCfg(a.clienteId).p)))];
     const udTit = unidades.length === 1 ? unidades[0] : 'Palets';
-    return `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table" data-fk="alb-${stockSeg()}">
+    return barraHist + `<div class="card" style="padding:0;overflow-x:auto;"><table class="tf-table" data-fk="alb-${stockSeg()}">
       <thead><tr>${thFilD('Nº', conRefSal ? 'text' : 'number')}${thFilD('Fecha','date')}${thFilD('Cliente','text')}${thFilD('Almacén','text')}${conDR ? (esSal ? thFilD('Destinatario','text') : thFilD('Referencia','text')) : ''}${conMerc ? thFilD('Mercancía','text') : ''}${conModal ? thFilD('Modalidad','text') : ''}${thFilD(udTit,'number','style="text-align:right;"')}${thFilD('Estado','text')}<th class="td-acc"></th></tr></thead>
       <tbody>${lista.map(a => { const c = contactos.find(x => x.id === a.clienteId); return `
         <tr data-alb="${a.id}">
