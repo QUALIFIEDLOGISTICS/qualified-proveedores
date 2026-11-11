@@ -6723,11 +6723,6 @@ function tplSgaClientePage(c){
             <div class="doc-seg sgac-sg" data-g="salida">${Object.keys(SGA_SALIDA_MODOS).map(k => `<button type="button" data-v="${k}" class="${sgaClienteSalida(c.id) === k ? 'on' : ''}" onclick="sgacSalida('${k}')">${SGA_SALIDA_MODOS[k].nombre}</button>`).join('')}</div>
             <div class="sgac-h" data-g="salida">${Object.keys(SGA_SALIDA_MODOS).map(k => `<span data-v="${k}" class="${sgaClienteSalida(c.id) === k ? 'on' : ''}">${SGA_SALIDA_MODOS[k].txt}</span>`).join('')}</div>
           </div>
-          ${sgaSubtiposMov(c.id).length ? `<div class="sgac-row">
-            <div class="sgac-rq">Si una mercancía no tiene tipo de palet, ¿cuál se cobra?</div>
-            <select id="sgac-subdef" style="width:auto;min-width:220px;"><option value="">Ninguno: no se cobra hasta indicarlo</option>${sgaSubtiposMov(c.id).map(s => `<option value="${esc(s)}" ${sgaNormSub(s) === sgaNormSub(sgaSubtipoDefecto(c.id)) ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
-            <div class="sgac-h fl">Este cliente tiene precios por tipo de palet (${esc(sgaSubtiposMov(c.id).join(' o '))}). Con un tipo elegido aquí, la mercancía que no indica el suyo (en la recepción, el stock inicial o el catálogo) se cobra con ese precio, en vez de no cobrarse y avisar «sin tipo de palet».</div>
-          </div>` : ''}
         </div>
       </div>
       <div class="card deca-card">
@@ -6794,8 +6789,6 @@ async function submitSgaCliente(){
   campos.__cobro = campos.__bultos === 'si' && (document.getElementById('sgac-cobro') || {}).value === '0' ? 'palet' : 'bulto';   // solo cuenta si hay bultos
   const cobroAntes = sgaClienteCobraPorBulto(id);
   campos.__salida = (document.getElementById('sgac-salida') || {}).value || 'fifo';
-  const subDefAntes = sgaSubtipoDefecto(id);
-  if (document.getElementById('sgac-subdef')) campos.__subtipoDef = document.getElementById('sgac-subdef').value || '';   // solo si el cliente tiene tipos de palet (si no, no se toca)
   const udS = ((document.getElementById('sgac-ud-s') || {}).value || '').trim().toLowerCase(), udP = ((document.getElementById('sgac-ud-p') || {}).value || '').trim().toLowerCase();
   campos.__unidad = udS ? udS + '|' + (udP || sgaUdPlural(udS)) : '';   // vacío = «palet / palets»
   const unidadAntes = sgaUnidadCfg(id).propia ? sgaUnidadCfg(id).s + '|' + sgaUnidadCfg(id).p : '';
@@ -6818,9 +6811,7 @@ async function submitSgaCliente(){
   if (bultosAntes !== (campos.__bultos === 'si')) dif.push(`bultos por palet ${campos.__bultos === 'si' ? 'sí' : 'no'}`);
   if (bultosAntes && campos.__bultos === 'si' && cobroAntes !== (campos.__cobro !== 'palet')) dif.push(`movimientos cobrados ${campos.__cobro === 'palet' ? 'por palet' : 'por bulto'}`);
   if (unidadAntes !== campos.__unidad) dif.push(campos.__unidad ? `unidad «${campos.__unidad.split('|')[0]} / ${campos.__unidad.split('|')[1]}»` : 'unidad «palet»');
-  if (salidaAntes !== campos.__salida) dif.push(`salida de la mercancía a ${(SGA_SALIDA_MODOS[campos.__salida] || {}).nombre}`);
-  if (document.getElementById('sgac-subdef') && subDefAntes !== (campos.__subtipoDef || '')) dif.push(campos.__subtipoDef ? `tipo de palet por defecto «${campos.__subtipoDef}»` : 'sin tipo de palet por defecto');
-  if (dif.length) await logContactoHistorial(id, `SGA · ha cambiado ${dif.join(', ')}.`);
+  if (salidaAntes !== campos.__salida) dif.push(`salida de la mercancía a ${(SGA_SALIDA_MODOS[campos.__salida] || {}).nombre}`);  if (dif.length) await logContactoHistorial(id, `SGA · ha cambiado ${dif.join(', ')}.`);
   sgaClienteCerrar();
 }
 
@@ -7334,7 +7325,7 @@ async function catGuardarCeldaCampo(el){
   if (!a || !f) return false;
   const r = sgaCampoParsear(f, el.value);
   if (r.error) { appToast(r.error, 'error'); if (!window.__catLote) renderTab(); return false; }
-  if (r.valor == null && sgaClienteCfg(a.clienteId).campos[f.id] === 'obligatorio') { appToast(`«${f.label}» es obligatorio para este cliente.`, 'error'); if (!window.__catLote) renderTab(); return false; }
+  if (r.valor == null && sgaCampoObligatorioArt(a.clienteId, f)) { appToast(`«${f.label}» es obligatorio para este cliente.`, 'error'); if (!window.__catLote) renderTab(); return false; }
   const atributos = Object.assign({}, a.atributos);
   if (r.valor == null) delete atributos[f.id]; else atributos[f.id] = r.valor;
   if (JSON.stringify(atributos) === JSON.stringify(a.atributos || {})) return true;
@@ -8291,7 +8282,10 @@ function catResumenHtml(){
   const f = catFiltro();
   const lnk = (k, txt) => `<button type="button" class="cat-kpi-l${f === k ? ' on' : ''}" onclick="window.__catFiltro='${k}'; refreshStockBody();" title="Ver solo estos artículos en la tabla">${txt}</button>`;
   const tile = (cls, etq, valor, sub, tit) => `<div class="cat-kpi-t ${cls}"${tit ? ` title="${esc(tit)}"` : ''}><small>${etq}</small><b>${valor}</b><span>${sub || '&nbsp;'}</span></div>`;
-  return `<div class="cat-kpi">
+  // Un cliente con dos o más tipos de palet necesita el tipo en cada artículo (de él depende el precio): se avisa de los que aún no lo tienen
+  const sinTipoPalet = cid && sgaTiposPaletElegir(cid).length ? altas.filter(a => !(a.atributos || {}).subtipo) : [];
+  const avisoTipoPalet = sinTipoPalet.length && sgaPuedeEditarStock() ? `<div class="dash-alerta warn" style="margin-bottom:12px;cursor:default;"><i></i><span><b>${sgaNumTxt(sinTipoPalet.length)}</b> artículo${sinTipoPalet.length === 1 ? '' : 's'} sin <b>tipo de palet</b> (${esc(sgaTiposPaletElegir(cid).join(' o '))}): sin él no se sabe qué precio de entrada y salida cobrar.</span><button type="button" class="btn btn-ghost" style="padding:4px 12px;font-size:12.5px;" onclick="catAsignarTipoPalet()">Asignar tipo…</button></div>` : '';
+  return avisoTipoPalet + `<div class="cat-kpi">
     ${tile('', 'Artículos', sgaNumTxt(n), `${lnk('stock', `<i class="ok"></i>${conStock} con stock`)}${lnk('sin', `<i></i>${n - conStock} sin stock`)}`)}
     ${tile('', sgaCap(ud), sgaNumTxt(pal), cid && sgaClienteConBultos(cid) ? `${sgaNumTxt(Math.round(bul * 100) / 100)} bultos` : 'en el almacén')}
     ${t.conPeso ? tile('', 'Peso', `${sgaNumTxt(Math.round(t.kg * 10) / 10)} <em>kg</em>`, t.sinPeso ? `${sgaNumTxt(t.sinPeso)} ${udDe(t.sinPeso)} sin peso` : 'todo con peso indicado') : ''}
@@ -8300,6 +8294,39 @@ function catResumenHtml(){
   </div>`;
 }
 function stockCatalogoBodyHtml(){ return catResumenHtml() + stockCatalogoTablaHtml(); }
+// Asigna de una vez un tipo de palet a todos los artículos del cliente que aún no lo tienen (los que ya lo tienen no se tocan)
+function catAsignarTipoPalet(){
+  const cid = catClienteSel();
+  if (!cid || !sgaPuedeEditarStock()) return;
+  const tipos = sgaTiposPaletElegir(cid), sin = sgaArticulosDe(cid).filter(a => !(a.atributos || {}).subtipo);
+  if (!tipos.length || !sin.length) return;
+  const c = contactos.find(x => x.id === cid) || {}, nom = (c.nombreComercial || '').trim() || c.nombre || 'este cliente';
+  document.getElementById('modal-slot').innerHTML = `<div class="modal-overlay" onclick="if(event.target===this) closeModal()"><div class="modal-box" style="max-width:500px;width:100%;">
+    <div style="font-weight:700;font-size:16px;margin-bottom:6px;">Asignar tipo de palet</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:12px;"><b>${sgaNumTxt(sin.length)}</b> artículo${sin.length === 1 ? '' : 's'} de ${esc(nom)} no tiene${sin.length === 1 ? '' : 'n'} tipo de palet. Elige el que se asigna a todos ellos. Los que ya tienen tipo no se tocan. Si no todos son del mismo tipo, usa «Editar catálogo»: filtra por una columna y rellena hacia abajo con Ctrl+D.</div>
+    <select id="cat-tp-sel" style="width:100%;"><option value="">— Elige el tipo —</option>${tipos.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('')}</select>
+    <div id="cat-tp-err" style="color:var(--danger);font-size:12.5px;margin-top:8px;"></div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px;"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="button" class="btn btn-primary" id="cat-tp-ok" onclick="catAsignarTipoPaletAplicar()">Asignar</button></div></div></div>`;
+}
+async function catAsignarTipoPaletAplicar(){
+  const cid = catClienteSel(), err = document.getElementById('cat-tp-err'), btn = document.getElementById('cat-tp-ok');
+  const tipo = ((document.getElementById('cat-tp-sel') || {}).value || '').trim();
+  if (!tipo) { if (err) err.textContent = 'Elige el tipo de palet.'; return; }
+  const sin = sgaArticulosDe(cid).filter(a => !(a.atributos || {}).subtipo);
+  if (btn) { btn.disabled = true; btn.textContent = 'Asignando…'; }
+  let hechos = 0, fallos = 0;
+  for (let i = 0; i < sin.length; i += 15) {   // de 15 en 15, a la vez
+    await Promise.all(sin.slice(i, i + 15).map(async a => {
+      const atributos = Object.assign({}, a.atributos, { subtipo: tipo });
+      const { error } = await supabaseClient.from('sga_articulos').update({ atributos }).eq('id', a.id);
+      if (error) fallos++; else { a.atributos = atributos; hechos++; }
+    }));
+  }
+  closeModal();
+  if (hechos) await logContactoHistorial(cid, `SGA · catálogo: tipo de palet «${tipo}» asignado a ${hechos} artículo${hechos === 1 ? '' : 's'} que no lo tenían.`);
+  appToast(fallos ? `Tipo «${tipo}» asignado a ${hechos}; ${fallos} no se pudieron guardar (vuelve a pulsar «Asignar tipo…» para reintentarlo).` : `Tipo «${tipo}» asignado a ${hechos} artículo${hechos === 1 ? '' : 's'}.`, fallos ? 'error' : 'ok');
+  refreshStockBody();
+}
 function stockCatalogoTablaHtml(){
   if (window.__stockView !== 'catedit') window.__catEditAll = false;   // si se salió de la pantalla de edición sin pasar por «Listo», no se queda a medias
   const cid = catClienteSel();
@@ -8887,7 +8914,7 @@ async function catGuardarFilaNueva(tr){
   for (const f of sgaCamposArticuloCat(cid)) {
     const r = sgaCampoParsear(f, g('x:' + f.id));
     if (r.error) return marcar('x:' + f.id, r.error);
-    if (r.valor == null) { if (sgaClienteCfg(cid).campos[f.id] === 'obligatorio') return marcar('x:' + f.id, `Falta «${f.label}».`); }
+    if (r.valor == null) { if (sgaCampoObligatorioArt(cid, f)) return marcar('x:' + f.id, `Falta «${f.label}».`); }
     else atributos[f.id] = r.valor;
   }
   const casillaClave = sgaUnicoSinCodigo(cid) ? 'x:' + ((sgaUnicoCampos(cid)[0] || {}).id) : 'nombre';   // la casilla de la primera columna
@@ -10014,14 +10041,17 @@ function sgaSubtipoPartida(p){
   const a = p.articuloId ? sgaArticulos.find(x => x.id === p.articuloId) : null;
   return (a && a.atributos && a.atributos.subtipo) || '';
 }
-// Tipo de palet «por defecto» del cliente (ficha SGA): el que se cobra a la mercancía que no indica el suyo. Vacío = ninguno (no se cobra y se avisa).
-function sgaSubtipoDefecto(clienteId){
-  const v = String(((sgaClienteCfg(clienteId) || {}).campos || {}).__subtipoDef || '');
-  return v && sgaSubtiposMov(clienteId).some(s => sgaNormSub(s) === sgaNormSub(v)) ? v : '';
-}
-// «Tipo de palet» como dato del artículo en el catálogo (solo si el cliente tiene tipos en sus líneas de entrada y salida): al recibir ese artículo sale solo
+/* Regla del tipo de palet (una sola, para todo el SGA):
+   · el cliente no tiene precios por tipo de palet → no hay nada que decidir;
+   · tiene UN solo tipo → no hay nada que elegir: todo su stock es de ese tipo (se anota solo y se cobra con él);
+   · tiene DOS o más → cada artículo del catálogo lleva el suyo, es obligatorio, y la recepción lo hereda. */
+function sgaTiposPaletElegir(clienteId){ const t = sgaSubtiposMov(clienteId); return t.length > 1 ? t : []; }
+function sgaTipoPaletUnico(clienteId){ const t = sgaSubtiposMov(clienteId); return t.length === 1 ? t[0] : ''; }
+// ¿Es obligatorio este dato del artículo? El tipo de palet lo es cuando el cliente tiene dos o más; los demás, según su ficha SGA
+function sgaCampoObligatorioArt(clienteId, f){ return f.id === 'subtipo' ? sgaTiposPaletElegir(clienteId).length > 0 : sgaClienteCfg(clienteId).campos[f.id] === 'obligatorio'; }
+// «Tipo de palet» como dato del artículo en el catálogo (solo si el cliente tiene dos o más tipos en sus líneas de entrada y salida): al recibir ese artículo sale solo
 function sgaCampoPaletCat(clienteId){
-  const o = sgaSubtiposMov(clienteId);
+  const o = sgaTiposPaletElegir(clienteId);
   return o.length ? { id: 'subtipo', label: 'Tipo de palet', nombre: 'Tipo de palet', unidad: '', custom: true, tipo: 'lista', opciones: o, ambito: 'articulo' } : null;
 }
 function sgaCamposArticuloCat(clienteId){ const f = sgaCampoPaletCat(clienteId); return sgaCamposArticulo(clienteId).concat(f ? [f] : []); }
@@ -10071,10 +10101,7 @@ function sgaCalcularEntrada(d){
           const nombrados = txt ? subs.filter(s => txt.includes(' ' + sgaNormSub(s).replace(/[^a-z0-9]+/g, ' ') + ' ')) : [];
           if (nombrados.length === 1) sub = nombrados[0];
         }
-        if (!sub && !p.subtipo) {   // sin tipo de palet: se usa el que este cliente tenga como «por defecto» en su ficha SGA (si lo tiene)
-          const def = sgaSubtipoDefecto(d.clienteId);
-          if (def) sub = subs.find(s => sgaNormSub(s) === sgaNormSub(def)) || '';
-        }
+        if (!sub && !p.subtipo && subs.length === 1) sub = subs[0];   // este producto solo tiene un tipo de palet: no hay nada que elegir, es ese
         if (!sub) { faltaSub += p.cantidad; return; }
         pe = sgaProdConTipo(d.clienteId, pe, sub);   // «Entrada palet» o «Entrada palet Especial», según el tipo de palet
       }
@@ -10422,7 +10449,7 @@ function sgaEntradaFilaHtml(i, cfg, pre){
       ${porLinea ? cell(`<select id="se-${i}-alm" onchange="sgaEntradaLineaAlmCambio(${i})">${wsL.map(w => `<option value="${w.id}" ${w.id === wl ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`, 150) : ''}
       ${conArt ? cell(`<select id="se-${i}-art" onchange="sgaEntradaArticuloCambio(${i})" style="display:none;">${sgaArticuloOptionsHtml(clienteId, pre.art || '')}</select><button type="button" id="se-${i}-artb" class="se-art-b" onclick="sgaArtPickerAbrir(${i})" title="Buscar en el catálogo del cliente">${sgaArtEtiquetaHtml(clienteId, pre.art || '')}<span class="se-art-ch">▾</span></button>`, 230) : ''}
       ${sgaEntradaConTipo(clienteId) ? cell(`<select id="se-${i}-prod">${sgaProdOptionsHtml(clienteId, pre.prod || '')}</select>`, 190) : ''}
-      ${sgaSubtiposMov(clienteId).length ? cell(`<select id="se-${i}-sub" title="Decide el precio de entrada y de salida de este palet"><option value="">Elige el tipo…</option>${sgaSubtiposMov(clienteId).map(s => `<option value="${esc(s)}" ${sgaNormSub(s) === sgaNormSub(pre.sub) ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>`, 140) : ''}
+      ${sgaTiposPaletElegir(clienteId).length ? cell(`<select id="se-${i}-sub" title="Decide el precio de entrada y de salida de este palet"><option value="">Elige el tipo…</option>${sgaTiposPaletElegir(clienteId).map(s => `<option value="${esc(s)}" ${sgaNormSub(s) === sgaNormSub(pre.sub) ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>`, 140) : ''}
       ${cfg.codigosUnicos
         ? cell(`<input id="se-${i}-codigo" maxlength="60" placeholder="${esc(sgaUdCodigo(clienteId))}" value="${esc(pre.codigo || '')}" />`, 150)
         : cell(`<input id="se-${i}-cant" inputmode="numeric" maxlength="6" placeholder="Nº de ${esc(sgaUnidadCfg(clienteId).p)}" oninput="sgaEntradaBultosAuto(${i})" value="${esc(pre.cant || '')}" />`, 90)}
@@ -10531,7 +10558,7 @@ function sgaEntradaLineasHtml(cfg, pre){
         ${sgaEntradaPorLinea() ? F('Almacén') : ''}
         ${conArt ? F('Artículo') : ''}
         ${sgaEntradaConTipo(sgaEntradaClienteId()) ? F(`Tipo de carga ${fill('prod')}`) : ''}
-        ${sgaSubtiposMov(sgaEntradaClienteId()).length ? F(`Tipo de palet <span class="dc-req">*</span> ${fill('sub')}`) : ''}
+        ${sgaTiposPaletElegir(sgaEntradaClienteId()).length ? F(`Tipo de palet <span class="dc-req">*</span> ${fill('sub')}`) : ''}
         ${F(cfg.codigosUnicos ? 'Código' : sgaCap(sgaUnidadCfg(sgaEntradaClienteId()).p) + ' ' + fill('cant'), cfg.codigosUnicos ? '' : 'number')}
         ${conArt && sgaClienteConBultos(sgaEntradaClienteId()) ? F('Bultos', 'number') : ''}
         ${campos.map(f => F(`${esc(f.label)}${cfg.campos[f.id] === 'obligatorio' ? ' <span class="dc-req">*</span>' : ''}${unicos.includes(f.id) || ['serie', 'codigo'].includes(f.id) ? '' : ' ' + fill(f.id)}`)).join('')}
@@ -10732,7 +10759,7 @@ function sgaArtNuevoRapido(i){
               ? `<div class="field" style="width:150px;"><label>Bultos por palet <span class="dc-req">*</span></label>${decaInputIcon('box', `<input id="na-bultos" inputmode="decimal" maxlength="8" value="1" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sgaArtNuevoGuardar(); }" />`)}</div>`
               : `<input type="hidden" id="na-bultos" value="1" />`}
             <div class="field" style="flex:1;min-width:180px;"><label>Tipo de carga</label><select id="na-prod"><option value="">— Sin definir —</option>${prods.map(p => `<option value="${p.id}" ${fila.prod === p.id ? 'selected' : ''}>${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></div>
-            ${sgaSubtiposMov(clienteId).length ? `<div class="field" style="flex:1;min-width:150px;"><label>Tipo de palet <span class="dc-req">*</span></label><select id="na-sub"><option value="">Elige el tipo…</option>${sgaSubtiposMov(clienteId).map(s => `<option value="${esc(s)}" ${sgaNormSub(s) === sgaNormSub(fila.sub) ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></div>` : ''}
+            ${sgaTiposPaletElegir(clienteId).length ? `<div class="field" style="flex:1;min-width:150px;"><label>Tipo de palet <span class="dc-req">*</span></label><select id="na-sub"><option value="">Elige el tipo…</option>${sgaTiposPaletElegir(clienteId).map(s => `<option value="${esc(s)}" ${sgaNormSub(s) === sgaNormSub(fila.sub) ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></div>` : ''}
           </div>
           <div style="font-size:12px;color:var(--mutedFaint);margin-bottom:10px;">Lo demás (peso, medidas…) se completa luego en Stock → Catálogo.</div>
           <div id="na-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
@@ -10756,7 +10783,7 @@ async function sgaArtNuevoGuardar(){
   if (!isFinite(bultos) || bultos <= 0) { errEl.textContent = 'Los bultos por palet tienen que ser un número mayor que 0.'; return; }
   if (sgaUnicoSinCodigo(clienteId)) { errEl.textContent = 'En este cliente el código no identifica al artículo (lo hacen ' + sgaUnicoCampos(clienteId).map(f => f.nombre.toLowerCase()).join(' o ') + '): créalo desde el catálogo del cliente.'; return; }
   if (sgaArticuloRepetido(clienteId, nombre, {})) { errEl.textContent = sgaArticuloRepetidoTxt(clienteId) + (sgaUnicoCampos(clienteId).length ? ' Para crear otro con el mismo código, hazlo desde el catálogo del cliente, rellenando también ese dato.' : ''); return; }
-  if (document.getElementById('na-sub') && !val('na-sub')) { errEl.textContent = 'Elige el tipo de palet (' + sgaSubtiposMov(clienteId).join(' o ') + '): decide el precio de entrada y de salida.'; return; }
+  if (document.getElementById('na-sub') && !val('na-sub')) { errEl.textContent = 'Elige el tipo de palet (' + sgaTiposPaletElegir(clienteId).join(' o ') + '): decide el precio de entrada y de salida.'; return; }
   const btn = document.querySelector('.na-save');
   if (btn) btn.disabled = true;
   const row = { cliente_id: clienteId, nombre, referencia: referencia || null, producto_id: val('na-prod') || null, bultos_por_unidad: bultos };
@@ -10999,7 +11026,7 @@ function sgaEntradaTotalesHtml(d){
   const campos = sgaCamposLinea(cfg, conArt);
   // mismas columnas que la tabla: #, [artículo], [tipo de carga], palets/código, [bultos], zona, ubicación, datos…, acciones
   const conTipo = sgaEntradaConTipo(d.clienteId);
-  const antes = [conArt ? 'art' : '', conTipo ? 'tipo' : '', sgaSubtiposMov(d.clienteId).length ? 'sub' : ''].filter(Boolean).length;
+  const antes = [conArt ? 'art' : '', conTipo ? 'tipo' : '', sgaTiposPaletElegir(d.clienteId).length ? 'sub' : ''].filter(Boolean).length;
   const resto = 2 + campos.length + 1;   // zona + ubicación + datos + acciones: ahí van los kilos
   return `<tr class="cg-tot"><td></td>${antes ? `<td style="text-align:left;">TOTAL</td>${'<td></td>'.repeat(antes - 1)}` : ''}<td style="text-align:left;">${antes ? `<b>${sgaNumTxt(t.pal)}</b> ${sgaUd(d.clienteId, t.pal)}` : `TOTAL · <b>${sgaNumTxt(t.pal)}</b> ${sgaUd(d.clienteId, t.pal)}`}</td>${conArt && conB ? `<td style="text-align:left;"><b>${sgaNumTxt(Math.round(t.bul * 100) / 100)}</b> bultos</td>` : ''}<td colspan="${resto}" style="text-align:right;">${catCeldaKilos(t)}</td></tr>`;
 }
@@ -11258,7 +11285,7 @@ async function sgaEntradaConfirmar(){
     if (String(l.zonaId).startsWith('nave:')) { errores.push(`${f}: la zona de la nave se está creando; espera un segundo y vuelve a guardar.`); return; }
     if (conArt && !l.articuloId && !cfg.codigosUnicos) { errores.push(`${f}: elige el artículo.`); return; }   // con código propio por palet, el artículo es opcional (palet único)
     if (!l.productoId && sgaProductosCliente(d.clienteId, '').length > 0) { errores.push(`${f}: elige el tipo de carga (es el que decide qué tarifa de entrada y salida se cobra).`); return; }
-    if (!l.subtipo && sgaSubtiposMov(d.clienteId).length && !sgaSubtipoDefecto(d.clienteId)) { errores.push(`${f}: elige el tipo de palet (${sgaSubtiposMov(d.clienteId).join(' o ')}): decide el precio de entrada y de salida.`); return; }
+    if (!l.subtipo && sgaTiposPaletElegir(d.clienteId).length) { errores.push(`${f}: elige el tipo de palet (${sgaTiposPaletElegir(d.clienteId).join(' o ')}): decide el precio de entrada y de salida.`); return; }
     let cantidad = 1;
     if (cfg.codigosUnicos) {
       if (!l.codigo) { errores.push(`${f}: falta ${sgaUdCodigo(d.clienteId).toLowerCase()}.`); return; }
@@ -11287,6 +11314,7 @@ async function sgaEntradaConfirmar(){
     }
     const atributos = {};
     if (l.subtipo) atributos.subtipo = l.subtipo;   // tipo de palet (Normal, Especial…): con él se cobra la salida
+    else if (sgaTipoPaletUnico(d.clienteId)) atributos.subtipo = sgaTipoPaletUnico(d.clienteId);   // un solo tipo en el cliente: no hay nada que elegir, se anota solo
     // Datos de la recepción que usa este cliente (referencia, descripción y lote van en columnas de la partida)
     sgaCamposActivos(cfg).filter(c => !SGA_CAMPOS_COLUMNA.includes(c.id)).forEach(c => { if (l[c.id]) atributos[c.id] = c.tipo === 'numero' ? sgaNumero(l[c.id]) : (c.id === 'proveedor' ? l[c.id].toUpperCase() : l[c.id]); });
     const art = sgaArticulos.find(x => x.id === l.articuloId);
@@ -12321,7 +12349,7 @@ function tplSgaArticuloPage(c){
       </div>
       ${camposArt.length ? `<div class="card deca-card">
         ${decaCardHead('list', 'Datos adicionales', 'Los que este cliente usa en su catálogo (Configuración → Datos de mercancía)')}
-        <div class="deca-card-body"><div style="display:flex;gap:12px;flex-wrap:wrap;">${camposArt.map(f => `<div class="field" style="flex:1;min-width:200px;"><label>${esc(f.label)}${c0.campos[f.id] === 'obligatorio' ? ' <span class="dc-req">*</span>' : ''}</label>${sgaCampoControl(f, a && a.atributos ? a.atributos[f.id] : '', `id="sgaa-x-${f.id}"`)}</div>`).join('')}</div></div>
+        <div class="deca-card-body"><div style="display:flex;gap:12px;flex-wrap:wrap;">${camposArt.map(f => `<div class="field" style="flex:1;min-width:200px;"><label>${esc(f.label)}${sgaCampoObligatorioArt(c.id, f) ? ' <span class="dc-req">*</span>' : ''}</label>${sgaCampoControl(f, a && a.atributos ? a.atributos[f.id] : '', `id="sgaa-x-${f.id}"`)}</div>`).join('')}</div></div>
       </div>` : ''}
     </div>
     <div class="deca-actions" style="max-width:720px;">
@@ -12353,7 +12381,7 @@ async function submitSgaArticulo(){
   for (const f of sgaCamposArticuloCat(pg.clienteId)) {
     const r = sgaCampoParsear(f, (document.getElementById(`sgaa-x-${f.id}`) || {}).value);
     if (r.error) { errEl.textContent = r.error; return; }
-    if (r.valor == null) { if (cfgCli.campos[f.id] === 'obligatorio') { errEl.textContent = `Falta «${f.label}».`; return; } delete atributos[f.id]; }
+    if (r.valor == null) { if (sgaCampoObligatorioArt(pg.clienteId, f)) { errEl.textContent = `Falta «${f.label}».`; return; } delete atributos[f.id]; }
     else atributos[f.id] = r.valor;
   }
   // Lo único es el código de artículo (la descripción puede repetirse) y, si el cliente lo ha elegido así, también los datos que lo distinguen (p. ej. el lote)
@@ -12432,6 +12460,7 @@ const SGA_ART_COLS = [
   { id: 'nave', re: /^nave|^zona|^almac/ },
   { id: 'medidas', re: /informaci|medidas|largo/ },
   { id: 'finalidad', re: /^finalidad/ },
+  { id: 'subtipo', re: /^tipo de palet|^subtipo/ },
 ];
 function sgaArtMapaColumnas(cabecera){
   const mapa = {};
@@ -12467,6 +12496,7 @@ function sgaArtRapidaAnalizar(texto, clienteId, zonaDefecto){
   const celda = (f, id) => { const v = mapa[id] !== undefined && f[mapa[id]] !== undefined ? String(f[mapa[id]]).trim() : ''; return v === '-' ? '' : v; };
   const existentes = new Set(sgaArticulosDe(clienteId, true).map(a => a.nombre.toLowerCase()));   // solo el código de artículo debe ser único
   const vistas = new Set();
+  const tiposPalet = sgaTiposPaletElegir(clienteId), subParaTodos = (document.getElementById('sgar-sub') || {}).value || '';
   const items = datos.map((f, n) => {
     const nombre = celda(f, 'nombre').toUpperCase(), referencia = celda(f, 'referencia').toUpperCase();
     const bTxt = celda(f, 'bultos');
@@ -12481,6 +12511,14 @@ function sgaArtRapidaAnalizar(texto, clienteId, zonaDefecto){
     const clave = nombre.toLowerCase();
     if (existentes.has(clave)) { item.estado = 'existe'; item.aviso = 'Ya está en el catálogo.'; return item; }
     if (vistas.has(clave)) { item.estado = 'existe'; item.aviso = 'Repetido en lo que has pegado.'; return item; }
+    // Tipo de palet: obligatorio cuando el cliente tiene dos o más (viene en la columna «Tipo de palet» o del valor «para todos»)
+    if (tiposPalet.length) {
+      const crudo = celda(f, 'subtipo') || subParaTodos;
+      const ok = crudo ? tiposPalet.find(t => sgaNormSub(t) === sgaNormSub(crudo)) : null;
+      if (!crudo) { item.estado = 'error'; item.aviso = `Falta el tipo de palet (${tiposPalet.join(' o ')}).`; return item; }
+      if (!ok) { item.estado = 'error'; item.aviso = `Tipo de palet «${crudo}» no reconocido (${tiposPalet.join(' o ')}).`; return item; }
+      item.subtipo = ok;
+    }
     vistas.add(clave);
     return item;
   });
@@ -12501,18 +12539,20 @@ function sgaArtRapidaRevisar(){
   if (!prev) return;
   if (!items.length) { prev.innerHTML = '<div style="color:var(--mutedFaint);font-size:12.5px;">Pega las filas de tu Excel en el cuadro de arriba y aquí verás lo que se va a crear.</div>'; return; }
   const ya = items.filter(i => i.estado === 'existe').length, err = items.filter(i => i.estado === 'error').length;
+  const conSubRev = sgaTiposPaletElegir((window.__sgaArtRapida || {}).clienteId).length > 0;
   const etiqueta = i => i.estado === 'nuevo' ? '<span style="color:var(--success);font-weight:600;">Nuevo</span>' : i.estado === 'existe' ? '<span style="color:var(--muted);">Se salta</span>' : '<span style="color:var(--danger);font-weight:600;">Error</span>';
   prev.innerHTML = `
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px;font-size:13px;">
       <span><b>${nuevos}</b> nuevo${nuevos !== 1 ? 's' : ''}</span><span style="color:var(--muted);"><b>${ya}</b> ya existen o repetidos</span>${err ? `<span style="color:var(--danger);"><b>${err}</b> con error</span>` : ''}
     </div>
     <div class="tc-hist-box" style="max-height:420px;"><table class="tf-table" style="min-width:760px;">
-      <thead><tr><th>#</th><th>Código de artículo</th><th>Descripción</th><th style="text-align:right;">Bultos</th><th style="text-align:right;">M. lin.</th><th style="text-align:right;">${esc(sgaPesoLabel())}</th><th>Estado</th></tr></thead>
+      <thead><tr><th>#</th><th>Código de artículo</th><th>Descripción</th>${conSubRev ? '<th>Tipo de palet</th>' : ''}<th style="text-align:right;">Bultos</th><th style="text-align:right;">M. lin.</th><th style="text-align:right;">${esc(sgaPesoLabel())}</th><th>Estado</th></tr></thead>
       <tbody>${items.map(i => `
         <tr${i.estado !== 'nuevo' ? ' style="opacity:.65;"' : ''}>
           <td style="color:var(--mutedFaint);">${i.n}</td>
           <td><b>${esc(i.nombre) || '—'}</b>${i.finalidad ? `<div style="font-size:11.5px;color:var(--muted);">${esc(i.finalidad)}</div>` : ''}</td>
           <td>${esc(i.referencia) || '—'}</td>
+          ${conSubRev ? `<td>${esc(i.subtipo) || '—'}</td>` : ''}
           <td class="tf-precio">${isFinite(i.bultos) ? sgaNumTxt(i.bultos) : '—'}</td>
           <td class="tf-precio">${sgaNumTxt(i.ml)}</td>
           <td class="tf-precio">${sgaNumTxt(i.peso)}</td>
@@ -12547,6 +12587,8 @@ function tplSgaArtRapidaPage(c){
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
             <div class="field" style="flex:1;min-width:220px;margin-bottom:0;"><label>Tipo de carga</label>
               <select id="sgar-prod" onchange="sgaArtRapidaRevisar()"><option value="">— Sin definir —</option>${prods.map(p => `<option value="${p.id}">${esc(almacenajeProductoTexto(p))}</option>`).join('')}</select></div>
+            ${sgaTiposPaletElegir(c.id).length ? `<div class="field" style="flex:1;min-width:220px;margin-bottom:0;"><label>Tipo de palet <span class="dc-req">*</span> <small style="font-weight:400;color:var(--muted);">(para los que no lo traen en el Excel)</small></label>
+              <select id="sgar-sub" onchange="sgaArtRapidaRevisar()"><option value="">— Elige el tipo —</option>${sgaTiposPaletElegir(c.id).map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('')}</select></div>` : ''}
           </div>
         </div>
       </div>
@@ -12574,7 +12616,7 @@ async function sgaArtRapidaCrear(){
   const productoId = (document.getElementById('sgar-prod') || {}).value || null;
   const btn = document.querySelector('.sgar-save');
   if (btn) btn.disabled = true;
-  const filas = nuevos.map(i => ({ cliente_id: pg.clienteId, nombre: i.nombre, referencia: i.referencia || null, producto_id: productoId, zona_id: null, bultos_por_unidad: i.bultos, metros_lineales: i.ml, peso: i.peso, medidas: i.medidas || null, ...(i.finalidad ? { atributos: { finalidad: i.finalidad } } : {}) }));
+  const filas = nuevos.map(i => ({ cliente_id: pg.clienteId, nombre: i.nombre, referencia: i.referencia || null, producto_id: productoId, zona_id: null, bultos_por_unidad: i.bultos, metros_lineales: i.ml, peso: i.peso, medidas: i.medidas || null, ...((i.finalidad || i.subtipo) ? { atributos: { ...(i.finalidad ? { finalidad: i.finalidad } : {}), ...(i.subtipo ? { subtipo: i.subtipo } : {}) } } : {}) }));
   const { data, error } = await supabaseClient.from('sga_articulos').insert(filas).select();
   if (error || !data) {
     const dup = error && /duplicate key|unique/i.test(error.message || '') ? await sgaArticuloDuplicadoTxt(pg.clienteId, nuevos.map(i => i.nombre)) : '';
