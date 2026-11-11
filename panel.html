@@ -28139,6 +28139,152 @@ function crmEurLang(n, L){
   const s = Number(n).toLocaleString(L.loc, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/[  ]/g, ' ');
   return L.euroDelante ? '€' + s : s + ' €';
 }
+/* ---- Nombres de los conceptos en el idioma del PDF ----
+   · Los tipos de transporte (FTL, LTL, Portacontenedores, Piso móvil / granel, Duo trailer, Grúa) son una lista fija: ya van traducidos.
+   · Los productos de almacén y las operativas llevan el nombre que tú les pones, así que se traducen una vez y vale para todas las ofertas
+     (tabla crm_traducciones, SQL «comercial-crm-traducciones.sql»). Al sacar un PDF en otro idioma, si hay nombres sin traducir se te preguntan.
+   Un nombre sin traducción sale tal cual está escrito, como hasta ahora. */
+const CRM_TIPOS_TRANSPORTE_LANG = {
+  ca: { FTL: 'FTL', LTL: 'LTL', PORTACONTENEDORES: 'Portacontenidors', GRANEL: 'Terra mòbil / granel', DUO: 'Duo trailer', GRUA: 'Grua' },
+  en: { FTL: 'FTL', LTL: 'LTL', PORTACONTENEDORES: 'Container trailer', GRANEL: 'Walking floor / bulk', DUO: 'Duo trailer', GRUA: 'Crane' },
+  fr: { FTL: 'FTL', LTL: 'LTL', PORTACONTENEDORES: 'Porte-conteneurs', GRANEL: 'Plancher mouvant / vrac', DUO: 'Duo trailer', GRUA: 'Grue' }
+};
+const CRM_TRAD_SQL = 'Para guardar traducciones falta ejecutar el SQL «comercial-crm-traducciones.sql» en Supabase.';
+function crmTradS(){ const S = crmS(); return S.trad || (S.trad = { cargado: false, ok: true, mapa: {}, omitidos: {}, avisado: false }); }
+const crmTradClave = s => crmNorm(s).replace(/\s+/g, ' ');
+async function crmTradCargar(forzar){
+  const T = crmTradS();
+  if (T.cargado && !forzar) return T.ok;
+  const mapa = {};
+  for (let d = 0; ; d += 1000) {   // de 1000 en 1000: la base de datos no devuelve más por petición
+    const r = await supabaseClient.from('crm_traducciones').select('*').order('clave').range(d, d + 999);
+    if (r.error) { T.cargado = true; T.ok = false; return false; }   // sin el SQL no hay tabla: los nombres salen como están escritos
+    (r.data || []).forEach(x => { mapa[x.clave] = { texto: x.texto || '', ca: x.ca || '', en: x.en || '', fr: x.fr || '' }; });
+    if ((r.data || []).length < 1000) break;
+  }
+  T.mapa = mapa; T.cargado = true; T.ok = true;
+  return true;
+}
+function crmTradDe(texto, lang){ const e = crmTradS().mapa[crmTradClave(texto)]; return e && e[lang] ? e[lang] : ''; }
+// El nombre de un producto u operativa en el idioma del PDF (o tal cual, si no está traducido). «A · B» se traduce por partes si no está entero.
+function crmTexto(texto, lang){
+  if (!lang || lang === 'es' || !texto) return texto;
+  const t = crmTradDe(texto, lang); if (t) return t;
+  const partes = String(texto).split(' · ');
+  return partes.length > 1 ? partes.map(p => crmTradDe(p, lang) || p).join(' · ') : texto;
+}
+function crmNombreLang(x, lang){
+  if (!x) return '';
+  if (lang && lang !== 'es' && x.t === 'transporte') { const T = CRM_TIPOS_TRANSPORTE_LANG[lang]; if (T && T[x.c]) return T[x.c]; }
+  return crmTexto(x.n, lang);
+}
+// Los nombres de una oferta que se pueden traducir (productos y operativas; el transporte ya va traducido)
+function crmTradTextos(conceptos){
+  const m = new Map();
+  const add = t => { const s = String(t || '').trim(); if (s) m.set(crmTradClave(s), s); };
+  (conceptos || []).forEach(x => {
+    if (x.t === 'transporte') return;
+    if (x.t === 'operativa') { add(x.n); (x.apartados || []).forEach(a => add(a.concepto)); return; }
+    add(x.n);
+  });
+  return [...m.values()];
+}
+function crmTradPendientes(conceptos, lang){
+  const T = crmTradS(), omit = T.omitidos[lang] || {};
+  return crmTradTextos(conceptos).filter(t => {
+    if (crmTradDe(t, lang) || omit[crmTradClave(t)]) return false;
+    const ps = String(t).split(' · ');
+    return !(ps.length > 1 && ps.every(p => crmTradDe(p, lang)));
+  });
+}
+// Antes de sacar un PDF en otro idioma: si hay nombres sin traducir se pregunta (se pueden dejar como están). Devuelve true para seguir y false para cancelar.
+async function crmTradRevisar(conceptos, lang){
+  if (!lang || lang === 'es') return true;
+  let ok = false;
+  try { ok = await crmTradCargar(); } catch (e) { ok = false; }
+  const T = crmTradS();
+  if (!ok) {
+    if (!T.avisado && crmTradTextos(conceptos).length) { T.avisado = true; appToast('Los nombres de los productos saldrán sin traducir: ' + CRM_TRAD_SQL, 'info'); }
+    return true;
+  }
+  const pend = crmTradPendientes(conceptos, lang);
+  if (!pend.length) return true;
+  return crmTradModal(pend, lang, 'auto');
+}
+function crmTradModal(textos, lang, modo){
+  return new Promise(resolve => { window.__crmTrad = { textos, lang, modo, vals: {}, resolve }; crmTradPinta(); });
+}
+function crmTradPinta(){
+  const R = window.__crmTrad; if (!R) return;
+  const L = CRM_PDF_IDIOMAS[R.lang], T = crmTradS(), auto = R.modo === 'auto';
+  const val = t => { const k = crmTradClave(t), v = R.vals[R.lang] && R.vals[R.lang][k]; return v != null ? v : (T.mapa[k] ? T.mapa[k][R.lang] : ''); };
+  const chips = auto ? '' : `<div class="crm-chs" style="margin-bottom:12px;">${['en', 'ca', 'fr'].map(k => `<button type="button" class="crm-ch${R.lang === k ? ' on' : ''}" onclick="crmTradLang('${k}')">${esc(CRM_PDF_IDIOMAS[k].nombre)}</button>`).join('')}</div>`;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:640px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.edit, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Traducciones para el PDF · ${esc(L.nombre)}</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">${auto ? `Estos nombres todavía no están traducidos al ${esc(L.nombre.toLowerCase())}. Se guardan y valen para todas las ofertas.` : 'Cada nombre se traduce una vez y vale para todas las ofertas. Lo que dejes vacío sale tal cual está escrito.'}</div></div>
+          <button class="close-x" onclick="crmTradCierra(false)" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="--dc-accent:var(--primary);">
+          ${chips}
+          <div style="max-height:380px;overflow:auto;padding-right:4px;">
+            ${R.textos.map(t => `<div class="field"><label>${esc(t)}</label><input data-k="${esc(crmTradClave(t))}" value="${esc(val(t))}" maxlength="120" placeholder="${esc(L.nombre)}" oninput="crmTradEscribe(this)" /></div>`).join('')}
+          </div>
+          <div id="crm-trad-err" style="color:var(--danger);font-size:12.5px;margin:8px 0;"></div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button class="btn btn-ghost deca-cancel" onclick="crmTradCierra(false)">${auto ? 'Cancelar' : 'Cerrar'}</button>
+            ${auto ? '<button class="btn btn-ghost" onclick="crmTradSinTraducir()" title="Saca el PDF con esos nombres como están escritos (no se vuelve a preguntar en esta sesión)">Generar sin traducir</button>' : ''}
+            <button class="btn btn-primary deca-submit" onclick="crmTradGuarda()">${auto ? 'Guardar y generar' : 'Guardar'}</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const i = document.querySelector('#modal-slot input[data-k]'); if (i && auto) i.focus();
+}
+function crmTradEscribe(inp){ const R = window.__crmTrad; if (!R) return; (R.vals[R.lang] = R.vals[R.lang] || {})[inp.dataset.k] = inp.value.trim(); }
+function crmTradLang(k){ const R = window.__crmTrad; if (!R) return; R.lang = k; crmTradPinta(); }
+function crmTradCierra(res){ const R = window.__crmTrad; window.__crmTrad = null; closeModal(); if (R && R.resolve) R.resolve(res); }
+function crmTradSinTraducir(){
+  const R = window.__crmTrad; if (!R) return;
+  const T = crmTradS(), o = (T.omitidos[R.lang] = T.omitidos[R.lang] || {});
+  R.textos.forEach(t => { o[crmTradClave(t)] = true; });
+  crmTradCierra(true);
+}
+async function crmTradGuarda(){
+  const R = window.__crmTrad; if (!R) return;
+  const err = document.getElementById('crm-trad-err'), T = crmTradS();
+  const filas = new Map();
+  Object.entries(R.vals).forEach(([lang, kv]) => Object.entries(kv).forEach(([k, v]) => {
+    const t = R.textos.find(x => crmTradClave(x) === k); if (!t) return;
+    const antes = T.mapa[k] ? T.mapa[k][lang] : '';
+    if ((v || '') === (antes || '')) return;   // sin cambios
+    const f = filas.get(k) || { clave: k, texto: t, updated_at: new Date().toISOString(), updated_by: currentUserEmail() };
+    f[lang] = v || null;
+    filas.set(k, f);
+  }));
+  if (filas.size) {
+    const { error } = await supabaseClient.from('crm_traducciones').upsert([...filas.values()], { onConflict: 'clave' });
+    if (error) { if (err) err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test(error.message || '') ? CRM_TRAD_SQL : (error.message || 'error desconocido.')); return; }
+    filas.forEach((f, k) => { const e = T.mapa[k] = T.mapa[k] || { texto: f.texto, ca: '', en: '', fr: '' }; ['ca', 'en', 'fr'].forEach(l => { if (l in f) e[l] = f[l] || ''; }); });
+    appToast(`${filas.size} traducción${filas.size === 1 ? '' : 'es'} guardada${filas.size === 1 ? '' : 's'}.`, 'ok');
+  }
+  if (R.modo === 'auto') { const o = (T.omitidos[R.lang] = T.omitidos[R.lang] || {}); R.textos.forEach(t => { if (!crmTradDe(t, R.lang)) o[crmTradClave(t)] = true; }); }   // los que se han dejado vacíos no se vuelven a preguntar en esta sesión
+  crmTradCierra(true);
+}
+// Desde el menú del PDF: ver y corregir las traducciones de los nombres de esta oferta
+async function crmTradEditar(id){
+  const S = crmS();
+  const conceptos = String(id).startsWith('form:') ? (S.form ? crmConceptosDeForm(S.form) : []) : ((S.opps.find(x => x.id === id) || {}).conceptos || []);
+  const textos = crmTradTextos(conceptos);
+  if (!textos.length) { appToast('Esta oferta no tiene productos ni operativas que traducir: los tipos de transporte ya salen traducidos.', 'info'); return; }
+  let ok = false; try { ok = await crmTradCargar(); } catch (e) { ok = false; }
+  if (!ok) { appToast(CRM_TRAD_SQL, 'error'); return; }
+  const u = crmPdfIdiomaUltimo();
+  crmTradModal(textos, u === 'es' ? 'en' : u, 'editar');
+}
 /* Plazo de pago: es texto libre, pero los de la lista desplegable («Transferencia a 30 días», «60 días fecha factura», «Pago al contado», «Pago anticipado»…)
    se traducen al idioma del PDF. Si se ha escrito otra cosa a mano, sale tal cual está escrito. */
 const CRM_PLAZO_TXT = {
@@ -28193,7 +28339,8 @@ function crmPdfMenuHtml(){
   return `<div class="crm-pdfm-t">PDF en…</div>${langs}
     <div class="crm-pdfm-s"><div class="crm-pdfm-t">Adjuntar presentación</div>
       <div class="pps">${chip('transporte', 'Transporte')}${chip('almacen', 'Almacén')}${chip('', 'Ninguna')}</div>
-      ${!hay ? '<small>Sube tus presentaciones en CRM → Documentos.</small>' : (P.sel && P.sel === P.auto ? `<small>${P.auto === 'transporte' && P.hayAlm ? 'Transporte y almacén cotizados: va la de Transporte.' : 'Elegida según lo que se cotiza.'}</small>` : '')}</div>`;
+      ${!hay ? '<small>Sube tus presentaciones en CRM → Documentos.</small>' : (P.sel && P.sel === P.auto ? `<small>${P.auto === 'transporte' && P.hayAlm ? 'Transporte y almacén cotizados: va la de Transporte.' : 'Elegida según lo que se cotiza.'}</small>` : '')}</div>
+    ${P.hayAlm ? `<div class="crm-pdfm-s"><button type="button" onclick="crmTradEditar('${P.id}')" title="Cómo se llaman los productos y operativas de esta oferta en los otros idiomas">Traducciones de los conceptos…</button></div>` : ''}`;
 }
 function crmPdfMenuPres(k){
   const P = window.__crmPres; if (!P) return;
@@ -28220,9 +28367,14 @@ async function crmPdfMenu(ev, id){
   m.style.top = (r.bottom + 6 + h > window.innerHeight - 8 ? Math.max(8, r.top - h - 6) : r.bottom + 6) + 'px';
   setTimeout(() => { document.addEventListener('click', crmPdfMenuCierra); window.addEventListener('scroll', crmPdfMenuCierra, true); }, 0);
 }
-function crmPdfMenuElige(id, lang){
+async function crmPdfMenuElige(id, lang){
   const pres = (window.__crmPres && window.__crmPres.id === id) ? (window.__crmPres.sel || '') : '';
   crmPdfMenuCierra(); crmPdfIdiomaGuarda(lang);
+  if (lang !== 'es') {   // los nombres de productos y operativas sin traducir se preguntan antes de sacar el PDF
+    const S = crmS();
+    const conceptos = String(id).startsWith('form:') ? (S.form ? crmConceptosDeForm(S.form) : []) : ((S.opps.find(x => x.id === id) || {}).conceptos || []);
+    if (!(await crmTradRevisar(conceptos, lang))) return;
+  }
   if (String(id).startsWith('form:')) { crmFormGuardar(id.slice(5) || null, true, lang, pres); return; }   // «Guardar y generar PDF» del formulario: guarda y genera en ese idioma
   crmOfertaGenerar(id, lang, pres);
 }
@@ -28309,6 +28461,8 @@ async function crmOfertaGenerar(id, lang, pres){
 async function crmOfertaPdfBytes(o, num, lang){
   const { PDFDocument, StandardFonts, rgb } = PDFLib;
   const L = CRM_PDF_IDIOMAS[lang] || CRM_PDF_IDIOMAS.es;
+  lang = CRM_PDF_IDIOMAS[lang] ? lang : 'es';
+  try { await crmTradCargar(); } catch (e) { /* sin traducciones los nombres salen como están escritos */ }
   const E = ocCfgEmpresa(), T = ocPdfTxt, cli = crmOfertaCliente(o);
   const pdf = await PDFDocument.create();
   pdf.setTitle(`${L.pres} ${num}`); pdf.setAuthor(E.nombre);
@@ -28424,7 +28578,7 @@ async function crmOfertaPdfBytes(o, num, lang){
   if (tr.length) {
     seccion(L.sTrans);
     tabla([{ t: L.cServ, w: 0.19, b: true }, { t: L.cOrig, w: 0.27 }, { t: L.cDest, w: 0.27 }, { t: L.cPrecio, w: 0.27, a: 'r', b: true }],
-      tr.map(x => { const fila = [x.n + (x.metros ? ` · ${String(x.metros).replace('.', L.dec)} m` : ''), lugar(x.o), lugar(x.d), x.precio == null ? CONSULTAR : eur2(x.precio) + (x.c === 'GRANEL' ? ' ' + L.ton : x.c === 'GRUA' ? ' ' + L.hora : '')];
+      tr.map(x => { const fila = [crmNombreLang(x, lang) + (x.metros ? ` · ${String(x.metros).replace('.', L.dec)} m` : ''), lugar(x.o), lugar(x.d), x.precio == null ? CONSULTAR : eur2(x.precio) + (x.c === 'GRANEL' ? ' ' + L.ton : x.c === 'GRUA' ? ' ' + L.hora : '')];
         if (x.nota) fila.nota = x.nota;
         return fila; }));
   }
@@ -28433,7 +28587,7 @@ async function crmOfertaPdfBytes(o, num, lang){
   const ops = (o.conceptos || []).filter(x => x.t === 'operativa');
   if (ops.length) {
     seccion(L.sOper);
-    tabla([{ t: L.cConc, w: 0.62, b: true }, { t: L.cPrecio, w: 0.38, a: 'r', b: true }], crmOpLineas(ops).map(x => [x.n, x.precio == null ? CONSULTAR : eur(x.precio)]));
+    tabla([{ t: L.cConc, w: 0.62, b: true }, { t: L.cPrecio, w: 0.38, a: 'r', b: true }], crmOpLineas(ops).map(x => [crmTexto(x.n, lang), x.precio == null ? CONSULTAR : eur(x.precio)]));
   }
   if (al.length) {
     seccion(L.sAlm);
@@ -28444,7 +28598,7 @@ async function crmOfertaPdfBytes(o, num, lang){
     alOrd.forEach(({ x, c }) => {
       if (varios && pos(c) !== grupoAnt) { grupoAnt = pos(c); const g = ['grupo']; g.grupo = CRM_CAT_AL[c] ? (L.cat[c] || CRM_CAT_AL[c][0]) : L.otros; filas.push(g); }
       const u = CRM_UNIDAD_AL[x.unidad];
-      const fila = [x.n, x.precio == null ? CONSULTAR : eur(x.precio) + (x.unidad === 'operativa' ? ' ' + L.oper : u ? ' ' + (L.u[x.unidad] || u.txt) : '')];
+      const fila = [crmNombreLang(x, lang), x.precio == null ? CONSULTAR : eur(x.precio) + (x.unidad === 'operativa' ? ' ' + L.oper : u ? ' ' + (L.u[x.unidad] || u.txt) : '')];
       if (x.nota) fila.nota = x.nota;
       filas.push(fila);
     });
