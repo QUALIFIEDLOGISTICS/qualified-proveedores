@@ -3385,13 +3385,32 @@ async function signedUrl(path){
   const { data } = await supabaseClient.storage.from(DOCS_BUCKET).createSignedUrl(path, 21600);
   return data ? data.signedUrl : null;
 }
+// Enlaces firmados de muchos archivos de golpe (de 100 en 100 y todos a la vez). Antes se pedía uno por uno, esperando a cada uno: con
+// decenas de adjuntos, abrir la web tardaba casi 10 segundos. Devuelve { ruta: enlace }.
+async function signedUrls(paths){
+  const unicos = [...new Set((paths || []).filter(Boolean))], out = {};
+  if (!unicos.length) return out;
+  const trozos = [];
+  for (let i = 0; i < unicos.length; i += 100) trozos.push(unicos.slice(i, i + 100));
+  let fallo = false;
+  await Promise.all(trozos.map(async t => {
+    try {
+      const { data, error } = await supabaseClient.storage.from(DOCS_BUCKET).createSignedUrls(t, 21600);
+      if (error) { fallo = true; return; }
+      (data || []).forEach(d => { if (d && d.signedUrl) out[d.path] = d.signedUrl; });
+    } catch (e) { fallo = true; }
+  }));
+  if (fallo) await Promise.all(unicos.filter(p => !out[p]).map(async p => { out[p] = await signedUrl(p); }));   // si falló el lote, uno a uno pero a la vez
+  return out;
+}
 async function loadAttachmentsFor(parentType, ids){
   if (!ids.length) return {};
   const { data } = await supabaseClient.from('attachments').select('*').eq('parent_type', parentType).in('parent_id', ids);
   const byParent = {};
-  for (const row of (data||[])) {
-    const url = await signedUrl(row.storage_path);
-    (byParent[row.parent_id] = byParent[row.parent_id] || []).push({ id: row.id, name: row.name, size: row.size, storage_path: row.storage_path, url });
+  const filas = data || [];
+  const urls = await signedUrls(filas.map(r => r.storage_path));
+  for (const row of filas) {
+    (byParent[row.parent_id] = byParent[row.parent_id] || []).push({ id: row.id, name: row.name, size: row.size, storage_path: row.storage_path, url: urls[row.storage_path] || null });
   }
   return byParent;
 }
@@ -19308,9 +19327,11 @@ async function loadDailyEntries(){
   const { data } = await supabaseClient.from('daily_entries').select('*');
   if (data && data.length) window.__dailyOrigenOk = 'origen' in data[0];   // false mientras falte el SQL del origen del fichaje
   dailyEntries = [];
+  // Los enlaces de las fotos se piden todos de golpe (antes uno por uno: con el histórico de fichajes tardaba varios segundos)
+  const urlsFoto = await signedUrls((data||[]).flatMap(f => [f.photo_in_path, f.photo_out_path]));
   for (const f of (data||[])) {
-    const photoIn = f.photo_in_path ? { storage_path: f.photo_in_path, url: await signedUrl(f.photo_in_path) } : null;
-    const photoOut = f.photo_out_path ? { storage_path: f.photo_out_path, url: await signedUrl(f.photo_out_path) } : null;
+    const photoIn = f.photo_in_path ? { storage_path: f.photo_in_path, url: urlsFoto[f.photo_in_path] || null } : null;
+    const photoOut = f.photo_out_path ? { storage_path: f.photo_out_path, url: urlsFoto[f.photo_out_path] || null } : null;
     dailyEntries.push({
       id: f.id, driverId: f.driver_id, date: f.date, status: f.status, timeIn: f.time_in, timeOut: f.time_out,
       kmStart: f.km_start!=null?Number(f.km_start):null, kmEnd: f.km_end!=null?Number(f.km_end):null, km: f.km!=null?Number(f.km):null,
