@@ -9947,8 +9947,25 @@ async function sgaRevCargar(){
     }));
     st.conCobro = con; st.error = '';
   } catch (e) { st.conCobro = null; st.error = (e && e.message) || 'error desconocido'; }
+  // Validación de cobros en la base de datos (SQL «sga-cobros-validacion.sql»): modo actual e incidencias recientes
+  try {
+    const [aj, inc] = await Promise.all([
+      supabaseClient.from('sga_ajustes').select('valor').eq('clave', 'validar_cobros').maybeSingle(),
+      supabaseClient.from('sga_cobros_incidencias').select('*').order('created_at', { ascending: false }).limit(50),
+    ]);
+    st.sqlFalta = !!((aj.error && /relation|does not exist|schema cache/i.test(aj.error.message || '')) || (inc.error && /relation|does not exist|schema cache/i.test(inc.error.message || '')));
+    st.modo = aj.data && aj.data.valor ? aj.data.valor : 'aviso'; st.incid = inc.data || [];
+  } catch (e) { st.sqlFalta = true; st.incid = []; }
   st.cargando = false;
   if (currentTab === 'stock' && stockSeg() === 'revision') refreshStockBody();
+}
+async function sgaRevModo(modo){
+  if (modo === 'estricto' && !(await appConfirm({ title: 'Pasar a modo estricto', message: 'Desde ahora, un cobro que no cuadre con la tarifa NO se guardará: la recepción o expedición entera se rechazará con el motivo. ¿Seguro? (Hazlo cuando no haya incidencias nuevas.)', confirmLabel: 'Pasar a estricto', cancelLabel: 'Cancelar', tone: 'warn', icon: 'warn' }))) return;
+  const { error } = await supabaseClient.from('sga_ajustes').update({ valor: modo, updated_at: new Date().toISOString(), updated_by: currentUserEmail() }).eq('clave', 'validar_cobros');
+  if (error) { appToast('No se pudo cambiar el modo: ' + (error.message || 'error desconocido') + '. Hace falta permiso de configuración de almacenes.', 'error'); return; }
+  sgaRevEstado().modo = modo;
+  appToast(modo === 'estricto' ? 'Validación de cobros en modo estricto.' : modo === 'aviso' ? 'Validación de cobros en modo aviso.' : 'Validación de cobros apagada.', 'ok');
+  refreshStockBody();
 }
 function sgaRevisionNumero(){ return sgaRevSinTipo().length; }
 function sgaRevToolbarHtml(){
@@ -10006,7 +10023,20 @@ function sgaRevisionBodyHtml(){
         <td class="tf-precio" data-sort-value="${x.sinCobro == null ? -1 : x.sinCobro}">${x.sinCobro == null ? '…' : x.sinCobro}</td>
         <td data-sort-value="${x.ok ? 1 : 0}">${x.ok ? '<span style="color:var(--success);font-weight:600;">✓ En orden</span>' : '<span style="color:var(--danger);font-weight:600;">Revisar</span>'}</td></tr>`).join('')}</tbody></table>
       <div class="dash-nota" style="margin-top:8px;">«Tipos de palet» sale de las líneas de tarifa de entrada y salida de cada cliente (pasa el ratón por encima para ver de qué línea sale cada uno). Si un cliente sale con tipos que no son los suyos, la causa está en cómo están escritas sus tarifas: dímelo y se corrige.</div></div></div>`;
-  return cardC + cardA + cardB;
+  // ---- D · la base de datos comprueba cada cobro contra la tarifa (modo e incidencias)
+  const modos = { aviso: 'Aviso: se guarda y queda apuntado', estricto: 'Estricto: un cobro que no cuadra no se guarda', apagado: 'Apagado' };
+  const puedeCfg = !!(PROFILE.isAdmin || (PROFILE.allowedTabs || []).includes('almacenconfig'));
+  let cuerpoD;
+  if (st.sqlFalta) cuerpoD = '<div class="dash-vacio">Falta ejecutar en Supabase el SQL «sga-cobros-validacion.sql» (está en la carpeta del proyecto). Con él, la base de datos comprueba cada cobro contra la tarifa del cliente.</div>';
+  else if (!st.conCobro && !st.error) cuerpoD = '<div class="dash-vacio">Comprobando…</div>';
+  else {
+    const inc = st.incid || [];
+    cuerpoD = `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px;"><span>Modo actual: <b>${esc(modos[st.modo] || st.modo || '—')}</b></span>${puedeCfg ? ['aviso', 'estricto', 'apagado'].filter(m => m !== st.modo).map(m => `<button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="sgaRevModo('${m}')">Pasar a ${m}</button>`).join('') : ''}</div>
+      ${inc.length ? `<table class="tf-table"><thead><tr>${thSort('Cuándo', 'date')}${thSort('Cliente', 'text')}${thSort('Qué no cuadra', 'text')}</tr></thead><tbody>${inc.map(i => { const c = contactos.find(x => x.id === i.cliente_id) || {}; const a = sgaAlbaranes.find(x => x.id === i.albaran_id); return `<tr><td style="white-space:nowrap;" data-sort-value="${esc(i.created_at)}">${fmtDateDMY(String(i.created_at).slice(0, 10))}${a ? `<div style="font-size:11.5px;color:var(--muted);">${esc(sgaNumAlbaran(a))}</div>` : ''}</td><td data-sort-value="${esc(c.nombre || '')}">${esc((c.nombreComercial || '').trim() || c.nombre || '—')}</td><td data-sort-value="${esc(i.motivos)}" style="white-space:normal;">${esc(i.motivos)}</td></tr>`; }).join('')}</tbody></table>
+        <div class="dash-nota" style="margin-top:8px;">Se enseñan las últimas ${inc.length}. Cada una es un cobro que, al guardarlo, no cuadraba con su tarifa. Cuando no salgan más, se puede pasar a modo estricto.</div>` : '<div class="dash-ok">✓ Ningún cobro ha dejado de cuadrar con su tarifa desde que está activa la comprobación.</div>'}`;
+  }
+  const cardD = `<div class="card deca-card dash-card" style="margin-top:14px;">${decaCardHead('info', 'Comprobación de los cobros', 'La base de datos revisa cada cobro contra la tarifa del cliente')}<div class="deca-card-body">${cuerpoD}</div></div>`;
+  return cardC + cardA + cardB + cardD;
 }
 function sgaRevIrCatalogo(cid){
   window.__catSel = cid; try { localStorage.setItem('qualified.sga.catCliente', cid); } catch (e) { /* sin almacenamiento */ }

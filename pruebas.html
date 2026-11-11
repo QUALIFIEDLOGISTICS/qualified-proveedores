@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Pruebas del SGA</title>
+<style>
+  body{font-family:Inter,Arial,sans-serif;margin:0;padding:24px;background:#F4F6F8;color:#1B2430;}
+  h1{font-size:20px;margin:0 0 4px;} p{color:#69727C;margin:0 0 16px;font-size:14px;}
+  .res{display:flex;gap:12px;align-items:center;margin-bottom:16px;font-weight:700;}
+  .ok{color:#3F8F5F;} .ko{color:#C1443D;}
+  table{border-collapse:collapse;width:100%;background:#fff;border-radius:10px;overflow:hidden;}
+  td,th{padding:8px 12px;border-bottom:1px solid #E1E5EA;text-align:left;font-size:13.5px;vertical-align:top;}
+  th{background:#F0F2F5;cursor:pointer;user-select:none;}
+  td.est{white-space:nowrap;font-weight:700;} pre{margin:4px 0 0;font-size:12px;white-space:pre-wrap;color:#69727C;}
+</style>
+</head>
+<body>
+<h1>Pruebas automáticas del SGA</h1>
+<p>Comprueban, con datos inventados, que el cálculo de cobros, la regla del tipo de palet, el pegado desde Excel y la lectura completa de tablas siguen dando los resultados esperados. Ábrela después de cada cambio importante: todo tiene que salir en verde. No toca ningún dato real.</p>
+<div class="res" id="res">Ejecutando…</div>
+<table><thead><tr><th>Prueba</th><th>Resultado</th></tr></thead><tbody id="filas"></tbody></table>
+<script>
+(async function(){
+  const pruebas = [];
+  const prueba = (nombre, f) => pruebas.push({ nombre, f });
+  const igual = (a, b, msg) => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error((msg || 'No coincide') + '\n  esperado: ' + JSON.stringify(b) + '\n  obtenido: ' + JSON.stringify(a)); };
+  const cierto = (c, msg) => { if (!c) throw new Error(msg || 'Debería ser verdadero'); };
+  const html = await (await fetch('panel.html?' + Date.now())).text();
+  const trozo = (ini, fin) => { const a = html.indexOf(ini), b = html.indexOf(fin, a + 1); if (a < 0 || b < 0) throw new Error('No encuentro «' + (a < 0 ? ini : fin) + '» en panel.html (¿ha cambiado el código?)'); return html.slice(a, b); };
+
+  // ---------- Cálculo de cobros ----------
+  const CALC = () => trozo('function sgaNormSub(s)', '/* ---- Pantalla «Nueva recepción» ---- */');
+  const tarifa = (sub, precio, fecha, extra) => Object.assign({ id: 't-' + sub + '-' + fecha, clienteId: 'c1', tipo: 'P', subtipo: sub, precio, fecha: fecha || '2020-01-01', createdAt: fecha || 'a' }, extra || {});
+  const calcular = (tarifas, partidas, opciones) => new Function(`
+    const almacenajeProductos=[{id:'P',nombre:'Palet',disparador:'entrada_salida',archived:false,familia:null}];
+    const almacenajeTarifas=${JSON.stringify(tarifas)};
+    const almacenajeCobraEn=(p,d)=>p.disparador===d||p.disparador==='entrada_salida';
+    const almacenajeProductoTexto=p=>p.nombre; const almacenajeProducto=id=>almacenajeProductos.find(p=>p.id===id);
+    const sgaClienteCfg=()=>({activoDesde:'2020-01-01',campos:{}}); const sgaClienteCobraPorBulto=()=>false; const sgaUdN=(c,n)=>n+' palets'; const sgaProdTxt=id=>id; const sgaArticulos=[]; const SGA_MODALIDADES={};
+    ${CALC()}
+    return sgaCalcularEntrada(Object.assign({tipo:'salida',clienteId:'c1',fecha:'2026-11-11',modalidad:'palet',servicios:[],partidas:${JSON.stringify(partidas)}}, ${JSON.stringify(opciones || {})}));`)();
+  const p = (cant, sub) => ({ productoId: 'P', cantidad: cant, bultos: cant, subtipo: sub || '' });
+  const resumen = r => r.cobros.map(c => `${c.cantidad}x${c.precio}=${c.importe}`);
+
+  prueba('Un solo tipo de palet en la tarifa: se cobra solo, sin avisos', () => {
+    const r = calcular([tarifa('Normal', 5)], [p(12)]);
+    igual(resumen(r), ['12x5=60']); igual(r.avisos, []);
+  });
+  prueba('Dos tipos: el palet con tipo cobra el precio de su tipo', () => {
+    const r = calcular([tarifa('Normal', 5), tarifa('Especial', 8)], [p(10, 'Normal'), p(2, 'Especial')]);
+    igual(resumen(r).sort(), ['10x5=50', '2x8=16']); igual(r.avisos, []);
+  });
+  prueba('Dos tipos: el palet SIN tipo no se cobra y avisa (no se inventa el precio)', () => {
+    const r = calcular([tarifa('Normal', 5), tarifa('Especial', 8)], [p(12)]);
+    igual(r.cobros, []); cierto(r.avisos.length === 1 && /sin tipo de palet/.test(r.avisos[0]), 'Debía avisar de «sin tipo de palet»');
+  });
+  prueba('Cliente sin tipos de palet: tarifa normal', () => {
+    const r = calcular([tarifa('', 4)], [p(10)]);
+    igual(resumen(r), ['10x4=40']); igual(r.avisos, []);
+  });
+  prueba('Tarifa nueva: gana la más reciente en vigor ese día', () => {
+    const r = calcular([tarifa('', 4, '2020-01-01'), tarifa('', 6, '2026-06-01'), tarifa('', 9, '2027-01-01')], [p(10)]);
+    igual(resumen(r), ['10x6=60'], 'Tenía que aplicar la de 2026-06-01 (la de 2027 aún no está en vigor)');
+  });
+  prueba('Importe mínimo por albarán', () => {
+    const r = calcular([tarifa('', 2, '2020-01-01', { importeMinimo: 30 })], [p(5)]);
+    igual(resumen(r), ['5x2=30']);
+  });
+  prueba('Cliente que aún no está activo en el SGA: no se cobra', () => {
+    const r = new Function(`
+      const almacenajeProductos=[],almacenajeTarifas=[],almacenajeCobraEn=()=>false,almacenajeProductoTexto=()=>'',almacenajeProducto=()=>null;
+      const sgaClienteCfg=()=>({activoDesde:'2099-01-01',campos:{}}); const sgaClienteCobraPorBulto=()=>false; const sgaUdN=(c,n)=>n; const sgaProdTxt=id=>id; const sgaArticulos=[]; const SGA_MODALIDADES={};
+      ${CALC()}
+      return sgaCalcularEntrada({tipo:'salida',clienteId:'c1',fecha:'2026-11-11',modalidad:'palet',servicios:[],partidas:[]});`)();
+    igual(r.activo, false);
+  });
+
+  // ---------- Regla del tipo de palet ----------
+  const regla = tarifas => new Function(`
+    const almacenajeProductos=[{id:'P',nombre:'Palet',disparador:'entrada_salida',archived:false,familia:null}];
+    const almacenajeTarifas=${JSON.stringify(tarifas)};
+    const almacenajeCobraEn=(p,d)=>p.disparador===d||p.disparador==='entrada_salida'; const almacenajeProductoTexto=p=>p.nombre; const almacenajeProducto=id=>almacenajeProductos.find(x=>x.id===id);
+    const sgaClienteCfg=()=>({activoDesde:'2020-01-01',campos:{}});
+    ${CALC()}
+    return { elegir: sgaTiposPaletElegir('c1'), unico: sgaTipoPaletUnico('c1'), obligatorio: sgaCampoObligatorioArt('c1', {id:'subtipo'}), otro: sgaCampoObligatorioArt('c1', {id:'lote'}) };`)();
+  prueba('Regla: ningún tipo → nada que elegir ni obligatorio', () => { const r = regla([tarifa('', 4)]); igual([r.elegir, r.unico, r.obligatorio], [[], '', false]); });
+  prueba('Regla: un tipo → automático, no obligatorio', () => { const r = regla([tarifa('Normal', 5)]); igual([r.elegir, r.unico, r.obligatorio], [[], 'Normal', false]); });
+  prueba('Regla: dos tipos → hay que elegir y es obligatorio en el artículo', () => { const r = regla([tarifa('Normal', 5), tarifa('Especial', 8)]); igual([r.elegir, r.unico, r.obligatorio], [['Especial', 'Normal'], '', true]); });
+
+  // ---------- Pegar desde Excel ----------
+  const pegar = (texto, tipos, paraTodos) => {
+    const cont = document.createElement('div'); cont.innerHTML = `<select id="sgar-sub"><option value="${paraTodos}" selected>${paraTodos}</option></select>`; document.body.appendChild(cont);
+    try {
+      return new Function(`
+        const sgaTiposPaletElegir=()=>${JSON.stringify(tipos)}; const sgaNormSub=s=>String(s||'').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').trim().toLowerCase();
+        const sgaArticulosDe=()=>[{nombre:'YA-EXISTE'}]; const sgaMayus=s=>String(s||'').toUpperCase(); function sgaNormaSitio(s){return String(s||'').trim().toLowerCase()} function sgaZonaPorTexto(){return null}
+        ${trozo('function sgaParseTsv', 'function sgaArtRapidaItems')}
+        return sgaArtRapidaAnalizar(${JSON.stringify(texto)}, 'c1', '');`)().items.map(i => [i.nombre, i.estado, i.subtipo || '']);
+    } finally { cont.remove(); }
+  };
+  const EXCEL = 'Código de artículo\tDescripción\tBultos\tTipo de palet\nA1\tx\t2\tnormal\nA2\ty\t3\tEspecial\nA3\tz\t4\t\nA4\tz\t4\tRaro\nYA-EXISTE\tq\t1\tNormal';
+  prueba('Pegar desde Excel con dos tipos: reconoce el tipo, marca error si falta o no existe, salta los repetidos', () => {
+    igual(pegar(EXCEL, ['Especial', 'Normal'], ''), [['A1', 'nuevo', 'Normal'], ['A2', 'nuevo', 'Especial'], ['A3', 'error', ''], ['A4', 'error', ''], ['YA-EXISTE', 'existe', '']]);
+  });
+  prueba('Pegar desde Excel: el valor «para todos» rellena los que no traen tipo', () => {
+    igual(pegar(EXCEL, ['Especial', 'Normal'], 'Normal')[2], ['A3', 'nuevo', 'Normal']);
+  });
+  prueba('Pegar desde Excel con un solo tipo: no exige tipo', () => {
+    igual(pegar('Código de artículo\tBultos\nB1\t2', [], '').map(x => x[1]), ['nuevo']);
+  });
+
+  // ---------- Lectura completa de tablas (más de 1000 filas) ----------
+  prueba('Tablas con más de 1000 filas: se leen enteras, sin repetidas ni saltadas', async () => {
+    const src = await (await fetch('assets/js/supabase-paginar.js?' + Date.now())).text();
+    class FB { constructor(n){ this.n = n; this.url = new URL('http://x/t'); }
+      select(){ return this; } eq(){ return this; }
+      order(c){ const prev = this.url.searchParams.get('order'); this.url.searchParams.set('order', prev ? prev + ',' + c + '.asc' : c + '.asc'); return this; }
+      range(f, t){ this.url.searchParams.set('offset', f); this.url.searchParams.set('limit', t - f + 1); return this; }
+      limit(n){ this.url.searchParams.set('limit', n); return this; } single(){ return this; }
+      then(ok, ko){ const off = Number(this.url.searchParams.get('offset') || 0), lim = Math.min(Number(this.url.searchParams.get('limit') || 1000), 1000); const filas = []; for (let i = off; i < Math.min(off + lim, this.n); i++) filas.push({ id: i }); return Promise.resolve({ data: filas, error: null }).then(ok, ko); } }
+    const cli = new Function('supabaseClient', src + '; return supabaseClient;')({ from: () => ({ select: () => new FB(2347) }) });
+    const r = await cli.from('t').select('*').order('fecha');
+    igual(r.data.length, 2347); igual(new Set(r.data.map(x => x.id)).size, 2347, 'Hay filas repetidas');
+    const r2 = await cli.from('t').select('*').limit(7); igual(r2.data.length, 7, 'Un limit propio no se debe tocar');
+  });
+
+  // ---------- Ejecutar ----------
+  const cuerpo = document.getElementById('filas'); let buenas = 0;
+  for (const t of pruebas) {
+    let ok = true, msg = '';
+    try { await t.f(); } catch (e) { ok = false; msg = e && e.message ? e.message : String(e); }
+    if (ok) buenas++;
+    cuerpo.insertAdjacentHTML('beforeend', `<tr><td>${t.nombre}${ok ? '' : `<pre>${msg.replace(/</g, '&lt;')}</pre>`}</td><td class="est ${ok ? 'ok' : 'ko'}">${ok ? '✓ Bien' : '✗ Falla'}</td></tr>`);
+  }
+  const res = document.getElementById('res');
+  res.className = 'res ' + (buenas === pruebas.length ? 'ok' : 'ko');
+  res.textContent = buenas === pruebas.length ? `✓ Todo en orden: ${buenas} de ${pruebas.length} pruebas bien` : `✗ ${pruebas.length - buenas} prueba${pruebas.length - buenas === 1 ? '' : 's'} fallan (${buenas} de ${pruebas.length} bien)`;
+  window.__pruebas = { buenas, total: pruebas.length };
+})();
+</script>
+</body>
+</html>
