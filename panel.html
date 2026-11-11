@@ -8488,9 +8488,13 @@ document.addEventListener('keydown', e => {
    saltan siempre. Con una lista desplegada, las flechas siguen eligiendo opción. */
 document.addEventListener('keydown', e => {
   if (!e.key || e.key.indexOf('Arrow') !== 0 || e.altKey || e.shiftKey || e.metaKey) return;
-  if (!window.__catEditAll || window.__stockView !== 'catedit' || window.__catLocked) return;
+  // También en las líneas de una recepción (artículo, tipo, palets, zona, ubicación…): mismas reglas que en «Editar catálogo»
+  const enCat = !!window.__catEditAll && window.__stockView === 'catedit' && !window.__catLocked, enRec = window.__stockView === 'entrada';
+  if (!enCat && !enRec) return;
   const el = e.target;
-  if (!el || !el.matches || !el.matches('input, select') || !el.closest('#stock-body table.cg-tabla') || !el.closest('tr.cg-row')) return;
+  if (!el || !el.matches || !el.matches(enRec ? 'input, select, .se-art-b' : 'input, select')) return;
+  if (enRec ? !el.closest('#se-rows tr.se-row') : (!el.closest('#stock-body table.cg-tabla') || !el.closest('tr.cg-row'))) return;
+  const filaCls = enRec ? 'se-row' : 'cg-row';
   const panel = document.getElementById('combo-panel');
   if (panel && panel.style.display !== 'none' && Combo.input === el) return;   // lista desplegada: las flechas eligen opción
   if (el.dataset.combo && !e.ctrlKey) return;
@@ -8502,19 +8506,26 @@ document.addEventListener('keydown', e => {
     const n = el.value.length, todo = a === 0 && b === n;
     if (izq ? !(todo || (a === 0 && b === 0)) : !(todo || (a === n && b === n))) return;
   }
-  const control = c => c.querySelector('input:not([type=hidden]):not([type=checkbox]), select, textarea');
+  // En la recepción, el artículo se elige con su botón (el desplegable de esa celda está oculto) y se saltan las casillas bloqueadas
+  const control = enRec
+    ? c => [...c.querySelectorAll('input:not([type=hidden]):not([type=checkbox]), select, textarea, .se-art-b')].find(x => !x.disabled && x.offsetParent !== null)
+    : c => c.querySelector('input:not([type=hidden]):not([type=checkbox]), select, textarea');
   const td = el.closest('td'), tr = el.closest('tr');
   let destino = null;
   if (vert) {
     let r = tr;
-    do { r = e.key === 'ArrowDown' ? r.nextElementSibling : r.previousElementSibling; } while (r && !(r.classList.contains('cg-row') && r.offsetParent !== null && r.cells[td.cellIndex] && control(r.cells[td.cellIndex])));
+    do { r = e.key === 'ArrowDown' ? r.nextElementSibling : r.previousElementSibling; } while (r && !(r.classList.contains(filaCls) && r.offsetParent !== null && r.cells[td.cellIndex] && control(r.cells[td.cellIndex])));
     if (r) destino = control(r.cells[td.cellIndex]);
   } else {
     let c = td;
     do { c = izq ? c.previousElementSibling : c.nextElementSibling; } while (c && !control(c));
     if (c) destino = control(c);
   }
-  if (!destino) return;
+  if (!destino) {
+    // al borde de la tabla, en un desplegable las flechas no deben cambiar la opción elegida sin querer
+    if (enRec && el.tagName === 'SELECT') e.preventDefault();
+    return;
+  }
   e.preventDefault(); e.stopImmediatePropagation();
   destino.focus();
   destino.scrollIntoView({ block: 'nearest', inline: 'nearest' });
