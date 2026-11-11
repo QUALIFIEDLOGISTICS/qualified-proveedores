@@ -10235,6 +10235,22 @@ function sgaProductoAlbaran(modalidad, disparador){
   return null;
 }
 const sgaR2 = n => Math.round(n * 100) / 100;
+// Por qué un cliente no tiene tarifa aplicable para un producto en una fecha (para que el aviso diga la causa y no solo el síntoma)
+function sgaTarifaMotivo(clienteId, productoId, fecha, sub, salida){
+  const dmy = f => String(f).split('-').reverse().join('-');
+  const nombre = '«' + sgaProdTxt(productoId) + '»';
+  const propias = almacenajeTarifas.filter(t => t.clienteId === clienteId && t.tipo === productoId);
+  if (!propias.length) {
+    const otras = sgaMovProductos(clienteId).filter(p => almacenajeCobraEn(p, salida ? 'salida' : 'entrada')).map(p => '«' + almacenajeProductoTexto(p) + '»');
+    return `Causa: el cliente no tiene ninguna línea de tarifa de ${nombre}${otras.length ? '; las de ' + (salida ? 'salida' : 'entrada') + ' que tiene son ' + otras.join(', ') : ' ni de ningún otro producto de ' + (salida ? 'salida' : 'entrada')}. Hay que añadirla en su tarifa (ficha del cliente → Almacén).`;
+  }
+  if (!propias.some(t => t.fecha <= fecha)) {
+    const primera = propias.map(t => t.fecha).sort()[0];
+    return `Causa: su tarifa de ${nombre} empieza el ${dmy(primera)}, después de la fecha del albarán (${dmy(fecha)}). Hay que corregir la fecha de la tarifa o la del albarán.`;
+  }
+  const tipos = [...new Set(propias.map(t => t.subtipo || 'sin tipo'))];
+  return `Causa: sus líneas de ${nombre} son de tipo ${tipos.map(x => '«' + x + '»').join(', ')} y ninguna encaja con ${sub ? '«' + sub + '»' : '«sin tipo»'}. Hay que revisar cómo está escrito el tipo en la tarifa.`;
+}
 // d: { tipo:'entrada'|'salida', clienteId, fecha, modalidad, partidas:[{productoId, cantidad}], servicios:[{productoId, cantidad}] }
 // Con una modalidad por albarán (contenedor, trailer) y tarifa del cliente para ella, se cobra eso por albarán; si no, por palet.
 function sgaCalcularEntrada(d){
@@ -10316,7 +10332,7 @@ function sgaCalcularEntrada(d){
     Object.keys(grupos).forEach(k => {
       const [id, sub] = k.split('|');
       const t = sgaTarifaEn(d.clienteId, id, d.fecha, sub || undefined);
-      if (!t) { res.avisos.push(`Sin tarifa de «${sgaProdTxt(id)}${sub ? ' ' + sub : ''}» para este cliente: esa ${palabra} no se cobra.`); return; }
+      if (!t) { res.avisos.push(`Sin tarifa de «${sgaProdTxt(id)}${sub ? ' ' + sub : ''}» para este cliente: esa ${palabra} no se cobra. ${sgaTarifaMotivo(d.clienteId, id, d.fecha, sub, salida)}`); return; }
       let imp = grupos[k] * t.precio, nota = '';
       if (t.importeMinimo != null && imp < t.importeMinimo) { imp = t.importeMinimo; nota = 'Importe mínimo por albarán'; }
       res.cobros.push({ origen: 'movimiento', producto_id: id, subtipo: t.subtipo || null, cantidad: grupos[k], precio: t.precio, importe: sgaR2(imp), tarifa_id: t.id, nota });
