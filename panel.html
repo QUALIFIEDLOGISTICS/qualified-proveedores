@@ -10151,6 +10151,10 @@ function sgaTarifaEn(clienteId, productoId, fecha, subtipo){
     .sort((a, b) => b.fecha.localeCompare(a.fecha) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
   return l[0] || null;
 }
+// De unas líneas de tarifa ya elegidas, la que vale en esa fecha (la más reciente que ya estaba en vigor)
+function sgaTarifaVigente(lineas, fecha){
+  return lineas.filter(t => t.fecha <= fecha).sort((a, b) => b.fecha.localeCompare(a.fecha) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null;
+}
 // Productos de entrada o salida que el cliente tiene en su tarifa
 function sgaMovProductos(clienteId){
   const ids = new Set(almacenajeTarifas.filter(t => t.clienteId === clienteId).map(t => t.tipo));
@@ -10275,9 +10279,10 @@ function sgaCalcularEntrada(d){
     let sinTipo = 0, faltaSub = 0;
     const sinTipoPs = [];
     // Un producto con líneas por subtipo («Normal» / «Especial») se cobra con la línea del subtipo de cada palet; sin subtipo no se sabe cuál toca
+    const lineasPorK = {};   // las líneas de tarifa de cada grupo, tomadas de la misma familia que dio el tipo (ver más abajo)
     const sumar = (pe, p, cant) => {
       const subs = sgaTiposDe(d.clienteId, pe);
-      let sub = '';
+      let sub = '', lineas = null;
       if (subs.length) {
         sub = subs.find(s => sgaNormSub(s) === sgaNormSub(p.subtipo)) || '';
         if (!sub && !p.subtipo && p.productoId) {   // sin «tipo de palet» anotado: si el tipo de carga lo dice en su nombre («Palet Especial»), vale ese
@@ -10288,9 +10293,15 @@ function sgaCalcularEntrada(d){
         }
         if (!sub && !p.subtipo && subs.length === 1) sub = subs[0];   // este producto solo tiene un tipo de palet: no hay nada que elegir, es ese
         if (!sub) { faltaSub += p.cantidad; return; }
-        pe = sgaProdConTipo(d.clienteId, pe, sub);   // «Entrada palet» o «Entrada palet Especial», según el tipo de palet
+        // «Entrada palet» o «Entrada palet Especial», según el tipo de palet. Las líneas de tarifa se toman de la MISMA familia que dio el tipo:
+        // si se recalculara la familia desde el producto que cobra, un tipo deducido de un producto hermano sin tarifa del cliente («Salida palet
+        // Especial») dejaba de existir y la tarifa de ese tipo no se encontraba (la expedición salía sin cobrar).
+        const fam = sgaMovFamilia(d.clienteId, pe).filter(e => sgaNormSub(e.label) === sgaNormSub(sub));
+        if (fam.length) { pe = fam[0].prod; lineas = fam.filter(e => e.prod.id === pe.id).map(e => e.t); }
+        else pe = sgaProdConTipo(d.clienteId, pe, sub);
       }
       const k = pe.id + '|' + sub;
+      if (lineas) lineasPorK[k] = lineas;
       grupos[k] = (grupos[k] || 0) + cant;
     };
     const elegidoMov = salida && d.productoMov ? almacenajeProducto(d.productoMov) : null;   // «Se cobra como»: lo elegido manda sobre el tipo de carga de cada línea
@@ -10331,7 +10342,7 @@ function sgaCalcularEntrada(d){
     } else if (sinTipo > 0 && cobraMov) res.avisos.push(`${sgaUdN(d.clienteId, sinTipo)} sin tipo de carga: sin él no se puede aplicar una tarifa de ${palabra} y no se cobra. Si este cliente cobra solo por m², es normal; si no, a esa mercancía le falta el tipo de carga (se asigna en el catálogo del cliente o al recibirla) y su tarifa de ${salida ? 'salida' : 'entrada'} en Almacén → Configuración → Productos.`);
     Object.keys(grupos).forEach(k => {
       const [id, sub] = k.split('|');
-      const t = sgaTarifaEn(d.clienteId, id, d.fecha, sub || undefined);
+      const t = lineasPorK[k] ? sgaTarifaVigente(lineasPorK[k], d.fecha) : sgaTarifaEn(d.clienteId, id, d.fecha, sub || undefined);
       if (!t) { res.avisos.push(`Sin tarifa de «${sgaProdTxt(id)}${sub ? ' ' + sub : ''}» para este cliente: esa ${palabra} no se cobra. ${sgaTarifaMotivo(d.clienteId, id, d.fecha, sub, salida)}`); return; }
       let imp = grupos[k] * t.precio, nota = '';
       if (t.importeMinimo != null && imp < t.importeMinimo) { imp = t.importeMinimo; nota = 'Importe mínimo por albarán'; }

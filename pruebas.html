@@ -33,8 +33,8 @@
   // ---------- Cálculo de cobros ----------
   const CALC = () => trozo('function sgaNormSub(s)', '/* ---- Pantalla «Nueva recepción» ---- */');
   const tarifa = (sub, precio, fecha, extra) => Object.assign({ id: 't-' + sub + '-' + fecha, clienteId: 'c1', tipo: 'P', subtipo: sub, precio, fecha: fecha || '2020-01-01', createdAt: fecha || 'a' }, extra || {});
-  const calcular = (tarifas, partidas, opciones) => new Function(`
-    const almacenajeProductos=[{id:'P',nombre:'Palet',disparador:'entrada_salida',archived:false,familia:null}];
+  const calcular = (tarifas, partidas, opciones, productos) => new Function(`
+    const almacenajeProductos=${JSON.stringify(productos || [{ id: 'P', nombre: 'Palet', disparador: 'entrada_salida', archived: false, familia: null }])};
     const almacenajeTarifas=${JSON.stringify(tarifas)};
     const almacenajeCobraEn=(p,d)=>p.disparador===d||p.disparador==='entrada_salida';
     const almacenajeProductoTexto=p=>p.nombre; const almacenajeProducto=id=>almacenajeProductos.find(p=>p.id===id);
@@ -63,6 +63,15 @@
   prueba('Tarifa nueva: gana la más reciente en vigor ese día', () => {
     const r = calcular([tarifa('', 4, '2020-01-01'), tarifa('', 6, '2026-06-01'), tarifa('', 9, '2027-01-01')], [p(10)]);
     igual(resumen(r), ['10x6=60'], 'Tenía que aplicar la de 2026-06-01 (la de 2027 aún no está en vigor)');
+  });
+  prueba('Caso Akan: el tipo de carga enlaza con «Salida palet Especial» (sin tarifa) y el cliente solo tiene «Salida palet»: se cobra con esa tarifa', () => {
+    const productos = [
+      { id: 'S', nombre: 'Salida palet', disparador: 'salida', archived: false, familia: null },
+      { id: 'SE', nombre: 'Salida palet Especial', disparador: 'salida', archived: false, familia: null },
+      { id: 'TC', nombre: 'Almacenaje palet Especial', disparador: 'stock_dia', archived: false, familia: null, cobroSalida: 'SE', cobroEntrada: '' },
+    ];
+    const r = calcular([tarifa('', 3, '2020-01-01', { tipo: 'S' })], [{ productoId: 'TC', cantidad: 12, bultos: 12, subtipo: '' }], {}, productos);
+    igual(resumen(r), ['12x3=36']); igual(r.avisos, []);
   });
   prueba('Sin tarifa: el aviso dice la causa (no hay ninguna línea del producto)', () => {
     const r = calcular([], [p(3)]);
