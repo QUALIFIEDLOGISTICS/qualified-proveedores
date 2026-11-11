@@ -10,9 +10,10 @@
 <meta name="theme-color" content="#173E8C">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
-<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="https://unpkg.com/qrcode-generator@1.4.4/qrcode.js"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2.119.0/dist/umd/supabase.js"></script>
+<!-- pdf-lib y el generador de QR solo se usan al crear PDFs o códigos QR: se descargan sin frenar la carga de la página -->
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js" defer></script>
+<script src="https://unpkg.com/qrcode-generator@1.4.4/qrcode.js" defer></script>
 <style>
   :root{
     --bg:#F4F6F8; --panel:#FFFFFF; --panel2:#F0F2F5; --border:#E1E5EA;
@@ -6846,7 +6847,6 @@ async function loadSgaStock(){
     supabaseClient.from('sga_albaranes').select('*').order('fecha', { ascending: false }).order('created_at', { ascending: false }).limit(1000),   // las más recientes primero (con las mismas fechas, las últimas creadas)
   ]);
   sgaPartidas = (p.data || []).map(sgaPartidaDeFila);
-  await sgaBultosRestantes();
   window.__sgaAlbCortado = (a.data || []).length >= 1000;   // la lista solo carga los 1000 más recientes: se avisa en pantalla cuando se llega al tope
   window.__sgaBorradorOk = (a.data || []).length ? 'borrador' in a.data[0] : null;   // false = falta ejecutar el SQL de borradores
   sgaAlbaranes =(a.data || []).map(r => ({
@@ -6856,7 +6856,9 @@ async function loadSgaStock(){
   sgaMovsAlbaran = {};
   window.__sgaLineasAlb = {};   // mercancía de cada expedición: [{ txt, cantidad }], para verla en el listado sin entrar
   const ids = sgaAlbaranes.map(x => x.id);
-  if (ids.length) {
+  // Los pasos que siguen no dependen unos de otros: se hacen a la vez (antes iban uno detrás de otro y la carga tardaba la suma de todos)
+  const pasoMovs = async () => {
+    if (!ids.length) return;
     // Supabase devuelve como mucho 1000 filas por consulta: los movimientos se piden por tandas de albaranes y por páginas, para que
     // ningún albarán se quede sin sus palets (si no, en la lista salía «—» en los que quedaban fuera del corte)
     const m = { data: [] };
@@ -6877,11 +6879,15 @@ async function loadSgaStock(){
       const tipoDe = {}; sgaAlbaranes.forEach(x => { tipoDe[x.id] = x.tipo; });
       const movS = (m.data || []).filter(r => tipoDe[r.albaran_id] && r.partida_id);
       const pids = [...new Set(movS.map(r => r.partida_id))];
+      // Los datos de cada partida ya están cargados (las que tienen stock): solo se piden las que faltan (las ya agotadas), y todas a la vez
       const pm = {};
-      for (let i = 0; i < pids.length; i += 100) {
-        const r = await supabaseClient.from('sga_partidas').select('id,producto_id,referencia,descripcion,articulo_id').in('id', pids.slice(i, i + 100));
+      sgaPartidas.forEach(x => { pm[x.id] = { id: x.id, producto_id: x.productoId || null, referencia: x.referencia, descripcion: x.descripcion, articulo_id: x.articuloId || null }; });
+      const faltan = pids.filter(id => !pm[id]), trozosP = [];
+      for (let i = 0; i < faltan.length; i += 100) trozosP.push(faltan.slice(i, i + 100));
+      await Promise.all(trozosP.map(async t => {
+        const r = await supabaseClient.from('sga_partidas').select('id,producto_id,referencia,descripcion,articulo_id').in('id', t);
         (r.data || []).forEach(x => { pm[x.id] = x; });
-      }
+      }));
       const grupos = {};
       movS.forEach(r => {
         const p = pm[r.partida_id] || {};
@@ -6895,23 +6901,25 @@ async function loadSgaStock(){
       Object.values(grupos).forEach(g => { (window.__sgaLineasAlb[g.alb] = window.__sgaLineasAlb[g.alb] || []).push(g); });
       Object.values(window.__sgaLineasAlb).forEach(l => l.sort((a, b) => (b.cantidad - a.cantidad) || a.nombre.localeCompare(b.nombre, 'es')));
     } catch (e) { window.__sgaLineasAlb = {}; }
-  }
+  };
   // Actividades: lo que se hizo (servicios) y lo que se cobra, para verlo en su lista
   window.__sgaActividades = {};
-  try {
-    const actIds = sgaAlbaranes.filter(x => x.tipo === 'actividad').map(x => x.id);
-    for (let i = 0; i < actIds.length; i += 80) {
-      const trozo = actIds.slice(i, i + 80);
-      const [s, c] = await Promise.all([
-        supabaseClient.from('sga_servicios').select('albaran_id,producto_id,cantidad,nota').in('albaran_id', trozo),
-        supabaseClient.from('sga_cobros').select('albaran_id,importe').in('albaran_id', trozo),
-      ]);
-      const de = id => (window.__sgaActividades[id] = window.__sgaActividades[id] || { servicios: [], importe: 0 });
-      (s.data || []).forEach(r => de(r.albaran_id).servicios.push({ productoId: r.producto_id, cantidad: Number(r.cantidad), nota: r.nota || '' }));
-      (c.data || []).forEach(r => { de(r.albaran_id).importe += Number(r.importe); });
-    }
-  } catch (e) { window.__sgaActividades = {}; }
-  await loadSgaOperativasHechas();
+  const pasoActividades = async () => {
+    try {
+      const actIds = sgaAlbaranes.filter(x => x.tipo === 'actividad').map(x => x.id), trozosA = [];
+      for (let i = 0; i < actIds.length; i += 80) trozosA.push(actIds.slice(i, i + 80));
+      await Promise.all(trozosA.map(async trozo => {
+        const [s, c] = await Promise.all([
+          supabaseClient.from('sga_servicios').select('albaran_id,producto_id,cantidad,nota').in('albaran_id', trozo),
+          supabaseClient.from('sga_cobros').select('albaran_id,importe').in('albaran_id', trozo),
+        ]);
+        const de = id => (window.__sgaActividades[id] = window.__sgaActividades[id] || { servicios: [], importe: 0 });
+        (s.data || []).forEach(r => de(r.albaran_id).servicios.push({ productoId: r.producto_id, cantidad: Number(r.cantidad), nota: r.nota || '' }));
+        (c.data || []).forEach(r => { de(r.albaran_id).importe += Number(r.importe); });
+      }));
+    } catch (e) { window.__sgaActividades = {}; }
+  };
+  await Promise.all([sgaBultosRestantes(), pasoMovs(), pasoActividades(), loadSgaOperativasHechas()]);
 }
 // Mercancía de una recepción, expedición o regularización, para el listado: resumen («12 × CARPA +2 más») y detalle completo (globo al pasar el ratón)
 function sgaLineasAlb(a){ return (window.__sgaLineasAlb || {})[a.id] || []; }
@@ -36965,7 +36973,12 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   }
 
   await loadWarehouses();
-  await Promise.all([loadWarehouseModuleData(), loadAutonomosModuleData(), loadDecaDocuments(), loadOrdenesCarga(), loadOcFiltros(), loadTransporteConfig(), loadContactos(), loadDirecciones(), loadFlota(), loadTarifas(), loadOperativas(), loadSgaConfig(), loadSgaStock(), loadTransportistaRutas(), loadTransportistaContactos(), loadAlmacenajeTarifas(), loadAlmacenajeProductos()]);
+  // Se mide lo que tarda cada carga (todas arrancan a la vez; la pantalla espera a la más lenta). Se puede ver en la consola del navegador (F12): «__tiempos».
+  const t0Carga = performance.now(); window.__tiempos = {};
+  const medir = (nombre, f) => Promise.resolve().then(f).finally(() => { window.__tiempos[nombre] = Math.round(performance.now() - t0Carga) + ' ms'; });
+  await Promise.all([['loadWarehouseModuleData', loadWarehouseModuleData], ['loadAutonomosModuleData', loadAutonomosModuleData], ['loadDecaDocuments', loadDecaDocuments], ['loadOrdenesCarga', loadOrdenesCarga], ['loadOcFiltros', loadOcFiltros], ['loadTransporteConfig', loadTransporteConfig], ['loadContactos', loadContactos], ['loadDirecciones', loadDirecciones], ['loadFlota', loadFlota], ['loadTarifas', loadTarifas], ['loadOperativas', loadOperativas], ['loadSgaConfig', loadSgaConfig], ['loadSgaStock', loadSgaStock], ['loadTransportistaRutas', loadTransportistaRutas], ['loadTransportistaContactos', loadTransportistaContactos], ['loadAlmacenajeTarifas', loadAlmacenajeTarifas], ['loadAlmacenajeProductos', loadAlmacenajeProductos]].map(([n, f]) => medir(n, f)));
+  window.__tiempos['TOTAL'] = Math.round(performance.now() - t0Carga) + ' ms';
+  try { console.info('[Carga] lo que ha tardado cada cosa al arrancar', window.__tiempos); } catch (e) { /* sin consola */ }
   await autoCloseStaleFichajes();
   // Si el usuario recarga la página sin haber cerrado sesión, se queda en
   // la misma pestaña (y almacén) donde estaba, en vez de volver a Inicio.
@@ -36994,6 +37007,8 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   } else {
     currentTab = allowed.length ? 'inicio' : null;
   }
+  // pdf-lib y el generador de QR se descargan aparte (sin frenar la página): casi siempre ya están; si no, se espera un momento antes de pintar
+  if (typeof PDFLib === 'undefined' || typeof qrcode === 'undefined') await new Promise(res => { const iv = setInterval(() => { if (typeof PDFLib !== 'undefined' && typeof qrcode !== 'undefined') { clearInterval(iv); res(); } }, 50); setTimeout(() => { clearInterval(iv); res(); }, 5000); });
   document.getElementById('app-root').style.display = '';
   if (currentTab) {
     renderHeader(); renderTab();
