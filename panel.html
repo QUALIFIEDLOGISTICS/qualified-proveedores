@@ -14971,7 +14971,7 @@ function warehouseSlug(name){
 // Vuelve a cargar los almacenes y todo lo que cuelga de cada uno.
 async function reloadWarehouseData(){
   await loadWarehouses();
-  await Promise.all([loadSchedules(), loadAppointments(), loadUnscheduled(), loadPallets(), loadMovements(), loadWarehouseTasks()]);
+  await Promise.all([loadSchedules(), loadAppointments(), loadUnscheduled(), loadWarehouseTasks()]);
   renderHeader(); renderTab();
 }
 async function submitWarehouse(editId){
@@ -18570,10 +18570,13 @@ async function submitContactoForm(editId){
 // tenga marcado ahora mismo, porque la clave foránea sigue existiendo
 // aunque el usuario desmarque la casilla después de acumular histórico.
 function contactoHasWarehouseHistory(id){
-  return Object.keys(pallets).some(wid => pallets[wid].some(p=>p.clientId===id))
-    || Object.keys(movements).some(wid => movements[wid].some(m=>m.clientId===id))
-    || Object.keys(appointments).some(wid => appointments[wid].some(a=>a.clientId===id))
+  return Object.keys(appointments).some(wid => appointments[wid].some(a=>a.clientId===id))
     || Object.keys(unscheduled).some(wid => unscheduled[wid].some(u=>u.clientId===id));
+}
+// Palets y movimientos del almacén antiguo (tablas «pallets» y «movements»): se cuentan en la base de datos, sin traerlos todos a la pantalla
+async function contactoTieneHistorialAlmacenAntiguo(id){
+  const res = await Promise.all(['pallets', 'movements'].map(t => supabaseClient.from(t).select('client_id', { count: 'exact', head: true }).eq('client_id', id).then(r => r, () => ({ error: true }))));
+  return res.some(r => !r.error && (r.count || 0) > 0);
 }
 function contactoHasAnyDrivers(id){
   return drivers.some(d=>d.companyId===id);
@@ -18616,7 +18619,7 @@ async function unarchiveContacto(id){
 async function confirmDeleteContacto(id){
   const c = contactos.find(x => x.id === id);
   if (!c) return;
-  const bloqueado = contactoHasWarehouseHistory(id) || contactoHasAnyDrivers(id) || await contactoTieneHistorialSga(id);
+  const bloqueado = contactoHasWarehouseHistory(id) || contactoHasAnyDrivers(id) || await contactoTieneHistorialSga(id) || await contactoTieneHistorialAlmacenAntiguo(id);
   if (bloqueado) {
     document.getElementById('modal-slot').innerHTML = `
       <div class="modal-overlay">
@@ -36820,10 +36823,14 @@ function tplAdmin(){
 
 /* ============================= INICIO ============================= */
 async function loadWarehouseModuleData(){
-  await Promise.all([loadClients(), loadPallets(), loadMovements(), loadAppointments(), loadUnscheduled(), loadSchedules(), loadWarehouseTasks()]);
+  // «pallets» y «movements» (el almacén antiguo, anterior al SGA) ya no se cargan al abrir: solo servían para saber si un cliente tuvo algo ahí
+  // antes de eliminarlo, y eso ahora se pregunta a la base de datos en ese momento (contactoTieneHistorialAlmacenAntiguo). Eran miles de filas leídas en cada apertura.
+  const t0 = performance.now(), med = (n, f) => f().finally(() => { if (window.__tiempos) window.__tiempos['   · ' + n] = Math.round(performance.now() - t0) + ' ms'; });
+  await Promise.all([['loadClients', loadClients], ['loadAppointments', loadAppointments], ['loadUnscheduled', loadUnscheduled], ['loadSchedules', loadSchedules], ['loadWarehouseTasks', loadWarehouseTasks]].map(([n, f]) => med(n, f)));
 }
 async function loadAutonomosModuleData(){
-  await Promise.all([loadCompanies(), loadDrivers(), loadDriverRates(), loadWeeklyEntries(), loadFuelEntries(), loadSupplementEntries(), loadExpenseEntries(), loadIndexationEntries(), loadDailyEntries(), loadDailyIncidents(), loadDriverNotes(), loadMonthlyBillingEntries(), loadMobileCommissionRates()]);
+  const t0 = performance.now(), med = (n, f) => f().finally(() => { if (window.__tiempos) window.__tiempos['   · ' + n] = Math.round(performance.now() - t0) + ' ms'; });
+  await Promise.all([['loadCompanies', loadCompanies], ['loadDrivers', loadDrivers], ['loadDriverRates', loadDriverRates], ['loadWeeklyEntries', loadWeeklyEntries], ['loadFuelEntries', loadFuelEntries], ['loadSupplementEntries', loadSupplementEntries], ['loadExpenseEntries', loadExpenseEntries], ['loadIndexationEntries', loadIndexationEntries], ['loadDailyEntries', loadDailyEntries], ['loadDailyIncidents', loadDailyIncidents], ['loadDriverNotes', loadDriverNotes], ['loadMonthlyBillingEntries', loadMonthlyBillingEntries], ['loadMobileCommissionRates', loadMobileCommissionRates]].map(([n, f]) => med(n, f)));
 }
 /* ===== Ventanas de confirmación y avisos propios =====
    Sustituyen a confirm()/alert() del navegador (el cuadro gris de Chrome). */
