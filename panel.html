@@ -9319,16 +9319,20 @@ async function sgaDashCargar(stArg){
   const albs = a.data || [];
   const movsRaw = [];
   const ids = albs.map(x => x.id);
-  for (let i = 0; i < ids.length; i += 80) {
-    const r = await todo(() => supabaseClient.from('sga_movimientos').select('albaran_id,partida_id,cantidad,bultos,fecha,tipo').in('albaran_id', ids.slice(i, i + 80)).order('id'));
-    (r.data || []).forEach(x => movsRaw.push(x));
-  }
+  // Las tandas de movimientos se piden todas a la vez (antes una tras otra, y con un año entero eran muchas esperas seguidas)
+  const tandasM = [];
+  for (let i = 0; i < ids.length; i += 80) tandasM.push(ids.slice(i, i + 80));
+  const resM = await Promise.all(tandasM.map(t => todo(() => supabaseClient.from('sga_movimientos').select('albaran_id,partida_id,cantidad,bultos,fecha,tipo').in('albaran_id', t).order('id'))));
+  resM.forEach(r => (r.data || []).forEach(x => movsRaw.push(x)));
   const pids = [...new Set(movsRaw.map(x => x.partida_id))];
   const prodDe = {};
-  for (let i = 0; i < pids.length; i += 100) {
-    const r = await supabaseClient.from('sga_partidas').select('id,producto_id').in('id', pids.slice(i, i + 100));
+  sgaPartidas.forEach(p => { prodDe[p.id] = p.productoId || null; });   // las partidas con stock ya están cargadas: solo se piden las demás (las agotadas), todas a la vez
+  const faltanP = pids.filter(id => !(id in prodDe)), tandasP = [];
+  for (let i = 0; i < faltanP.length; i += 100) tandasP.push(faltanP.slice(i, i + 100));
+  await Promise.all(tandasP.map(async t => {
+    const r = await supabaseClient.from('sga_partidas').select('id,producto_id').in('id', t);
     (r.data || []).forEach(p => { prodDe[p.id] = p.producto_id; });
-  }
+  }));
   st.datos = { per, ant, anio, albs, movsRaw, prodDe, cobros: (c.data || []).filter(x => x.estado !== 'anulado'), m2: m2.data || [],
     op: op.error ? [] : (op.data || []), opPend: opPend.error ? [] : (opPend.data || []), cargadoEn: new Date() };
   st.cargando = false;
@@ -9592,6 +9596,13 @@ function dashAlmacenesSvg(filas){
     }).join('')}
   </svg>`;
 }
+// El cálculo por almacén es lo más pesado del dashboard: se deja para después de pintar el resto, y esta tarjeta sale con «Calculando…» un instante
+function dashCardAlmacenesDif(st, periodos, todos, opts){
+  if (allWarehouses.filter(w => !w.archived).length < 2) return '';
+  const id = 'dash-alm-' + (window.__dashAlmN = (window.__dashAlmN || 0) + 1);
+  setTimeout(() => { const el = document.getElementById(id); if (el) el.outerHTML = dashCardAlmacenes(st, periodos, todos, opts); }, 0);
+  return `<div id="${id}" class="card deca-card dash-card">${decaCardHead('home', 'Ingreso por almacén', opts.sub)}<div class="deca-card-body"><div class="dash-vacio">Calculando…</div></div></div>`;
+}
 // opts: { anual, previo (mes anterior, para comparar), sub }
 function dashCardAlmacenes(st, periodos, todos, opts){
   if (allWarehouses.filter(w => !w.archived).length < 2) return '';
@@ -9692,7 +9703,7 @@ function stockDashboardAnioHtml(st){
       ${decaCardHead('box', 'Recepciones y expediciones', 'Palets que entran y salen cada mes')}
       <div class="deca-card-body">${dashBarrasSvg(serieRE, { etq: s => s.corto, cada: 1, tit: s => s.nombre })}<div class="dash-leyenda"><span><i style="background:${DASH_COLORES.mov}"></i>Recibidos · ${sgaNumTxt(palRec)}</span><span><i style="background:${DASH_COLORES.oper}"></i>Expedidos · ${sgaNumTxt(palExp)}</span></div></div>
     </div>`;
-  const cardAlmacenes = dashCardAlmacenes(st, pers, st.wid ? null : porMes, { anual: true, sub: `Comparación de los almacenes en ${anio} (no le afecta el filtro de almacén)` });
+  const cardAlmacenes = dashCardAlmacenesDif(st, pers, st.wid ? null : porMes, { anual: true, sub: `Comparación de los almacenes en ${anio} (no le afecta el filtro de almacén)` });
   const { cardClientes, cardEdad, cardAtencion } = dashTarjetasComunes(st, D, items, total, borradores, hoy, `Pulsa un cliente para ver su resumen mensual en ${anio}`);
   const nota = '<div class="dash-nota" style="margin-top:10px;">En el año, cada operativa cuenta en el mes de su fecha (las que venían de antes de enero, en enero), para no sumarla dos veces.' + (st.wid ? ' Con un almacén elegido, el almacenaje por m² cuenta los m² contratados de ese almacén (se anotan por almacén en la ficha de cada cliente). Las operativas y las cuotas fijas, que no pertenecen a un almacén, todavía no se cuentan.' : '') + '</div>';
   return `${kpis}
@@ -9784,7 +9795,7 @@ function stockDashboardBodyHtml(){
       ${decaCardHead('box', 'Recepciones y expediciones', 'Palets que entran y salen cada día')}
       <div class="deca-card-body">${dashBarrasSvg(serieRE)}<div class="dash-leyenda"><span><i style="background:${DASH_COLORES.mov}"></i>Recibidos · ${sgaNumTxt(palRec)}</span><span><i style="background:${DASH_COLORES.oper}"></i>Expedidos · ${sgaNumTxt(palExp)}</span></div></div>
     </div>`;
-  const cardAlmacenes = dashCardAlmacenes(st, [st.periodo], st.wid ? null : [items], { anual: false, previo: D.ant, sub: `Comparación de los almacenes en ${nombreMes} (no le afecta el filtro de almacén)` });
+  const cardAlmacenes = dashCardAlmacenesDif(st, [st.periodo], st.wid ? null : [items], { anual: false, previo: D.ant, sub: `Comparación de los almacenes en ${nombreMes} (no le afecta el filtro de almacén)` });
   const { cardClientes, cardEdad, cardAtencion } = dashTarjetasComunes(st, D, items, total, borradores, hoy, `Pulsa un cliente para ver su resumen mensual`);
   const nota = st.wid ? '<div class="dash-nota" style="margin-top:10px;">Con un almacén elegido, el almacenaje por m² cuenta los m² contratados de ese almacén (se anotan por almacén en la ficha de cada cliente). Las operativas y las cuotas fijas, que no pertenecen a un almacén, todavía no se cuentan.</div>' : '';
   return `${kpis}
