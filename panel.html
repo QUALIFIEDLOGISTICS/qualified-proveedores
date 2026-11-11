@@ -6969,7 +6969,7 @@ function sgaSitioTxt(p){
   const z = sgaZonaDe(p.zonaId), u = sgaUbicDe(p.ubicacionId);
   return z ? sgaZonaNombre(z) + (u ? ' · ' + u.codigo : '') : '—';
 }
-function stockSeg(){ return ['catalogo', 'entradas', 'salidas', 'actividades', 'operativas', 'liquidaciones'].includes(window.__stockSeg) ? window.__stockSeg : 'catalogo'; }   // «Stock» se fusionó con el catálogo
+function stockSeg(){ return ['catalogo', 'entradas', 'salidas', 'actividades', 'operativas', 'liquidaciones', 'revision'].includes(window.__stockSeg) ? window.__stockSeg : 'catalogo'; }   // «Stock» se fusionó con el catálogo
 
 /* ---- Pantalla principal: stock por cliente y recepciones ---- */
 function whNombre(id){ const w = allWarehouses.find(x => x.id === id); return w ? w.name : '—'; }
@@ -7079,6 +7079,7 @@ window.addEventListener('scroll', sgaAlbMenuCerrar, true);
 function stockBodyHtml(){
   if (stockSeg() === 'catalogo') return stockCatalogoBodyHtml();
   if (stockSeg() === 'liquidaciones') return sgaLiqBodyHtml();
+  if (stockSeg() === 'revision') return sgaRevisionBodyHtml();
   if (stockSeg() === 'operativas') return stockOperativasBodyHtml();
   if (stockSeg() === 'actividades') return stockActividadesBodyHtml();
   const q = (window.__stockSearch || '').trim().toLowerCase();
@@ -9894,6 +9895,7 @@ function stockEmpElegir(id, seg){
 // Al abrir Liquidaciones se empieza por la lista del mes, recalculada con lo último registrado
 function stockSegSync(seg){
   if (seg === 'liquidaciones') { const L = sgaLiqEstado(); L.datos = null; L.estados = null; L.sel = ''; }
+  if (seg === 'revision') { const R = sgaRevEstado(); R.conCobro = null; R.error = ''; }   // al abrirla se vuelve a comprobar con lo último
 }
 function stockEmpresaSelectHtml(seg){
   const lista = stockEmpresasConAlbaran(seg);
@@ -9903,6 +9905,120 @@ function stockEmpresaSelectHtml(seg){
   const selC = seg !== 'operativas' && act && !lista.some(c => c.id === act) ? contactos.find(c => c.id === act) : null;
   const ops = (selC ? lista.concat(selC) : lista).slice().sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es'));
   return `<select id="stock-emp" onchange="stockEmpElegir(this.value, '${seg}')" style="width:auto;flex:0 0 210px;min-width:0;" title="Ver solo los albaranes de una empresa"><option value="">Todas las empresas</option>${ops.map(c => `<option value="${c.id}" ${c.id === (stockEmpActual(seg) || '') ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>`;
+}
+/* ---- SGA · Revisión: lo que está incompleto o ha quedado sin cobrar ----
+   Para enterarse de los datos que faltan en cuanto se producen y no a final de mes:
+   · mercancía en stock sin tipo de palet (en clientes con dos o más tipos, de él depende el precio);
+   · recepciones y expediciones confirmadas de clientes que cobran movimientos y que no tienen ningún cobro de movimiento. */
+function sgaRevEstado(){ return (window.__rev = window.__rev || { dias: 90, conCobro: null, cargando: false }); }
+function sgaRevDesde(dias){ const [y, m, d] = today().split('-').map(Number), dt = new Date(y, m - 1, d - dias); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`; }
+function sgaClienteCobraMov(clienteId, direccion){ return sgaMovProductos(clienteId).some(p => almacenajeCobraEn(p, direccion)); }
+// Stock con mercancía sin tipo de palet, por cliente (solo clientes con dos o más tipos: con uno solo el tipo es automático)
+function sgaRevSinTipo(){
+  const out = [];
+  sgaClientesAlmacenLista().forEach(c => {
+    if (!sgaTiposPaletElegir(c.id).length) return;
+    const ps = sgaPartidas.filter(p => p.clienteId === c.id && p.actual > 0 && !sgaSubtipoPartida(p));
+    if (!ps.length) return;
+    out.push({ c, ps, conArt: ps.filter(p => p.articuloId), sinArt: ps.filter(p => !p.articuloId), uds: ps.reduce((s, p) => s + p.actual, 0) });
+  });
+  return out.sort((a, b) => b.uds - a.uds);
+}
+// Albaranes confirmados de los últimos días que deberían tener cobro de movimiento y no lo tienen (se comprueba contra sga_cobros)
+function sgaRevCandidatos(){
+  const desde = sgaRevDesde(sgaRevEstado().dias), hoy = today();
+  return sgaAlbaranes.filter(a => (a.tipo === 'entrada' || a.tipo === 'salida') && a.estado === 'confirmado' && !a.borrador && a.fecha >= desde && a.fecha <= hoy
+    && Math.abs(sgaMovsAlbaran[a.id] || 0) > 0
+    && (() => { const cfg = sgaClienteCfg(a.clienteId); return cfg.activoDesde && cfg.activoDesde <= a.fecha; })()
+    && sgaClienteCobraMov(a.clienteId, a.tipo));
+}
+async function sgaRevCargar(){
+  const st = sgaRevEstado();
+  if (st.cargando) return;
+  st.cargando = true;
+  const ids = sgaRevCandidatos().map(a => a.id), tandas = [];
+  for (let i = 0; i < ids.length; i += 100) tandas.push(ids.slice(i, i + 100));
+  const con = new Set();
+  try {
+    await Promise.all(tandas.map(async t => {
+      const r = await supabaseClient.from('sga_cobros').select('albaran_id,origen').in('albaran_id', t);
+      if (r.error) throw r.error;
+      (r.data || []).forEach(x => { if (x.origen === 'movimiento') con.add(x.albaran_id); });
+    }));
+    st.conCobro = con; st.error = '';
+  } catch (e) { st.conCobro = null; st.error = (e && e.message) || 'error desconocido'; }
+  st.cargando = false;
+  if (currentTab === 'stock' && stockSeg() === 'revision') refreshStockBody();
+}
+function sgaRevisionNumero(){ return sgaRevSinTipo().length; }
+function sgaRevToolbarHtml(){
+  const st = sgaRevEstado();
+  return `<span style="font-size:13px;color:var(--muted);">Albaranes sin cobro de:</span>
+    <select id="rev-dias" onchange="sgaRevEstado().dias = Number(this.value); sgaRevEstado().conCobro = null; refreshStockBody();" style="width:auto;min-width:170px;">${[[30, 'los últimos 30 días'], [90, 'los últimos 3 meses'], [180, 'los últimos 6 meses'], [365, 'el último año']].map(([d, t]) => `<option value="${d}" ${d === st.dias ? 'selected' : ''}>${t}</option>`).join('')}</select>
+    <button type="button" class="btn btn-ghost" style="margin-left:auto;" onclick="sgaRevEstado().conCobro = null; refreshStockBody();">↻ Volver a comprobar</button>`;
+}
+function sgaRevisionBodyHtml(){
+  const st = sgaRevEstado();
+  // ---- A · mercancía sin tipo de palet
+  const sinTipo = sgaRevSinTipo();
+  const cardA = `<div class="card deca-card dash-card" style="margin-bottom:14px;">
+    ${decaCardHead('box', 'Mercancía sin tipo de palet', sinTipo.length ? 'Clientes con dos o más tipos: sin él no se sabe qué precio de entrada y salida cobrar' : 'Todo en orden')}
+    <div class="deca-card-body">${sinTipo.length ? `<table class="tf-table"><thead><tr>${thSort('Cliente', 'text')}${thSort('Palets', 'number', 'style="text-align:right;"')}${thSort('De artículo del catálogo', 'number', 'style="text-align:right;"')}${thSort('Sin artículo', 'number', 'style="text-align:right;"')}<th></th></tr></thead><tbody>${sinTipo.map(x => `
+      <tr><td data-sort-value="${esc(x.c.nombre)}"><b>${esc((x.c.nombreComercial || '').trim() || x.c.nombre)}</b><div style="font-size:11.5px;color:var(--muted);">Tipos: ${esc(sgaTiposPaletElegir(x.c.id).join(' o '))}</div></td>
+        <td class="tf-precio" data-sort-value="${x.uds}">${sgaNumTxt(x.uds)}</td>
+        <td class="tf-precio" data-sort-value="${x.conArt.length}">${x.conArt.length}</td>
+        <td class="tf-precio" data-sort-value="${x.sinArt.length}">${x.sinArt.length}</td>
+        <td style="text-align:right;white-space:nowrap;">${x.conArt.length ? `<button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="sgaRevIrCatalogo('${x.c.id}')" title="Su tipo de palet se pone en el artículo del catálogo">Asignar en el catálogo</button> ` : ''}${x.sinArt.length && sgaPuedeEditarStock() ? `<button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="sgaRevAsignarPartidas('${x.c.id}')" title="Estos palets no tienen artículo: el tipo se pone en cada palet">Asignar a los palets sin artículo</button>` : ''}</td></tr>`).join('')}</tbody></table>` : '<div class="dash-ok">✓ Ninguna mercancía sin tipo de palet en los clientes que lo necesitan.</div>'}</div></div>`;
+  // ---- B · albaranes sin cobro
+  let cuerpoB;
+  if (st.error) cuerpoB = `<div class="dash-vacio" style="color:var(--danger);">No se pudo comprobar los cobros: ${esc(st.error)}</div>`;
+  else if (!st.conCobro) { if (!st.cargando) setTimeout(sgaRevCargar, 0); cuerpoB = '<div class="dash-vacio">Comprobando los cobros…</div>'; }
+  else {
+    const sin = sgaRevCandidatos().filter(a => !st.conCobro.has(a.id)).sort((a, b) => b.fecha.localeCompare(a.fecha));
+    st.nSin = sin.length;
+    cuerpoB = sin.length ? `<table class="tf-table" data-fk="rev-sin-cobro"><thead><tr>${thSort('Nº', 'text')}${thSort('Fecha', 'date')}${thSort('Cliente', 'text')}${thSort('Tipo', 'text')}${thSort('Palets', 'number', 'style="text-align:right;"')}<th></th></tr></thead><tbody>${sin.map(a => { const c = contactos.find(x => x.id === a.clienteId) || {}; return `
+      <tr><td data-sort-value="${esc(sgaNumAlbaran(a))}"><b>${esc(sgaNumAlbaran(a))}</b></td><td style="white-space:nowrap;" data-sort-value="${esc(a.fecha)}">${fmtDateDMY(a.fecha)}</td>
+        <td data-sort-value="${esc(c.nombre || '')}">${esc((c.nombreComercial || '').trim() || c.nombre || '—')}</td><td data-sort-value="${a.tipo}">${a.tipo === 'salida' ? 'Expedición' : 'Recepción'}</td>
+        <td class="tf-precio" data-sort-value="${Math.abs(sgaMovsAlbaran[a.id] || 0)}">${sgaNumTxt(Math.abs(sgaMovsAlbaran[a.id] || 0))}</td>
+        <td style="text-align:right;">${sgaPuedeEditarStock() ? `<button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;" onclick="${a.tipo === 'salida' ? `sgaSalidaEditar('${a.id}')` : `sgaEntradaEditar('${a.id}')`}" title="Se abre para revisarlo: al guardarlo se recalculan sus cobros">Abrir y recalcular</button>` : ''}</td></tr>`; }).join('')}</tbody></table>
+      <div class="dash-nota" style="margin-top:8px;">Son albaranes de clientes con tarifa de movimientos que no tienen ningún cobro de movimiento. Si el cliente paga solo por m², es normal; si no, falta el tipo de carga, el tipo de palet o la tarifa. Al abrir uno y guardarlo se recalculan sus cobros.</div>` : '<div class="dash-ok">✓ Todos los albaranes confirmados del periodo tienen su cobro.</div>';
+  }
+  const cardB = `<div class="card deca-card dash-card">${decaCardHead('tag', 'Albaranes sin cobro', st.conCobro ? ((st.nSin || 0) ? `${st.nSin} por revisar` : 'Todo en orden') : 'Comprobando…')}<div class="deca-card-body">${cuerpoB}</div></div>`;
+  return cardA + cardB;
+}
+function sgaRevIrCatalogo(cid){
+  window.__catSel = cid; try { localStorage.setItem('qualified.sga.catCliente', cid); } catch (e) { /* sin almacenamiento */ }
+  window.__stockSeg = 'catalogo'; renderTab();
+}
+// Tipo de palet para los palets de un cliente que no tienen artículo (se anota en cada palet)
+function sgaRevAsignarPartidas(cid){
+  const tipos = sgaTiposPaletElegir(cid), ps = sgaPartidas.filter(p => p.clienteId === cid && p.actual > 0 && !p.articuloId && !sgaSubtipoPartida(p));
+  if (!tipos.length || !ps.length || !sgaPuedeEditarStock()) return;
+  const c = contactos.find(x => x.id === cid) || {}, nom = (c.nombreComercial || '').trim() || c.nombre || 'este cliente';
+  document.getElementById('modal-slot').innerHTML = `<div class="modal-overlay" onclick="if(event.target===this) closeModal()"><div class="modal-box" style="max-width:500px;width:100%;">
+    <div style="font-weight:700;font-size:16px;margin-bottom:6px;">Asignar tipo de palet</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:12px;"><b>${ps.length}</b> partida${ps.length === 1 ? '' : 's'} de ${esc(nom)} (${sgaNumTxt(ps.reduce((s, p) => s + p.actual, 0))} palets) no tiene${ps.length === 1 ? '' : 'n'} artículo ni tipo de palet. Elige el tipo que se anota en todas ellas.</div>
+    <select id="rev-tp-sel" style="width:100%;"><option value="">— Elige el tipo —</option>${tipos.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('')}</select>
+    <div id="rev-tp-err" style="color:var(--danger);font-size:12.5px;margin-top:8px;"></div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px;"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="button" class="btn btn-primary" id="rev-tp-ok" onclick="sgaRevAsignarPartidasAplicar('${cid}')">Asignar</button></div></div></div>`;
+}
+async function sgaRevAsignarPartidasAplicar(cid){
+  const tipo = ((document.getElementById('rev-tp-sel') || {}).value || '').trim(), err = document.getElementById('rev-tp-err'), btn = document.getElementById('rev-tp-ok');
+  if (!tipo) { if (err) err.textContent = 'Elige el tipo de palet.'; return; }
+  const ps = sgaPartidas.filter(p => p.clienteId === cid && p.actual > 0 && !p.articuloId && !sgaSubtipoPartida(p));
+  if (btn) { btn.disabled = true; btn.textContent = 'Asignando…'; }
+  let hechos = 0, fallos = 0;
+  for (let i = 0; i < ps.length; i += 15) {
+    await Promise.all(ps.slice(i, i + 15).map(async p => {
+      const atributos = Object.assign({}, p.atributos, { subtipo: tipo });
+      const { error } = await supabaseClient.from('sga_partidas').update({ atributos }).eq('id', p.id);
+      if (error) fallos++; else { p.atributos = atributos; hechos++; }
+    }));
+  }
+  closeModal();
+  if (hechos) await logContactoHistorial(cid, `SGA · stock: tipo de palet «${tipo}» asignado a ${hechos} partida${hechos === 1 ? '' : 's'} sin artículo que no lo tenían.`);
+  appToast(fallos ? `Tipo «${tipo}» asignado a ${hechos}; ${fallos} no se pudieron guardar.` : `Tipo «${tipo}» asignado a ${hechos} partida${hechos === 1 ? '' : 's'}.`, fallos ? 'error' : 'ok');
+  refreshStockBody();
 }
 function tplStock(){
   if (window.__stockView !== 'catedit') { window.__catEditAll = false; window.__catLocked = true; }
@@ -9934,7 +10050,7 @@ function tplStock(){
       ${acc('#2F7F86', 'regul', 'Ajustes de stock', 'Stock inicial, regularización y cambios de sitio', 'sgaRegulAbrir()', 'Dar de alta la mercancía que ya hay en el almacén, ajustar las existencias a lo contado o cambiarla de almacén o de ubicación sin movimientos')}
       ${acc('#7A4FA3', 'actividad', 'Nueva actividad', 'Un trabajo que se cobra, sin mover stock', 'sgaActividadAbrir()', 'Anotar un trabajo hecho para un cliente (verificación de inventario, recuento…) y cobrarlo')}
     </div>`}
-    ${seg === 'operativas' ? '' : `<div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('actividades', 'Actividades')}${segBtn('liquidaciones', 'Liquidaciones')}</div>`}
+    ${seg === 'operativas' ? '' : `<div class="sga-tabs">${segBtn('catalogo', 'Inventario')}${segBtn('entradas', 'Recepciones')}${segBtn('salidas', 'Expediciones')}${segBtn('actividades', 'Actividades')}${segBtn('liquidaciones', 'Liquidaciones')}${segBtn('revision', 'Revisión' + (sgaRevisionNumero() ? ` <span class="cg-chip" style="background:var(--danger);color:#fff;margin-left:4px;">${sgaRevisionNumero()}</span>` : ''))}</div>`}
     <div class="card deca-toolbar">
       ${seg === 'catalogo' ? `
       <select id="cat-cliente" onchange="catElegirCliente(this.value)" style="width:auto;flex:0 0 210px;min-width:0;order:1;"><option value="">Todos los clientes</option>${contactos.filter(c => c.esClienteAlmacen && !c.archived).sort((a, b) => ((a.nombreComercial || '').trim() || a.nombre).localeCompare(((b.nombreComercial || '').trim() || b.nombre), 'es')).map(c => `<option value="${c.id}" ${c.id === catClienteSel() ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>
@@ -9948,6 +10064,7 @@ function tplStock(){
       <span id="cat-dens" style="order:9;margin-left:auto;">${catDensHtml()}</span>
       ${catModoHtml()}
       ` : seg === 'liquidaciones' ? `${sgaLiqToolbarHtml()}
+      ` : seg === 'revision' ? `${sgaRevToolbarHtml()}
       ` : `
       <div class="deca-search">
         <input placeholder="${seg === 'catalogo' ? 'Buscar cliente o artículo…' : 'Buscar cliente por nombre o NIF…'}" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
@@ -9955,7 +10072,7 @@ function tplStock(){
       </div>
       ${seg === 'entradas' || seg === 'salidas' || seg === 'actividades' || seg === 'operativas' ? stockEmpresaSelectHtml(seg) + stockEstadoSelectHtml(seg) : ''}${seg === 'operativas' && sgaPuedeEditarStock() ? '<button class="btn btn-primary" style="margin-left:auto;" onclick="sgaOperativaAbrir()">+ Nueva operativa</button>' : ''}`}
       ${seg === 'catalogo' ? `<div style="margin-left:auto;order:5;display:flex;gap:8px;"><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catExportarAbrir()" title="Descargar el inventario en Excel o PDF, eligiendo las columnas">${homeIcon(HOME_ICON_PATHS.download, 15, 'currentColor', 2)}<span>Exportar</span></button>${sgaPuedeEditarStock() ? (catSinNada(catClienteSel()) ? `<button type="button" class="btn btn-primary" onclick="catEditarTodo()" title="Todavía no hay nada: empieza creando el primer artículo">＋ Crear primer artículo</button>` : `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catEditarTodo()" title="Abrir una pantalla completa para editar todo el catálogo del cliente">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>`) : ''}</div>` : ''}
-      ${seg === 'liquidaciones' || seg === 'operativas' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="${seg === 'catalogo' ? 'width:auto;flex:0 0 190px;order:2;' : ''}min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
+      ${seg === 'liquidaciones' || seg === 'revision' || seg === 'operativas' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="${seg === 'catalogo' ? 'width:auto;flex:0 0 190px;order:2;' : ''}min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
     </div>
     <div id="stock-body">${stockBodyHtml()}</div>
     </div>`;
