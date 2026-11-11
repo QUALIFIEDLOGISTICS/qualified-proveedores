@@ -6828,8 +6828,20 @@ async function sgaBultosRestantes(){
 }
 async function loadSgaStock(){
   if (window.__dash) window.__dash.datos = null;   // el dashboard se vuelve a calcular con los datos nuevos
+  // La base de datos devuelve como mucho 1000 filas por consulta: las partidas se piden por páginas. Si no, con más de 1000 partidas en el almacén
+  // (todos los clientes) se cortaban en silencio las más recientes y el stock salía más bajo que lo registrado en recepciones y expediciones.
+  const partidasTodas = async () => {
+    const filas = [];
+    for (let desde = 0; ; desde += 1000) {
+      const r = await supabaseClient.from('sga_partidas').select('*').eq('estado', 'activa').order('fecha_entrada', { ascending: true }).order('id', { ascending: true }).range(desde, desde + 999);
+      if (r.error) return { data: filas.length ? filas : null, error: r.error };
+      filas.push(...(r.data || []));
+      if ((r.data || []).length < 1000) break;
+    }
+    return { data: filas, error: null };
+  };
   const [p, a] = await Promise.all([
-    supabaseClient.from('sga_partidas').select('*').eq('estado', 'activa').order('fecha_entrada', { ascending: true }),
+    partidasTodas(),
     supabaseClient.from('sga_albaranes').select('*').order('fecha', { ascending: false }).order('created_at', { ascending: false }).limit(1000),   // las más recientes primero (con las mismas fechas, las últimas creadas)
   ]);
   sgaPartidas = (p.data || []).map(sgaPartidaDeFila);
