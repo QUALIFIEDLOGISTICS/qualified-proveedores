@@ -12436,6 +12436,7 @@ async function sgaSalidaConfirmar(comoBorrador){
       appToast(oc.sinVincular ? `Orden ${ocRef(oc)} creada, pero sin vincular a la expedición: falta ejecutar el SQL «orden-carga-expedicion.sql» en Supabase.` : `Orden de carga ${ocRef(oc)} creada y vinculada a la expedición.`, oc.sinVincular ? 'error' : 'ok');
     } catch (err) { appToast('La expedición se ha guardado, pero la orden de carga no se pudo crear: ' + (err && err.message ? err.message : 'error desconocido.') + ' Ábrela con «Editar» para reintentarlo.', 'error'); }
   }
+  if (edit && !comoBorrador) { try { await sgaOcSincronizarExpedicion(edit, d, sale, total); } catch (err) { appToast('La expedición se ha guardado, pero no se pudo actualizar su orden de carga: ' + (err && err.message ? err.message : 'error desconocido.'), 'error'); } }
   if (albDeca) await sgaFranjaExpedicionSync(albDeca, d, numAlb || (edit ? sgaNumAlbaran(edit.albaran) : ''));   // franja horaria del día de salida (borrador o confirmada)
   mc('DeCA, orden de carga y franja horaria');
   if (edit) {
@@ -13711,7 +13712,9 @@ function sgaSalidaOcClienteTransporte(clienteId){
 function sgaSalidaOcHtml(){
   const edit = window.__slEdit;
   const ya = edit ? sgaOcDeExpedicion(edit.id) : null;
-  if (ya) return `<div style="font-size:13.5px;">Esta expedición ya tiene su orden de carga: <button type="button" class="deca-code-pill" style="cursor:pointer;border:none;" onclick="sgaAbrirOcExpedicion('${ya.id}')">${esc(ocRef(ya))}</button></div>`;
+  if (ya) return `<div style="font-size:13.5px;">Esta expedición ya tiene su orden de carga: <button type="button" class="deca-code-pill" style="cursor:pointer;border:none;" onclick="sgaAbrirOcExpedicion('${ya.id}')">${esc(ocRef(ya))}</button></div>
+    <div style="font-size:12px;color:var(--muted);margin-top:6px;">Si cambias el transportista, las matrículas, la fecha, el destinatario o la mercancía, al guardar te pregunto si actualizo también la orden.</div>
+    <div class="field" style="margin:12px 0 0;"><label>Observaciones especiales de la orden de carga <span class="oc-tag pdf">Sale en el PDF</span></label><textarea id="sl-oc-obs-ya" maxlength="600" rows="2" placeholder="Opcional" style="width:100%;resize:vertical;">${esc(ya.observacionesEspeciales || '')}</textarea></div>`;
   if (!(PROFILE.isAdmin || sectionAllowedFor(PROFILE, 'trafico', 'ordenes'))) return '<div style="font-size:13px;color:var(--muted);">Para generar la orden de carga hace falta acceso a Órdenes de carga (Transporte).</div>';
   const req = '<span class="dc-req">*</span>';
   return `<label style="display:flex;align-items:flex-start;gap:10px;font-size:13.5px;cursor:pointer;"><input type="checkbox" class="switch" id="sl-oc-on" onchange="sgaSalidaOcToggle()" style="margin-top:2px;" />
@@ -13826,6 +13829,52 @@ async function sgaCrearOcExpedicion(albaranId, d, sale, decaId){
   if (!vinculada) oc.sinVincular = true;
   ordenesCarga.unshift(oc);
   return oc;
+}
+// Si la expedición ya tiene su orden de carga, lo que se cambie en ella y salga en la orden se ofrece actualizar (con confirmación, para no pisar
+// lo que se haya tocado a mano en la orden). Las observaciones especiales se pasan directamente: se han escrito a propósito en la expedición.
+async function sgaOcSincronizarExpedicion(edit, d, sale, total){
+  const oc = sgaOcDeExpedicion(edit.id);
+  if (!oc || oc.estado === 'anulada') return;
+  if (!(PROFILE.isAdmin || sectionAllowedFor(PROFILE, 'trafico', 'ordenes'))) return;
+  const upd = {}, hechos = [];
+  // Observaciones especiales (campo de la propia expedición)
+  const obsEl = document.getElementById('sl-oc-obs-ya');
+  if (obsEl && obsEl.value.trim() !== (oc.observacionesEspeciales || '').trim()) { upd.observaciones_especiales = obsEl.value.trim() || null; hechos.push('observaciones especiales'); }
+  // Lo que sale de la expedición: transportista, matrículas, fecha de carga, destinatario, mercancía y peso
+  const a0 = edit.albaran, totalAntes = Object.values(edit.prev || {}).reduce((s, n) => s + n, 0), cambios = [];
+  if ((a0.transportista || '') !== (d.transportista || '')) cambios.push('transportista');
+  if ((a0.matricula || '') !== (d.matricula || '')) cambios.push('matrículas');
+  if ((a0.destinatario || '') !== (d.destinatario || '') || (a0.destinatarioDireccion || '') !== (d.destinatarioDireccion || '')) cambios.push('destinatario');
+  if (a0.fecha !== d.fecha) cambios.push('fecha de carga');
+  if (totalAntes !== total) cambios.push('mercancía y peso');
+  if (cambios.length && await appConfirm({ title: 'Actualizar la orden de carga', message: `Esta expedición tiene la orden ${ocRef(oc)} y has cambiado: ${cambios.join(', ')}. ¿Quieres actualizar la orden con estos cambios? Lo demás de la orden (precios, referencias, observaciones…) no se toca.`, confirmLabel: 'Actualizar la orden', cancelLabel: 'Dejarla como está', tone: 'info', icon: 'info' })) {
+    if (cambios.includes('transportista')) {
+      const tc = sgaTransportistaContacto(d.transportista);
+      Object.assign(upd, { transportista_id: tc ? tc.id : null, transportista_nombre: tc ? tc.nombre : d.transportista, transportista_nif: tc ? tc.nif || null : null,
+        transportista_direccion: tc ? [tc.calle1, tc.calle2].filter(Boolean).join(', ') || null : null, transportista_poblacion: tc ? tc.ciudad || null : null });
+    }
+    if (cambios.includes('matrículas')) { const mat = sgaMatriculaSplit(d.matricula); upd.matricula_tractora = mat.tractora || null; upd.matricula_remolque = mat.remolque || null; }
+    if (cambios.includes('fecha de carga') && oc.cargas.length) upd.cargas = oc.cargas.map((c, i) => i === 0 ? { ...c, fecha: d.fecha } : c);
+    if (cambios.includes('destinatario') && oc.descargas.length) {
+      const dd = sgaDireccionPorNombre(d.destinatario);
+      const punto = dd ? { empresa: dd.nombre, direccion: [dd.calle1, dd.calle2].filter(Boolean).join(', '), cp: dd.codigoPostal || '', poblacion: dd.ciudad || '', pais: dd.pais || '', horario: dd.horarios || '', maps: dd.mapsUrl || '', observaciones: dd.observacionesOc || '' } : sgaDestinoManual(d.destinatario, d.destinatarioDireccion);
+      if (punto.poblacion) upd.descargas = oc.descargas.map((p, i) => i === 0 ? { ...p, ...punto } : p);
+      else appToast('El destinatario nuevo no tiene población legible: la descarga de la orden no se ha cambiado.', 'error');
+    }
+    if (cambios.includes('mercancía y peso')) {
+      const nombres = [...new Set(sale.map(x => String(x.p.descripcion || sgaProdTxt(x.p.productoId) || '').trim()).filter(Boolean))];
+      upd.mercancia = (`${total} ${sgaUd(d.clienteId, total)}` + (nombres.length ? ': ' + nombres.join(', ') : '')).slice(0, 250);
+      const peso = sgaSalidaPesoCalculado(sale);
+      if (peso) upd.peso_kg = String(peso);
+    }
+    hechos.push(...cambios);
+  }
+  if (!hechos.length || !Object.keys(upd).length) return;
+  upd.updated_at = new Date().toISOString();
+  const { error } = await supabaseClient.from('ordenes_carga').update(upd).eq('id', oc.id);
+  if (error) { appToast('La expedición se ha guardado, pero no se pudo actualizar su orden de carga: ' + (error.message || 'error desconocido') + '.', 'error'); return; }
+  await loadOrdenesCarga();
+  appToast(`Orden de carga ${ocRef(oc)} actualizada (${hechos.join(', ')}).`, 'ok');
 }
 /* ---- Cómo llama cada cliente a su unidad ----
    Por defecto «palet / palets». Un cliente puede llamarla «carpa / carpas», «jumbo / jumbos»…: se elige en su ficha SGA y se guarda en su
