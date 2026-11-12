@@ -9088,8 +9088,8 @@ function sgaOperativaAbrir(id, keepNav){
   if (!keepNav) window.__opNavIds = id ? [...document.querySelectorAll('#stock-body tbody tr[data-op]')].filter(r => r.getAttribute('onclick')).map(r => r.dataset.op) : [];
   const o = id ? sgaOperativasHechas.find(x => x.id === id) : null;
   window.__opForm = o
-    ? { id: o.id, clienteId: o.clienteId, fecha: o.fecha, nombre: o.nombre, apartados: JSON.parse(JSON.stringify(o.apartados)), obs: o.observaciones, operativaId: o.operativaId, facturada: !!o.facturada, factura: o.factura || '', referencia: o.referencia || '' }
-    : { id: null, clienteId: '', fecha: today(), nombre: '', apartados: [], obs: '', operativaId: null, facturada: false, factura: '', referencia: '' };
+    ? { id: o.id, clienteId: o.clienteId, fecha: o.fecha, nombre: o.nombre, lineas: (o.apartados || []).map(sgaOperativaLineaDeApartado), obs: o.observaciones, operativaId: o.operativaId, facturada: !!o.facturada, factura: o.factura || '', referencia: o.referencia || '' }
+    : { id: null, clienteId: '', fecha: today(), nombre: '', lineas: [], obs: '', operativaId: null, facturada: false, factura: '', referencia: '' };
   window.__stockView = 'operativa';
   window.__stockDirty = false;
   renderHeader(); renderTab();
@@ -9114,8 +9114,9 @@ async function sgaOperativaCancelar(){
 }
 function tplStockOperativaPage(){
   const f = window.__opForm || {};
-  // Solo los clientes que tienen operativas creadas (Comercial → Tarifas Almacén → Operativas)
-  const idsConOp = new Set(operativas.map(o => o.clienteId));
+  // Los clientes que tienen productos de operativa en su tarifa (y los que aún tienen operativas antiguas de Comercial, para poder convertirlas)
+  const idsConOp = new Set(almacenajeTarifas.filter(t => t.categoria === 'operativa').map(t => t.clienteId));
+  operativas.forEach(o => idsConOp.add(o.clienteId));
   const clientes = contactos.filter(c => idsConOp.has(c.id) && !c.archived)
     .sort((x, y) => ((x.nombreComercial || '').trim() || x.nombre).localeCompare(((y.nombreComercial || '').trim() || y.nombre), 'es'));
   if (f.clienteId && !clientes.some(c => c.id === f.clienteId)) { const c = contactos.find(x => x.id === f.clienteId); if (c) clientes.push(c); }
@@ -9125,7 +9126,7 @@ function tplStockOperativaPage(){
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.tag, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
         <div class="deca-banner-title">${f.id ? 'Editar operativa' : 'Nueva operativa'}</div>
-        <div class="deca-banner-sub">Un servicio con precio cerrado que se le ha hecho a un cliente. Sale en su resumen mensual, en «A facturar».</div>
+        <div class="deca-banner-sub">Un servicio que se le ha hecho a un cliente. Las líneas salen de su tarifa: quita las que no han hecho falta, ajusta cantidades o precios y añade otras. Sale en su resumen mensual, en «A facturar».</div>
       </div>
       ${f.id && (window.__opNavIds || []).length > 1 && (window.__opNavIds || []).includes(f.id) ? (() => {
         const ids = window.__opNavIds, idx = ids.indexOf(f.id);
@@ -9135,20 +9136,18 @@ function tplStockOperativaPage(){
     </div>
     <div class="deca-form" style="max-width:820px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
       <div class="card deca-card">
-        ${decaCardHead('tag', 'Qué se ha hecho', 'Cliente, día y operativa')}
+        ${decaCardHead('tag', 'Qué se ha hecho', 'Cliente y día')}
         <div class="deca-card-body">
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
             <div class="field" style="flex:2;min-width:230px;"><label>Cliente <span class="dc-req">*</span></label>
-              <select id="op-cliente" onchange="sgaOperativaCambio('cliente')" ${f.id ? 'disabled' : ''}><option value="">${clientes.length ? 'Elige el cliente…' : 'Ningún cliente tiene operativas creadas'}</option>${clientes.map(c => `<option value="${c.id}" ${c.id === f.clienteId ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>${clientes.length ? '' : '<div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">Crea primero sus operativas en Comercial → Tarifas Almacén → Operativas.</div>'}</div>
+              <select id="op-cliente" onchange="sgaOperativaCambio('cliente')" ${f.id ? 'disabled' : ''}><option value="">${clientes.length ? 'Elige el cliente…' : 'Ningún cliente tiene operativas creadas'}</option>${clientes.map(c => `<option value="${c.id}" ${c.id === f.clienteId ? 'selected' : ''}>${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select>${clientes.length ? '' : '<div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">Crea primero los productos de «Operativa» (Configuración → Productos) y ponles precio en la tarifa del cliente.</div>'}</div>
             <div class="field" style="flex:1;min-width:160px;"><label>Fecha <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="op-f-fecha" type="date" value="${esc(f.fecha || today())}" onchange="sgaOperativaCambio('fecha')" />`)}</div>
           </div>
-          <div class="field" style="margin-bottom:0;"><label>Operativa <span class="dc-req">*</span></label>
-            <select id="op-f-sel" onchange="sgaOperativaCambio('operativa')"></select></div>
-          <div class="field" style="margin-top:12px;margin-bottom:0;"><label>Nº de albarán o contenedor <span style="color:var(--mutedFaint);font-weight:400;">(opcional)</span></label>${decaInputIcon('file', `<input id="op-f-ref" data-mayusc maxlength="40" style="text-transform:uppercase;" placeholder="Ej. MSKU1234567 o nº de albarán" value="${esc(f.referencia || '')}" oninput="window.__opForm.referencia=this.value; window.__stockDirty=true;" />`)}</div>
+          <div class="field" style="margin-top:0;margin-bottom:0;"><label>Nº de albarán o contenedor <span style="color:var(--mutedFaint);font-weight:400;">(opcional)</span></label>${decaInputIcon('file', `<input id="op-f-ref" data-mayusc maxlength="40" style="text-transform:uppercase;" placeholder="Ej. MSKU1234567 o nº de albarán" value="${esc(f.referencia || '')}" oninput="window.__opForm.referencia=this.value; window.__stockDirty=true;" />`)}</div>
         </div>
       </div>
       <div class="card deca-card" id="op-f-detalle-card">
-        ${decaCardHead('list', 'Precio', 'Apartados fijos y extras por cantidad')}
+        ${decaCardHead('list', 'Líneas', 'Salen de la tarifa del cliente · quita, añade o cambia lo que haga falta')}
         <div class="deca-card-body" id="op-f-detalle"></div>
       </div>
       <div class="card deca-card">
@@ -9172,102 +9171,133 @@ function tplStockOperativaPage(){
     </div>
     </div>`;
 }
-// Lee cliente y fecha y vuelve a pintar el desplegable de operativas y el precio
+/* ---- Las líneas de una operativa ----
+   Cada operativa es una cabecera (cliente, día, contenedor o albarán) con LÍNEAS. Las líneas salen solas de la tarifa del cliente: todos los productos
+   de la categoría «Operativa» que tiene con precio ese día. Se quitan las que no han hecho falta, se cambia la cantidad o el precio de esa vez y se
+   añaden otras de su tarifa o a mano. Lo guardado conserva el formato de siempre (apartados), así que el resumen mensual no cambia. */
+const SGA_OP_UNIDAD_TXT = { operativa: 'precio fijo', palet: 'por palet', unidad: 'por unidad', hora: 'por hora' };
+// Productos de «Operativa» que el cliente tiene en su tarifa con precio a esa fecha
+function sgaOperativaProductosCliente(clienteId, fecha){
+  if (!clienteId || !fecha) return [];
+  return almacenajeProductos.filter(p => !p.archived && p.categoria === 'operativa')
+    .map(p => ({ p, t: sgaTarifaEn(clienteId, p.id, fecha) })).filter(x => x.t)
+    .sort((a, b) => almacenajeProductoTexto(a.p).localeCompare(almacenajeProductoTexto(b.p), 'es'));
+}
+function sgaOperativaLineaDe(p, t){
+  return { productoId: p.id, tarifaId: t.id, concepto: almacenajeProductoTexto(p), unidad: p.unidad, precioTarifa: t.precio, precio: t.precio, cantidad: p.unidad === 'operativa' ? 1 : 0, manual: false };
+}
+function sgaOperativaLineasIniciales(clienteId, fecha){ return sgaOperativaProductosCliente(clienteId, fecha).map(x => sgaOperativaLineaDe(x.p, x.t)); }
+function sgaOperativaLineaImporte(l){ return sgaR2((Number(l.cantidad) || 0) * (Number(l.precio) || 0)); }
+function sgaOperativaTotalLineas(lineas){ return sgaR2((lineas || []).reduce((s, l) => s + sgaOperativaLineaImporte(l), 0)); }
+// Línea de la pantalla → apartado guardado (el precio fijo una vez es un apartado fijo; lo demás, un extra con su cantidad)
+function sgaOperativaApartadoDe(l){
+  const base = { concepto: l.concepto, importe: sgaR2(Number(l.precio) || 0) };
+  if (l.productoId) { base.producto_id = l.productoId; if (l.tarifaId) base.tarifa_id = l.tarifaId; }
+  const cant = Number(l.cantidad) || 0;
+  if (l.unidad === 'operativa' && cant === 1 && !l.manual) return base;
+  return { ...base, extra: true, unidad: ['palet', 'unidad', 'hora'].includes(l.unidad) ? l.unidad : 'unidad', cantidad: cant, ...(l.manual ? { manual: true } : {}) };
+}
+// Apartado guardado → línea de la pantalla (también las operativas antiguas, que venían de una plantilla de Comercial)
+function sgaOperativaLineaDeApartado(a){
+  return { productoId: a.producto_id || '', tarifaId: a.tarifa_id || '', concepto: a.concepto || '', unidad: a.extra ? (a.unidad || 'unidad') : 'operativa',
+    precioTarifa: null, precio: Number(a.importe) || 0, cantidad: a.extra ? (Number(a.cantidad) || 0) : 1, manual: !!a.manual };
+}
+function sgaOperativaNombreAuto(lineas){
+  const c = [...new Set(lineas.map(l => l.concepto).filter(Boolean))];
+  return (c.slice(0, 3).join(' + ') + (c.length > 3 ? ` +${c.length - 3}` : '')).slice(0, 120) || 'Operativa';
+}
+// Lee cliente y fecha y vuelve a pintar las líneas
 function sgaOperativaCambio(que){
   const f = window.__opForm;
   if (!f) return;
-  const cli = document.getElementById('op-cliente'), fec = document.getElementById('op-f-fecha'), sel = document.getElementById('op-f-sel');
+  const cli = document.getElementById('op-cliente'), fec = document.getElementById('op-f-fecha');
+  const antesCli = f.clienteId, antesFecha = f.fecha;
   if (cli) f.clienteId = cli.value;
   if (fec && fec.value) f.fecha = fec.value;
   window.__stockDirty = true;
-  if (que === 'cliente') { f.nombre = ''; f.apartados = []; f.operativaId = null; }
-  else if (que === 'operativa' && sel) {
-    f.nombre = sel.value;
-    const manuales = f.apartados.filter(a => a.manual);   // los extras escritos a mano se conservan
-    const v = f.nombre ? sgaOperativaVigente(f.clienteId, f.nombre, f.fecha) : null;
-    f.apartados = v ? [...JSON.parse(JSON.stringify(v.apartados)), ...manuales] : [];
-    f.operativaId = v ? v.id : null;
-  } else if (que === 'fecha' && f.nombre) {   // otro día: puede haber otro precio vigente
-    const manuales = f.apartados.filter(a => a.manual);
-    const v = sgaOperativaVigente(f.clienteId, f.nombre, f.fecha);
-    f.apartados = v ? [...JSON.parse(JSON.stringify(v.apartados)), ...manuales] : [];
-    f.operativaId = v ? v.id : null;
-    if (!v) f.nombre = '';
+  if (que === 'cliente' && f.clienteId !== antesCli) f.lineas = sgaOperativaLineasIniciales(f.clienteId, f.fecha);
+  else if (que === 'fecha' && f.fecha !== antesFecha) {   // otro día puede haber otro precio: se actualizan las líneas cuyo precio no se había cambiado a mano
+    f.lineas.forEach(l => {
+      if (!l.productoId) return;
+      const t = sgaTarifaEn(f.clienteId, l.productoId, f.fecha);
+      if (!t) return;
+      if (l.precioTarifa == null || Number(l.precio) === Number(l.precioTarifa)) l.precio = t.precio;
+      l.precioTarifa = t.precio; l.tarifaId = t.id;
+    });
   }
   sgaOperativaPintar();
 }
 function sgaOperativaPintar(){
   const f = window.__opForm;
   if (!f) return;
-  const sel = document.getElementById('op-f-sel');
-  if (sel) {
-    const nombres = f.clienteId ? sgaOperativasNombres(f.clienteId, f.fecha) : [];
-    if (f.nombre && !nombres.some(n => n.toLowerCase() === f.nombre.toLowerCase())) nombres.push(f.nombre);   // al editar, la que ya tenía
-    sel.innerHTML = `<option value="">${!f.clienteId ? 'Elige primero el cliente' : nombres.length ? 'Elige la operativa…' : 'Este cliente no tiene operativas con precio a esa fecha'}</option>`
-      + nombres.map(n => `<option value="${esc(n)}" ${n.toLowerCase() === (f.nombre || '').toLowerCase() ? 'selected' : ''}>${esc(n)}</option>`).join('');
-  }
   const det = document.getElementById('op-f-detalle');
   if (!det) return;
-  if (!f.apartados.length) { det.innerHTML = '<div style="color:var(--mutedFaint);font-size:13px;">Elige el cliente y la operativa para ver su precio.</div>'; return; }
-  const fijos = f.apartados.map((a, i) => ({ a, i })).filter(x => !x.a.extra), extras = f.apartados.map((a, i) => ({ a, i })).filter(x => x.a.extra && !x.a.manual), manuales = f.apartados.map((a, i) => ({ a, i })).filter(x => x.a.manual);
-  det.innerHTML = `
-    <div class="op-lines">${fijos.map(({ a }) => `<div class="op-line"><span>${esc(a.concepto)}</span><span class="op-dots"></span><b>${esc(eur2(a.importe))}</b></div>`).join('')}</div>
-    ${extras.length ? `<div class="op-extras" style="margin-top:12px;"><div class="op-extras-t">Extras: pon cuántos ha habido</div>
-      ${extras.map(({ a, i }) => `<div class="op-line" style="align-items:center;"><span>${esc(a.concepto)} <small style="color:var(--muted);">· ${esc(operativaExtraTxt(a))}</small></span><span class="op-dots"></span>
-        <input inputmode="numeric" maxlength="5" placeholder="0" value="${Number(a.cantidad) > 0 ? a.cantidad : ''}" style="width:78px;text-align:right;" oninput="sgaOperativaExtra(${i}, this.value)" /><b id="op-xs-${i}" style="min-width:96px;text-align:right;">${eur2((Number(a.cantidad) || 0) * (Number(a.importe) || 0))}</b></div>`).join('')}</div>` : ''}
-    <div class="op-extras" style="margin-top:12px;"><div class="op-extras-t">Extra puntual · escríbelo a mano</div>
-      ${manuales.map(({ a, i }) => `<div class="op-line" style="align-items:center;gap:8px;flex-wrap:wrap;">
-        <input maxlength="80" placeholder="Qué es (ej. Cancelación)" value="${esc(a.concepto || '')}" style="flex:1;min-width:170px;" oninput="sgaOperativaManual(${i}, 'concepto', this.value)" />
-        <input inputmode="numeric" maxlength="4" placeholder="1" title="Cantidad" value="${Number(a.cantidad) > 0 ? a.cantidad : ''}" style="width:60px;text-align:right;" oninput="sgaOperativaManual(${i}, 'cantidad', this.value)" />
-        <span style="color:var(--muted);">×</span>
-        <input inputmode="decimal" maxlength="9" placeholder="0,00" title="Precio de cada uno, sin IVA" value="${a.importe ? esc(String(a.importe).replace('.', ',')) : ''}" style="width:90px;text-align:right;" oninput="sgaOperativaManual(${i}, 'importe', this.value)" /><span style="color:var(--muted);">€</span>
-        <b id="op-xs-${i}" style="min-width:86px;text-align:right;">${eur2((Number(a.cantidad) || 0) * (Number(a.importe) || 0))}</b>
-        <button type="button" class="op-x" onclick="sgaOperativaManualQuitar(${i})" title="Quitar este extra">✕</button></div>`).join('')}
-      <div><button type="button" class="op-chip otro" onclick="sgaOperativaManualAdd()">+ Añadir extra manual</button></div></div>
-    <div class="op-total-row" style="margin-top:14px;"><span>Importe de esta operativa (sin IVA)</span><b id="op-f-total">${eur2(sgaOperativaTotal(f.apartados))}</b></div>`;
+  if (!f.clienteId) { det.innerHTML = '<div style="color:var(--mutedFaint);font-size:13px;">Elige el cliente para ver las líneas de su tarifa.</div>'; return; }
+  const deSuTarifa = sgaOperativaProductosCliente(f.clienteId, f.fecha);
+  const disponibles = deSuTarifa.filter(x => !f.lineas.some(l => l.productoId === x.p.id));
+  const tieneAntiguas = operativas.some(o => o.clienteId === f.clienteId);
+  const aviso = !deSuTarifa.length && !f.lineas.length
+    ? `<div style="color:var(--muted);font-size:13px;margin-bottom:10px;">Este cliente no tiene productos de operativa con precio a esa fecha.${tieneAntiguas ? (PROFILE.isAdmin ? ' Tiene operativas antiguas de Comercial: <button type="button" class="btn btn-ghost" style="padding:3px 10px;font-size:12px;" onclick="operativasConvertir()">Convertirlas en productos y tarifas</button>' : ' Tiene operativas antiguas de Comercial: pide a un administrador que las convierta (botón «Convertir operativas» de esta pantalla).') : ' Añade los productos de categoría «Operativa» en Configuración → Productos y ponle su precio en la tarifa del cliente, o escribe las líneas a mano.'}</div>` : '';
+  const dif = l => l.precioTarifa != null && Math.abs(Number(l.precio) - Number(l.precioTarifa)) > 0.004;
+  const fila = (l, i) => `<div class="op-line" style="align-items:center;gap:8px;flex-wrap:wrap;">
+      ${l.manual ? `<input maxlength="80" placeholder="Qué es (ej. Cancelación)" value="${esc(l.concepto || '')}" style="flex:1;min-width:170px;" oninput="sgaOperativaLinea(${i}, 'concepto', this.value)" />`
+        : `<span style="flex:1;min-width:170px;">${esc(l.concepto)} <small style="color:var(--muted);">· ${esc(SGA_OP_UNIDAD_TXT[l.unidad] || '')}</small></span>`}
+      <input inputmode="decimal" maxlength="7" placeholder="0" title="Cantidad" value="${Number(l.cantidad) > 0 ? esc(String(l.cantidad).replace('.', ',')) : ''}" style="width:70px;text-align:right;" oninput="sgaOperativaLinea(${i}, 'cantidad', this.value)" />
+      <span style="color:var(--muted);">×</span>
+      <input inputmode="decimal" maxlength="9" placeholder="0,00" title="${l.precioTarifa != null ? 'Precio de su tarifa: ' + esc(eur2(l.precioTarifa)) : 'Precio de cada uno, sin IVA'}" value="${esc(String(l.precio).replace('.', ','))}" style="width:90px;text-align:right;${dif(l) ? 'border-color:#C98A2E;background:#FFF8EA;' : ''}" oninput="sgaOperativaLinea(${i}, 'precio', this.value)" /><span style="color:var(--muted);">€</span>
+      <b id="op-xs-${i}" style="min-width:86px;text-align:right;">${eur2(sgaOperativaLineaImporte(l))}</b>
+      <button type="button" class="op-x" onclick="sgaOperativaLineaQuitar(${i})" title="Quitar esta línea">✕</button></div>`;
+  det.innerHTML = `${aviso}
+    ${f.lineas.length ? `<div class="op-lines">${f.lineas.map(fila).join('')}</div>` : ''}
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px;">
+      ${disponibles.length ? `<select id="op-add-sel" onchange="sgaOperativaLineaAdd(this.value)" style="width:auto;min-width:230px;"><option value="">+ Añadir línea de su tarifa…</option>${disponibles.map(x => `<option value="${esc(x.p.id)}">${esc(almacenajeProductoTexto(x.p))} · ${esc(eurPrecio(x.t.precio))} ${esc(SGA_OP_UNIDAD_TXT[x.p.unidad] || '')}</option>`).join('')}</select>` : ''}
+      <button type="button" class="op-chip otro" onclick="sgaOperativaManualAdd()">+ Línea manual</button>
+    </div>
+    <div class="op-total-row" style="margin-top:14px;"><span>Importe de esta operativa (sin IVA)</span><b id="op-f-total">${eur2(sgaOperativaTotalLineas(f.lineas))}</b></div>`;
 }
-function sgaOperativaExtra(i, v){
-  const f = window.__opForm;
-  if (!f || !f.apartados[i]) return;
-  const n = parseInt(String(v).replace(/\D/g, ''), 10);
-  f.apartados[i].cantidad = isFinite(n) && n > 0 ? n : 0;
+// Cantidad o precio de una línea (sin volver a pintar, para no perder el cursor)
+function sgaOperativaLinea(i, campo, v){
+  const f = window.__opForm, l = f && f.lineas[i];
+  if (!l) return;
+  if (campo === 'concepto') l.concepto = String(v).slice(0, 80);
+  else {
+    const n = parseFloat(String(v).replace(',', '.').replace(/[^\d.]/g, ''));
+    const x = isFinite(n) && n >= 0 ? n : 0;
+    if (campo === 'cantidad') l.cantidad = l.unidad === 'hora' ? Math.round(x * 100) / 100 : Math.floor(x);
+    else l.precio = Math.round(x * 100) / 100;
+  }
   const sub = document.getElementById('op-xs-' + i);
-  if (sub) sub.textContent = eur2(f.apartados[i].cantidad * (Number(f.apartados[i].importe) || 0));
-  window.__stockDirty = true;
+  if (sub) sub.textContent = eur2(sgaOperativaLineaImporte(l));
   const t = document.getElementById('op-f-total');
-  if (t) t.textContent = eur2(sgaOperativaTotal(f.apartados));
+  if (t) t.textContent = eur2(sgaOperativaTotalLineas(f.lineas));
+  window.__stockDirty = true;
 }
-// Extra puntual escrito a mano (ej. una cancelación): descripción, cantidad y precio de cada uno
+function sgaOperativaLineaQuitar(i){
+  const f = window.__opForm;
+  if (!f || !f.lineas[i]) return;
+  f.lineas.splice(i, 1);
+  window.__stockDirty = true;
+  sgaOperativaPintar();
+}
+function sgaOperativaLineaAdd(productoId){
+  const f = window.__opForm;
+  if (!f || !productoId) return;
+  const x = sgaOperativaProductosCliente(f.clienteId, f.fecha).find(y => y.p.id === productoId);
+  if (!x) return;
+  f.lineas.push(sgaOperativaLineaDe(x.p, x.t));
+  window.__stockDirty = true;
+  sgaOperativaPintar();
+}
+// Línea a mano (una cancelación, algo puntual que no está en su tarifa)
 function sgaOperativaManualAdd(){
   const f = window.__opForm;
   if (!f) return;
-  f.apartados.push({ concepto: '', importe: 0, extra: true, manual: true, unidad: 'unidad', cantidad: 1 });
+  f.lineas.push({ productoId: '', tarifaId: '', concepto: '', unidad: 'unidad', precioTarifa: null, precio: 0, cantidad: 1, manual: true });
   window.__stockDirty = true;
   sgaOperativaPintar();
-  const cajas = document.querySelectorAll('#op-f-detalle .op-extras');
-  const filas = cajas.length ? cajas[cajas.length - 1].querySelectorAll('.op-line') : [];
+  const filas = document.querySelectorAll('#op-f-detalle .op-line');
   const ult = filas.length ? filas[filas.length - 1].querySelector('input') : null;
   if (ult) ult.focus();
-}
-function sgaOperativaManual(i, campo, v){
-  const f = window.__opForm;
-  if (!f || !f.apartados[i]) return;
-  const a = f.apartados[i];
-  if (campo === 'concepto') a.concepto = String(v).slice(0, 80);
-  else if (campo === 'cantidad') { const n = parseInt(String(v).replace(/\D/g, ''), 10); a.cantidad = isFinite(n) && n > 0 ? n : 0; }
-  else { const n = parseFloat(String(v).replace(',', '.').replace(/[^\d.]/g, '')); a.importe = isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0; }
-  const sub = document.getElementById('op-xs-' + i);
-  if (sub) sub.textContent = eur2((Number(a.cantidad) || 0) * (Number(a.importe) || 0));
-  window.__stockDirty = true;
-  const t = document.getElementById('op-f-total');
-  if (t) t.textContent = eur2(sgaOperativaTotal(f.apartados));
-}
-function sgaOperativaManualQuitar(i){
-  const f = window.__opForm;
-  if (!f || !f.apartados[i]) return;
-  f.apartados.splice(i, 1);
-  window.__stockDirty = true;
-  sgaOperativaPintar();
 }
 async function sgaOperativaGuardar(){
   const f = window.__opForm;
@@ -9275,20 +9305,22 @@ async function sgaOperativaGuardar(){
   if (!f || !errEl) return;
   errEl.textContent = '';
   const errores = [];
-  // Los extras manuales vacíos se descartan; los a medias avisan
-  f.apartados = f.apartados.filter(a => !(a.manual && !(a.concepto || '').trim() && !(Number(a.importe) > 0)));
-  f.apartados.filter(a => a.manual).forEach(a => {
-    a.concepto = (a.concepto || '').trim();
-    if (!a.concepto) errores.push('Un extra manual no tiene descripción.');
-    else if (!(Number(a.importe) > 0)) errores.push(`Pon el precio del extra «${a.concepto}».`);
-    else if (!(Number(a.cantidad) > 0)) a.cantidad = 1;
+  // Las líneas manuales vacías se descartan; las que van a medias avisan
+  f.lineas = f.lineas.filter(l => !(l.manual && !(l.concepto || '').trim() && !(Number(l.precio) > 0)));
+  f.lineas.filter(l => l.manual).forEach(l => {
+    l.concepto = (l.concepto || '').trim();
+    if (!l.concepto) errores.push('Una línea manual no tiene descripción.');
+    else if (!(Number(l.precio) > 0)) errores.push(`Pon el precio de «${l.concepto}».`);
+    else if (!(Number(l.cantidad) > 0)) l.cantidad = 1;
   });
+  const validas = f.lineas.filter(l => Number(l.cantidad) > 0);
   if (!f.clienteId) errores.push('Elige el cliente.');
   if (!f.fecha) errores.push('Indica la fecha.');
-  if (!f.nombre || !f.apartados.length) errores.push('Elige la operativa.');
+  if (!validas.length) errores.push('Pon la cantidad de al menos una línea.');
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
-  const importe = sgaOperativaTotal(f.apartados);
-  const fila = { cliente_id: f.clienteId, operativa_id: f.operativaId || null, nombre: f.nombre, fecha: f.fecha, apartados: f.apartados, importe, observaciones: (f.obs || '').trim() || null };
+  const apartados = validas.map(sgaOperativaApartadoDe);
+  const importe = sgaOperativaTotal(apartados);
+  const fila = { cliente_id: f.clienteId, operativa_id: f.operativaId || null, nombre: (f.nombre || '').trim() || sgaOperativaNombreAuto(validas), fecha: f.fecha, apartados, importe, observaciones: (f.obs || '').trim() || null };
   if (window.__sgaOpRefCol !== false && (window.__sgaOpRefCol === true || (f.referencia || '').trim())) fila.referencia = (f.referencia || '').trim().toUpperCase() || null;
   if (window.__sgaOpFacCol !== false && (window.__sgaOpFacCol === true || f.facturada || f.factura)) {
     fila.facturada = !!f.facturada; fila.factura = (f.factura || '').trim() || null;
@@ -9309,6 +9341,61 @@ async function sgaOperativaGuardar(){
   window.__opForm = null;
   window.__stockSeg = 'operativas';
   stockVolver();
+}
+/* ---- Convertir las operativas de Comercial en productos y tarifas ----
+   Cada apartado de las plantillas de Comercial pasa a ser un producto de la categoría «Operativa» (uno por concepto y forma de cobro, compartido
+   por todos los clientes) y, por cada cliente, una línea de tarifa con su precio y la fecha de la plantilla. No se borra ni se cambia nada de lo que
+   ya hay (las operativas ya anotadas se quedan como están) y se puede repetir sin que nada se duplique. */
+async function operativasConvertir(){
+  if (!PROFILE.isAdmin) { appToast('Solo un administrador puede convertir las operativas.', 'info'); return; }
+  if (!operativas.length) { appToast('No hay operativas de Comercial que convertir.', 'info'); return; }
+  const norm = s => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const items = [];
+  operativas.forEach(o => (o.apartados || []).forEach(a => {
+    const concepto = String(a.concepto || '').trim().replace(/\s+/g, ' ');
+    if (!concepto) return;
+    items.push({ clienteId: o.clienteId, op: o.nombre, fecha: o.fecha, concepto, importe: Number(a.importe) || 0, unidad: a.extra ? ({ palet: 'palet', unidad: 'unidad', hora: 'hora' }[a.unidad] || 'palet') : 'operativa' });
+  }));
+  if (!items.length) { appToast('Las operativas de Comercial no tienen apartados que convertir.', 'info'); return; }
+  const prodDe = {}, nuevos = [];   // «concepto|unidad» → id del producto
+  items.forEach(it => {
+    const k = norm(it.concepto) + '|' + it.unidad;
+    if (k in prodDe) return;
+    const igual = almacenajeProductos.find(p => p.categoria === 'operativa' && norm(p.nombre) === norm(it.concepto) && p.unidad === it.unidad);
+    if (igual) { prodDe[k] = igual.id; return; }
+    const mismoNombre = almacenajeProductos.some(p => norm(p.nombre) === norm(it.concepto)) || nuevos.some(n => norm(n.nombre) === norm(it.concepto));
+    nuevos.push({ k, nombre: mismoNombre ? `${it.concepto} (${SGA_OP_UNIDAD_TXT[it.unidad]})` : it.concepto, unidad: it.unidad });
+    prodDe[k] = '';
+  });
+  const nClientes = new Set(items.map(i => i.clienteId)).size;
+  if (!(await appConfirm({ title: 'Convertir las operativas de Comercial', message: `Se van a crear ${nuevos.length} producto${nuevos.length === 1 ? '' : 's'} de la categoría «Operativa» y las líneas de tarifa de ${nClientes} cliente${nClientes === 1 ? '' : 's'} con los precios de sus operativas actuales. No se borra ni se cambia nada de lo que ya hay: las operativas ya anotadas se quedan como están, y se puede repetir sin duplicar. ¿Convertir?`, confirmLabel: 'Convertir', cancelLabel: 'Cancelar', tone: 'info', icon: 'info' }))) return;
+  // 1) productos
+  for (const n of nuevos) {
+    const id = almacenajeProductoSlug(n.nombre);
+    const row = { id, nombre: n.nombre, categoria: 'operativa', unidad: n.unidad, usa_subtipo: false, subtipo_label: null, subtipo_valor: null, disparador: 'operativa', cobro_entrada: null, cobro_salida: null };
+    const { data, error } = await supabaseClient.from('almacenaje_productos').insert(row).select().single();
+    if (error || !data) { appToast('No se pudo crear el producto «' + n.nombre + '»: ' + ((error && error.message) || 'error desconocido') + '. No se ha convertido nada más.', 'error'); return; }
+    almacenajeProductos.push({ id: data.id, createdAt: data.created_at, nombre: n.nombre, categoria: 'operativa', unidad: n.unidad, usaSubtipo: false, subtipoLabel: '', subtipoValor: '', archived: false, disparador: 'operativa', familia: '', cobroEntrada: '', cobroSalida: '' });
+    prodDe[n.k] = data.id;
+  }
+  // 2) líneas de tarifa: una por cliente, producto y fecha (si dos plantillas distintas dan precios distintos para lo mismo, se deja la primera y se avisa)
+  const lineas = new Map(), conflictos = [];
+  items.forEach(it => {
+    const prod = prodDe[norm(it.concepto) + '|' + it.unidad];
+    const k = `${it.clienteId}|${prod}|${it.fecha}`;
+    const ya = lineas.get(k);
+    if (ya) { if (Math.abs(ya.precio - it.importe) > 0.004) conflictos.push(`${(contactos.find(c => c.id === it.clienteId) || {}).nombre || 'Cliente'}: «${it.concepto}» a ${eur2(ya.precio)} (${ya._op}) y a ${eur2(it.importe)} (${it.op}) el ${fmtDateDMY(it.fecha)}`); return; }
+    lineas.set(k, { cliente_id: it.clienteId, fecha: it.fecha, tipo: prod, subtipo: null, precio: it.importe, observaciones: `Convertida de la operativa «${it.op}»`, tipo_actividad: 'operativa', _op: it.op });
+  });
+  const nuevasT = [...lineas.values()].filter(l => !almacenajeTarifas.some(t => t.clienteId === l.cliente_id && t.tipo === l.tipo && t.fecha === l.fecha))
+    .map(({ _op, ...fila }) => ({ ...fila, created_by: currentUserEmail() }));
+  for (let i = 0; i < nuevasT.length; i += 100) {
+    const { error } = await supabaseClient.from('almacenaje_tarifas').insert(nuevasT.slice(i, i + 100));
+    if (error) { appToast('No se pudieron crear las tarifas: ' + (error.message || 'error desconocido') + '. Los productos ya están creados; vuelve a pulsar «Convertir» para terminar.', 'error'); await loadAlmacenajeProductos(); await loadAlmacenajeTarifas(); return; }
+  }
+  await loadAlmacenajeProductos(); await loadAlmacenajeTarifas();
+  await appConfirm({ title: 'Operativas convertidas', message: `Productos nuevos: ${nuevos.length}. Líneas de tarifa creadas: ${nuevasT.length}.${conflictos.length ? `\n\nHay ${conflictos.length} caso${conflictos.length === 1 ? '' : 's'} en que dos operativas del mismo cliente daban precios distintos al mismo concepto y el mismo día (se ha dejado el primero; corrígelo en su tarifa si hace falta):\n· ${conflictos.slice(0, 8).join('\n· ')}${conflictos.length > 8 ? `\n· y ${conflictos.length - 8} más` : ''}` : ''}`, confirmLabel: 'Entendido', cancelLabel: 'Cerrar', tone: 'info', icon: 'info' });
+  renderTab();
 }
 async function sgaOperativaAnular(id){
   const o = sgaOperativasHechas.find(x => x.id === id);
@@ -10140,7 +10227,7 @@ function tplStock(){
         <input placeholder="${seg === 'catalogo' ? 'Buscar cliente o artículo…' : 'Buscar cliente por nombre o NIF…'}" value="${esc(window.__stockSearch || '')}" oninput="window.__stockSearch=this.value; refreshStockBody();" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      ${seg === 'entradas' || seg === 'salidas' || seg === 'actividades' || seg === 'operativas' ? stockEmpresaSelectHtml(seg) + stockEstadoSelectHtml(seg) : ''}${seg === 'operativas' && sgaPuedeEditarStock() ? '<button class="btn btn-primary" style="margin-left:auto;" onclick="sgaOperativaAbrir()">+ Nueva operativa</button>' : ''}`}
+      ${seg === 'entradas' || seg === 'salidas' || seg === 'actividades' || seg === 'operativas' ? stockEmpresaSelectHtml(seg) + stockEstadoSelectHtml(seg) : ''}${seg === 'operativas' && sgaPuedeEditarStock() ? `<span style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;">${PROFILE.isAdmin && operativas.length ? '<button class="btn btn-ghost" style="background:var(--panel);" onclick="operativasConvertir()" title="Pasa los apartados de las operativas de Comercial a productos de la categoría Operativa y a la tarifa de cada cliente. No borra nada y se puede repetir.">Convertir operativas de Comercial</button>' : ''}<button class="btn btn-primary" onclick="sgaOperativaAbrir()">+ Nueva operativa</button></span>` : ''}`}
       ${seg === 'catalogo' ? `<div style="margin-left:auto;order:5;display:flex;gap:8px;"><button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catExportarAbrir()" title="Descargar el inventario en Excel o PDF, eligiendo las columnas">${homeIcon(HOME_ICON_PATHS.download, 15, 'currentColor', 2)}<span>Exportar</span></button>${sgaPuedeEditarStock() ? (catSinNada(catClienteSel()) ? `<button type="button" class="btn btn-primary" onclick="catEditarTodo()" title="Todavía no hay nada: empieza creando el primer artículo">＋ Crear primer artículo</button>` : `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="catEditarTodo()" title="Abrir una pantalla completa para editar todo el catálogo del cliente">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>`) : ''}</div>` : ''}
       ${seg === 'liquidaciones' || seg === 'revision' || seg === 'operativas' || (seg === 'catalogo' && catAlmacenesConMercancia().length < 2) ? '' : `<select id="stock-alm" onchange="window.__stockAlm=this.value; renderTab();" style="${seg === 'catalogo' ? 'width:auto;flex:0 0 190px;order:2;' : ''}min-width:170px;"><option value="">Todos los almacenes</option>${(seg === 'catalogo' ? catAlmacenesConMercancia() : allWarehouses.filter(w => !w.archived)).map(w => `<option value="${w.id}" ${w.id === (window.__stockAlm || '') ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>`}
     </div>
@@ -29488,21 +29575,21 @@ function almacenajeProducto(tipo){ return almacenajeProductos.find(p=>p.id===tip
 // guarda tal cual en cada línea de tarifa (no se recalcula sola) para que si
 // el día de mañana cambia la categoría de un producto, las estadísticas ya
 // guardadas no cambien solas con el tiempo.
-const ALMACENAJE_CATEGORIAS = { almacenaje: 'Almacenaje', movimiento: 'Movimiento', extra: 'Extra' };
-const ALMACENAJE_UNIDADES = { dia: '/día', mes: '/m² al mes', cuota: '/mes', movimiento: '/movimiento', bulto: '/bulto', hora: '/hora', albaran: '/albarán' };
+const ALMACENAJE_CATEGORIAS = { almacenaje: 'Almacenaje', movimiento: 'Movimiento', extra: 'Extra', operativa: 'Operativa' };
+const ALMACENAJE_UNIDADES = { dia: '/día', mes: '/m² al mes', cuota: '/mes', movimiento: '/movimiento', bulto: '/bulto', hora: '/hora', albaran: '/albarán', operativa: '/operativa', palet: '/palet', unidad: '/unidad' };
 function almacenajeTipoLabel(tipo){ const p = almacenajeProducto(tipo); return p ? p.nombre : tipo; }
 function almacenajeCategoriaDe(tipo){ const p = almacenajeProducto(tipo); return p ? p.categoria : 'extra'; }
 function almacenajeCategoriaLabel(cat){ return ALMACENAJE_CATEGORIAS[cat] || cat; }
 // Orden de la tabla al abrirla (antes de que se pulse ninguna cabecera para
 // reordenar a mano): primero por categoría (Almacenaje, Movimiento, Extra) y
 // dentro de cada una, alfabético por el nombre del tipo.
-const ALMACENAJE_CATEGORIA_ORDEN = { almacenaje: 0, movimiento: 1, extra: 2 };
+const ALMACENAJE_CATEGORIA_ORDEN = { almacenaje: 0, movimiento: 1, extra: 2, operativa: 3 };
 function almacenajeOrdenDefecto(a, b){
   const oa = ALMACENAJE_CATEGORIA_ORDEN[a.categoria] ?? 9;
   const ob = ALMACENAJE_CATEGORIA_ORDEN[b.categoria] ?? 9;
   return oa !== ob ? oa - ob : almacenajeEtiqueta(a).localeCompare(almacenajeEtiqueta(b), 'es');
 }
-const ALMACENAJE_CATEGORIA_COLORS = { almacenaje: '#1B3A6B', movimiento: '#C98A2E', extra: '#7C5CBF' };
+const ALMACENAJE_CATEGORIA_COLORS = { almacenaje: '#1B3A6B', movimiento: '#C98A2E', extra: '#7C5CBF', operativa: '#2F7F86' };
 function almacenajeCategoriaBadgeHtml(cat){
   const color = ALMACENAJE_CATEGORIA_COLORS[cat] || 'var(--muted)';
   return `<span style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:${color};background:${color}1A;border-radius:999px;padding:2px 9px;white-space:nowrap;">${esc(almacenajeCategoriaLabel(cat))}</span>`;
@@ -29541,7 +29628,7 @@ function almacenajeSubtipoFijo(tipo){ const p = almacenajeProducto(tipo); return
 function almacenajeUnidadTxt(tipo, base){ if (base === 'mes_max') return '/mes (máx.)'; const p = almacenajeProducto(tipo); return ALMACENAJE_UNIDADES[p ? p.unidad : 'dia'] || '/día'; }
 
 /* ---- Almacén → Configuración → Productos (catálogo, CRUD) ---- */
-const ALMACENAJE_UNIDAD_LABELS = { dia: 'Por día', mes: 'Por m² (cada mes)', cuota: 'Por mes (cuota fija, ej. un seguro)', movimiento: 'Por movimiento (cada palet o unidad)', bulto: 'Por bulto (caja)', albaran: 'Por albarán (precio fijo)', hora: 'Por hora' };
+const ALMACENAJE_UNIDAD_LABELS = { dia: 'Por día', mes: 'Por m² (cada mes)', cuota: 'Por mes (cuota fija, ej. un seguro)', movimiento: 'Por movimiento (cada palet o unidad)', bulto: 'Por bulto (caja)', albaran: 'Por albarán (precio fijo)', hora: 'Por hora', operativa: 'Precio fijo por operativa', palet: 'Por palet', unidad: 'Por unidad' };
 // Identificador del producto a partir del nombre ("Retractilado" → "retractilado"),
 // con el mismo formato (minúsculas y guion bajo) que ya llevan los 7 sembrados.
 function almacenajeProductoSlug(nombre){
@@ -29591,6 +29678,7 @@ const ALMACENAJE_UNIDADES_POR_ACTIVIDAD = {
   almacenaje: ['dia'],   // «por mes» solo existía para el M²: ya no se ofrece (el producto que lo tiene lo conserva)
   movimiento: ['movimiento', 'bulto', 'albaran'],
   extra: ['hora', 'cuota', 'movimiento', 'bulto', 'albaran'],   // «cuota»: precio fijo cada mes (un seguro, por ejemplo), distinto de «por m²» del almacenaje
+  operativa: ['operativa', 'palet', 'unidad', 'hora'],           // lo que se cobra en una operativa: precio fijo de la operativa, o por palet, por unidad o por hora
 };
 // «conservar»: la unidad que el producto ya tiene guardada; si no es de las de su actividad (p. ej. stock contado por bulto), se mantiene para no romper su cobro.
 function almacenajeUnidadOpcionesHtml(cat, actual, conservar){
@@ -29614,6 +29702,7 @@ function almacenajeEnlaceOpcionesHtml(disparador, actual){
 function almacenajeDisparadorDe(cat, unidad, direccion){
   if (cat === 'almacenaje') return unidad === 'mes' ? 'stock_mes' : 'stock_dia';
   if (cat === 'extra') return 'manual';
+  if (cat === 'operativa') return 'operativa';   // no se cobra solo: sale en las operativas de los clientes que lo tienen en su tarifa
   const albaran = unidad === 'albaran', sale = direccion === 'expedicion';
   if (direccion === 'ambas') return albaran ? 'descarga_carga' : 'entrada_salida';   // un solo producto y un solo precio, en la recepción y en la expedición
   return sale ? (albaran ? 'carga' : 'salida') : (albaran ? 'descarga' : 'entrada');
@@ -29638,6 +29727,7 @@ function almacenajeCobroActualizar(){
   const dir = (document.getElementById('ap-direccion') || {}).value;
   h.textContent = cat === 'almacenaje' ? (uni === 'mes' ? 'Se cobra solo cada mes, con los metros cuadrados que ocupa el cliente.' : 'Se cobra solo cada día, con el stock que haya en el almacén.')
     : cat === 'extra' ? (uni === 'cuota' ? 'Cuota fija de cada mes (por ejemplo, un seguro de mercancía). Sale sola en el resumen mensual de cada cliente que la tenga en su tarifa, una vez al mes.' : 'Lo apunta el operario a mano en el albarán, con la cantidad que toque.')
+    : cat === 'operativa' ? 'Sale como una línea al anotar una operativa a cualquier cliente que lo tenga en su tarifa, con el precio de esa tarifa (que se puede cambiar en esa operativa).'
     : `Se cobra solo en cada ${dir === 'expedicion' ? 'expedición' : dir === 'ambas' ? 'recepción y en cada expedición, con el mismo precio' : 'recepción'}${uni === 'albaran' ? ', una vez por albarán' : uni === 'bulto' ? ', por cada bulto' : ', por cada palet o unidad'}.`;
 }
 async function submitAlmacenajeProducto(editId){
@@ -29729,15 +29819,17 @@ function apToggleGrupo(cat){
   window.__apCerradas[cat] = !window.__apCerradas[cat];
   const el = document.getElementById('ap-lista'); if (el) el.innerHTML = apListaHtml(); else renderTab();
 }
-const AP_EJEMPLOS = { almacenaje: 'Ej. Palet Europeo, Bobina D.20', movimiento: "Ej. Entrada Palet, Descarga Contenedor 20' Paletizado", extra: 'Ej. Retractilado de palet, Hora operario' };
+const AP_EJEMPLOS = { almacenaje: 'Ej. Palet Europeo, Bobina D.20', movimiento: "Ej. Entrada Palet, Descarga Contenedor 20' Paletizado", extra: 'Ej. Retractilado de palet, Hora operario', operativa: 'Ej. Acarreo puerto, Manipulación mercancía, Transporte final' };
 const AP_ACTIVIDADES = {
   almacenaje: { icono: 'home', titulo: 'Almacenaje', texto: 'Lo que se guarda: se cobra cada día mientras haya stock' },
   movimiento: { icono: 'truck', titulo: 'Movimiento', texto: 'Las entradas y salidas de mercancía' },
   extra: { icono: 'settings', titulo: 'Extra', texto: 'Servicios sueltos que apunta el operario' },
+  operativa: { icono: 'list', titulo: 'Operativa', texto: 'Lo que se cobra en una operativa: acarreo, manipulación, transporte…' },
 };
 // Cómo se cobra un producto, con palabras (lo que ve quien no conoce el SGA)
 function almacenajeCobroFrase(p){
-  const cuenta = { movimiento: 'por palet o unidad', bulto: 'por bulto', albaran: 'una vez por albarán', hora: 'por hora', dia: 'por día', mes: 'por m² ocupado', cuota: 'cuota fija cada mes' }[p.unidad] || '';
+  const cuenta = { movimiento: 'por palet o unidad', bulto: 'por bulto', albaran: 'una vez por albarán', hora: 'por hora', dia: 'por día', mes: 'por m² ocupado', cuota: 'cuota fija cada mes', operativa: 'precio fijo por operativa', palet: 'por palet', unidad: 'por unidad' }[p.unidad] || '';
+  if (p.categoria === 'operativa') return `Línea de las operativas · ${cuenta}`;
   if (p.categoria === 'almacenaje') {
     if (p.unidad === 'mes') return 'Cada mes, por m² ocupado';
     const e = almacenajeProducto(p.cobroEntrada), s = almacenajeProducto(p.cobroSalida);
@@ -29765,9 +29857,10 @@ function apLayoutActual(){ return window.__apLayoutSesion || apLayout(); }
 function setApLayout(v){ try { localStorage.setItem('qp_ap_layout', v); } catch (e) { /* solo dura esta sesión */ } window.__apLayoutSesion = v; renderTab(); }
 // Chips cortos de una tarjeta: cuándo y cómo se cobra
 function apChipsHtml(p){
-  const cuenta = { movimiento: 'Por palet o unidad', bulto: 'Por bulto', albaran: 'Por albarán', hora: 'Por hora', cuota: 'Cuota cada mes' }[p.unidad];
+  const cuenta = { movimiento: 'Por palet o unidad', bulto: 'Por bulto', albaran: 'Por albarán', hora: 'Por hora', cuota: 'Cuota cada mes', operativa: 'Precio fijo', palet: 'Por palet', unidad: 'Por unidad' }[p.unidad];
   const l = p.categoria === 'almacenaje' ? [p.unidad === 'mes' ? 'Cada mes' : 'Cada día', p.unidad === 'mes' ? 'Por m²' : (p.unidad === 'bulto' ? 'Por bulto' : '')]
     : p.categoria === 'extra' ? [p.unidad === 'cuota' ? 'Automático' : 'A mano', cuenta]
+    : p.categoria === 'operativa' ? ['Operativa', cuenta]
     : [almacenajeDireccionTxt(p), cuenta];
   return l.filter(Boolean).map(t => `<span>${esc(t)}</span>`).join('');
 }
@@ -29785,7 +29878,7 @@ function apTarjetaHtml(p){
       ${p.archived ? `<button class="btn btn-ghost apc-act" onclick="event.stopPropagation(); setAlmacenajeProductoArchived('${p.id}', false)">Activar</button>` : ''}
     </div>`;
 }
-function apFiltro(){ return ['almacenaje', 'movimiento', 'extra', 'archivados'].includes(window.__apFiltro) ? window.__apFiltro : 'todos'; }
+function apFiltro(){ return ['almacenaje', 'movimiento', 'extra', 'operativa', 'archivados'].includes(window.__apFiltro) ? window.__apFiltro : 'todos'; }
 function apFiltrar(f){ window.__apFiltro = f; renderTab(); }
 function apBuscar(v){ window.__apQ = v; const el = document.getElementById('ap-lista'); if (el) el.innerHTML = apListaHtml(); }
 function apListaHtml(){
@@ -29794,7 +29887,7 @@ function apListaHtml(){
   if (q) list = list.filter(p => (p.nombre + ' ' + almacenajeCobroFrase(p)).toLowerCase().includes(q));
   list = f === 'archivados' ? list.filter(p => p.archived) : f === 'todos' ? list : list.filter(p => p.categoria === f && !p.archived);
   if (!list.length) return `<div class="card" style="color:var(--mutedFaint);text-align:center;padding:32px;">${q || f !== 'todos' ? 'Ningún producto coincide con la búsqueda o el filtro.' : 'Todavía no hay ningún producto creado.'}</div>`;
-  const cats = ['almacenaje', 'movimiento', 'extra'].filter(c => list.some(p => p.categoria === c)).concat([...new Set(list.map(p => p.categoria))].filter(c => !['almacenaje', 'movimiento', 'extra'].includes(c)));
+  const cats = ['almacenaje', 'movimiento', 'extra', 'operativa'].filter(c => list.some(p => p.categoria === c)).concat([...new Set(list.map(p => p.categoria))].filter(c => !['almacenaje', 'movimiento', 'extra', 'operativa'].includes(c)));
   return cats.map(cat => {
     const ps = list.filter(p => p.categoria === cat);
     const cerrada = !!(window.__apCerradas && window.__apCerradas[cat]);
@@ -29829,7 +29922,7 @@ function tplAlmacenajeProductosPage(){
         <div class="deca-banner-sub">Lo que se puede cobrar a un cliente en Almacén. El precio de cada uno se pone en la tarifa del cliente.</div>
       </div>
       <div class="deca-banner-actions">
-        <div class="deca-stat"><b>${n('almacenaje')}</b><span>Almacenaje</span></div><div class="deca-stat"><b>${n('movimiento')}</b><span>Movimiento</span></div><div class="deca-stat"><b>${n('extra')}</b><span>Extra</span></div>
+        <div class="deca-stat"><b>${n('almacenaje')}</b><span>Almacenaje</span></div><div class="deca-stat"><b>${n('movimiento')}</b><span>Movimiento</span></div><div class="deca-stat"><b>${n('extra')}</b><span>Extra</span></div><div class="deca-stat"><b>${n('operativa')}</b><span>Operativa</span></div>
         <button class="btn btn-primary deca-new-btn" onclick="openAlmacenajeProductoForm()">${homeIcon(HOME_ICON_PATHS.tag, 17, 'currentColor', 1.8)}<span>Nuevo producto</span></button>
       </div>
     </div>
@@ -29838,7 +29931,7 @@ function tplAlmacenajeProductosPage(){
         <input id="ap-q" placeholder="Buscar un producto…" value="${esc(window.__apQ || '')}" oninput="apBuscar(this.value)" autocomplete="off" />
         <span class="ico">${homeIcon(HOME_ICON_PATHS.search, 17, 'currentColor', 1.8)}</span>
       </div>
-      <div class="doc-seg">${chip('todos', 'Todos', null)}${chip('almacenaje', 'Almacenaje', n('almacenaje'))}${chip('movimiento', 'Movimiento', n('movimiento'))}${chip('extra', 'Extra', n('extra'))}${todos.some(p => p.archived) ? chip('archivados', 'Archivados', n('archivados')) : ''}</div>
+      <div class="doc-seg">${chip('todos', 'Todos', null)}${chip('almacenaje', 'Almacenaje', n('almacenaje'))}${chip('movimiento', 'Movimiento', n('movimiento'))}${chip('extra', 'Extra', n('extra'))}${chip('operativa', 'Operativa', n('operativa'))}${todos.some(p => p.archived) ? chip('archivados', 'Archivados', n('archivados')) : ''}</div>
       ${layoutToggleHtml(apLayoutActual(), 'setApLayout')}
     </div>
     <div id="ap-lista">${apListaHtml()}</div>

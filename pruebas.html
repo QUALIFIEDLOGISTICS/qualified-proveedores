@@ -132,6 +132,45 @@
     igual(pegar('Código de artículo\tBultos\nB1\t2', [], '').map(x => x[1]), ['nuevo']);
   });
 
+  // ---------- Operativas (líneas desde la tarifa del cliente) ----------
+  const OPC = () => trozo('const SGA_OP_UNIDAD_TXT', 'async function operativasConvertir');
+  const OPC_TODO = () => trozo('const SGA_OP_UNIDAD_TXT', 'async function sgaOperativaAnular');
+  prueba('Operativas: las líneas salen de la tarifa, se quita una (acarreo de un tercero), se cambia un precio y el total cuadra', () => {
+    document.body.insertAdjacentHTML('beforeend', '<div id="op-f-detalle"></div><span id="op-f-total"></span>');
+    try {
+      const r = new Function(`
+        const sgaR2=n=>Math.round(n*100)/100; const esc=s=>String(s==null?'':s); const eur2=n=>Number(n).toFixed(2)+' €'; const eurPrecio=eur2;
+        const almacenajeProductos=[{id:'acarreo',nombre:'Acarreo puerto',categoria:'operativa',unidad:'operativa',archived:false},{id:'manip',nombre:'Manipulación',categoria:'operativa',unidad:'operativa',archived:false},{id:'palet_extra',nombre:'Palet extra',categoria:'operativa',unidad:'palet',archived:false},{id:'otro',nombre:'Otro',categoria:'movimiento',unidad:'movimiento',archived:false}];
+        const almacenajeProductoTexto=p=>p.nombre; const P={acarreo:{id:'t1',precio:120},manip:{id:'t2',precio:80},palet_extra:{id:'t3',precio:5}}; const sgaTarifaEn=(c,pid)=>c==='c1'?(P[pid]||null):null;
+        const operativas=[]; const PROFILE={isAdmin:true}; const operativasConvertir=()=>{};
+        window.__opForm={ id:null, clienteId:'c1', fecha:'2026-11-12', nombre:'', lineas:[] };
+        ${OPC()}
+        const F=window.__opForm; F.lineas=sgaOperativaLineasIniciales('c1','2026-11-12');
+        const inicial=F.lineas.map(l=>l.concepto);
+        sgaOperativaLineaQuitar(0); sgaOperativaLinea(1,'cantidad','4'); sgaOperativaLinea(0,'precio','70,50');
+        const aps=F.lineas.filter(l=>Number(l.cantidad)>0).map(sgaOperativaApartadoDe);
+        return { inicial, total: sgaOperativaTotalLineas(F.lineas), aps: aps.map(a=>[a.concepto,a.importe,a.cantidad||1]), vuelta: aps.map(sgaOperativaLineaDeApartado).map(l=>[l.concepto,l.cantidad,l.precio]) };`)();
+      igual(r.inicial, ['Acarreo puerto', 'Manipulación', 'Palet extra'], 'Las líneas debían ser todos los productos de operativa de su tarifa (y no los de otras categorías)');
+      igual(r.total, 90.5); igual(r.aps, [['Manipulación', 70.5, 1], ['Palet extra', 5, 4]]); igual(r.vuelta, [['Manipulación', 1, 70.5], ['Palet extra', 4, 5]], 'Lo guardado no vuelve igual a la pantalla');
+    } finally { ['op-f-detalle', 'op-f-total'].forEach(id => { const e = document.getElementById(id); if (e) e.remove(); }); }
+  });
+  prueba('Operativas: convertir las de Comercial crea los productos y tarifas una sola vez y avisa de precios en conflicto', async () => {
+    window.__ins = {}; window.__msg = [];
+    const r = await new Function(`
+      const PROFILE={isAdmin:true}; const sgaR2=n=>Math.round(n*100)/100; const esc=s=>s; const eur2=n=>Number(n).toFixed(2)+' €'; const fmtDateDMY=d=>d; const currentUserEmail=()=>'a@b';
+      let almacenajeProductos=[{id:'acarreo',nombre:'Acarreo',categoria:'operativa',unidad:'operativa',archived:false}]; let almacenajeTarifas=[{clienteId:'c1',tipo:'acarreo',fecha:'2026-01-01'}];
+      const contactos=[{id:'c1',nombre:'UNO'},{id:'c2',nombre:'DOS'}];
+      const operativas=[{clienteId:'c1',nombre:'A',fecha:'2026-01-01',apartados:[{concepto:'Acarreo',importe:120},{concepto:'Manipulación',importe:80},{concepto:'Palet extra',importe:5,extra:true,unidad:'palet'}]},{clienteId:'c1',nombre:'B',fecha:'2026-01-01',apartados:[{concepto:'Manipulación',importe:95}]},{clienteId:'c2',nombre:'A',fecha:'2026-03-01',apartados:[{concepto:'Acarreo',importe:110},{concepto:'Palet extra',importe:4,extra:true,unidad:'palet'}]}];
+      const almacenajeProductoSlug=n=>{ let b=n.toLowerCase().replace(/[^a-z0-9]+/g,'_'), id=b, k=2; while(almacenajeProductos.some(p=>p.id===id)) id=b+'_'+(k++); return id; };
+      const appConfirm=async(o)=>{ window.__msg.push(o.message); return true; }; const appToast=()=>{}; const renderTab=()=>{}; const loadAlmacenajeProductos=async()=>{}; const loadAlmacenajeTarifas=async()=>{};
+      const supabaseClient={from:(t)=>({insert:(rows)=>{ const arr=Array.isArray(rows)?rows:[rows]; window.__ins[t]=(window.__ins[t]||[]).concat(arr); return { select:()=>({ single:()=>Promise.resolve({data:{id:arr[0].id,created_at:'x'},error:null}) }), then:(ok)=>ok({error:null}) }; }})};
+      ${OPC_TODO()}
+      return operativasConvertir().then(()=>({prods: window.__ins.almacenaje_productos.map(p=>p.nombre+'|'+p.unidad), tars: window.__ins.almacenaje_tarifas.map(t=>[t.cliente_id,t.fecha,t.precio].join('|'))}));`)();
+    igual(r.prods, ['Manipulación|operativa', 'Palet extra|palet'], 'Debía crear solo los productos que faltan, uno por concepto');
+    igual(r.tars, ['c1|2026-01-01|80', 'c1|2026-01-01|5', 'c2|2026-03-01|110', 'c2|2026-03-01|4'], 'Debía crear una línea por cliente, producto y fecha, sin repetir la que ya existía');
+    cierto(/precios distintos/.test(window.__msg.join(' ')), 'Debía avisar del conflicto de precios (Manipulación 80 y 95 el mismo día)');
+  });
+
   // ---------- Textos largos en los PDF ----------
   const partir = (texto, ancho) => new Function(`${trozo('function wrapPdfText', '// Genera el PDF nativo del DeCA')}; const font={widthOfTextAtSize:(s)=>s.length*5}; return wrapPdfText(${JSON.stringify(texto)}, font, 10, ${ancho});`)();
   prueba('PDF: un texto normal se reparte en líneas que caben', () => {
