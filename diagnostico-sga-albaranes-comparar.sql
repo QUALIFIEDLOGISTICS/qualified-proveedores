@@ -31,3 +31,12 @@ from public.sga_albaranes a
 join public.sga_albaran_historial h on h.albaran_id = a.id
 where a.numero_texto in ('GLO13112026-1', 'GLO13112026-2', 'GLO13112026-3')
 order by a.numero_texto, h.created_at;
+
+-- BLOQUE 5: los datos de los artículos de esos albaranes (lo que sale impreso en el albarán: medidas, peso, referencia…)
+select a.numero_texto as albaran, ar.nombre as articulo, ar.referencia, ar.medidas, ar.peso, ar.metros_lineales, ar.bultos_por_unidad, ar.atributos, length(coalesce(ar.medidas, '')) as largo_medidas
+from public.sga_albaranes a
+join public.sga_movimientos m on m.albaran_id = a.id
+join public.sga_partidas p on p.id = m.partida_id
+join public.sga_articulos ar on ar.id = p.articulo_id
+where a.numero_texto in ('GLO13112026-1', 'GLO13112026-2', 'GLO13112026-3')
+order by a.numero_texto;
