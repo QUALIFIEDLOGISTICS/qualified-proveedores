@@ -6846,6 +6846,20 @@ async function sgaBultosRestantes(){
     ps.forEach(p => { if (!falta.has(p.id)) p.bultosAct = Math.max(0, Math.round((p.bultos + (suma[p.id] || 0)) * 100) / 100); });
   } catch (e) { ps.forEach(p => { p.bultosAct = null; }); }
 }
+// Tras cambiar un artículo del catálogo, su stock vivo hereda el cambio en la base de datos (disparador sga_articulo_propagar): aquí se vuelven a leer
+// esas partidas para que expediciones, inventario y cobros de esta sesión usen ya los datos nuevos. En ediciones masivas se juntan y se leen una sola vez.
+function sgaArtPartidasMarcar(id){ (window.__artRecargar = window.__artRecargar || new Set()).add(id); if (!window.__catLote) sgaArtPartidasRecargar(); }
+async function sgaArtPartidasRecargar(){
+  const ids = [...(window.__artRecargar || [])]; window.__artRecargar = new Set();
+  if (!ids.length) return;
+  const trozos = [];
+  for (let i = 0; i < ids.length; i += 100) trozos.push(ids.slice(i, i + 100));
+  await Promise.all(trozos.map(async t => {
+    const r = await supabaseClient.from('sga_partidas').select('*').in('articulo_id', t).eq('estado', 'activa');
+    if (r.error) return;
+    (r.data || []).map(sgaPartidaDeFila).forEach(n => { const i = sgaPartidas.findIndex(x => x.id === n.id); if (i >= 0) { n.bultosAct = sgaPartidas[i].bultosAct; sgaPartidas[i] = n; } });
+  }));
+}
 // Cronómetro de una confirmación (recepción, expedición…): cada llamada apunta lo que ha tardado desde la anterior. Se ve con Ctrl + Alt + T.
 function sgaConfMedir(tipo){
   let ult = performance.now(); const pasos = [];
@@ -7350,6 +7364,7 @@ async function catGuardarCeldaCampo(el){
   if (error) { appToast('No se pudo guardar: ' + sgaArticuloErrorTxt(error, a.clienteId), 'error'); if (!window.__catLote) renderTab(); return false; }
   a.atributos = atributos; a.claveExtra = extra;
   if (nuevoNombre) a.nombre = nuevoNombre;
+  sgaArtPartidasMarcar(a.id);
   el.classList.add('cg-ok'); setTimeout(() => el.classList.remove('cg-ok'), 900);
   return true;
 }
@@ -7566,6 +7581,7 @@ async function catGuardarTodo(){
       if (r === false) fallos++; else if (tr.isConnected) ok++;
     }
   } finally { window.__catLote = false; }
+  await sgaArtPartidasRecargar();   // el stock vivo de los artículos cambiados hereda los cambios: se vuelve a leer una sola vez
   if (fallos) { appToast(`${fallos} cambio${fallos === 1 ? '' : 's'} no se ha podido guardar: revisa las casillas en rojo.`, 'error'); return; }
   appToast(`Catálogo guardado: ${ok} cambio${ok === 1 ? '' : 's'}.`, 'ok');
   window.__catDirty = {}; window.__catHist = null;
@@ -8320,9 +8336,10 @@ async function catAsignarTipoPaletAplicar(){
     await Promise.all(sin.slice(i, i + 15).map(async a => {
       const atributos = Object.assign({}, a.atributos, { subtipo: tipo });
       const { error } = await supabaseClient.from('sga_articulos').update({ atributos }).eq('id', a.id);
-      if (error) fallos++; else { a.atributos = atributos; hechos++; }
+      if (error) fallos++; else { a.atributos = atributos; hechos++; (window.__artRecargar = window.__artRecargar || new Set()).add(a.id); }
     }));
   }
+  await sgaArtPartidasRecargar();
   closeModal();
   if (hechos) await logContactoHistorial(cid, `SGA · catálogo: tipo de palet «${tipo}» asignado a ${hechos} artículo${hechos === 1 ? '' : 's'} que no lo tenían.`);
   appToast(fallos ? `Tipo «${tipo}» asignado a ${hechos}; ${fallos} no se pudieron guardar (vuelve a pulsar «Asignar tipo…» para reintentarlo).` : `Tipo «${tipo}» asignado a ${hechos} artículo${hechos === 1 ? '' : 's'}.`, fallos ? 'error' : 'ok');
@@ -8412,6 +8429,7 @@ async function catGuardarCelda(el){
   const { error } = await supabaseClient.from('sga_articulos').update({ [campos[f]]: dbVal }).eq('id', a.id);
   if (error) return volver('No se pudo guardar: ' + error.message);
   a[f] = valor == null ? (f === 'bultos' ? 1 : null) : valor;
+  if (['nombre', 'referencia', 'productoId'].includes(f)) sgaArtPartidasMarcar(a.id);   // su stock vivo hereda el cambio
   el.classList.add('cg-ok'); setTimeout(() => el.classList.remove('cg-ok'), 900);
   if (f === 'productoId' || f === 'zonaId') return true;
   if (f === 'bultos' && !window.__catLote) refreshStockBody(); // cambia la columna de stock
@@ -12597,6 +12615,7 @@ async function submitSgaArticulo(){
       const { error } = await supabaseClient.from('sga_articulos').update(row).eq('id', pg.id);
       if (error) throw error;
       Object.assign(sgaArticulos.find(x => x.id === pg.id), local);
+      sgaArtPartidasMarcar(pg.id);   // su stock vivo hereda el cambio
     } else {
       const { data, error } = await supabaseClient.from('sga_articulos').insert(row).select().single();
       if (error || !data) throw (error || new Error('sin datos'));
