@@ -11734,7 +11734,20 @@ function sgaSalidaRellenar(){
   const mov = document.getElementById('sl-mov');   // cómo se cobró la salida (si el cliente tiene varias): se recupera de sus cobros
   if (mov) { const ya = (e.cobrosMov || []).find(id => [...mov.options].some(o => o.value === id)); if (ya) mov.value = ya; }
   const alm = document.getElementById('sl-almacen');
-  if (alm) alm.value = a.warehouseId;
+  if (alm) {
+    alm.value = a.warehouseId;
+    // Si la mercancía de esta expedición ya no está en su almacén (se traspasó a otro después de prepararla), se pone el almacén donde está ahora
+    const dondeEsta = {};
+    Object.keys(e.prev).forEach(pid => { const p = sgaPartidas.find(x => x.id === pid); if (p) dondeEsta[p.warehouseId] = (dondeEsta[p.warehouseId] || 0) + e.prev[pid]; });
+    const ws = Object.keys(dondeEsta);
+    if (ws.length && !dondeEsta[a.warehouseId]) {
+      const mejor = ws.sort((x, y) => dondeEsta[y] - dondeEsta[x])[0];
+      if ([...alm.options].some(o => o.value === mejor)) {
+        alm.value = mejor;
+        appToast(`${whNombre(a.warehouseId)} ya no tiene la mercancía de esta expedición (está en ${whNombre(mejor)}): se ha puesto ${whNombre(mejor)}. Al guardarla, la expedición queda en ese almacén.`, 'info');
+      }
+    }
+  }
   sgaSalidaAlmacenCambio();
   set('sl-fecha', e.confirmar ? today() : a.fecha); set('sl-ref', a.referencia); set('sl-transp', a.transportista); sgaMatriculaPoner('sl', a.matricula); set('sl-obs', a.observaciones);
   if (a.modalidad) sgaSalidaModalidad(a.modalidad);
@@ -11916,7 +11929,13 @@ function sgaFiltrarFilas(q, tablaSel, contId){
 function sgaSalidaStockHtml(clienteId){
   const cfg = sgaClienteCfg(clienteId);
   const modo = sgaClienteSalida(clienteId), manual = modo === 'manual', agrupado = manual && !sgaClienteCfg(clienteId).codigosUnicos;
-  const ps = sgaStockCliente(clienteId, sgaSalidaWh());
+  const ps0 = sgaStockCliente(clienteId, sgaSalidaWh());
+  // Al abrir una expedición ya hecha (o un borrador), su propia mercancía sale siempre, aunque ya no esté en el almacén elegido (p. ej. si se traspasó
+  // a otro almacén después de preparar el borrador): si no, el borrador se veía vacío y no se podía confirmar.
+  const ed = window.__slEdit;
+  const propiasOtroAlm = ed ? Object.keys(ed.prev || {}).map(pid => sgaPartidas.find(x => x.id === pid)).filter(p => p && p.actual > 0 && !ps0.includes(p)) : [];
+  const ps = ps0.concat(propiasOtroAlm);
+  const avisoOtroAlm = propiasOtroAlm.length ? `<div class="se-aviso" style="margin-bottom:10px;">⚠ ${propiasOtroAlm.length === 1 ? 'Una partida de esta expedición está' : propiasOtroAlm.length + ' partidas de esta expedición están'} ahora en otro almacén (${esc([...new Set(propiasOtroAlm.map(p => whNombre(p.warehouseId)))].join(', '))}): se muestra${propiasOtroAlm.length === 1 ? '' : 'n'} aquí igualmente para poder confirmarla.</div>` : '';
   const conDesc = ps.some(p => p.descripcion);
   // Solo se enseñan los datos que este cliente usa: un apartado que ninguna de sus partidas tiene relleno se oculta
   const conTipo = ps.some(p => p.productoId), conRef = ps.some(p => p.referencia), conSitio = ps.some(p => { const s = sgaSitioTxt(p); return s && s !== '—'; });
@@ -11925,7 +11944,7 @@ function sgaSalidaStockHtml(clienteId){
   const tipos = [...new Set(ps.map(p => p.productoId))].sort((a, b) => sgaProdTxt(a).localeCompare(sgaProdTxt(b), 'es'));
   // «Pedir por cantidad» va como título del primer filtro que se vea
   const pedir = conTipo ? 'Reparto por cantidad' : '', pedirArt = !conTipo ? 'Reparto por cantidad · código de artículo' : 'Código de artículo', pedirRef = !conTipo && !conDesc ? 'Reparto por cantidad · descripción' : 'Descripción';
-  return `
+  return `${avisoOtroAlm}
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;padding:12px 14px;border:1px dashed var(--border);border-radius:12px;margin-bottom:14px;">
       ${manual ? '' : `<div class="field" style="flex:1;min-width:190px;margin-bottom:0;${conTipo ? '' : 'display:none;'}"><label>${pedir}</label><select id="sl-q-tipo" onchange="sgaSalidaTipoCambio()">${tipos.map(t => `<option value="${t}">${esc(sgaProdTxt(t))}</option>`).join('')}</select></div>
       ${conDesc ? `<div class="field" style="flex:1;min-width:170px;margin-bottom:0;"><label>${pedirArt}</label><select id="sl-q-art" onchange="sgaSalidaArtCambio()"></select></div>` : ''}
@@ -11990,7 +12009,11 @@ function sgaSalidaClienteCambio(){
   sgaServiciosRefrescar();                        // y solo los servicios que tiene creados
   const alm = document.getElementById('sl-almacen');
   if (alm) {
-    const ids = [...new Set(sgaStockCliente(clienteId).map(p => p.warehouseId))];
+    // Al abrir una expedición ya hecha o un borrador, también salen su almacén y los almacenes donde esté ahora su mercancía (aunque ya no tengan
+    // stock del cliente o estén archivados): si no, tras un traspaso el borrador se quedaba sin almacén y se veía vacío.
+    const ed = window.__slEdit;
+    const delBorrador = ed ? [ed.albaran.warehouseId, ...Object.keys(ed.prev || {}).map(pid => (sgaPartidas.find(x => x.id === pid) || {}).warehouseId)].filter(Boolean) : [];
+    const ids = [...new Set(sgaStockCliente(clienteId).map(p => p.warehouseId).concat(delBorrador))];
     const whs = allWarehouses.filter(w => ids.includes(w.id));
     alm.innerHTML = clienteId ? `${whs.length === 1 ? '' : '<option value="">Elige el almacén…</option>'}${whs.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}` : '<option value="">Elige primero el cliente</option>';
     if (whs.length === 1) alm.value = whs[0].id;
