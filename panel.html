@@ -9191,7 +9191,7 @@ function sgaOperativaLineaImporte(l){ return sgaR2((Number(l.cantidad) || 0) * (
 function sgaOperativaTotalLineas(lineas){ return sgaR2((lineas || []).reduce((s, l) => s + sgaOperativaLineaImporte(l), 0)); }
 // Línea de la pantalla → apartado guardado (el precio fijo una vez es un apartado fijo; lo demás, un extra con su cantidad)
 function sgaOperativaApartadoDe(l){
-  const base = { concepto: l.concepto, importe: sgaR2(Number(l.precio) || 0) };
+  const base = { concepto: l.concepto, importe: Math.round((Number(l.precio) || 0) * 10000) / 10000 };
   if (l.productoId) { base.producto_id = l.productoId; if (l.tarifaId) base.tarifa_id = l.tarifaId; }
   const cant = Number(l.cantidad) || 0;
   if (l.unidad === 'operativa' && cant === 1 && !l.manual) return base;
@@ -9255,16 +9255,23 @@ function sgaOperativaPintar(){
     </div>
     <div class="op-total-row" style="margin-top:14px;"><span>Importe de esta operativa (sin IVA)</span><b id="op-f-total">${eur2(sgaOperativaTotalLineas(f.lineas))}</b></div>`;
 }
+// Número escrito a la española: «120», «70,5», «1.200» (mil doscientos), «1.200,50», «0.125» (con punto decimal, si empieza por 0 o no tiene tres cifras detrás)
+function sgaOperativaNumero(v){
+  let s = String(v == null ? '' : v).trim().replace(/[^\d.,]/g, '');
+  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  else if (/^[1-9]\d{0,2}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
+  const n = parseFloat(s);
+  return isFinite(n) && n >= 0 ? n : 0;
+}
 // Cantidad o precio de una línea (sin volver a pintar, para no perder el cursor)
 function sgaOperativaLinea(i, campo, v){
   const f = window.__opForm, l = f && f.lineas[i];
   if (!l) return;
   if (campo === 'concepto') l.concepto = String(v).slice(0, 80);
   else {
-    const n = parseFloat(String(v).replace(',', '.').replace(/[^\d.]/g, ''));
-    const x = isFinite(n) && n >= 0 ? n : 0;
+    const x = sgaOperativaNumero(v);
     if (campo === 'cantidad') l.cantidad = l.unidad === 'hora' ? Math.round(x * 100) / 100 : Math.floor(x);
-    else l.precio = Math.round(x * 100) / 100;
+    else l.precio = Math.round(x * 10000) / 10000;   // hasta 4 decimales, como las tarifas (0,125 €)
   }
   const sub = document.getElementById('op-xs-' + i);
   if (sub) sub.textContent = eur2(sgaOperativaLineaImporte(l));
