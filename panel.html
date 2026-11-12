@@ -9181,10 +9181,10 @@ function sgaOperativaProductosCliente(clienteId, fecha){
   if (!clienteId || !fecha) return [];
   return almacenajeProductos.filter(p => !p.archived && p.categoria === 'operativa')
     .map(p => ({ p, t: sgaTarifaEn(clienteId, p.id, fecha) })).filter(x => x.t)
-    .sort((a, b) => almacenajeProductoTexto(a.p).localeCompare(almacenajeProductoTexto(b.p), 'es'));
+    .sort((a, b) => almacenajeProductoTexto(a.p, false).localeCompare(almacenajeProductoTexto(b.p, false), 'es'));
 }
 function sgaOperativaLineaDe(p, t){
-  return { productoId: p.id, tarifaId: t.id, concepto: almacenajeProductoTexto(p), unidad: p.unidad, precioTarifa: t.precio, precio: t.precio, cantidad: p.unidad === 'operativa' ? 1 : 0, manual: false };
+  return { productoId: p.id, tarifaId: t.id, concepto: almacenajeProductoTexto(p, false), unidad: p.unidad, precioTarifa: t.precio, precio: t.precio, cantidad: p.unidad === 'operativa' ? 1 : 0, manual: false };
 }
 function sgaOperativaLineasIniciales(clienteId, fecha){ return sgaOperativaProductosCliente(clienteId, fecha).map(x => sgaOperativaLineaDe(x.p, x.t)); }
 function sgaOperativaLineaImporte(l){ return sgaR2((Number(l.cantidad) || 0) * (Number(l.precio) || 0)); }
@@ -9250,7 +9250,7 @@ function sgaOperativaPintar(){
   det.innerHTML = `${aviso}
     ${f.lineas.length ? `<div class="op-lines">${f.lineas.map(fila).join('')}</div>` : ''}
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px;">
-      ${disponibles.length ? `<select id="op-add-sel" onchange="sgaOperativaLineaAdd(this.value)" style="width:auto;min-width:230px;"><option value="">+ Añadir línea de su tarifa…</option>${disponibles.map(x => `<option value="${esc(x.p.id)}">${esc(almacenajeProductoTexto(x.p))} · ${esc(eurPrecio(x.t.precio))} ${esc(SGA_OP_UNIDAD_TXT[x.p.unidad] || '')}</option>`).join('')}</select>` : ''}
+      ${disponibles.length ? `<select id="op-add-sel" onchange="sgaOperativaLineaAdd(this.value)" style="width:auto;min-width:230px;"><option value="">+ Añadir línea de su tarifa…</option>${disponibles.map(x => `<option value="${esc(x.p.id)}">${esc(almacenajeProductoTexto(x.p, false))} · ${esc(eurPrecio(x.t.precio))} ${esc(SGA_OP_UNIDAD_TXT[x.p.unidad] || '')}</option>`).join('')}</select>` : ''}
       <button type="button" class="op-chip otro" onclick="sgaOperativaManualAdd()">+ Línea manual</button>
     </div>
     <div class="op-total-row" style="margin-top:14px;"><span>Importe de esta operativa (sin IVA)</span><b id="op-f-total">${eur2(sgaOperativaTotalLineas(f.lineas))}</b></div>`;
@@ -9363,7 +9363,7 @@ async function operativasConvertir(){
     if (k in prodDe) return;
     const igual = almacenajeProductos.find(p => p.categoria === 'operativa' && norm(p.nombre) === norm(it.concepto) && p.unidad === it.unidad);
     if (igual) { prodDe[k] = igual.id; return; }
-    const mismoNombre = almacenajeProductos.some(p => norm(p.nombre) === norm(it.concepto)) || nuevos.some(n => norm(n.nombre) === norm(it.concepto));
+    const mismoNombre = almacenajeProductos.some(p => p.categoria === 'operativa' && norm(p.nombre) === norm(it.concepto)) || nuevos.some(n => norm(n.nombre) === norm(it.concepto));
     nuevos.push({ k, nombre: mismoNombre ? `${it.concepto} (${SGA_OP_UNIDAD_TXT[it.unidad]})` : it.concepto, unidad: it.unidad });
     prodDe[k] = '';
   });
@@ -29600,10 +29600,14 @@ function almacenajeCategoriaBadgeHtml(cat){
 // pero las tarifas que ya lo usaban lo siguen mostrando bien).
 // Texto de un producto en los desplegables: "Palet · Europeo". Si hay varios con el mismo nombre
 // (p. ej. dos "Palet"), el que no lleva subtipo definido se marca como "sin subtipo definido" para distinguirlos.
-function almacenajeProductoTexto(p){
-  if (p.usaSubtipo && p.subtipoValor) return `${p.nombre} · ${p.subtipoValor}`;
-  const repetido = almacenajeProductos.some(x => x.id !== p.id && x.nombre.trim().toLowerCase() === p.nombre.trim().toLowerCase());
-  return repetido ? `${p.nombre} · sin subtipo definido` : p.nombre;
+// Un mismo nombre puede existir en dos actividades (p. ej. «Palet europeo» de Almacenaje y «Palet europeo» de Operativa, para cobrar el que se gasta al repaletizar):
+// en los desplegables que mezclan actividades se distinguen añadiendo la actividad. conActividad=false da el nombre limpio (el que sale en las líneas de una operativa).
+function almacenajeProductoTexto(p, conActividad){
+  const mismoNombre = x => x.id !== p.id && x.nombre.trim().toLowerCase() === p.nombre.trim().toLowerCase();
+  const sufijoAct = conActividad !== false && almacenajeProductos.some(x => mismoNombre(x) && x.categoria !== p.categoria) ? ` · ${almacenajeCategoriaLabel(p.categoria)}` : '';
+  if (p.usaSubtipo && p.subtipoValor) return `${p.nombre} · ${p.subtipoValor}${sufijoAct}`;
+  const repetido = almacenajeProductos.some(x => mismoNombre(x) && x.categoria === p.categoria);
+  return repetido ? `${p.nombre} · sin subtipo definido` : `${p.nombre}${sufijoAct}`;
 }
 // cat (opcional): solo los productos de esa actividad, en una lista plana. Sin cat, todos agrupados por actividad.
 function almacenajeTipoOptionsHtml(selected, cat){
@@ -29743,8 +29747,9 @@ async function submitAlmacenajeProducto(editId){
   if (!nombre) { apError('Ponle un nombre al producto.', 'ap-nombre'); return; }
   // Dos productos no pueden llamarse igual y tener el mismo subtipo (saldrían idénticos al elegirlos en una tarifa).
   const clave = (n, s) => `${n} ${s || ''}`.replace(/[ ]+/g, ' ').trim().toLowerCase();   // compara el nombre completo
-  const repetido = almacenajeProductos.find(p => p.id !== editId && clave(p.nombre, p.subtipoValor) === clave(nombre, subtipoValor));
-  if (repetido) { apError(`Ya existe «${almacenajeProductoTexto(repetido)}»${repetido.archived ? ' (archivado)' : ''}. Cambia el nombre para distinguirlos.`, 'ap-nombre'); return; }
+  // Se puede repetir un nombre si es de otra actividad (p. ej. «Palet europeo» de Almacenaje y de Operativa): en las listas se distinguen solos.
+  const repetido = almacenajeProductos.find(p => p.id !== editId && p.categoria === categoria && clave(p.nombre, p.subtipoValor) === clave(nombre, subtipoValor));
+  if (repetido) { apError(`Ya existe «${almacenajeProductoTexto(repetido)}» en ${almacenajeCategoriaLabel(categoria)}${repetido.archived ? ' (archivado)' : ''}. Cambia el nombre para distinguirlos.`, 'ap-nombre'); return; }
   const editing = editId ? almacenajeProducto(editId) : null;
   // El subtipo del producto es su valor fijo; también se guarda como etiqueta para los textos que la usan.
   // Solo los productos de stock por días llevan enlace de entrada y salida; el resto no
