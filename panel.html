@@ -21611,11 +21611,13 @@ function fzCatalogoHtml(tipo){
    Cada línea es un producto (y formato, si hace falta) con su precio desde una fecha. Para actualizar un precio se añade una línea nueva con
    su fecha: la anterior queda en el historial. El vigente es el de la fecha más reciente de cada producto y formato. */
 const fzPrecioTxt = r => `${fzNum(r.precio, 2)} €/${r.unidad === 'balas' ? 'bala' : 't'}`;
-function fzPreciosDe(provId){
+function fzPreciosOrdenar(filas){
   const M = fzMaps(), nom = id => fzNorm((M.prod.get(id) || {}).nombre || '');
-  return fzS().precios.filter(r => r.proveedorId === provId)
-    .sort((a, b) => nom(a.productoId).localeCompare(nom(b.productoId)) || fzNorm(a.formato).localeCompare(fzNorm(b.formato)) || String(b.fecha).localeCompare(String(a.fecha)) || String(b.creado).localeCompare(String(a.creado)));
+  return filas.sort((a, b) => nom(a.productoId).localeCompare(nom(b.productoId)) || fzNorm(a.formato).localeCompare(fzNorm(b.formato)) || String(b.fecha).localeCompare(String(a.fecha)) || String(b.creado).localeCompare(String(a.creado)));
 }
+function fzPreciosDe(provId){ return fzPreciosOrdenar(fzS().precios.filter(r => r.proveedorId === provId)); }
+// Proveedor nuevo (aún sin crear): los precios que se van apuntando esperan en un borrador y se guardan al pulsar «Crear proveedor»
+function fzPreciosBorrador(){ return fzPreciosOrdenar(((window.__fzCat || {}).borrador || []).slice()); }
 // Los precios vigentes de un proveedor: el más reciente de cada producto y formato
 function fzPreciosVigentes(provId){
   const visto = new Set();
@@ -21624,8 +21626,7 @@ function fzPreciosVigentes(provId){
 function fzPreciosHtml(provId){
   const S = fzS(), M = fzMaps(), opt = (v, t, sel) => `<option value="${esc(v)}"${sel ? ' selected' : ''}>${esc(t)}</option>`;
   if (!S.preciosOk) return '<div class="se-aviso">Falta ejecutar el SQL «forrajes-proveedor-precios.sql» en Supabase para guardar los productos y precios de cada proveedor.</div>';
-  const filas = fzPreciosDe(provId), visto = new Set();
-  const usados = new Set(filas.map(r => r.productoId));
+  const filas = provId ? fzPreciosDe(provId) : fzPreciosBorrador(), visto = new Set();
   const cuerpo = filas.map(r => {
     const k = r.productoId + '|' + r.formato, vigente = !visto.has(k); visto.add(k);
     const p = M.prod.get(r.productoId), gris = vigente ? '' : 'color:var(--mutedFaint);';
@@ -21641,7 +21642,7 @@ function fzPreciosHtml(provId){
   }).join('');
   const tabla = filas.length
     ? `<div style="overflow-x:auto;"><table class="tf-table" style="min-width:560px;"><thead><tr><th>Producto</th><th>Formato</th><th style="text-align:right;">Precio</th><th>Desde</th><th></th><th>Nota</th><th></th></tr></thead><tbody>${cuerpo}</tbody></table></div>`
-    : '<div style="color:var(--mutedFaint);font-size:13px;padding:6px 0 10px;">Todavía no hay productos ni precios apuntados de este proveedor.</div>';
+    : `<div style="color:var(--mutedFaint);font-size:13px;padding:6px 0 10px;">${provId ? 'Todavía no hay productos ni precios apuntados de este proveedor.' : 'Aún no has apuntado ningún producto. Puedes hacerlo ahora: se guardan al crear el proveedor.'}</div>`;
   const prods = S.productos.filter(p => !p.archived);
   return `${tabla}
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:10px;padding:10px;border:1px dashed var(--border);border-radius:10px;">
@@ -21655,15 +21656,21 @@ function fzPreciosHtml(provId){
     </div>
     <div id="fzp-error" style="color:var(--danger);font-size:12.5px;min-height:16px;margin-top:6px;"></div>`;
 }
-function fzPreciosRefrescar(){ const ctx = window.__fzCat || {}, el = document.getElementById('fzc-precios'); if (el && ctx.id) el.innerHTML = fzPreciosHtml(ctx.id); }
+function fzPreciosRefrescar(){ const ctx = window.__fzCat || {}, el = document.getElementById('fzc-precios'); if (el) el.innerHTML = fzPreciosHtml(ctx.id || null); }
 async function fzPrecioAnadir(){
-  const S = fzS(), ctx = window.__fzCat || {}, err = document.getElementById('fzp-error'); if (!ctx.id || ctx.tipo !== 'proveedores' || !err) return;
+  const S = fzS(), ctx = window.__fzCat || {}, err = document.getElementById('fzp-error'); if (ctx.tipo !== 'proveedores' || !err) return;
   err.textContent = '';
   const producto = fzV('fzp-prod'), txt = fzV('fzp-precio'), precio = fzN('fzp-precio'), fecha = fzV('fzp-fecha');
   if (!producto) { err.textContent = 'Elige el producto.'; return; }
   if (txt === '' || !isFinite(precio) || precio < 0) { err.textContent = 'Escribe el precio (un número).'; document.getElementById('fzp-precio').focus(); return; }
   if (!fecha) { err.textContent = 'Indica desde qué fecha vale ese precio.'; return; }
   const row = { proveedor_id: ctx.id, producto_id: producto, formato: fzV('fzp-formato') || null, precio, unidad: fzV('fzp-ud') === 'balas' ? 'balas' : 't', fecha, notas: fzV('fzp-nota') || null, created_by: currentUserEmail() };
+  if (!ctx.id) {   // proveedor nuevo: se apunta en el borrador y se guardará al crearlo
+    (ctx.borrador = ctx.borrador || []).push({ id: 'tmp-' + Date.now() + '-' + ctx.borrador.length, proveedorId: null, productoId: producto, formato: row.formato || '', precio, unidad: row.unidad, fecha, notas: row.notas || '', creado: String(Date.now()) });
+    fzDirty(); fzPreciosRefrescar();
+    const f0 = document.getElementById('fzp-prod'); if (f0) f0.focus();
+    return;
+  }
   const { data, error } = await supabaseClient.from('forraje_proveedor_precios').insert(row).select().single();
   if (error || !data) { err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test((error && error.message) || '') ? 'falta ejecutar el SQL «forrajes-proveedor-precios.sql» en Supabase.' : ((error && error.message) || 'error desconocido.')); return; }
   S.precios.push(fzPrecioDeFila(data));
@@ -21672,7 +21679,9 @@ async function fzPrecioAnadir(){
   const f = document.getElementById('fzp-prod'); if (f) f.focus();
 }
 async function fzPrecioQuitar(id){
-  const S = fzS(), r = S.precios.find(x => x.id === id); if (!r) return;
+  const S = fzS(), ctx0 = window.__fzCat || {};
+  if (String(id).startsWith('tmp-')) { ctx0.borrador = (ctx0.borrador || []).filter(x => x.id !== id); fzPreciosRefrescar(); return; }   // todavía no está guardado: se quita sin más
+  const r = S.precios.find(x => x.id === id); if (!r) return;
   const p = fzMaps().prod.get(r.productoId);
   if (!(await appConfirm({ title: 'Quitar precio', name: `${p ? p.nombre : ''}${r.formato ? ' · ' + r.formato : ''} · ${fzPrecioTxt(r)} · desde ${fmtDateDMY(r.fecha)}`, message: 'Se borra esta línea del historial de precios del proveedor. No afecta a los viajes.', confirmLabel: 'Quitar', tone: 'danger', icon: 'trash' }))) return;
   const { error } = await supabaseClient.from('forraje_proveedor_precios').delete().eq('id', id);
@@ -21693,7 +21702,7 @@ function fzProvPantallaHtml(){
   return `
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.users, 26, '#fff', 1.8)}</span>
-      <div style="min-width:0;flex:1 1 260px;"><div class="deca-banner-title">${e ? esc(e.nombre) : 'Nuevo proveedor'}${e && e.archived ? ' <span class="cg-chip">Archivado</span>' : ''}${e && e.bloqueado ? '<span class="fz-bloq-chip">Bloqueado</span>' : ''}</div><div class="deca-banner-sub">${e ? 'Sus datos y los productos que vende, con sus precios y fechas.' : 'Crea el proveedor y después podrás apuntar los productos que vende y sus precios.'}</div></div>
+      <div style="min-width:0;flex:1 1 260px;"><div class="deca-banner-title">${e ? esc(e.nombre) : 'Nuevo proveedor'}${e && e.archived ? ' <span class="cg-chip">Archivado</span>' : ''}${e && e.bloqueado ? '<span class="fz-bloq-chip">Bloqueado</span>' : ''}</div><div class="deca-banner-sub">${e ? 'Sus datos y los productos que vende, con sus precios y fechas.' : 'Sus datos y, si quieres, los productos que vende con sus precios: todo junto, al crearlo.'}</div></div>
       <div class="deca-banner-actions">${volver}</div>
     </div>
     <div class="dr-page" style="max-width:980px;margin:0;" oninput="fzDirtyProv(event)" onchange="fzDirtyProv(event)">
@@ -21712,10 +21721,11 @@ function fzProvPantallaHtml(){
         <datalist id="fz-dl-bloq">${['Mala calidad', 'Problemas de pago', 'No cumple los plazos', 'Poco fiable', 'Precio demasiado alto'].map(t => `<option value="${esc(t)}"></option>`).join('')}</datalist>
         <div id="fzc-bloq-motivo" style="${e && e.bloqueado ? '' : 'display:none;'}"><div class="field" style="margin:0;"><label>Motivo ${e && e.bloqueado && e.bloqueadoEn ? `<small style="color:var(--mutedFaint);font-weight:400;">· bloqueado desde el ${esc(fmtDateDMY(e.bloqueadoEn))}</small>` : ''}</label><input id="fzc-bloq-txt" data-combo="fz-dl-bloq" autocomplete="off" maxlength="200" placeholder="Mala calidad, problemas de pago…" value="${esc(e ? e.bloqueadoMotivo : '')}" /></div></div>
       </div>
-      ${e ? `<div class="card dr-card">
-        ${sec(3, 'Productos que vende y sus precios', 'Informativo: no cambia los viajes. Para actualizar un precio, añade una línea nueva con su fecha y la anterior queda en el historial.')}
-        <div id="fzc-precios">${fzPreciosHtml(e.id)}</div>
-      </div>` : ''}
+      <div class="card dr-card">
+        ${sec(3, 'Productos que vende y sus precios', e ? 'Informativo: no cambia los viajes. Para actualizar un precio, añade una línea nueva con su fecha y la anterior queda en el historial.' : 'Opcional: apunta ya lo que vende y a qué precio, y se guarda junto con el proveedor al pulsar «Crear proveedor».')}
+        <div id="fzc-precios">${fzPreciosHtml(e ? e.id : null)}</div>
+      </div>
+
       <div id="fzc-error" class="dr-err"></div>
       <div class="dr-bar" style="max-width:980px;">
         <div style="margin-right:auto;display:flex;gap:8px;flex-wrap:wrap;">
@@ -21795,11 +21805,20 @@ async function fzCatGuardar(){
   const q = ctx.id ? supabaseClient.from(c.tabla).update(row).eq('id', ctx.id).select().single() : supabaseClient.from(c.tabla).insert(ctx.tipo === 'productos' ? row : { ...row, created_by: currentUserEmail() }).select().single();
   const { data, error } = await q;
   if (error || !data) { err.textContent = 'No se pudo guardar: ' + (error && error.code === '23505' ? 'ya existe uno con ese nombre.' : /bloqueado/i.test((error && error.message) || '') ? 'falta ejecutar el SQL «forrajes-proveedor-bloqueo.sql» en Supabase.' : ((error && error.message) || 'error desconocido.')); return; }
+  // Proveedor nuevo con productos y precios apuntados en la misma pantalla: se guardan ahora, ya con su id
+  let errPrecios = '';
+  if (ctx.tipo === 'proveedores' && !ctx.id && (ctx.borrador || []).length) {
+    const filas = ctx.borrador.map(r => ({ proveedor_id: data.id, producto_id: r.productoId, formato: r.formato || null, precio: r.precio, unidad: r.unidad, fecha: r.fecha, notas: r.notas || null, created_by: currentUserEmail() }));
+    const rp = await supabaseClient.from('forraje_proveedor_precios').insert(filas).select();
+    if (rp.error) errPrecios = /relation|does not exist|schema cache/i.test(rp.error.message || '') ? 'falta ejecutar el SQL «forrajes-proveedor-precios.sql» en Supabase' : (rp.error.message || 'error desconocido');
+    else (rp.data || []).forEach(x => S.precios.push(fzPrecioDeFila(x)));
+  }
   const nuevo = fzCatDeFila(data), lista = S[ctx.tipo], i = lista.findIndex(x => x.id === nuevo.id);
   if (i >= 0) lista[i] = nuevo; else lista.push(nuevo);
   lista.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
   closeModal();
-  appToast(`${c.unoT} guardado.`, 'ok');
+  if (errPrecios) appToast(`Proveedor creado, pero no se pudieron guardar sus precios (${errPrecios}). Apúntalos de nuevo en su ficha.`, 'error');
+  else appToast(ctx.tipo === 'proveedores' && !ctx.id && (ctx.borrador || []).length ? `Proveedor creado con ${ctx.borrador.length} precio${ctx.borrador.length !== 1 ? 's' : ''}.` : `${c.unoT} guardado.`, 'ok');
   if (S.view === 'cat' && !ctx.id) { S.formDirty = false; fzCatForm('proveedores', nuevo.id); return; }   // recién creado: se queda en su pantalla para apuntar sus productos y precios
   if (ctx.desdeViaje && S.view === 'form') {   // viene del formulario de un viaje: se recoge lo escrito, se repinta y queda elegido
     const f = S.form; f.fecha = fzV('fz-fecha') || f.fecha;
