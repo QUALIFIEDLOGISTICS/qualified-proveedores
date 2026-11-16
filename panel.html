@@ -21112,7 +21112,7 @@ const FZ_SECCIONES = [['viajes', 'Viajes'], ['proveedores', 'Proveedores'], ['cl
 const FZ_FORMATOS = ['Redonda', 'Rectangular', 'Ensilada'];   // formato de la bala
 const FZ_MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 function fzS(){
-  return (window.__fz = window.__fz || { cargado: false, cargando: false, error: '', sec: 'viajes', view: 'lista', viajes: [], proveedores: [], clientes: [], productos: [], precios: [], preciosOk: true, preciosCli: [], preciosCliOk: true, socios: [], pagos: [], ajustes: [], pagosOk: true, pcts: [], pctsOk: true, pgAnio: today().slice(0, 4), pgSocio: '',
+  return (window.__fz = window.__fz || { cargado: false, cargando: false, error: '', sec: 'viajes', view: 'lista', viajes: [], proveedores: [], clientes: [], productos: [], precios: [], preciosOk: true, preciosCli: [], preciosCliOk: true, socios: [], pagos: [], pagosOk: true, pcts: [], pctsOk: true, pgAnio: today().slice(0, 4), pgSocio: '',
     q: '', anio: today().slice(0, 4), mes: today().slice(5, 7), fprov: '', fcli: '', producto: '', formato: '', pend: false, cq: '', archivados: false, da: today().slice(0, 4), dm: '', dvista: 'resumen', dmet: 'beneficio', dtramo: false, df: { producto: '', formato: '', prov: '', cli: '', reg: '' }, form: null, formDirty: false });
 }
 const fzR2 = n => Math.round((Number(n) || 0) * 100) / 100;
@@ -21146,7 +21146,7 @@ async function fzCargar(forzar){
   };
   try {
     const adm = !!PROFILE.isAdmin;   // el reparto y los pagos de los socios solo se piden a los administradores
-    const [v, p, c, pr, pp, pc, so, pg, aj, px] = await Promise.all([
+    const [v, p, c, pr, pp, pc, so, pg, px] = await Promise.all([
       todo(() => supabaseClient.from('forraje_viajes').select('*').order('fecha', { ascending: false }).order('id')),
       todo(() => supabaseClient.from('forraje_proveedores').select('*').order('nombre').order('id')),
       todo(() => supabaseClient.from('forraje_clientes').select('*').order('nombre').order('id')),
@@ -21155,18 +21155,15 @@ async function fzCargar(forzar){
       todo(() => supabaseClient.from('forraje_cliente_precios').select('*').order('fecha', { ascending: false }).order('id')).catch(() => null),
       adm ? todo(() => supabaseClient.from('forraje_socios').select('*').order('orden').order('created_at').order('id')).catch(() => null) : Promise.resolve([]),
       adm ? todo(() => supabaseClient.from('forraje_pagos').select('*').order('fecha', { ascending: false }).order('id')).catch(() => null) : Promise.resolve([]),
-      adm ? todo(() => supabaseClient.from('forraje_ajustes_mes').select('*').order('mes')).catch(() => null) : Promise.resolve([]),
       adm ? todo(() => supabaseClient.from('forraje_socio_porcentajes').select('*').order('desde').order('id')).catch(() => null) : Promise.resolve([]),   // si falta su SQL, cada socio usa su porcentaje único de siempre
     ]);
     S.viajes = v.map(fzViajeDeFila); fzOrdenar();
     S.proveedores = p.map(fzCatDeFila); S.clientes = c.map(fzCatDeFila); S.productos = pr.map(fzCatDeFila);
     S.preciosOk = pp !== null; S.precios = (pp || []).map(fzPrecioDeFila);
     S.preciosCliOk = pc !== null; S.preciosCli = (pc || []).map(fzPrecioDeFila);
-    S.pagosOk = so !== null && pg !== null && aj !== null;
+    S.pagosOk = so !== null && pg !== null;
     S.socios = (so || []).map(r => ({ id: r.id, nombre: r.nombre || '', porcentaje: Number(r.porcentaje) || 0, orden: Number(r.orden) || 0 }));
-    S.pagos = (pg || []).map(r => ({ id: r.id, socioId: r.socio_id, fecha: r.fecha, importe: Number(r.importe) || 0, concepto: r.concepto || '' }));
-    S.ajustes = (aj || []).map(r => ({ mes: r.mes, importe: Number(r.importe) || 0 }));
-    S.pctsOk = px !== null; S.pcts = (px || []).map(r => ({ id: r.id, socioId: r.socio_id, desde: r.desde, porcentaje: Number(r.porcentaje) || 0 }));
+    S.pagos = (pg || []).map(r => ({ id: r.id, socioId: r.socio_id, fecha: r.fecha, importe: Number(r.importe) || 0, concepto: r.concepto || '' }));    S.pctsOk = px !== null; S.pcts = (px || []).map(r => ({ id: r.id, socioId: r.socio_id, desde: r.desde, porcentaje: Number(r.porcentaje) || 0 }));
     S.cargado = true;
   } catch (e) {
     S.error = /relation|does not exist|schema cache/i.test((e && e.message) || '') ? 'Falta ejecutar el SQL «forrajes-schema.sql» en Supabase.' : ((e && e.message) || 'No se pudieron cargar los datos.');
@@ -21945,7 +21942,7 @@ async function fzCatEliminar(){
 }
 // ---------------------------------------------------------------- Pagos (solo administradores)
 /* Todo el beneficio de los viajes, mes a mes y acumulado desde el inicio, se reparte entre los socios según su porcentaje; cada pago que se les hace
-   se apunta y se descuenta. Sin temporadas: un solo saldo por socio. El beneficio de un mes sale solo de los viajes y se puede corregir con un ajuste. */
+   se apunta y se descuenta. Sin temporadas: un solo saldo por socio. El beneficio de cada mes sale solo de los viajes de ese mes. */
 // Importe escrito a la española («1.234,56», «-300», «95,5»); NaN si no es un número
 function fzImporte(txt){
   let s = String(txt == null ? '' : txt).trim().replace(/[^\d.,\-]/g, '');
@@ -21964,13 +21961,12 @@ function fzPctEn(s, ym){
   const vig = lineas.filter(x => String(x.desde).slice(0, 7) <= ym).sort((a, b) => String(b.desde).localeCompare(String(a.desde)))[0];
   return vig ? vig.porcentaje : 0;
 }
-// El reparto completo: beneficio de cada mes (viajes + ajuste), la parte de cada socio y lo que le falta por cobrar
+// El reparto completo: beneficio de cada mes (los viajes), la parte de cada socio y lo que le falta por cobrar
 function fzPagosCalc(){
-  const S = fzS(), porMes = new Map(), nuevo = ym => ({ mes: ym, viajes: 0, ben: 0, ajuste: 0 }), hoyYm = today().slice(0, 7);
+  const S = fzS(), porMes = new Map(), nuevo = ym => ({ mes: ym, viajes: 0, ben: 0 }), hoyYm = today().slice(0, 7);
   S.viajes.forEach(v => { const ym = String(v.fecha).slice(0, 7), e = porMes.get(ym) || nuevo(ym); e.viajes++; e.ben += fzCalc(v).beneficio; porMes.set(ym, e); });
-  (S.ajustes || []).forEach(a => { const e = porMes.get(a.mes) || nuevo(a.mes); e.ajuste = a.importe; porMes.set(a.mes, e); });
   const socios = (S.socios || []).slice();
-  const meses = [...porMes.values()].sort((a, b) => b.mes.localeCompare(a.mes)).map(m => { m.ben = fzR2(m.ben); m.total = fzR2(m.ben + m.ajuste); m.pcts = socios.map(s => fzPctEn(s, m.mes)); m.partes = socios.map((s, i) => fzR2(m.total * m.pcts[i] / 100)); return m; });
+  const meses = [...porMes.values()].sort((a, b) => b.mes.localeCompare(a.mes)).map(m => { m.ben = fzR2(m.ben); m.total = m.ben; m.pcts = socios.map(s => fzPctEn(s, m.mes)); m.partes = socios.map((s, i) => fzR2(m.total * m.pcts[i] / 100)); return m; });
   const filasSocio = socios.map((s, i) => {
     const corresponde = fzR2(meses.reduce((t, m) => t + m.partes[i], 0)), pagado = fzR2((S.pagos || []).filter(p => p.socioId === s.id).reduce((t, p) => t + p.importe, 0));
     return { s, corresponde, pagado, saldo: fzR2(corresponde - pagado), pctActual: fzPctEn(s, hoyYm) };
@@ -22034,18 +22030,17 @@ function fzPagosHtml(){
       <div class="pg-filtros">${selAnio}${selSocio}<span class="pg-resumen">${pagosVis.length} pago${pagosVis.length !== 1 ? 's' : ''} · <b>${fzEur(totVis)}</b></span></div>
       ${pagosVis.length ? `<div style="overflow-x:auto;"><table class="tf-table"><thead><tr>${thSort('Fecha', 'date')}${thSort('Socio', 'text')}${thSort('Importe', 'number', 'style="text-align:right;"')}${thSort('Concepto', 'text')}<th></th></tr></thead><tbody>${filasPag}</tbody></table></div>`
         : '<div style="color:var(--mutedFaint);font-size:13px;padding:10px 0;">No hay pagos con este filtro.</div>'}`;
-  // Beneficio por mes (viajes + ajuste) y la parte de cada socio
+  // Beneficio por mes (los viajes) y la parte de cada socio
   const mesesVis = C.meses.filter(m => !S.pgAnio || m.mes.startsWith(S.pgAnio));
   const sumaMes = f => fzR2(mesesVis.reduce((t, m) => t + f(m), 0));
   const filasMes = mesesVis.map(m => `<tr><td data-sort-value="${m.mes}" style="white-space:nowrap;"><b>${esc(fzMesTxt(m.mes))}</b></td><td data-sort-value="${m.viajes}" style="text-align:right;color:var(--muted);">${m.viajes}</td>
       <td data-sort-value="${m.ben}" style="text-align:right;white-space:nowrap;">${fzEur(m.ben)}</td>
-      <td data-sort-value="${m.ajuste}" style="text-align:right;"><input value="${m.ajuste ? esc(String(m.ajuste).replace('.', ',')) : ''}" placeholder="0" inputmode="decimal" maxlength="12" style="width:92px;text-align:right;${m.ajuste ? 'border-color:#C98A2E;background:#FFF8EA;' : ''}" title="Corrección del beneficio de este mes: suma o resta a lo que salen de los viajes" onchange="fzAjusteGuardar('${m.mes}', this.value)" /></td>
       <td data-sort-value="${m.total}" style="text-align:right;white-space:nowrap;font-weight:700;">${fzEur(m.total)}</td>
       ${m.partes.map((x, i) => `<td data-sort-value="${x}" style="text-align:right;white-space:nowrap;color:var(--muted);" title="${fzNum(m.pcts[i], 2)} % este mes">${fzEur(x)}</td>`).join('')}</tr>`).join('');
-  const pie = `<tfoot><tr style="font-weight:700;"><td>Total${S.pgAnio ? ' ' + esc(S.pgAnio) : ''}</td><td style="text-align:right;">${sumaMes(m => m.viajes)}</td><td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.ben))}</td><td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.ajuste))}</td><td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.total))}</td>${C.socios.map((s, i) => `<td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.partes[i]))}</td>`).join('')}</tr></tfoot>`;
-  const panelMeses = `<div style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">El beneficio de cada mes sale solo de los viajes. Si hay que corregirlo, escribe un <b>ajuste</b> en su fila (positivo suma, negativo resta; se marca en naranja) y el reparto se recalcula.</div>
+  const pie = `<tfoot><tr style="font-weight:700;"><td>Total${S.pgAnio ? ' ' + esc(S.pgAnio) : ''}</td><td style="text-align:right;">${sumaMes(m => m.viajes)}</td><td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.ben))}</td><td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.total))}</td>${C.socios.map((s, i) => `<td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.partes[i]))}</td>`).join('')}</tr></tfoot>`;
+  const panelMeses = `<div style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">El beneficio de cada mes sale solo de los viajes de ese mes, y se reparte entre los socios con el porcentaje que valía entonces.</div>
       <div class="pg-filtros">${selAnio}</div>
-      ${mesesVis.length ? `<div style="overflow-x:auto;"><table class="tf-table" style="min-width:640px;"><thead><tr>${thSort('Mes', 'text')}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Beneficio de los viajes', 'number', 'style="text-align:right;"')}${thSort('Ajuste', 'number', 'style="text-align:right;"')}${thSort('Total del mes', 'number', 'style="text-align:right;"')}${C.filasSocio.map(f => thSort(esc(f.s.nombre) + ' <small style="font-weight:400;">· ' + fzNum(f.pctActual, 2) + ' % hoy</small>', 'number', 'style="text-align:right;"')).join('')}</tr></thead><tbody>${filasMes}</tbody>${pie}</table></div>`
+      ${mesesVis.length ? `<div style="overflow-x:auto;"><table class="tf-table" style="min-width:640px;"><thead><tr>${thSort('Mes', 'text')}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Beneficio de los viajes', 'number', 'style="text-align:right;"')}${thSort('Total del mes', 'number', 'style="text-align:right;"')}${C.filasSocio.map(f => thSort(esc(f.s.nombre) + ' <small style="font-weight:400;">· ' + fzNum(f.pctActual, 2) + ' % hoy</small>', 'number', 'style="text-align:right;"')).join('')}</tr></thead><tbody>${filasMes}</tbody>${pie}</table></div>`
         : '<div style="color:var(--mutedFaint);font-size:13px;padding:10px 0;">No hay meses con viajes en este año.</div>'}`;
   // Dos pestañas para que la pantalla no sea larguísima: Pagos realizados (por defecto) y Beneficio por mes
   const tab = S.pgTab === 'meses' ? 'meses' : 'pagos';
@@ -22179,21 +22174,6 @@ async function fzPagoQuitar(id){
   const { error } = await supabaseClient.from('forraje_pagos').delete().eq('id', id);
   if (error) { appToast('No se pudo quitar: ' + error.message, 'error'); return; }
   S.pagos = S.pagos.filter(x => x.id !== id);
-  fzPagosRefrescar();
-}
-// Ajuste del beneficio de un mes: positivo suma, negativo resta, vacío o 0 lo quita
-async function fzAjusteGuardar(ym, txt){
-  const S = fzS(), n = String(txt).trim() === '' ? 0 : fzImporte(txt);
-  if (!isFinite(n)) { appToast('Escribe un número para el ajuste.', 'error'); fzPagosRefrescar(); return; }
-  if (Math.abs(n) < 0.005) {
-    const { error } = await supabaseClient.from('forraje_ajustes_mes').delete().eq('mes', ym);
-    if (error) { appToast('No se pudo quitar el ajuste: ' + error.message, 'error'); fzPagosRefrescar(); return; }
-    S.ajustes = S.ajustes.filter(a => a.mes !== ym);
-  } else {
-    const { error } = await supabaseClient.from('forraje_ajustes_mes').upsert({ mes: ym, importe: fzR2(n), updated_at: new Date().toISOString() }, { onConflict: 'mes' });
-    if (error) { appToast('No se pudo guardar el ajuste: ' + error.message, 'error'); fzPagosRefrescar(); return; }
-    const a = S.ajustes.find(x => x.mes === ym); if (a) a.importe = fzR2(n); else S.ajustes.push({ mes: ym, importe: fzR2(n) });
-  }
   fzPagosRefrescar();
 }
 // ---------------------------------------------------------------- Dashboard
