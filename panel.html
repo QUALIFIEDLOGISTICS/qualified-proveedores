@@ -21645,9 +21645,16 @@ function fzPreciosVigentes(id, tipo){
 function fzPreciosHtml(id, tipo){
   const S = fzS(), M = fzMaps(), cfg = fzPrecCfg(tipo), provId = id, opt = (v, t, sel) => `<option value="${esc(v)}"${sel ? ' selected' : ''}>${esc(t)}</option>`;
   if (!S[cfg.ok]) return `<div class="se-aviso">Falta ejecutar el SQL «${cfg.sql}» en Supabase para guardar los productos y precios ${cfg.deCada}.</div>`;
-  const filas = provId ? fzPreciosDe(provId, tipo) : fzPreciosBorrador(), visto = new Set();
+  const filasTodas = provId ? fzPreciosDe(provId, tipo) : fzPreciosBorrador(), visto = new Set();
+  // Qué línea es la vigente se decide con todas (la más reciente de cada producto y formato); después se enseñan solo las del filtro
+  const vigentes = new Set(filasTodas.filter(r => { const k = r.productoId + '|' + r.formato; if (visto.has(k)) return false; visto.add(k); return true; }).map(r => r.id));
+  const nVig = vigentes.size, nHis = filasTodas.length - nVig, ctxF = window.__fzCat || {};
+  const filtro = nHis === 0 ? 'todas' : (ctxF.precFiltro || 'vigentes');   // por defecto solo las vigentes: si hay muchas tarifas la ficha no se hace larguísima
+  const filas = filtro === 'vigentes' ? filasTodas.filter(r => vigentes.has(r.id)) : filtro === 'historicas' ? filasTodas.filter(r => !vigentes.has(r.id)) : filasTodas;
+  const pill = (v, t, n) => `<button type="button" onclick="fzPreciosFiltro('${v}')" style="border:1px solid ${filtro === v ? 'var(--primary)' : 'var(--border)'};background:${filtro === v ? 'var(--primary)' : 'var(--panel)'};color:${filtro === v ? 'var(--primary-text,#fff)' : 'var(--text)'};border-radius:999px;padding:4px 13px;font-size:12.5px;font-weight:600;cursor:pointer;">${t} <span style="opacity:.75;">${n}</span></button>`;
+  const barraFiltro = nHis > 0 ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 10px;">${pill('vigentes', 'Vigentes', nVig)}${pill('historicas', 'Históricas', nHis)}${pill('todas', 'Todas', filasTodas.length)}</div>` : '';
   const cuerpo = filas.map(r => {
-    const k = r.productoId + '|' + r.formato, vigente = !visto.has(k); visto.add(k);
+    const vigente = vigentes.has(r.id);
     const p = M.prod.get(r.productoId), gris = vigente ? '' : 'color:var(--mutedFaint);';
     return `<tr>
       <td style="${gris}"><b>${esc(p ? p.nombre : '—')}</b></td>
@@ -21659,9 +21666,9 @@ function fzPreciosHtml(id, tipo){
       <td style="text-align:right;"><button type="button" class="deca-act danger" title="Quitar esta línea" onclick="fzPrecioQuitar('${r.id}')">${homeIcon(HOME_ICON_PATHS.trash, 14, 'currentColor', 2)}</button></td>
     </tr>`;
   }).join('');
-  const tabla = filas.length
+  const tabla = barraFiltro + (filas.length
     ? `<div style="overflow-x:auto;"><table class="tf-table" style="min-width:560px;"><thead><tr><th>Producto</th><th>Formato</th><th style="text-align:right;">Precio</th><th>Desde</th><th></th><th>Nota</th><th></th></tr></thead><tbody>${cuerpo}</tbody></table></div>`
-    : `<div style="color:var(--mutedFaint);font-size:13px;padding:6px 0 10px;">${provId ? `Todavía no hay productos ni precios apuntados ${cfg.de}.` : `Aún no has apuntado ningún producto. Puedes hacerlo ahora: se guardan al crear el ${cfg.uno}.`}</div>`;
+    : `<div style="color:var(--mutedFaint);font-size:13px;padding:6px 0 10px;">${provId ? `Todavía no hay productos ni precios apuntados ${cfg.de}.` : `Aún no has apuntado ningún producto. Puedes hacerlo ahora: se guardan al crear el ${cfg.uno}.`}</div>`);
   const prods = S.productos.filter(p => !p.archived);
   return `${tabla}
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:10px;padding:10px;border:1px dashed var(--border);border-radius:10px;">
@@ -21676,6 +21683,8 @@ function fzPreciosHtml(id, tipo){
     <div id="fzp-error" style="color:var(--danger);font-size:12.5px;min-height:16px;margin-top:6px;"></div>`;
 }
 function fzPreciosRefrescar(){ const ctx = window.__fzCat || {}, el = document.getElementById('fzc-precios'); if (el) el.innerHTML = fzPreciosHtml(ctx.id || null, ctx.tipo); }
+// Filtro de la tabla de tarifas de la ficha: Vigentes (por defecto), Históricas o Todas
+function fzPreciosFiltro(v){ const ctx = window.__fzCat; if (!ctx) return; ctx.precFiltro = v; fzPreciosRefrescar(); }
 async function fzPrecioAnadir(){
   const S = fzS(), ctx = window.__fzCat || {}, err = document.getElementById('fzp-error'); if (!FZ_PREC[ctx.tipo] || !err) return;
   const cfg = fzPrecCfg(ctx.tipo);
