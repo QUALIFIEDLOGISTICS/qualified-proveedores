@@ -21085,7 +21085,7 @@ const FZ_SECCIONES = [['viajes', 'Viajes'], ['proveedores', 'Proveedores'], ['cl
 const FZ_FORMATOS = ['Redonda', 'Rectangular', 'Ensilada'];   // formato de la bala
 const FZ_MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 function fzS(){
-  return (window.__fz = window.__fz || { cargado: false, cargando: false, error: '', sec: 'viajes', view: 'lista', viajes: [], proveedores: [], clientes: [], productos: [], precios: [], preciosOk: true, preciosCli: [], preciosCliOk: true, socios: [], pagos: [], ajustes: [], pagosOk: true, pgAnio: today().slice(0, 4), pgSocio: '',
+  return (window.__fz = window.__fz || { cargado: false, cargando: false, error: '', sec: 'viajes', view: 'lista', viajes: [], proveedores: [], clientes: [], productos: [], precios: [], preciosOk: true, preciosCli: [], preciosCliOk: true, socios: [], pagos: [], ajustes: [], pagosOk: true, pcts: [], pctsOk: true, pgAnio: today().slice(0, 4), pgSocio: '',
     q: '', anio: today().slice(0, 4), mes: today().slice(5, 7), fprov: '', fcli: '', producto: '', formato: '', pend: false, cq: '', archivados: false, da: today().slice(0, 4), dm: '', dvista: 'resumen', dmet: 'beneficio', dtramo: false, df: { producto: '', formato: '', prov: '', cli: '', reg: '' }, form: null, formDirty: false });
 }
 const fzR2 = n => Math.round((Number(n) || 0) * 100) / 100;
@@ -21119,7 +21119,7 @@ async function fzCargar(forzar){
   };
   try {
     const adm = !!PROFILE.isAdmin;   // el reparto y los pagos de los socios solo se piden a los administradores
-    const [v, p, c, pr, pp, pc, so, pg, aj] = await Promise.all([
+    const [v, p, c, pr, pp, pc, so, pg, aj, px] = await Promise.all([
       todo(() => supabaseClient.from('forraje_viajes').select('*').order('fecha', { ascending: false }).order('id')),
       todo(() => supabaseClient.from('forraje_proveedores').select('*').order('nombre').order('id')),
       todo(() => supabaseClient.from('forraje_clientes').select('*').order('nombre').order('id')),
@@ -21129,6 +21129,7 @@ async function fzCargar(forzar){
       adm ? todo(() => supabaseClient.from('forraje_socios').select('*').order('orden').order('created_at').order('id')).catch(() => null) : Promise.resolve([]),
       adm ? todo(() => supabaseClient.from('forraje_pagos').select('*').order('fecha', { ascending: false }).order('id')).catch(() => null) : Promise.resolve([]),
       adm ? todo(() => supabaseClient.from('forraje_ajustes_mes').select('*').order('mes')).catch(() => null) : Promise.resolve([]),
+      adm ? todo(() => supabaseClient.from('forraje_socio_porcentajes').select('*').order('desde').order('id')).catch(() => null) : Promise.resolve([]),   // si falta su SQL, cada socio usa su porcentaje único de siempre
     ]);
     S.viajes = v.map(fzViajeDeFila); fzOrdenar();
     S.proveedores = p.map(fzCatDeFila); S.clientes = c.map(fzCatDeFila); S.productos = pr.map(fzCatDeFila);
@@ -21138,6 +21139,7 @@ async function fzCargar(forzar){
     S.socios = (so || []).map(r => ({ id: r.id, nombre: r.nombre || '', porcentaje: Number(r.porcentaje) || 0, orden: Number(r.orden) || 0 }));
     S.pagos = (pg || []).map(r => ({ id: r.id, socioId: r.socio_id, fecha: r.fecha, importe: Number(r.importe) || 0, concepto: r.concepto || '' }));
     S.ajustes = (aj || []).map(r => ({ mes: r.mes, importe: Number(r.importe) || 0 }));
+    S.pctsOk = px !== null; S.pcts = (px || []).map(r => ({ id: r.id, socioId: r.socio_id, desde: r.desde, porcentaje: Number(r.porcentaje) || 0 }));
     S.cargado = true;
   } catch (e) {
     S.error = /relation|does not exist|schema cache/i.test((e && e.message) || '') ? 'Falta ejecutar el SQL «forrajes-schema.sql» en Supabase.' : ((e && e.message) || 'No se pudieron cargar los datos.');
@@ -21927,19 +21929,30 @@ function fzImporte(txt){
   return isFinite(n) ? (neg ? -n : n) : NaN;
 }
 const fzMesTxt = ym => { const [y, m] = String(ym).split('-'); return `${(FZ_MESES[Number(m) - 1] || '').slice(0, 3)} ${y}`; };   // «nov 2023»
+// Porcentaje de un socio en un mes («2025-03»): el de su línea más reciente cuya fecha «desde» sea de ese mes o anterior; 0 si aún no era socio.
+// Sin líneas con fecha (antes de ejecutar el SQL de porcentajes por fecha), el porcentaje único de siempre.
+function fzPctEn(s, ym){
+  const S = fzS(), lineas = S.pctsOk ? (S.pcts || []).filter(x => x.socioId === s.id) : [];
+  if (!lineas.length) return s.porcentaje;
+  const vig = lineas.filter(x => String(x.desde).slice(0, 7) <= ym).sort((a, b) => String(b.desde).localeCompare(String(a.desde)))[0];
+  return vig ? vig.porcentaje : 0;
+}
 // El reparto completo: beneficio de cada mes (viajes + ajuste), la parte de cada socio y lo que le falta por cobrar
 function fzPagosCalc(){
-  const S = fzS(), porMes = new Map(), nuevo = ym => ({ mes: ym, viajes: 0, ben: 0, ajuste: 0 });
+  const S = fzS(), porMes = new Map(), nuevo = ym => ({ mes: ym, viajes: 0, ben: 0, ajuste: 0 }), hoyYm = today().slice(0, 7);
   S.viajes.forEach(v => { const ym = String(v.fecha).slice(0, 7), e = porMes.get(ym) || nuevo(ym); e.viajes++; e.ben += fzCalc(v).beneficio; porMes.set(ym, e); });
   (S.ajustes || []).forEach(a => { const e = porMes.get(a.mes) || nuevo(a.mes); e.ajuste = a.importe; porMes.set(a.mes, e); });
   const socios = (S.socios || []).slice();
-  const meses = [...porMes.values()].sort((a, b) => b.mes.localeCompare(a.mes)).map(m => { m.ben = fzR2(m.ben); m.total = fzR2(m.ben + m.ajuste); m.partes = socios.map(s => fzR2(m.total * s.porcentaje / 100)); return m; });
+  const meses = [...porMes.values()].sort((a, b) => b.mes.localeCompare(a.mes)).map(m => { m.ben = fzR2(m.ben); m.total = fzR2(m.ben + m.ajuste); m.pcts = socios.map(s => fzPctEn(s, m.mes)); m.partes = socios.map((s, i) => fzR2(m.total * m.pcts[i] / 100)); return m; });
   const filasSocio = socios.map((s, i) => {
     const corresponde = fzR2(meses.reduce((t, m) => t + m.partes[i], 0)), pagado = fzR2((S.pagos || []).filter(p => p.socioId === s.id).reduce((t, p) => t + p.importe, 0));
-    return { s, corresponde, pagado, saldo: fzR2(corresponde - pagado) };
+    return { s, corresponde, pagado, saldo: fzR2(corresponde - pagado), pctActual: fzPctEn(s, hoyYm) };
   });
+  // Los meses (y el actual) en los que los porcentajes de todos los socios no suman 100 %: el reparto dejaría algo sin repartir o repartiría de más
+  const yms = [...new Set([...meses.filter(m => Math.abs(m.total) > 0.004).map(m => m.mes), hoyYm])].sort(), sumaEn = ym => fzR2(socios.reduce((t, s) => t + fzPctEn(s, ym), 0));
+  const mesesMal = socios.length ? yms.map(ym => ({ ym, suma: sumaEn(ym) })).filter(x => Math.abs(x.suma - 100) > 0.001) : [];
   return { meses, socios, filasSocio, total: fzR2(meses.reduce((t, m) => t + m.total, 0)), pagado: fzR2(filasSocio.reduce((t, f) => t + f.pagado, 0)),
-    pendiente: fzR2(filasSocio.reduce((t, f) => t + f.saldo, 0)), sumaPct: fzR2(socios.reduce((t, s) => t + s.porcentaje, 0)) };
+    pendiente: fzR2(filasSocio.reduce((t, f) => t + f.saldo, 0)), sumaPct: sumaEn(hoyYm), mesesMal };
 }
 function fzPagosHtml(){
   const S = fzS();
@@ -21957,11 +21970,11 @@ function fzPagosHtml(){
   // 1) Socios: lo que le corresponde a cada uno, lo cobrado y lo pendiente (desde el inicio)
   const filasSoc = C.filasSocio.map(f => `<tr class="cg-row" style="cursor:pointer;" onclick="fzSocioForm('${f.s.id}')" title="Editar">
       <td data-sort-value="${esc(f.s.nombre)}"><b>${esc(f.s.nombre)}</b></td>
-      <td data-sort-value="${f.s.porcentaje}" style="text-align:right;">${fzNum(f.s.porcentaje, 2)} %</td>
+      <td data-sort-value="${f.pctActual}" style="text-align:right;white-space:nowrap;">${fzNum(f.pctActual, 2)} %${(S.pcts || []).filter(x => x.socioId === f.s.id).length > 1 ? ' <small style="color:var(--mutedFaint);" title="Su porcentaje ha cambiado con el tiempo: pulsa el socio para ver las fechas">· con cambios</small>' : ''}</td>
       <td data-sort-value="${f.corresponde}" style="text-align:right;white-space:nowrap;">${fzEur(f.corresponde)}</td>
       <td data-sort-value="${f.pagado}" style="text-align:right;white-space:nowrap;">${fzEur(f.pagado)}</td>
       <td data-sort-value="${f.saldo}" style="text-align:right;white-space:nowrap;font-weight:700;color:${colorSaldo(f.saldo)};">${fzEur(f.saldo)}</td></tr>`).join('');
-  const avisoPct = C.socios.length && Math.abs(C.sumaPct - 100) > 0.001 ? `<div class="se-aviso" style="margin-top:10px;">Los porcentajes suman ${fzNum(C.sumaPct, 2)} %, no 100 %: ${C.sumaPct < 100 ? 'una parte del beneficio no se reparte a nadie' : 'se reparte más de lo que hay'}.</div>` : '';
+  const avisoPct = C.mesesMal.length ? `<div class="se-aviso" style="margin-top:10px;">Los porcentajes no suman 100 % en ${C.mesesMal.slice(0, 3).map(x => `${esc(fzMesTxt(x.ym))} (${fzNum(x.suma, 2)} %)`).join(', ')}${C.mesesMal.length > 3 ? ` y ${C.mesesMal.length - 3} mes${C.mesesMal.length - 3 !== 1 ? 'es' : ''} más` : ''}: en esos meses ${C.mesesMal[0].suma < 100 ? 'una parte del beneficio no se reparte a nadie' : 'se reparte más de lo que hay'}. Revisa las fechas de los porcentajes.</div>` : '';
   const cardSocios = `<div class="card dr-card"><div class="dr-sec"><span class="dr-n">1</span><div><b>Socios y reparto</b><small>Desde el inicio: lo que le corresponde a cada uno según su porcentaje, lo que ya ha cobrado y lo que le falta. Pulsa un socio para cambiar su nombre o porcentaje.</small></div></div>
       ${C.socios.length ? `<div style="overflow-x:auto;"><table class="tf-table"><thead><tr>${thSort('Socio', 'text')}${thSort('Porcentaje', 'number', 'style="text-align:right;"')}${thSort('Le corresponde', 'number', 'style="text-align:right;"')}${thSort('Cobrado', 'number', 'style="text-align:right;"')}${thSort('Pendiente', 'number', 'style="text-align:right;"')}</tr></thead><tbody>${filasSoc}</tbody></table></div>${avisoPct}`
         : '<div style="color:var(--mutedFaint);font-size:13px;padding:6px 0;">Todavía no hay socios. Pulsa «+ Socio» para añadir el primero con su porcentaje.</div>'}</div>`;
@@ -21992,25 +22005,50 @@ function fzPagosHtml(){
       <td data-sort-value="${m.ben}" style="text-align:right;white-space:nowrap;">${fzEur(m.ben)}</td>
       <td data-sort-value="${m.ajuste}" style="text-align:right;"><input value="${m.ajuste ? esc(String(m.ajuste).replace('.', ',')) : ''}" placeholder="0" inputmode="decimal" maxlength="12" style="width:92px;text-align:right;" title="Corrección del beneficio de este mes: suma o resta a lo que salen de los viajes" onchange="fzAjusteGuardar('${m.mes}', this.value)" /></td>
       <td data-sort-value="${m.total}" style="text-align:right;white-space:nowrap;font-weight:700;">${fzEur(m.total)}</td>
-      ${m.partes.map((x, i) => `<td data-sort-value="${x}" style="text-align:right;white-space:nowrap;color:var(--muted);">${fzEur(x)}</td>`).join('')}</tr>`).join('');
+      ${m.partes.map((x, i) => `<td data-sort-value="${x}" style="text-align:right;white-space:nowrap;color:var(--muted);" title="${fzNum(m.pcts[i], 2)} % este mes">${fzEur(x)}</td>`).join('')}</tr>`).join('');
   const pie = `<tfoot><tr style="font-weight:700;"><td>Total${S.pgAnio ? ' ' + esc(S.pgAnio) : ''}</td><td style="text-align:right;">${sumaMes(m => m.viajes)}</td><td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.ben))}</td><td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.ajuste))}</td><td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.total))}</td>${C.socios.map((s, i) => `<td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.partes[i]))}</td>`).join('')}</tr></tfoot>`;
   const cardMeses = `<div class="card dr-card"><div class="dr-sec"><span class="dr-n">3</span><div><b>Beneficio por mes</b><small>Sale solo de los viajes de cada mes. Si hay que corregirlo, escribe un ajuste (positivo suma, negativo resta) y el reparto se recalcula.</small></div></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">${selAnio}</div>
-      ${mesesVis.length ? `<div style="overflow-x:auto;"><table class="tf-table" style="min-width:640px;"><thead><tr>${thSort('Mes', 'text')}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Beneficio de los viajes', 'number', 'style="text-align:right;"')}${thSort('Ajuste', 'number', 'style="text-align:right;"')}${thSort('Total del mes', 'number', 'style="text-align:right;"')}${C.socios.map(s => thSort(`${esc(s.nombre)} · ${fzNum(s.porcentaje, 2)} %`, 'number', 'style="text-align:right;"')).join('')}</tr></thead><tbody>${filasMes}</tbody>${pie}</table></div>`
+      ${mesesVis.length ? `<div style="overflow-x:auto;"><table class="tf-table" style="min-width:640px;"><thead><tr>${thSort('Mes', 'text')}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Beneficio de los viajes', 'number', 'style="text-align:right;"')}${thSort('Ajuste', 'number', 'style="text-align:right;"')}${thSort('Total del mes', 'number', 'style="text-align:right;"')}${C.filasSocio.map(f => thSort(esc(f.s.nombre) + ' <small style="font-weight:400;">· ' + fzNum(f.pctActual, 2) + ' % hoy</small>', 'number', 'style="text-align:right;"')).join('')}</tr></thead><tbody>${filasMes}</tbody>${pie}</table></div>`
         : '<div style="color:var(--mutedFaint);font-size:13px;padding:6px 0;">No hay meses con viajes en este año.</div>'}</div>`;
   return `${banner}<div class="dr-page" style="max-width:none;margin:0;">${cardSocios}${cardPagos}${cardMeses}</div>`;
 }
 function fzPagosRefrescar(){ const el = document.getElementById('fz-pagos'); if (el) el.innerHTML = fzPagosHtml(); }
 function fzPagosFiltro(k, v){ fzS()[k] = v; fzPagosRefrescar(); }
-function fzSocioForm(id){
-  const S = fzS(), s = id ? S.socios.find(x => x.id === id) : null;
+// Líneas de porcentaje de un socio, de la más reciente a la más antigua; la que vale hoy va marcada
+function fzPctLineasHtml(id){
+  const S = fzS(), lineas = (S.pcts || []).filter(x => x.socioId === id).sort((a, b) => String(b.desde).localeCompare(String(a.desde))), hoyYm = today().slice(0, 7);
+  const vigente = lineas.find(x => String(x.desde).slice(0, 7) <= hoyYm);
+  const txtDesde = d => String(d) <= '2000-01-01' ? 'Desde el inicio' : 'Desde ' + fmtDateDMY(d);
+  return `<div style="overflow-x:auto;"><table class="tf-table"><thead><tr><th>Desde</th><th style="text-align:right;">Porcentaje</th><th></th><th></th></tr></thead><tbody>${lineas.map(l => `<tr>
+      <td style="white-space:nowrap;">${esc(txtDesde(l.desde))}</td><td style="text-align:right;font-weight:700;">${fzNum(l.porcentaje, 2)} %</td>
+      <td>${vigente && vigente.id === l.id ? '<span class="cg-chip" style="background:color-mix(in srgb,var(--success) 14%,var(--panel));color:var(--success);">Vigente</span>' : (String(l.desde).slice(0, 7) > hoyYm ? '<span class="cg-chip">Futuro</span>' : '<span style="font-size:11.5px;color:var(--mutedFaint);">Anterior</span>')}</td>
+      <td style="text-align:right;"><button type="button" class="deca-act danger" title="Quitar esta línea" onclick="fzPctQuitar('${l.id}')">${homeIcon(HOME_ICON_PATHS.trash, 14, 'currentColor', 2)}</button></td></tr>`).join('')}</tbody></table></div>`;
+}
+function fzSocioForm(id, nombreTecleado){
+  const S = fzS(), s = id ? S.socios.find(x => x.id === id) : null, conFechas = !!S.pctsOk;
   window.__fzSocioId = id || null;
+  const enter = `onkeydown="if(event.key==='Enter'){ event.preventDefault(); fzSocioGuardar(); }"`;
+  const pctBloque = !conFechas
+    ? `<div class="field"><label>Porcentaje del beneficio <span class="dc-req">*</span></label><input id="fzs-pct" inputmode="decimal" maxlength="7" placeholder="Ej. 25" value="${s ? esc(String(s.porcentaje).replace('.', ',')) : ''}" ${enter} /></div>
+       <div style="font-size:12px;color:var(--mutedFaint);margin:-4px 0 10px;">Para poner porcentajes distintos según la fecha, ejecuta el SQL «forrajes-pagos-porcentajes.sql» en Supabase.</div>`
+    : !s
+      ? `<div style="display:flex;gap:10px;flex-wrap:wrap;"><div class="field" style="flex:1 1 140px;"><label>Porcentaje del beneficio <span class="dc-req">*</span></label><input id="fzs-pct" inputmode="decimal" maxlength="7" placeholder="Ej. 25" ${enter} /></div>
+         <div class="field" style="flex:1 1 160px;"><label>Desde <small style="color:var(--mutedFaint);font-weight:400;">· vacío = desde el inicio</small></label><input id="fzs-desde" type="date" /></div></div>
+         <div style="font-size:12px;color:var(--mutedFaint);margin:-4px 0 10px;">Después podrás añadir cambios de porcentaje con su fecha.</div>`
+      : `<div class="field" style="margin-bottom:8px;"><label>Porcentaje por fechas</label>${fzPctLineasHtml(id)}</div>
+         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;padding:10px;border:1px dashed var(--border);border-radius:10px;margin-bottom:6px;">
+           <div class="field" style="flex:1 1 150px;margin:0;"><label>Nuevo % desde</label><input id="fzs-pdesde" type="date" /></div>
+           <div class="field" style="flex:0 1 110px;margin:0;"><label>Porcentaje</label><input id="fzs-pct" inputmode="decimal" maxlength="7" placeholder="Ej. 30" onkeydown="if(event.key==='Enter'){ event.preventDefault(); fzPctAnadir(); }" /></div>
+           <button type="button" class="btn btn-primary" onclick="fzPctAnadir()" style="margin-bottom:0;">Añadir</button>
+         </div>
+         <div style="font-size:12px;color:var(--mutedFaint);margin-bottom:10px;">Se aplica desde el <b>mes</b> de esa fecha: los meses anteriores se siguen repartiendo con el porcentaje que tenía entonces. Si pones una fecha que ya existe, se cambia su porcentaje.</div>`;
   document.getElementById('modal-slot').innerHTML = `
     <div class="modal-overlay" onclick="if(event.target===this) closeModal()">
-      <div class="modal-box" style="max-width:420px;">
+      <div class="modal-box" style="max-width:${conFechas && s ? 520 : 440}px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;"><h3 class="modal-title">${s ? esc(s.nombre) : 'Nuevo socio'}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
-        <div class="field"><label>Nombre <span class="dc-req">*</span></label><input id="fzs-nombre" maxlength="80" value="${esc(s ? s.nombre : '')}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); fzSocioGuardar(); }" /></div>
-        <div class="field"><label>Porcentaje del beneficio <span class="dc-req">*</span></label><input id="fzs-pct" inputmode="decimal" maxlength="7" placeholder="Ej. 25" value="${s ? esc(String(s.porcentaje).replace('.', ',')) : ''}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); fzSocioGuardar(); }" /></div>
+        <div class="field"><label>Nombre <span class="dc-req">*</span></label><input id="fzs-nombre" maxlength="80" value="${esc(nombreTecleado != null ? nombreTecleado : (s ? s.nombre : ''))}" ${enter} /></div>
+        ${pctBloque}
         <div id="fzs-error" style="color:var(--danger);font-size:12.5px;min-height:16px;margin-bottom:8px;"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">
           ${s ? '<button class="btn btn-ghost" style="margin-right:auto;color:var(--danger);" onclick="fzSocioEliminar()">Eliminar</button>' : ''}
@@ -22019,22 +22057,55 @@ function fzSocioForm(id){
         </div>
       </div>
     </div>`;
-  setTimeout(() => { const i = document.getElementById('fzs-nombre'); if (i) i.focus(); }, 30);
+  if (nombreTecleado == null) setTimeout(() => { const i = document.getElementById('fzs-nombre'); if (i) i.focus(); }, 30);
 }
 async function fzSocioGuardar(){
   const S = fzS(), id = window.__fzSocioId, err = document.getElementById('fzs-error'); if (!err) return;
   err.textContent = '';
-  const nombre = fzV('fzs-nombre').replace(/\s+/g, ' '), pct = fzImporte(fzV('fzs-pct'));
+  const nombre = fzV('fzs-nombre').replace(/\s+/g, ' '), conFechas = !!S.pctsOk;
   if (!nombre) { err.textContent = 'Escribe el nombre.'; return; }
-  if (!isFinite(pct) || pct < 0 || pct > 100) { err.textContent = 'El porcentaje tiene que ser un número entre 0 y 100.'; return; }
   if (S.socios.some(x => x.id !== id && fzNorm(x.nombre) === fzNorm(nombre))) { err.textContent = 'Ya hay un socio con ese nombre.'; return; }
-  const row = { nombre, porcentaje: Math.round(pct * 1000) / 1000 };
+  const row = { nombre };
+  let pct = null, desde = '';
+  if (!id || !conFechas) {   // socio nuevo, o sin porcentajes por fecha: el porcentaje se pide aquí (si ya existe con fechas, se cambian en su lista)
+    pct = fzImporte(fzV('fzs-pct'));
+    if (!isFinite(pct) || pct < 0 || pct > 100) { err.textContent = 'El porcentaje tiene que ser un número entre 0 y 100.'; return; }
+    row.porcentaje = Math.round(pct * 1000) / 1000;
+    desde = !id && conFechas ? (fzV('fzs-desde') || '2000-01-01') : '';
+  }
   const { data, error } = id ? await supabaseClient.from('forraje_socios').update(row).eq('id', id).select().single() : await supabaseClient.from('forraje_socios').insert({ ...row, orden: S.socios.length + 1 }).select().single();
   if (error || !data) { err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test((error && error.message) || '') ? 'falta ejecutar el SQL «forrajes-pagos.sql» en Supabase.' : ((error && error.message) || 'error desconocido.')); return; }
+  if (!id && conFechas) {   // el porcentaje de un socio nuevo entra como su primera línea con fecha
+    const rp = await supabaseClient.from('forraje_socio_porcentajes').insert({ socio_id: data.id, desde, porcentaje: row.porcentaje }).select().single();
+    if (rp.error || !rp.data) appToast('Socio creado, pero no se pudo guardar su porcentaje: ' + ((rp.error && rp.error.message) || 'error desconocido') + '. Ábrelo y añádeselo.', 'error');
+    else S.pcts.push({ id: rp.data.id, socioId: data.id, desde: rp.data.desde, porcentaje: Number(rp.data.porcentaje) || 0 });
+  }
   const s = { id: data.id, nombre: data.nombre, porcentaje: Number(data.porcentaje) || 0, orden: Number(data.orden) || 0 }, i = S.socios.findIndex(x => x.id === s.id);
   if (i >= 0) S.socios[i] = s; else S.socios.push(s);
   S.socios.sort((a, b) => a.orden - b.orden);
   closeModal(); appToast('Socio guardado.', 'ok'); fzPagosRefrescar();
+}
+// Nuevo porcentaje con fecha para un socio que ya existe
+async function fzPctAnadir(){
+  const S = fzS(), id = window.__fzSocioId, err = document.getElementById('fzs-error'); if (!err || !id) return;
+  err.textContent = '';
+  const desde = fzV('fzs-pdesde'), pct = fzImporte(fzV('fzs-pct')), nombre = fzV('fzs-nombre');
+  if (!desde) { err.textContent = 'Indica desde qué fecha vale el nuevo porcentaje.'; return; }
+  if (!isFinite(pct) || pct < 0 || pct > 100) { err.textContent = 'El porcentaje tiene que ser un número entre 0 y 100.'; return; }
+  const { data, error } = await supabaseClient.from('forraje_socio_porcentajes').upsert({ socio_id: id, desde, porcentaje: Math.round(pct * 1000) / 1000 }, { onConflict: 'socio_id,desde' }).select().single();
+  if (error || !data) { err.textContent = 'No se pudo guardar: ' + ((error && error.message) || 'error desconocido.'); return; }
+  const nueva = { id: data.id, socioId: id, desde: data.desde, porcentaje: Number(data.porcentaje) || 0 }, i = S.pcts.findIndex(x => x.socioId === id && x.desde === nueva.desde);
+  if (i >= 0) S.pcts[i] = nueva; else S.pcts.push(nueva);
+  fzSocioForm(id, nombre); fzPagosRefrescar();
+}
+async function fzPctQuitar(pid){
+  const S = fzS(), id = window.__fzSocioId, l = S.pcts.find(x => x.id === pid), err = document.getElementById('fzs-error'); if (!l) return;
+  if (S.pcts.filter(x => x.socioId === l.socioId).length <= 1) { if (err) err.textContent = 'Es la única línea de porcentaje de este socio: no se puede quitar. Cambia su porcentaje añadiendo otra con su fecha.'; return; }
+  const nombre = fzV('fzs-nombre');
+  const { error } = await supabaseClient.from('forraje_socio_porcentajes').delete().eq('id', pid);
+  if (error) { if (err) err.textContent = 'No se pudo quitar: ' + error.message; return; }
+  S.pcts = S.pcts.filter(x => x.id !== pid);
+  fzSocioForm(id, nombre); fzPagosRefrescar();
 }
 async function fzSocioEliminar(){
   const S = fzS(), id = window.__fzSocioId, s = S.socios.find(x => x.id === id), err = document.getElementById('fzs-error'); if (!s) return;

@@ -272,7 +272,7 @@
         ajustes: [{ mes: '2024-01', importe: -41 }, { mes: '2024-02', importe: 100 }],
         socios: [{ id: 'a', nombre: 'Socio', porcentaje: 50 }, { id: 't', nombre: 'Tatiana', porcentaje: 25 }, { id: 'j', nombre: 'Joel', porcentaje: 25 }],
         pagos: [{ id: '1', socioId: 't', importe: 631 }, { id: '2', socioId: 't', importe: 1000 }, { id: '3', socioId: 'j', importe: 631 }] };
-      const fzS = () => S;
+      const fzS = () => S; const today = () => '2026-11-16';
       ${trozo('function fzImporte', 'function fzPagosHtml')}
       const C = fzPagosCalc();
       return { meses: C.meses.map(m => [m.mes, m.viajes, m.ben, m.ajuste, m.total]), total: C.total, sumaPct: C.sumaPct,
@@ -284,6 +284,31 @@
     igual(r.pagado, 2262); igual(r.pendiente, fzTotalPend(r), 'Lo pendiente es lo repartido menos lo pagado'); igual(r.mes, 'nov 2023');
     igual(r.imp.map(x => (x !== x ? 'NaN' : x)), [1234.56, -300, 95.5, 1300, 0.5, 'NaN', 'NaN']);
     function fzTotalPend(x) { return Math.round((18639 + 9319.5 + 9319.5 - 2262) * 100) / 100; }
+  });
+
+  prueba('Forrajes · Pagos: el porcentaje de cada socio cambia con la fecha (desde el mes del cambio) y avisa si un mes no suma 100 %', () => {
+    const r = new Function(`
+      const FZ_MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']; const fzR2 = n => Math.round((Number(n) || 0) * 100) / 100;
+      const fzCalc = v => ({ beneficio: v.b }); const today = () => '2026-11-16';
+      const S = { pctsOk: true, viajes: [{ fecha: '2024-01-10', b: 1000 }, { fecha: '2024-02-10', b: 1000 }, { fecha: '2024-03-10', b: 1000 }], ajustes: [], pagos: [{ id: 'p', socioId: 'a', importe: 300 }],
+        socios: [{ id: 'a', nombre: 'A', porcentaje: 50 }, { id: 't', nombre: 'T', porcentaje: 25 }, { id: 'j', nombre: 'J', porcentaje: 25 }],
+        pcts: [{ id: '1', socioId: 'a', desde: '2000-01-01', porcentaje: 50 }, { id: '2', socioId: 'a', desde: '2024-02-15', porcentaje: 40 },
+               { id: '3', socioId: 't', desde: '2000-01-01', porcentaje: 25 }, { id: '4', socioId: 't', desde: '2024-03-01', porcentaje: 30 },
+               { id: '5', socioId: 'j', desde: '2000-01-01', porcentaje: 25 }, { id: '6', socioId: 'j', desde: '2024-02-01', porcentaje: 30 }] };
+      const fzS = () => S;
+      ${trozo('function fzImporte', 'function fzPagosHtml')}
+      let C = fzPagosCalc();
+      const porMes = C.meses.slice().reverse().map(m => [m.mes, ...m.partes.slice(0, 3)]);
+      const malos = C.mesesMal.map(x => [x.ym, x.suma]);
+      // un socio que entra en marzo de 2024: los meses de antes tiene 0 % y desde marzo, el 10 %
+      S.socios.push({ id: 'n', nombre: 'Nuevo', porcentaje: 10 }); S.pcts.push({ id: '7', socioId: 'n', desde: '2024-03-01', porcentaje: 10 });
+      C = fzPagosCalc();
+      return { porMes, malos, totales: C.filasSocio.slice(0, 3).map(f => [f.s.id, f.corresponde, f.pagado, f.saldo]), nuevoEn: C.meses.slice().reverse().map(m => m.partes[3]), hoy: C.filasSocio.slice(0, 3).map(f => f.pctActual) };`)();
+    igual(r.porMes, [['2024-01', 500, 250, 250], ['2024-02', 400, 250, 300], ['2024-03', 400, 300, 300]], 'Cada mes usa el porcentaje que valía ese mes (el cambio rige desde el mes de su fecha)');
+    igual(r.malos[0], ['2024-02', 95], 'Febrero suma 95 %: debía avisar'); cierto(r.malos.length >= 1);
+    igual(r.totales, [['a', 1300, 300, 1000], ['t', 800, 0, 800], ['j', 850, 0, 850]]);
+    igual(r.nuevoEn, [0, 0, 100], 'Un socio sin línea anterior a su fecha no cobra los meses de antes (0 %) y entra desde el mes de su fecha');
+    igual(r.hoy, [40, 30, 30]);
   });
 
   // ---------- Textos largos en los PDF ----------
