@@ -218,17 +218,40 @@
         const fzV = id => ((document.getElementById(id) || {}).value || '').trim(); const fzN = id => { const t = fzV(id).replace(',', '.'); return t === '' ? 0 : Number(t); };
         let sucio = 0; const fzDirty = () => { sucio++; }; const currentUserEmail = () => 'a@b'; const appConfirm = async () => true; const supabaseClient = {};
         window.__fzCat = { tipo: 'proveedores', id: null, pantalla: true };
-        ${trozo('const fzPrecioTxt', '/* Un proveedor se crea y se edita')}
+        S.preciosCli = [{ id: 'pc1', duenoId: 'cli1', productoId: 'paja', formato: '', precio: 110, unidad: 't', fecha: '2026-01-01', notas: '', creado: '1' }, { id: 'pc2', duenoId: 'cli1', productoId: 'paja', formato: '', precio: 120, unidad: 't', fecha: '2026-06-01', notas: '', creado: '2' }]; S.preciosCliOk = true;
+        ${trozo('const fzPrecioTxt', '/* Un proveedor y un cliente se crean y se editan')}
         fzPreciosRefrescar();
         const poner = (prod, precio, ud) => { document.getElementById('fzp-prod').value = prod; document.getElementById('fzp-precio').value = precio; document.getElementById('fzp-ud').value = ud; };
         poner('paja', '95', 't'); await fzPrecioAnadir();
         poner('alf', '120,5', 't'); await fzPrecioAnadir();
         const filas1 = document.querySelectorAll('#fzc-precios tbody tr').length, borr1 = window.__fzCat.borrador.map(b => [b.productoId, b.precio]);
         const idQuitar = window.__fzCat.borrador[0].id; await fzPrecioQuitar(idQuitar);
-        return { filas1, borr1, borr2: window.__fzCat.borrador.map(b => [b.productoId, b.precio]), filas2: document.querySelectorAll('#fzc-precios tbody tr').length, sucio, guardadosEnBD: S.precios.length, aviso: /se guardan al crear/.test(fzPreciosHtml(null)) || /Aún no has apuntado/.test(document.getElementById('fzc-precios').innerHTML) };`)();
+        const res = { filas1, borr1, borr2: window.__fzCat.borrador.map(b => [b.productoId, b.precio]), filas2: document.querySelectorAll('#fzc-precios tbody tr').length, sucio, guardadosEnBD: S.precios.length };
+        // cliente nuevo: el mismo borrador, con su texto
+        window.__fzCat = { tipo: 'clientes', id: null, pantalla: true }; fzPreciosRefrescar();
+        res.textoCli = /se guardan al crear el cliente/.test(document.getElementById('fzc-precios').innerHTML);
+        poner('alf', '99', 'balas'); await fzPrecioAnadir(); res.borrCli = window.__fzCat.borrador.map(b => [b.productoId, b.precio, b.unidad]);
+        // cliente ya creado: la tarifa vigente es la de la fecha más reciente (120, no 110), y no se mezcla con la de los proveedores
+        res.vigCli = fzPreciosVigentes('cli1', 'clientes').map(r => r.precio); res.vigProv = fzPreciosVigentes('cli1').length;
+        return res;`)();
       igual(r.filas1, 2); igual(r.borr1, [['paja', 95], ['alf', 120.5]]); igual(r.borr2, [['alf', 120.5]]); igual(r.filas2, 1);
       cierto(r.sucio >= 2, 'Debía marcar el formulario como modificado'); igual(r.guardadosEnBD, 0, 'No debe guardar nada en la base de datos hasta crear el proveedor');
+      cierto(r.textoCli, 'El cliente nuevo debía decir que los precios se guardan al crearlo'); igual(r.borrCli, [['alf', 99, 'balas']]);
+      igual(r.vigCli, [120], 'El precio vigente del cliente es el de la fecha más reciente'); igual(r.vigProv, 0, 'Los precios de clientes no se mezclan con los de proveedores');
     } finally { ['fzc-precios', 'fz-test-sel'].forEach(id => { const e = document.getElementById(id); if (e) e.remove(); }); }
+  });
+
+  prueba('Forrajes: el cliente tiene su pantalla completa con productos y precios (sin «Calidad y bloqueo», que es solo de proveedores)', () => {
+    const r = new Function(`
+      const FZ_CAT = { proveedores: { uno: 'proveedor', unoT: 'Proveedor', campo: 'proveedorId' }, clientes: { uno: 'cliente', unoT: 'Cliente', campo: 'clienteId' } };
+      const S = { catEdit: { tipo: 'TIPO', id: null }, proveedores: [], clientes: [], viajes: [] }; const fzS = () => S; const esc = s => String(s == null ? '' : s); const homeIcon = () => ''; const HOME_ICON_PATHS = { users: '' };
+      const FZ_PAGOS = ['Efectivo']; const fmtDateDMY = d => d; const fzPreciosHtml = (id, tipo) => '<i>precios:' + tipo + ':' + id + '</i>';
+      ${trozo('function fzCatPantallaHtml', 'function fzBloqToggle')}
+      S.catEdit.tipo = 'clientes'; const cli = fzCatPantallaHtml(); S.catEdit.tipo = 'proveedores'; const prov = fzCatPantallaHtml();
+      return { cli, prov };`)();
+    cierto(/Volver a clientes/.test(r.cli) && /Crear cliente/.test(r.cli) && /Productos que compra y sus precios/.test(r.cli) && /precios:clientes:null/.test(r.cli), 'El cliente nuevo debía tener su pantalla con sus precios');
+    cierto(!/Calidad y bloqueo/.test(r.cli), 'Un cliente no se bloquea');
+    cierto(/Volver a proveedores/.test(r.prov) && /Crear proveedor/.test(r.prov) && /Calidad y bloqueo/.test(r.prov) && /Productos que vende y sus precios/.test(r.prov) && /precios:proveedores:null/.test(r.prov), 'El proveedor debía seguir igual');
   });
 
   // ---------- Textos largos en los PDF ----------

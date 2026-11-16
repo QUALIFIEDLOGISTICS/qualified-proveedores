@@ -21078,7 +21078,7 @@ const FZ_SECCIONES = [['viajes', 'Viajes'], ['proveedores', 'Proveedores'], ['cl
 const FZ_FORMATOS = ['Redonda', 'Rectangular', 'Ensilada'];   // formato de la bala
 const FZ_MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 function fzS(){
-  return (window.__fz = window.__fz || { cargado: false, cargando: false, error: '', sec: 'viajes', view: 'lista', viajes: [], proveedores: [], clientes: [], productos: [], precios: [], preciosOk: true,
+  return (window.__fz = window.__fz || { cargado: false, cargando: false, error: '', sec: 'viajes', view: 'lista', viajes: [], proveedores: [], clientes: [], productos: [], precios: [], preciosOk: true, preciosCli: [], preciosCliOk: true,
     q: '', anio: today().slice(0, 4), mes: today().slice(5, 7), fprov: '', fcli: '', producto: '', formato: '', pend: false, cq: '', archivados: false, da: today().slice(0, 4), dm: '', dvista: 'resumen', dmet: 'beneficio', dtramo: false, df: { producto: '', formato: '', prov: '', cli: '', reg: '' }, form: null, formDirty: false });
 }
 const fzR2 = n => Math.round((Number(n) || 0) * 100) / 100;
@@ -21094,7 +21094,7 @@ function fzViajeDeFila(r){
 }
 const fzCatDeFila = r => ({ id: r.id, nombre: r.nombre || '', telefono: r.telefono || '', zona: r.zona || '', formaPago: r.forma_pago || '', notas: r.notas || '', archived: !!r.archived,
   bloqueado: !!r.bloqueado, bloqueadoMotivo: r.bloqueado_motivo || '', bloqueadoEn: r.bloqueado_en || '' });   // el bloqueo solo lo usan los proveedores
-const fzPrecioDeFila = r => ({ id: r.id, proveedorId: r.proveedor_id, productoId: r.producto_id, formato: r.formato || '', precio: Number(r.precio) || 0, unidad: r.unidad || 't', fecha: r.fecha, notas: r.notas || '', creado: r.created_at || '' });
+const fzPrecioDeFila = r => ({ id: r.id, duenoId: r.proveedor_id || r.cliente_id, productoId: r.producto_id, formato: r.formato || '', precio: Number(r.precio) || 0, unidad: r.unidad || 't', fecha: r.fecha, notas: r.notas || '', creado: r.created_at || '' });
 async function fzCargar(forzar){
   const S = fzS();
   if (S.cargando || (S.cargado && !forzar)) return;
@@ -21111,16 +21111,18 @@ async function fzCargar(forzar){
     return out;
   };
   try {
-    const [v, p, c, pr, pp] = await Promise.all([
+    const [v, p, c, pr, pp, pc] = await Promise.all([
       todo(() => supabaseClient.from('forraje_viajes').select('*').order('fecha', { ascending: false }).order('id')),
       todo(() => supabaseClient.from('forraje_proveedores').select('*').order('nombre').order('id')),
       todo(() => supabaseClient.from('forraje_clientes').select('*').order('nombre').order('id')),
       todo(() => supabaseClient.from('forraje_productos').select('*').order('nombre').order('id')),
       todo(() => supabaseClient.from('forraje_proveedor_precios').select('*').order('fecha', { ascending: false }).order('id')).catch(() => null),   // si falta su SQL, lo demás sigue funcionando
+      todo(() => supabaseClient.from('forraje_cliente_precios').select('*').order('fecha', { ascending: false }).order('id')).catch(() => null),
     ]);
     S.viajes = v.map(fzViajeDeFila); fzOrdenar();
     S.proveedores = p.map(fzCatDeFila); S.clientes = c.map(fzCatDeFila); S.productos = pr.map(fzCatDeFila);
     S.preciosOk = pp !== null; S.precios = (pp || []).map(fzPrecioDeFila);
+    S.preciosCliOk = pc !== null; S.preciosCli = (pc || []).map(fzPrecioDeFila);
     S.cargado = true;
   } catch (e) {
     S.error = /relation|does not exist|schema cache/i.test((e && e.message) || '') ? 'Falta ejecutar el SQL «forrajes-schema.sql» en Supabase.' : ((e && e.message) || 'No se pudieron cargar los datos.');
@@ -21166,7 +21168,7 @@ function tplForrajes(){
   if (S.error) cuerpo = `<div class="card" style="color:var(--danger);padding:24px;text-align:center;">${esc(S.error)}<div style="margin-top:14px;"><button class="btn btn-ghost" onclick="fzS().error=''; fzCargar(true)">Reintentar</button></div></div>`;
   else if (!S.cargado) cuerpo = `<div class="card dash-sk" style="height:260px;"></div>`;
   else if (S.view === 'form') { cuerpo = fzFormHtml(); setTimeout(() => { if (fzS().view === 'form') fzFormPrecios(); }, 0); }
-  else if (S.view === 'cat') cuerpo = fzProvPantallaHtml();
+  else if (S.view === 'cat') cuerpo = fzCatPantallaHtml();
   else if (S.sec === 'viajes') cuerpo = fzViajesHtml();
   else if (S.sec === 'dashboard') cuerpo = fzDashboardHtml();
   else cuerpo = fzCatalogoHtml(S.sec);
@@ -21355,7 +21357,7 @@ function fzFormHtml(){
         <div class="card dr-card">
           ${sec(3, 'Descarga: a quién se vende', 'El cliente donde se descarga la mercancía')}
           <div class="dr-g">
-            <div class="field dr-w2"><label>Cliente ${nuevo('clientes')}</label>${fzSelHtml('fz-cli', cli, f.clienteId, 'Elige el cliente…', 'fzFormCliente()')}</div>
+            <div class="field dr-w2"><label>Cliente ${nuevo('clientes')}</label>${fzSelHtml('fz-cli', cli, f.clienteId, 'Elige el cliente…', 'fzFormCliente()')}<div id="fz-cli-precio" class="fz-hint"></div></div>
             <div class="field"><label>Región de descarga</label><input id="fz-zd" list="fz-dl-zona" maxlength="12" placeholder="ES25" style="text-transform:uppercase;" value="${esc(f.zonaDescarga)}" /></div>
             <div class="field dr-w2"><label>Camión / conductor de la descarga ${ayuda('· si es otro distinto')}</label><input id="fz-cd" list="fz-dl-cam" maxlength="40" placeholder="Igual que en la carga" value="${esc(f.camionDescarga)}" /></div>
             <div class="field"><label>Teléfono de descarga</label><input id="fz-td" inputmode="tel" maxlength="40" value="${esc(f.telDescarga)}" /></div>
@@ -21427,6 +21429,7 @@ function fzFormPrecios(){
   if (hc) hc.textContent = uc ? `Último con este proveedor: ${fzNum(uc.precioCompra, 4)}` : '';
   if (hv) hv.textContent = uv ? `Último con este cliente: ${fzNum(uv.precioVenta, 4)}` : '';
   fzFormProvPrecio();
+  fzFormCliPrecio();
   fzFormCalc();
 }
 // El precio que el proveedor tiene apuntado en su ficha para ese producto (y formato): un clic lo pone como precio de compra
@@ -21440,8 +21443,17 @@ function fzFormProvPrecio(){
   const vg = fzPreciosVigentes(prov).filter(r => (!prod || r.productoId === prod) && (!fm || !r.formato || r.formato === fm)).slice(0, 4);
   el.innerHTML = vg.length ? `<span style="margin-right:6px;">Precio apuntado:</span>${vg.map(r => `<button type="button" class="fz-chip" onclick="fzUsarPrecio('${r.id}')" title="Poner este precio como precio de compra">${esc((M.prod.get(r.productoId) || {}).nombre || '')}${r.formato ? ' ' + esc(r.formato) : ''} <b>${esc(fzPrecioTxt(r))}</b> <small>desde ${esc(fmtDateDMY(r.fecha))} · Usar</small></button>`).join('')}` : '';
 }
+// Lo mismo con el cliente: el precio de venta que tiene apuntado en su ficha para ese producto (y formato)
+function fzFormCliPrecio(){
+  const el = document.getElementById('fz-cli-precio'); if (!el) return;
+  const cli = fzV('fz-cli'), prod = fzV('fz-prod'), fm = fzV('fz-formato');
+  if (!cli) { el.innerHTML = ''; return; }
+  const M = fzMaps();
+  const vg = fzPreciosVigentes(cli, 'clientes').filter(r => (!prod || r.productoId === prod) && (!fm || !r.formato || r.formato === fm)).slice(0, 4);
+  el.innerHTML = vg.length ? `<span style="margin-right:6px;">Precio apuntado:</span>${vg.map(r => `<button type="button" class="fz-chip" onclick="fzUsarPrecio('${r.id}')" title="Poner este precio como precio de venta">${esc((M.prod.get(r.productoId) || {}).nombre || '')}${r.formato ? ' ' + esc(r.formato) : ''} <b>${esc(fzPrecioTxt(r))}</b> <small>desde ${esc(fmtDateDMY(r.fecha))} · Usar</small></button>`).join('')}` : '';
+}
 function fzUsarPrecio(id){
-  const r = fzS().precios.find(x => x.id === id), pc = document.getElementById('fz-pcu'); if (!r || !pc) return;
+  const S0 = fzS(), rCli = (S0.preciosCli || []).find(x => x.id === id), r = rCli || S0.precios.find(x => x.id === id), pc = document.getElementById(rCli ? 'fz-pvu' : 'fz-pcu'); if (!r || !pc) return;
   pc.value = String(r.precio).replace('.', ',');
   const ud = document.getElementById('fz-ud'); if (ud && r.unidad !== fzV('fz-ud')) ud.value = r.unidad;
   const pr = document.getElementById('fz-prod'); if (pr && !pr.value) pr.value = r.productoId;
@@ -21560,16 +21572,17 @@ function fzCatTablaHtml(tipo){
   const esProd = tipo === 'productos';
   // Proveedores (toneladas compradas), clientes (vendidas) y productos (movidas) salen de más a menos toneladas (se puede cambiar pulsando el título de cualquier columna)
   lista.sort((a, b) => ((est.get(b.id) || {}).tn || 0) - ((est.get(a.id) || {}).tn || 0) || a.nombre.localeCompare(b.nombre, 'es'));
-  const compra = new Map();   // proveedor → productos que se le han comprado (con las toneladas de cada uno)
-  if (tipo === 'proveedores') S.viajes.forEach(v => { if (!v.proveedorId || !v.productoId) return; const m = compra.get(v.proveedorId) || new Map(); m.set(v.productoId, (m.get(v.productoId) || 0) + (v.unidad === 'balas' ? 0 : v.cantidad)); compra.set(v.proveedorId, m); });
+  const conPrecios = tipo !== 'productos', esCliL = tipo === 'clientes';
+  const compra = new Map();   // proveedor → productos que se le han comprado (cliente → que se le han vendido), con las toneladas de cada uno
+  if (conPrecios) S.viajes.forEach(v => { const quien = v[c.campo]; if (!quien || !v.productoId) return; const m = compra.get(quien) || new Map(); m.set(v.productoId, (m.get(v.productoId) || 0) + (v.unidad === 'balas' ? 0 : v.cantidad)); compra.set(quien, m); });
   const filas = lista.map(e => { const s = est.get(e.id) || { n: 0, tn: 0, beneficio: 0, reg: new Set() }, regs = [...s.reg].sort().join(', ');
     return `<tr class="cg-row${e.archived ? ' arch' : ''}${e.bloqueado ? ' fz-bloq' : ''}" style="cursor:pointer;" onclick="fzCatForm('${tipo}', '${e.id}')">
       <td data-sort-value="${esc(e.nombre)}"><b${e.bloqueado ? ' class="fz-bloq-n"' : ''}>${esc(e.nombre)}</b>${e.bloqueado ? '<span class="fz-bloq-chip">Bloqueado</span>' : ''}${e.archived ? ' <span class="cg-chip">Archivado</span>' : ''}${e.bloqueado && e.bloqueadoMotivo ? `<div class="cg-ref fz-bloq-n" style="font-weight:600;">${esc(e.bloqueadoMotivo)}</div>` : ''}${e.notas ? `<div class="cg-ref">${esc(e.notas)}</div>` : ''}</td>
-      ${tipo === 'proveedores' ? (() => {
-        const comprados = [...(compra.get(e.id) || new Map())].sort((a, b) => b[1] - a[1]).map(x => x[0]), tiene = fzPreciosDe(e.id).map(r => r.productoId);
+      ${conPrecios ? (() => {
+        const comprados = [...(compra.get(e.id) || new Map())].sort((a, b) => b[1] - a[1]).map(x => x[0]), tiene = fzPreciosDe(e.id, tipo).map(r => r.productoId);
         const todos = [...new Set([...comprados, ...tiene])], nom = id => (M0.prod.get(id) || {}).nombre || '';
-        const chips = todos.map(id => `<span class="cg-chip" style="margin:1px 4px 1px 0;${comprados.includes(id) ? '' : 'opacity:.6;'}" title="${comprados.includes(id) ? 'Se le ha comprado' : 'Lo tiene apuntado en su ficha, aún no se le ha comprado'}">${esc(nom(id))}</span>`).join('');
-        const lineas = fzPreciosVigentes(e.id).map(r => `${nom(r.productoId)}${r.formato ? ' ' + r.formato : ''}: ${fzPrecioTxt(r)}`), vacio = '<span style="color:var(--mutedFaint);">—</span>';
+        const chips = todos.map(id => `<span class="cg-chip" style="margin:1px 4px 1px 0;${comprados.includes(id) ? '' : 'opacity:.6;'}" title="${comprados.includes(id) ? (esCliL ? 'Se le ha vendido' : 'Se le ha comprado') : (esCliL ? 'Lo tiene apuntado en su ficha, aún no se le ha vendido' : 'Lo tiene apuntado en su ficha, aún no se le ha comprado')}">${esc(nom(id))}</span>`).join('');
+        const lineas = fzPreciosVigentes(e.id, tipo).map(r => `${nom(r.productoId)}${r.formato ? ' ' + r.formato : ''}: ${fzPrecioTxt(r)}`), vacio = '<span style="color:var(--mutedFaint);">—</span>';
         return `<td data-sort-value="${esc(todos.map(nom).join(' '))}" style="max-width:240px;">${chips || vacio}</td><td data-sort-value="${esc(lineas.join(' '))}" style="font-size:12.5px;white-space:nowrap;">${lineas.length ? lineas.map(l => `<div>${esc(l)}</div>`).join('') : vacio}</td>`;
       })() : ''}
       ${esProd ? '' : `<td data-sort-value="${esc(regs)}">${esc(regs) || '<span style="color:var(--mutedFaint);">—</span>'}</td><td data-sort-value="${esc(e.telefono)}" style="white-space:nowrap;">${esc(e.telefono) || '<span style="color:var(--mutedFaint);">—</span>'}</td><td data-sort-value="${esc(e.formaPago)}">${esc(e.formaPago) || '<span style="color:var(--mutedFaint);">—</span>'}</td>`}
@@ -21579,7 +21592,7 @@ function fzCatTablaHtml(tipo){
       <td class="td-acc" style="text-align:right;white-space:nowrap;"><button type="button" class="deca-act" title="Editar" onclick="event.stopPropagation(); fzCatForm('${tipo}', '${e.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button></td>
     </tr>`; }).join('');
   return `<div class="card cg-compacta" style="padding:0;overflow:hidden;"><div style="overflow-x:auto;"><table class="tf-table">
-    <thead><tr>${thSort(c.unoT, 'text')}${tipo === 'proveedores' ? thSort('Productos', 'text') + thSort('Precios vigentes', 'text') : ''}${esProd ? '' : `${thSort('Regiones', 'text')}${thSort('Teléfono', 'text')}${thSort('Forma de pago', 'text')}`}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Toneladas', 'number', 'style="text-align:right;"')}${thSort('Beneficio', 'number', 'style="text-align:right;"')}<th class="td-acc"></th></tr></thead>
+    <thead><tr>${thSort(c.unoT, 'text')}${conPrecios ? thSort('Productos', 'text') + thSort('Precios vigentes', 'text') : ''}${esProd ? '' : `${thSort('Regiones', 'text')}${thSort('Teléfono', 'text')}${thSort('Forma de pago', 'text')}`}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Toneladas', 'number', 'style="text-align:right;"')}${thSort('Beneficio', 'number', 'style="text-align:right;"')}<th class="td-acc"></th></tr></thead>
     <tbody>${filas}</tbody></table></div></div>`;
 }
 function fzCatalogoHtml(tipo){
@@ -21615,18 +21628,24 @@ function fzPreciosOrdenar(filas){
   const M = fzMaps(), nom = id => fzNorm((M.prod.get(id) || {}).nombre || '');
   return filas.sort((a, b) => nom(a.productoId).localeCompare(nom(b.productoId)) || fzNorm(a.formato).localeCompare(fzNorm(b.formato)) || String(b.fecha).localeCompare(String(a.fecha)) || String(b.creado).localeCompare(String(a.creado)));
 }
-function fzPreciosDe(provId){ return fzPreciosOrdenar(fzS().precios.filter(r => r.proveedorId === provId)); }
-// Proveedor nuevo (aún sin crear): los precios que se van apuntando esperan en un borrador y se guardan al pulsar «Crear proveedor»
+// Proveedores y clientes llevan sus productos con precio y fecha, cada uno en su tabla: lo que cambia entre uno y otro está aquí
+const FZ_PREC = {
+  proveedores: { tabla: 'forraje_proveedor_precios', fk: 'proveedor_id', lista: 'precios', ok: 'preciosOk', sql: 'forrajes-proveedor-precios.sql', uno: 'proveedor', de: 'de este proveedor', deCada: 'de cada proveedor' },
+  clientes: { tabla: 'forraje_cliente_precios', fk: 'cliente_id', lista: 'preciosCli', ok: 'preciosCliOk', sql: 'forrajes-cliente-precios.sql', uno: 'cliente', de: 'de este cliente', deCada: 'de cada cliente' },
+};
+const fzPrecCfg = tipo => FZ_PREC[tipo] || FZ_PREC.proveedores;
+function fzPreciosDe(id, tipo){ const cfg = fzPrecCfg(tipo); return fzPreciosOrdenar((fzS()[cfg.lista] || []).filter(r => r.duenoId === id)); }
+// Proveedor o cliente nuevo (aún sin crear): los precios que se van apuntando esperan en un borrador y se guardan al pulsar «Crear»
 function fzPreciosBorrador(){ return fzPreciosOrdenar(((window.__fzCat || {}).borrador || []).slice()); }
-// Los precios vigentes de un proveedor: el más reciente de cada producto y formato
-function fzPreciosVigentes(provId){
+// Los precios vigentes: el más reciente de cada producto y formato
+function fzPreciosVigentes(id, tipo){
   const visto = new Set();
-  return fzPreciosDe(provId).filter(r => { const k = r.productoId + '|' + r.formato; if (visto.has(k)) return false; visto.add(k); return true; });
+  return fzPreciosDe(id, tipo).filter(r => { const k = r.productoId + '|' + r.formato; if (visto.has(k)) return false; visto.add(k); return true; });
 }
-function fzPreciosHtml(provId){
-  const S = fzS(), M = fzMaps(), opt = (v, t, sel) => `<option value="${esc(v)}"${sel ? ' selected' : ''}>${esc(t)}</option>`;
-  if (!S.preciosOk) return '<div class="se-aviso">Falta ejecutar el SQL «forrajes-proveedor-precios.sql» en Supabase para guardar los productos y precios de cada proveedor.</div>';
-  const filas = provId ? fzPreciosDe(provId) : fzPreciosBorrador(), visto = new Set();
+function fzPreciosHtml(id, tipo){
+  const S = fzS(), M = fzMaps(), cfg = fzPrecCfg(tipo), provId = id, opt = (v, t, sel) => `<option value="${esc(v)}"${sel ? ' selected' : ''}>${esc(t)}</option>`;
+  if (!S[cfg.ok]) return `<div class="se-aviso">Falta ejecutar el SQL «${cfg.sql}» en Supabase para guardar los productos y precios ${cfg.deCada}.</div>`;
+  const filas = provId ? fzPreciosDe(provId, tipo) : fzPreciosBorrador(), visto = new Set();
   const cuerpo = filas.map(r => {
     const k = r.productoId + '|' + r.formato, vigente = !visto.has(k); visto.add(k);
     const p = M.prod.get(r.productoId), gris = vigente ? '' : 'color:var(--mutedFaint);';
@@ -21642,7 +21661,7 @@ function fzPreciosHtml(provId){
   }).join('');
   const tabla = filas.length
     ? `<div style="overflow-x:auto;"><table class="tf-table" style="min-width:560px;"><thead><tr><th>Producto</th><th>Formato</th><th style="text-align:right;">Precio</th><th>Desde</th><th></th><th>Nota</th><th></th></tr></thead><tbody>${cuerpo}</tbody></table></div>`
-    : `<div style="color:var(--mutedFaint);font-size:13px;padding:6px 0 10px;">${provId ? 'Todavía no hay productos ni precios apuntados de este proveedor.' : 'Aún no has apuntado ningún producto. Puedes hacerlo ahora: se guardan al crear el proveedor.'}</div>`;
+    : `<div style="color:var(--mutedFaint);font-size:13px;padding:6px 0 10px;">${provId ? `Todavía no hay productos ni precios apuntados ${cfg.de}.` : `Aún no has apuntado ningún producto. Puedes hacerlo ahora: se guardan al crear el ${cfg.uno}.`}</div>`;
   const prods = S.productos.filter(p => !p.archived);
   return `${tabla}
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:10px;padding:10px;border:1px dashed var(--border);border-radius:10px;">
@@ -21656,58 +21675,59 @@ function fzPreciosHtml(provId){
     </div>
     <div id="fzp-error" style="color:var(--danger);font-size:12.5px;min-height:16px;margin-top:6px;"></div>`;
 }
-function fzPreciosRefrescar(){ const ctx = window.__fzCat || {}, el = document.getElementById('fzc-precios'); if (el) el.innerHTML = fzPreciosHtml(ctx.id || null); }
+function fzPreciosRefrescar(){ const ctx = window.__fzCat || {}, el = document.getElementById('fzc-precios'); if (el) el.innerHTML = fzPreciosHtml(ctx.id || null, ctx.tipo); }
 async function fzPrecioAnadir(){
-  const S = fzS(), ctx = window.__fzCat || {}, err = document.getElementById('fzp-error'); if (ctx.tipo !== 'proveedores' || !err) return;
+  const S = fzS(), ctx = window.__fzCat || {}, err = document.getElementById('fzp-error'); if (!FZ_PREC[ctx.tipo] || !err) return;
+  const cfg = fzPrecCfg(ctx.tipo);
   err.textContent = '';
   const producto = fzV('fzp-prod'), txt = fzV('fzp-precio'), precio = fzN('fzp-precio'), fecha = fzV('fzp-fecha');
   if (!producto) { err.textContent = 'Elige el producto.'; return; }
   if (txt === '' || !isFinite(precio) || precio < 0) { err.textContent = 'Escribe el precio (un número).'; document.getElementById('fzp-precio').focus(); return; }
   if (!fecha) { err.textContent = 'Indica desde qué fecha vale ese precio.'; return; }
-  const row = { proveedor_id: ctx.id, producto_id: producto, formato: fzV('fzp-formato') || null, precio, unidad: fzV('fzp-ud') === 'balas' ? 'balas' : 't', fecha, notas: fzV('fzp-nota') || null, created_by: currentUserEmail() };
-  if (!ctx.id) {   // proveedor nuevo: se apunta en el borrador y se guardará al crearlo
-    (ctx.borrador = ctx.borrador || []).push({ id: 'tmp-' + Date.now() + '-' + ctx.borrador.length, proveedorId: null, productoId: producto, formato: row.formato || '', precio, unidad: row.unidad, fecha, notas: row.notas || '', creado: String(Date.now()) });
+  const row = { [cfg.fk]: ctx.id, producto_id: producto, formato: fzV('fzp-formato') || null, precio, unidad: fzV('fzp-ud') === 'balas' ? 'balas' : 't', fecha, notas: fzV('fzp-nota') || null, created_by: currentUserEmail() };
+  if (!ctx.id) {   // nuevo (aún sin crear): se apunta en el borrador y se guardará al crearlo
+    (ctx.borrador = ctx.borrador || []).push({ id: 'tmp-' + Date.now() + '-' + ctx.borrador.length, duenoId: null, productoId: producto, formato: row.formato || '', precio, unidad: row.unidad, fecha, notas: row.notas || '', creado: String(Date.now()) });
     fzDirty(); fzPreciosRefrescar();
     const f0 = document.getElementById('fzp-prod'); if (f0) f0.focus();
     return;
   }
-  const { data, error } = await supabaseClient.from('forraje_proveedor_precios').insert(row).select().single();
-  if (error || !data) { err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test((error && error.message) || '') ? 'falta ejecutar el SQL «forrajes-proveedor-precios.sql» en Supabase.' : ((error && error.message) || 'error desconocido.')); return; }
-  S.precios.push(fzPrecioDeFila(data));
+  const { data, error } = await supabaseClient.from(cfg.tabla).insert(row).select().single();
+  if (error || !data) { err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test((error && error.message) || '') ? `falta ejecutar el SQL «${cfg.sql}» en Supabase.` : ((error && error.message) || 'error desconocido.')); return; }
+  S[cfg.lista].push(fzPrecioDeFila(data));
   fzPreciosRefrescar();
-  if (S.sec === 'proveedores') { const l = document.getElementById('fz-cat-lista'); if (l) l.innerHTML = fzCatTablaHtml('proveedores'); }
+  if (S.sec === ctx.tipo) { const l = document.getElementById('fz-cat-lista'); if (l) l.innerHTML = fzCatTablaHtml(ctx.tipo); }
   const f = document.getElementById('fzp-prod'); if (f) f.focus();
 }
 async function fzPrecioQuitar(id){
-  const S = fzS(), ctx0 = window.__fzCat || {};
+  const S = fzS(), ctx0 = window.__fzCat || {}, cfg = fzPrecCfg(ctx0.tipo);
   if (String(id).startsWith('tmp-')) { ctx0.borrador = (ctx0.borrador || []).filter(x => x.id !== id); fzPreciosRefrescar(); return; }   // todavía no está guardado: se quita sin más
-  const r = S.precios.find(x => x.id === id); if (!r) return;
+  const r = (S[cfg.lista] || []).find(x => x.id === id); if (!r) return;
   const p = fzMaps().prod.get(r.productoId);
-  if (!(await appConfirm({ title: 'Quitar precio', name: `${p ? p.nombre : ''}${r.formato ? ' · ' + r.formato : ''} · ${fzPrecioTxt(r)} · desde ${fmtDateDMY(r.fecha)}`, message: 'Se borra esta línea del historial de precios del proveedor. No afecta a los viajes.', confirmLabel: 'Quitar', tone: 'danger', icon: 'trash' }))) return;
-  const { error } = await supabaseClient.from('forraje_proveedor_precios').delete().eq('id', id);
+  if (!(await appConfirm({ title: 'Quitar precio', name: `${p ? p.nombre : ''}${r.formato ? ' · ' + r.formato : ''} · ${fzPrecioTxt(r)} · desde ${fmtDateDMY(r.fecha)}`, message: `Se borra esta línea del historial de precios ${cfg.de}. No afecta a los viajes.`, confirmLabel: 'Quitar', tone: 'danger', icon: 'trash' }))) return;
+  const { error } = await supabaseClient.from(cfg.tabla).delete().eq('id', id);
   if (error) { const e = document.getElementById('fzp-error'); if (e) e.textContent = 'No se pudo quitar: ' + error.message; return; }
-  S.precios = S.precios.filter(x => x.id !== id);
+  S[cfg.lista] = S[cfg.lista].filter(x => x.id !== id);
   fzPreciosRefrescar();
-  if (S.sec === 'proveedores') { const l = document.getElementById('fz-cat-lista'); if (l) l.innerHTML = fzCatTablaHtml('proveedores'); }
+  if (S.sec === ctx0.tipo) { const l = document.getElementById('fz-cat-lista'); if (l) l.innerHTML = fzCatTablaHtml(ctx0.tipo); }
 }
-/* Un proveedor se crea y se edita en pantalla completa (con sus productos y precios); clientes y productos, y un proveedor nuevo desde el
-   formulario de un viaje, usan la ventana pequeña. */
-function fzProvPantallaHtml(){
-  const S = fzS(), ce = S.catEdit || {}, c = FZ_CAT.proveedores, e = ce.id ? S.proveedores.find(x => x.id === ce.id) : null;
-  const volver = `<button class="btn btn-ghost" style="background:var(--panel);" onclick="fzVolver()">← Volver a proveedores</button>`;
-  if (ce.id && !e) return `<div class="deca-banner"><div style="flex:1;"><div class="deca-banner-title">Proveedor no encontrado</div></div><div class="deca-banner-actions">${volver}</div></div>`;
+/* Un proveedor y un cliente se crean y se editan en pantalla completa (con sus productos y precios); los productos, y un proveedor o cliente nuevo
+   desde el formulario de un viaje, usan la ventana pequeña. */
+function fzCatPantallaHtml(){
+  const S = fzS(), ce = S.catEdit || {}, tipo = ce.tipo === 'clientes' ? 'clientes' : 'proveedores', esCli = tipo === 'clientes', c = FZ_CAT[tipo], e = ce.id ? S[tipo].find(x => x.id === ce.id) : null;
+  const volver = `<button class="btn btn-ghost" style="background:var(--panel);" onclick="fzVolver()">← Volver a ${esCli ? 'clientes' : 'proveedores'}</button>`;
+  if (ce.id && !e) return `<div class="deca-banner"><div style="flex:1;"><div class="deca-banner-title">${c.unoT} no encontrado</div></div><div class="deca-banner-actions">${volver}</div></div>`;
   const sec = (n, t, s) => `<div class="dr-sec"><span class="dr-n">${n}</span><div><b>${t}</b>${s ? `<small>${s}</small>` : ''}</div></div>`;
   const pagos = FZ_PAGOS.slice(); if (e && e.formaPago && !pagos.includes(e.formaPago)) pagos.push(e.formaPago);
   const tieneViajes = e && S.viajes.some(v => v[c.campo] === e.id);
   return `
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.users, 26, '#fff', 1.8)}</span>
-      <div style="min-width:0;flex:1 1 260px;"><div class="deca-banner-title">${e ? esc(e.nombre) : 'Nuevo proveedor'}${e && e.archived ? ' <span class="cg-chip">Archivado</span>' : ''}${e && e.bloqueado ? '<span class="fz-bloq-chip">Bloqueado</span>' : ''}</div><div class="deca-banner-sub">${e ? 'Sus datos y los productos que vende, con sus precios y fechas.' : 'Sus datos y, si quieres, los productos que vende con sus precios: todo junto, al crearlo.'}</div></div>
+      <div style="min-width:0;flex:1 1 260px;"><div class="deca-banner-title">${e ? esc(e.nombre) : 'Nuevo ' + c.uno}${e && e.archived ? ' <span class="cg-chip">Archivado</span>' : ''}${e && e.bloqueado && !esCli ? '<span class="fz-bloq-chip">Bloqueado</span>' : ''}</div><div class="deca-banner-sub">${e ? `Sus datos y los productos que ${esCli ? 'compra' : 'vende'}, con sus precios y fechas.` : `Sus datos y, si quieres, los productos que ${esCli ? 'compra' : 'vende'} con sus precios: todo junto, al crearlo.`}</div></div>
       <div class="deca-banner-actions">${volver}</div>
     </div>
     <div class="dr-page" style="max-width:980px;margin:0;" oninput="fzDirtyProv(event)" onchange="fzDirtyProv(event)">
       <div class="card dr-card">
-        ${sec(1, 'Datos del proveedor', 'De quién se compra: nombre, teléfono y forma de pago habitual. La región (FR31, ES25…) se apunta en cada viaje.')}
+        ${sec(1, 'Datos del ' + c.uno, (esCli ? 'A quién se vende' : 'De quién se compra') + ': nombre, teléfono y forma de pago habitual. La región (FR31, ES25…) se apunta en cada viaje.')}
         <div class="dr-g">
           <div class="field dr-w2"><label>Nombre <span class="dc-req">*</span></label><input id="fzc-nombre" maxlength="120" value="${esc(e ? e.nombre : '')}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); fzCatGuardar(); }" /></div>
           <div class="field"><label>Teléfono</label><input id="fzc-tel" inputmode="tel" maxlength="40" value="${esc(e ? e.telefono : '')}" /></div>
@@ -21715,15 +21735,15 @@ function fzProvPantallaHtml(){
           <div class="field dr-w3"><label>Notas</label><textarea id="fzc-notas" rows="2" maxlength="400">${esc(e ? e.notas : '')}</textarea></div>
         </div>
       </div>
-      <div class="card dr-card"${e && e.bloqueado ? ' style="border-color:var(--danger);"' : ''}>
+      ${esCli ? '' : `<div class="card dr-card"${e && e.bloqueado ? ' style="border-color:var(--danger);"' : ''}>
         ${sec(2, 'Calidad y bloqueo', 'Si la calidad es mala o hay cualquier otro motivo, bloquéalo: saldrá en rojo en la lista y en los viajes, y avisará al elegirlo')}
         <label class="dr-chk" style="margin:0 0 10px;font-weight:600;"><input type="checkbox" id="fzc-bloq" ${e && e.bloqueado ? 'checked' : ''} onchange="fzBloqToggle()" /> Bloquear este proveedor</label>
         <datalist id="fz-dl-bloq">${['Mala calidad', 'Problemas de pago', 'No cumple los plazos', 'Poco fiable', 'Precio demasiado alto'].map(t => `<option value="${esc(t)}"></option>`).join('')}</datalist>
         <div id="fzc-bloq-motivo" style="${e && e.bloqueado ? '' : 'display:none;'}"><div class="field" style="margin:0;"><label>Motivo ${e && e.bloqueado && e.bloqueadoEn ? `<small style="color:var(--mutedFaint);font-weight:400;">· bloqueado desde el ${esc(fmtDateDMY(e.bloqueadoEn))}</small>` : ''}</label><input id="fzc-bloq-txt" data-combo="fz-dl-bloq" autocomplete="off" maxlength="200" placeholder="Mala calidad, problemas de pago…" value="${esc(e ? e.bloqueadoMotivo : '')}" /></div></div>
-      </div>
+      </div>`}
       <div class="card dr-card">
-        ${sec(3, 'Productos que vende y sus precios', e ? 'Informativo: no cambia los viajes. Para actualizar un precio, añade una línea nueva con su fecha y la anterior queda en el historial.' : 'Opcional: apunta ya lo que vende y a qué precio, y se guarda junto con el proveedor al pulsar «Crear proveedor».')}
-        <div id="fzc-precios">${fzPreciosHtml(e ? e.id : null)}</div>
+        ${sec(esCli ? 2 : 3, esCli ? 'Productos que compra y sus precios' : 'Productos que vende y sus precios', e ? 'Informativo: no cambia los viajes. Para actualizar un precio, añade una línea nueva con su fecha y la anterior queda en el historial.' : `Opcional: apunta ya lo que ${esCli ? 'compra' : 'vende'} y a qué precio, y se guarda junto con el ${c.uno} al pulsar «Crear ${c.uno}».`)}
+        <div id="fzc-precios">${fzPreciosHtml(e ? e.id : null, tipo)}</div>
       </div>
 
       <div id="fzc-error" class="dr-err"></div>
@@ -21733,7 +21753,7 @@ function fzProvPantallaHtml(){
           ${e && e.archived && !tieneViajes ? `<button class="btn btn-ghost" style="color:var(--danger);" onclick="fzCatEliminar()" title="Solo se puede eliminar lo archivado que no tiene ningún viaje">Eliminar</button>` : ''}
         </div>
         <button class="btn btn-ghost" onclick="fzVolver()">Cancelar</button>
-        <button class="btn btn-primary" onclick="fzCatGuardar()">${e ? 'Guardar cambios' : 'Crear proveedor'}</button>
+        <button class="btn btn-primary" onclick="fzCatGuardar()">${e ? 'Guardar cambios' : 'Crear ' + c.uno}</button>
       </div>
     </div>`;
 }
@@ -21753,7 +21773,7 @@ function fzCatCerrar(){
   if (S.view === 'lista') window.scrollTo(0, 0);
 }
 function fzCatForm(tipo, id, desdeViaje){
-  if (tipo === 'proveedores' && !desdeViaje) {
+  if ((tipo === 'proveedores' || tipo === 'clientes') && !desdeViaje) {
     const S0 = fzS();
     window.__fzCat = { tipo, id: id || null, desdeViaje: false, pantalla: true };
     S0.view = 'cat'; S0.catEdit = { tipo, id: id || null }; S0.formDirty = false;
@@ -21807,19 +21827,20 @@ async function fzCatGuardar(){
   if (error || !data) { err.textContent = 'No se pudo guardar: ' + (error && error.code === '23505' ? 'ya existe uno con ese nombre.' : /bloqueado/i.test((error && error.message) || '') ? 'falta ejecutar el SQL «forrajes-proveedor-bloqueo.sql» en Supabase.' : ((error && error.message) || 'error desconocido.')); return; }
   // Proveedor nuevo con productos y precios apuntados en la misma pantalla: se guardan ahora, ya con su id
   let errPrecios = '';
-  if (ctx.tipo === 'proveedores' && !ctx.id && (ctx.borrador || []).length) {
-    const filas = ctx.borrador.map(r => ({ proveedor_id: data.id, producto_id: r.productoId, formato: r.formato || null, precio: r.precio, unidad: r.unidad, fecha: r.fecha, notas: r.notas || null, created_by: currentUserEmail() }));
-    const rp = await supabaseClient.from('forraje_proveedor_precios').insert(filas).select();
-    if (rp.error) errPrecios = /relation|does not exist|schema cache/i.test(rp.error.message || '') ? 'falta ejecutar el SQL «forrajes-proveedor-precios.sql» en Supabase' : (rp.error.message || 'error desconocido');
-    else (rp.data || []).forEach(x => S.precios.push(fzPrecioDeFila(x)));
+  if (FZ_PREC[ctx.tipo] && !ctx.id && (ctx.borrador || []).length) {
+    const cfgP = fzPrecCfg(ctx.tipo);
+    const filas = ctx.borrador.map(r => ({ [cfgP.fk]: data.id, producto_id: r.productoId, formato: r.formato || null, precio: r.precio, unidad: r.unidad, fecha: r.fecha, notas: r.notas || null, created_by: currentUserEmail() }));
+    const rp = await supabaseClient.from(cfgP.tabla).insert(filas).select();
+    if (rp.error) errPrecios = /relation|does not exist|schema cache/i.test(rp.error.message || '') ? `falta ejecutar el SQL «${cfgP.sql}» en Supabase` : (rp.error.message || 'error desconocido');
+    else (rp.data || []).forEach(x => S[cfgP.lista].push(fzPrecioDeFila(x)));
   }
   const nuevo = fzCatDeFila(data), lista = S[ctx.tipo], i = lista.findIndex(x => x.id === nuevo.id);
   if (i >= 0) lista[i] = nuevo; else lista.push(nuevo);
   lista.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
   closeModal();
-  if (errPrecios) appToast(`Proveedor creado, pero no se pudieron guardar sus precios (${errPrecios}). Apúntalos de nuevo en su ficha.`, 'error');
-  else appToast(ctx.tipo === 'proveedores' && !ctx.id && (ctx.borrador || []).length ? `Proveedor creado con ${ctx.borrador.length} precio${ctx.borrador.length !== 1 ? 's' : ''}.` : `${c.unoT} guardado.`, 'ok');
-  if (S.view === 'cat' && !ctx.id) { S.formDirty = false; fzCatForm('proveedores', nuevo.id); return; }   // recién creado: se queda en su pantalla para apuntar sus productos y precios
+  if (errPrecios) appToast(`${c.unoT} creado, pero no se pudieron guardar sus precios (${errPrecios}). Apúntalos de nuevo en su ficha.`, 'error');
+  else appToast(FZ_PREC[ctx.tipo] && !ctx.id && (ctx.borrador || []).length ? `${c.unoT} creado con ${ctx.borrador.length} precio${ctx.borrador.length !== 1 ? 's' : ''}.` : `${c.unoT} guardado.`, 'ok');
+  if (S.view === 'cat' && !ctx.id) { S.formDirty = false; fzCatForm(ctx.tipo, nuevo.id); return; }   // recién creado: se queda en su pantalla para apuntar sus productos y precios
   if (ctx.desdeViaje && S.view === 'form') {   // viene del formulario de un viaje: se recoge lo escrito, se repinta y queda elegido
     const f = S.form; f.fecha = fzV('fz-fecha') || f.fecha;
     fzGuardarBorradorForm();
