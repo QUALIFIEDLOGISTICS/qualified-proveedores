@@ -21081,11 +21081,11 @@ function closeModal(){ document.getElementById('modal-slot').innerHTML = ''; }
    beneficio = venta − (compra + flete). Tablas: forraje_viajes, forraje_proveedores, forraje_clientes, forraje_productos (forrajes-schema.sql).
    ==================================================================================================== */
 const FZ_PAGOS = ['Efectivo', 'Factura contado', 'Factura 15 días', 'Factura 30 días'];
-const FZ_SECCIONES = [['viajes', 'Viajes'], ['proveedores', 'Proveedores'], ['clientes', 'Clientes'], ['productos', 'Productos'], ['dashboard', 'Dashboard']];
+const FZ_SECCIONES = [['viajes', 'Viajes'], ['proveedores', 'Proveedores'], ['clientes', 'Clientes'], ['productos', 'Productos'], ['dashboard', 'Dashboard'], ['pagos', 'Pagos']];   // «Pagos» solo la ven los administradores
 const FZ_FORMATOS = ['Redonda', 'Rectangular', 'Ensilada'];   // formato de la bala
 const FZ_MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 function fzS(){
-  return (window.__fz = window.__fz || { cargado: false, cargando: false, error: '', sec: 'viajes', view: 'lista', viajes: [], proveedores: [], clientes: [], productos: [], precios: [], preciosOk: true, preciosCli: [], preciosCliOk: true,
+  return (window.__fz = window.__fz || { cargado: false, cargando: false, error: '', sec: 'viajes', view: 'lista', viajes: [], proveedores: [], clientes: [], productos: [], precios: [], preciosOk: true, preciosCli: [], preciosCliOk: true, socios: [], pagos: [], ajustes: [], pagosOk: true, pgAnio: today().slice(0, 4), pgSocio: '',
     q: '', anio: today().slice(0, 4), mes: today().slice(5, 7), fprov: '', fcli: '', producto: '', formato: '', pend: false, cq: '', archivados: false, da: today().slice(0, 4), dm: '', dvista: 'resumen', dmet: 'beneficio', dtramo: false, df: { producto: '', formato: '', prov: '', cli: '', reg: '' }, form: null, formDirty: false });
 }
 const fzR2 = n => Math.round((Number(n) || 0) * 100) / 100;
@@ -21118,18 +21118,26 @@ async function fzCargar(forzar){
     return out;
   };
   try {
-    const [v, p, c, pr, pp, pc] = await Promise.all([
+    const adm = !!PROFILE.isAdmin;   // el reparto y los pagos de los socios solo se piden a los administradores
+    const [v, p, c, pr, pp, pc, so, pg, aj] = await Promise.all([
       todo(() => supabaseClient.from('forraje_viajes').select('*').order('fecha', { ascending: false }).order('id')),
       todo(() => supabaseClient.from('forraje_proveedores').select('*').order('nombre').order('id')),
       todo(() => supabaseClient.from('forraje_clientes').select('*').order('nombre').order('id')),
       todo(() => supabaseClient.from('forraje_productos').select('*').order('nombre').order('id')),
       todo(() => supabaseClient.from('forraje_proveedor_precios').select('*').order('fecha', { ascending: false }).order('id')).catch(() => null),   // si falta su SQL, lo demás sigue funcionando
       todo(() => supabaseClient.from('forraje_cliente_precios').select('*').order('fecha', { ascending: false }).order('id')).catch(() => null),
+      adm ? todo(() => supabaseClient.from('forraje_socios').select('*').order('orden').order('created_at').order('id')).catch(() => null) : Promise.resolve([]),
+      adm ? todo(() => supabaseClient.from('forraje_pagos').select('*').order('fecha', { ascending: false }).order('id')).catch(() => null) : Promise.resolve([]),
+      adm ? todo(() => supabaseClient.from('forraje_ajustes_mes').select('*').order('mes')).catch(() => null) : Promise.resolve([]),
     ]);
     S.viajes = v.map(fzViajeDeFila); fzOrdenar();
     S.proveedores = p.map(fzCatDeFila); S.clientes = c.map(fzCatDeFila); S.productos = pr.map(fzCatDeFila);
     S.preciosOk = pp !== null; S.precios = (pp || []).map(fzPrecioDeFila);
     S.preciosCliOk = pc !== null; S.preciosCli = (pc || []).map(fzPrecioDeFila);
+    S.pagosOk = so !== null && pg !== null && aj !== null;
+    S.socios = (so || []).map(r => ({ id: r.id, nombre: r.nombre || '', porcentaje: Number(r.porcentaje) || 0, orden: Number(r.orden) || 0 }));
+    S.pagos = (pg || []).map(r => ({ id: r.id, socioId: r.socio_id, fecha: r.fecha, importe: Number(r.importe) || 0, concepto: r.concepto || '' }));
+    S.ajustes = (aj || []).map(r => ({ mes: r.mes, importe: Number(r.importe) || 0 }));
     S.cargado = true;
   } catch (e) {
     S.error = /relation|does not exist|schema cache/i.test((e && e.message) || '') ? 'Falta ejecutar el SQL «forrajes-schema.sql» en Supabase.' : ((e && e.message) || 'No se pudieron cargar los datos.');
@@ -21165,7 +21173,7 @@ function fzConfirmLeave(){
 function fzBarHtml(){
   const S = fzS();
   return `<div class="mod-bar" style="display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
-    <div class="mod-bar-t" style="display:flex;gap:2px;flex-wrap:wrap;">${tabsOrdenar('forrajes', FZ_SECCIONES.map(([id, label]) => ({ id, label }))).map(x => tabsMov('forrajes', x.id, moduleTabBtnHtml(`fzIr('${x.id}')`, x.label, S.sec === x.id && S.view !== 'form' || (S.view === 'form' && x.id === 'viajes')))).join('')}</div>
+    <div class="mod-bar-t" style="display:flex;gap:2px;flex-wrap:wrap;">${tabsOrdenar('forrajes', FZ_SECCIONES.filter(([id]) => id !== 'pagos' || PROFILE.isAdmin).map(([id, label]) => ({ id, label }))).map(x => tabsMov('forrajes', x.id, moduleTabBtnHtml(`fzIr('${x.id}')`, x.label, S.sec === x.id && S.view !== 'form' || (S.view === 'form' && x.id === 'viajes')))).join('')}</div>
   </div>`;
 }
 function tplForrajes(){
@@ -21178,6 +21186,7 @@ function tplForrajes(){
   else if (S.view === 'cat') cuerpo = fzCatPantallaHtml();
   else if (S.sec === 'viajes') cuerpo = fzViajesHtml();
   else if (S.sec === 'dashboard') cuerpo = fzDashboardHtml();
+  else if (S.sec === 'pagos') cuerpo = PROFILE.isAdmin ? `<div id="fz-pagos">${fzPagosHtml()}</div>` : '<div class="card" style="padding:24px;text-align:center;color:var(--mutedFaint);">Esta pestaña es solo para administradores.</div>';
   else cuerpo = fzCatalogoHtml(S.sec);
   return `<div style="--bn-accent:var(--primary);--dc-accent:var(--primary);">${S.view === 'form' || S.view === 'cat' ? '' : fzBarHtml()}${cuerpo}</div>`;
 }
@@ -21904,6 +21913,176 @@ async function fzCatEliminar(){
   if (error) { if (err) err.textContent = 'No se pudo eliminar: ' + error.message; return; }
   S[ctx.tipo] = S[ctx.tipo].filter(x => x.id !== e.id);
   appToast(`${c.unoT} eliminado.`, 'ok'); fzCatCerrar();
+}
+// ---------------------------------------------------------------- Pagos (solo administradores)
+/* Todo el beneficio de los viajes, mes a mes y acumulado desde el inicio, se reparte entre los socios según su porcentaje; cada pago que se les hace
+   se apunta y se descuenta. Sin temporadas: un solo saldo por socio. El beneficio de un mes sale solo de los viajes y se puede corregir con un ajuste. */
+// Importe escrito a la española («1.234,56», «-300», «95,5»); NaN si no es un número
+function fzImporte(txt){
+  let s = String(txt == null ? '' : txt).trim().replace(/[^\d.,\-]/g, '');
+  const neg = s.startsWith('-'); s = s.replace(/-/g, '');
+  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
+  const n = parseFloat(s);
+  return isFinite(n) ? (neg ? -n : n) : NaN;
+}
+const fzMesTxt = ym => { const [y, m] = String(ym).split('-'); return `${(FZ_MESES[Number(m) - 1] || '').slice(0, 3)} ${y}`; };   // «nov 2023»
+// El reparto completo: beneficio de cada mes (viajes + ajuste), la parte de cada socio y lo que le falta por cobrar
+function fzPagosCalc(){
+  const S = fzS(), porMes = new Map(), nuevo = ym => ({ mes: ym, viajes: 0, ben: 0, ajuste: 0 });
+  S.viajes.forEach(v => { const ym = String(v.fecha).slice(0, 7), e = porMes.get(ym) || nuevo(ym); e.viajes++; e.ben += fzCalc(v).beneficio; porMes.set(ym, e); });
+  (S.ajustes || []).forEach(a => { const e = porMes.get(a.mes) || nuevo(a.mes); e.ajuste = a.importe; porMes.set(a.mes, e); });
+  const socios = (S.socios || []).slice();
+  const meses = [...porMes.values()].sort((a, b) => b.mes.localeCompare(a.mes)).map(m => { m.ben = fzR2(m.ben); m.total = fzR2(m.ben + m.ajuste); m.partes = socios.map(s => fzR2(m.total * s.porcentaje / 100)); return m; });
+  const filasSocio = socios.map((s, i) => {
+    const corresponde = fzR2(meses.reduce((t, m) => t + m.partes[i], 0)), pagado = fzR2((S.pagos || []).filter(p => p.socioId === s.id).reduce((t, p) => t + p.importe, 0));
+    return { s, corresponde, pagado, saldo: fzR2(corresponde - pagado) };
+  });
+  return { meses, socios, filasSocio, total: fzR2(meses.reduce((t, m) => t + m.total, 0)), pagado: fzR2(filasSocio.reduce((t, f) => t + f.pagado, 0)),
+    pendiente: fzR2(filasSocio.reduce((t, f) => t + f.saldo, 0)), sumaPct: fzR2(socios.reduce((t, s) => t + s.porcentaje, 0)) };
+}
+function fzPagosHtml(){
+  const S = fzS();
+  if (!S.pagosOk) return '<div class="card" style="padding:24px;"><div class="se-aviso">Falta ejecutar el SQL «forrajes-pagos.sql» en Supabase para usar los pagos y el reparto entre socios.</div></div>';
+  const C = fzPagosCalc(), nom = id => (S.socios.find(x => x.id === id) || {}).nombre || '—', stat = (v, t) => `<div class="deca-stat"><b>${v}</b><span>${t}</span></div>`;
+  const anios = [...new Set([...C.meses.map(m => m.mes.slice(0, 4)), ...S.pagos.map(p => String(p.fecha).slice(0, 4)), today().slice(0, 4)])].sort().reverse();
+  if (S.pgAnio && !anios.includes(S.pgAnio)) anios.push(S.pgAnio);
+  const selAnio = `<select style="width:auto;min-width:150px;" onchange="fzPagosFiltro('pgAnio', this.value)"><option value="">Todos los años</option>${anios.map(a => `<option value="${a}"${a === S.pgAnio ? ' selected' : ''}>${a}</option>`).join('')}</select>`;
+  const colorSaldo = n => n < -0.005 ? 'var(--danger)' : n > 0.005 ? 'var(--text)' : 'var(--success)';
+  const banner = `<div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.users, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 260px;"><div class="deca-banner-title">Pagos y reparto</div><div class="deca-banner-sub">Todo el beneficio acumulado desde el inicio, repartido entre los socios según su porcentaje, y lo que se les ha ido pagando.</div></div>
+      <div class="deca-banner-actions">${stat(fzEur(C.total), 'Beneficio acumulado')}${stat(fzEur(C.pagado), 'Pagado')}${stat(fzEur(C.pendiente), 'Pendiente de pagar')}<button class="btn btn-primary deca-new-btn" onclick="fzSocioForm(null)"><span>+ Socio</span></button></div>
+    </div>`;
+  // 1) Socios: lo que le corresponde a cada uno, lo cobrado y lo pendiente (desde el inicio)
+  const filasSoc = C.filasSocio.map(f => `<tr class="cg-row" style="cursor:pointer;" onclick="fzSocioForm('${f.s.id}')" title="Editar">
+      <td data-sort-value="${esc(f.s.nombre)}"><b>${esc(f.s.nombre)}</b></td>
+      <td data-sort-value="${f.s.porcentaje}" style="text-align:right;">${fzNum(f.s.porcentaje, 2)} %</td>
+      <td data-sort-value="${f.corresponde}" style="text-align:right;white-space:nowrap;">${fzEur(f.corresponde)}</td>
+      <td data-sort-value="${f.pagado}" style="text-align:right;white-space:nowrap;">${fzEur(f.pagado)}</td>
+      <td data-sort-value="${f.saldo}" style="text-align:right;white-space:nowrap;font-weight:700;color:${colorSaldo(f.saldo)};">${fzEur(f.saldo)}</td></tr>`).join('');
+  const avisoPct = C.socios.length && Math.abs(C.sumaPct - 100) > 0.001 ? `<div class="se-aviso" style="margin-top:10px;">Los porcentajes suman ${fzNum(C.sumaPct, 2)} %, no 100 %: ${C.sumaPct < 100 ? 'una parte del beneficio no se reparte a nadie' : 'se reparte más de lo que hay'}.</div>` : '';
+  const cardSocios = `<div class="card dr-card"><div class="dr-sec"><span class="dr-n">1</span><div><b>Socios y reparto</b><small>Desde el inicio: lo que le corresponde a cada uno según su porcentaje, lo que ya ha cobrado y lo que le falta. Pulsa un socio para cambiar su nombre o porcentaje.</small></div></div>
+      ${C.socios.length ? `<div style="overflow-x:auto;"><table class="tf-table"><thead><tr>${thSort('Socio', 'text')}${thSort('Porcentaje', 'number', 'style="text-align:right;"')}${thSort('Le corresponde', 'number', 'style="text-align:right;"')}${thSort('Cobrado', 'number', 'style="text-align:right;"')}${thSort('Pendiente', 'number', 'style="text-align:right;"')}</tr></thead><tbody>${filasSoc}</tbody></table></div>${avisoPct}`
+        : '<div style="color:var(--mutedFaint);font-size:13px;padding:6px 0;">Todavía no hay socios. Pulsa «+ Socio» para añadir el primero con su porcentaje.</div>'}</div>`;
+  // 2) Pagos realizados
+  const pagosVis = S.pagos.filter(p => (!S.pgAnio || String(p.fecha).startsWith(S.pgAnio)) && (!S.pgSocio || p.socioId === S.pgSocio)).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+  const totVis = fzR2(pagosVis.reduce((t, p) => t + p.importe, 0));
+  const ult = S.pgForm || {};
+  const filasPag = pagosVis.map(p => `<tr><td data-sort-value="${esc(p.fecha)}" style="white-space:nowrap;">${esc(fmtDateDMY(p.fecha))}</td><td data-sort-value="${esc(nom(p.socioId))}"><b>${esc(nom(p.socioId))}</b></td>
+      <td data-sort-value="${p.importe}" style="text-align:right;white-space:nowrap;font-weight:700;">${fzEur(p.importe)}</td><td data-sort-value="${esc(p.concepto)}" style="font-size:12.5px;">${esc(p.concepto)}</td>
+      <td style="text-align:right;"><button type="button" class="deca-act danger" title="Quitar este pago" onclick="fzPagoQuitar('${p.id}')">${homeIcon(HOME_ICON_PATHS.trash, 14, 'currentColor', 2)}</button></td></tr>`).join('');
+  const formPago = C.socios.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;padding:10px;border:1px dashed var(--border);border-radius:10px;">
+      <div class="field" style="flex:1 1 160px;margin:0;"><label>Socio</label><select id="pg-socio"><option value="">Elige…</option>${C.socios.map(s => `<option value="${s.id}"${s.id === ult.socio ? ' selected' : ''}>${esc(s.nombre)}</option>`).join('')}</select></div>
+      <div class="field" style="flex:0 1 150px;margin:0;"><label>Fecha</label><input id="pg-fecha" type="date" value="${esc(ult.fecha || today())}" /></div>
+      <div class="field" style="flex:0 1 130px;margin:0;"><label>Importe (€)</label><input id="pg-importe" inputmode="decimal" maxlength="14" placeholder="Ej. 1.300" onkeydown="if(event.key==='Enter'){ event.preventDefault(); fzPagoAnadir(); }" /></div>
+      <div class="field" style="flex:1 1 180px;margin:0;"><label>Concepto <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></label><input id="pg-concepto" maxlength="120" placeholder="Extraordinario…" onkeydown="if(event.key==='Enter'){ event.preventDefault(); fzPagoAnadir(); }" /></div>
+      <button type="button" class="btn btn-primary" onclick="fzPagoAnadir()" style="margin-bottom:0;">Añadir pago</button>
+    </div><div id="pg-error" style="color:var(--danger);font-size:12.5px;min-height:16px;margin:-6px 0 8px;"></div>` : '';
+  const cardPagos = `<div class="card dr-card"><div class="dr-sec"><span class="dr-n">2</span><div><b>Pagos realizados</b><small>Cada pago a un socio se apunta aquí y se descuenta de lo que le corresponde.</small></div></div>
+      ${formPago}
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">${selAnio}<select style="width:auto;min-width:170px;" onchange="fzPagosFiltro('pgSocio', this.value)"><option value="">Todos los socios</option>${C.socios.map(s => `<option value="${s.id}"${s.id === S.pgSocio ? ' selected' : ''}>${esc(s.nombre)}</option>`).join('')}</select>
+        <span style="margin-left:auto;font-size:12.5px;color:var(--muted);">${pagosVis.length} pago${pagosVis.length !== 1 ? 's' : ''} · <b>${fzEur(totVis)}</b></span></div>
+      ${pagosVis.length ? `<div style="overflow-x:auto;"><table class="tf-table"><thead><tr>${thSort('Fecha', 'date')}${thSort('Socio', 'text')}${thSort('Importe', 'number', 'style="text-align:right;"')}${thSort('Concepto', 'text')}<th></th></tr></thead><tbody>${filasPag}</tbody></table></div>`
+        : '<div style="color:var(--mutedFaint);font-size:13px;padding:6px 0;">No hay pagos con este filtro.</div>'}</div>`;
+  // 3) Beneficio por mes (viajes + ajuste) y la parte de cada socio
+  const mesesVis = C.meses.filter(m => !S.pgAnio || m.mes.startsWith(S.pgAnio));
+  const sumaMes = f => fzR2(mesesVis.reduce((t, m) => t + f(m), 0));
+  const filasMes = mesesVis.map(m => `<tr><td data-sort-value="${m.mes}" style="white-space:nowrap;"><b>${esc(fzMesTxt(m.mes))}</b></td><td data-sort-value="${m.viajes}" style="text-align:right;">${m.viajes}</td>
+      <td data-sort-value="${m.ben}" style="text-align:right;white-space:nowrap;">${fzEur(m.ben)}</td>
+      <td data-sort-value="${m.ajuste}" style="text-align:right;"><input value="${m.ajuste ? esc(String(m.ajuste).replace('.', ',')) : ''}" placeholder="0" inputmode="decimal" maxlength="12" style="width:92px;text-align:right;" title="Corrección del beneficio de este mes: suma o resta a lo que salen de los viajes" onchange="fzAjusteGuardar('${m.mes}', this.value)" /></td>
+      <td data-sort-value="${m.total}" style="text-align:right;white-space:nowrap;font-weight:700;">${fzEur(m.total)}</td>
+      ${m.partes.map((x, i) => `<td data-sort-value="${x}" style="text-align:right;white-space:nowrap;color:var(--muted);">${fzEur(x)}</td>`).join('')}</tr>`).join('');
+  const pie = `<tfoot><tr style="font-weight:700;"><td>Total${S.pgAnio ? ' ' + esc(S.pgAnio) : ''}</td><td style="text-align:right;">${sumaMes(m => m.viajes)}</td><td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.ben))}</td><td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.ajuste))}</td><td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.total))}</td>${C.socios.map((s, i) => `<td style="text-align:right;white-space:nowrap;">${fzEur(sumaMes(m => m.partes[i]))}</td>`).join('')}</tr></tfoot>`;
+  const cardMeses = `<div class="card dr-card"><div class="dr-sec"><span class="dr-n">3</span><div><b>Beneficio por mes</b><small>Sale solo de los viajes de cada mes. Si hay que corregirlo, escribe un ajuste (positivo suma, negativo resta) y el reparto se recalcula.</small></div></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">${selAnio}</div>
+      ${mesesVis.length ? `<div style="overflow-x:auto;"><table class="tf-table" style="min-width:640px;"><thead><tr>${thSort('Mes', 'text')}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Beneficio de los viajes', 'number', 'style="text-align:right;"')}${thSort('Ajuste', 'number', 'style="text-align:right;"')}${thSort('Total del mes', 'number', 'style="text-align:right;"')}${C.socios.map(s => thSort(`${esc(s.nombre)} · ${fzNum(s.porcentaje, 2)} %`, 'number', 'style="text-align:right;"')).join('')}</tr></thead><tbody>${filasMes}</tbody>${pie}</table></div>`
+        : '<div style="color:var(--mutedFaint);font-size:13px;padding:6px 0;">No hay meses con viajes en este año.</div>'}</div>`;
+  return `${banner}<div class="dr-page" style="max-width:none;margin:0;">${cardSocios}${cardPagos}${cardMeses}</div>`;
+}
+function fzPagosRefrescar(){ const el = document.getElementById('fz-pagos'); if (el) el.innerHTML = fzPagosHtml(); }
+function fzPagosFiltro(k, v){ fzS()[k] = v; fzPagosRefrescar(); }
+function fzSocioForm(id){
+  const S = fzS(), s = id ? S.socios.find(x => x.id === id) : null;
+  window.__fzSocioId = id || null;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeModal()">
+      <div class="modal-box" style="max-width:420px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;"><h3 class="modal-title">${s ? esc(s.nombre) : 'Nuevo socio'}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+        <div class="field"><label>Nombre <span class="dc-req">*</span></label><input id="fzs-nombre" maxlength="80" value="${esc(s ? s.nombre : '')}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); fzSocioGuardar(); }" /></div>
+        <div class="field"><label>Porcentaje del beneficio <span class="dc-req">*</span></label><input id="fzs-pct" inputmode="decimal" maxlength="7" placeholder="Ej. 25" value="${s ? esc(String(s.porcentaje).replace('.', ',')) : ''}" onkeydown="if(event.key==='Enter'){ event.preventDefault(); fzSocioGuardar(); }" /></div>
+        <div id="fzs-error" style="color:var(--danger);font-size:12.5px;min-height:16px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">
+          ${s ? '<button class="btn btn-ghost" style="margin-right:auto;color:var(--danger);" onclick="fzSocioEliminar()">Eliminar</button>' : ''}
+          <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" onclick="fzSocioGuardar()">${s ? 'Guardar' : 'Añadir'}</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const i = document.getElementById('fzs-nombre'); if (i) i.focus(); }, 30);
+}
+async function fzSocioGuardar(){
+  const S = fzS(), id = window.__fzSocioId, err = document.getElementById('fzs-error'); if (!err) return;
+  err.textContent = '';
+  const nombre = fzV('fzs-nombre').replace(/\s+/g, ' '), pct = fzImporte(fzV('fzs-pct'));
+  if (!nombre) { err.textContent = 'Escribe el nombre.'; return; }
+  if (!isFinite(pct) || pct < 0 || pct > 100) { err.textContent = 'El porcentaje tiene que ser un número entre 0 y 100.'; return; }
+  if (S.socios.some(x => x.id !== id && fzNorm(x.nombre) === fzNorm(nombre))) { err.textContent = 'Ya hay un socio con ese nombre.'; return; }
+  const row = { nombre, porcentaje: Math.round(pct * 1000) / 1000 };
+  const { data, error } = id ? await supabaseClient.from('forraje_socios').update(row).eq('id', id).select().single() : await supabaseClient.from('forraje_socios').insert({ ...row, orden: S.socios.length + 1 }).select().single();
+  if (error || !data) { err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test((error && error.message) || '') ? 'falta ejecutar el SQL «forrajes-pagos.sql» en Supabase.' : ((error && error.message) || 'error desconocido.')); return; }
+  const s = { id: data.id, nombre: data.nombre, porcentaje: Number(data.porcentaje) || 0, orden: Number(data.orden) || 0 }, i = S.socios.findIndex(x => x.id === s.id);
+  if (i >= 0) S.socios[i] = s; else S.socios.push(s);
+  S.socios.sort((a, b) => a.orden - b.orden);
+  closeModal(); appToast('Socio guardado.', 'ok'); fzPagosRefrescar();
+}
+async function fzSocioEliminar(){
+  const S = fzS(), id = window.__fzSocioId, s = S.socios.find(x => x.id === id), err = document.getElementById('fzs-error'); if (!s) return;
+  const n = S.pagos.filter(p => p.socioId === id).length;
+  if (n) { if (err) err.textContent = `Tiene ${n} pago${n !== 1 ? 's' : ''} apuntado${n !== 1 ? 's' : ''}: no se puede eliminar sin perderlos. Quita antes sus pagos.`; return; }
+  if (!(await appConfirm({ title: 'Eliminar socio', name: s.nombre, message: 'Dejará de entrar en el reparto del beneficio. No tiene ningún pago apuntado.', confirmLabel: 'Eliminar', tone: 'danger', icon: 'trash' }))) return;
+  const { error } = await supabaseClient.from('forraje_socios').delete().eq('id', id);
+  if (error) { if (err) err.textContent = 'No se pudo eliminar: ' + error.message; return; }
+  S.socios = S.socios.filter(x => x.id !== id);
+  closeModal(); fzPagosRefrescar();
+}
+async function fzPagoAnadir(){
+  const S = fzS(), err = document.getElementById('pg-error'); if (!err) return;
+  err.textContent = '';
+  const socio = fzV('pg-socio'), fecha = fzV('pg-fecha'), importe = fzImporte(fzV('pg-importe')), concepto = fzV('pg-concepto');
+  if (!socio) { err.textContent = 'Elige el socio.'; return; }
+  if (!fecha) { err.textContent = 'Indica la fecha del pago.'; return; }
+  if (!isFinite(importe) || importe === 0) { err.textContent = 'Escribe el importe (un número distinto de 0).'; document.getElementById('pg-importe').focus(); return; }
+  const { data, error } = await supabaseClient.from('forraje_pagos').insert({ socio_id: socio, fecha, importe: fzR2(importe), concepto: concepto || null, created_by: currentUserEmail() }).select().single();
+  if (error || !data) { err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test((error && error.message) || '') ? 'falta ejecutar el SQL «forrajes-pagos.sql» en Supabase.' : ((error && error.message) || 'error desconocido.')); return; }
+  S.pagos.push({ id: data.id, socioId: data.socio_id, fecha: data.fecha, importe: Number(data.importe) || 0, concepto: data.concepto || '' });
+  S.pgForm = { socio, fecha };   // se recuerdan el socio y la fecha para apuntar el siguiente más rápido
+  fzPagosRefrescar();
+  const f = document.getElementById('pg-importe'); if (f) f.focus();
+}
+async function fzPagoQuitar(id){
+  const S = fzS(), p = S.pagos.find(x => x.id === id); if (!p) return;
+  const s = S.socios.find(x => x.id === p.socioId);
+  if (!(await appConfirm({ title: 'Quitar pago', name: `${s ? s.nombre : ''} · ${fzEur(p.importe)} · ${fmtDateDMY(p.fecha)}`, message: 'Se borra este pago y vuelve a sumarse a lo que le falta por cobrar.', confirmLabel: 'Quitar', tone: 'danger', icon: 'trash' }))) return;
+  const { error } = await supabaseClient.from('forraje_pagos').delete().eq('id', id);
+  if (error) { appToast('No se pudo quitar: ' + error.message, 'error'); return; }
+  S.pagos = S.pagos.filter(x => x.id !== id);
+  fzPagosRefrescar();
+}
+// Ajuste del beneficio de un mes: positivo suma, negativo resta, vacío o 0 lo quita
+async function fzAjusteGuardar(ym, txt){
+  const S = fzS(), n = String(txt).trim() === '' ? 0 : fzImporte(txt);
+  if (!isFinite(n)) { appToast('Escribe un número para el ajuste.', 'error'); fzPagosRefrescar(); return; }
+  if (Math.abs(n) < 0.005) {
+    const { error } = await supabaseClient.from('forraje_ajustes_mes').delete().eq('mes', ym);
+    if (error) { appToast('No se pudo quitar el ajuste: ' + error.message, 'error'); fzPagosRefrescar(); return; }
+    S.ajustes = S.ajustes.filter(a => a.mes !== ym);
+  } else {
+    const { error } = await supabaseClient.from('forraje_ajustes_mes').upsert({ mes: ym, importe: fzR2(n), updated_at: new Date().toISOString() }, { onConflict: 'mes' });
+    if (error) { appToast('No se pudo guardar el ajuste: ' + error.message, 'error'); fzPagosRefrescar(); return; }
+    const a = S.ajustes.find(x => x.mes === ym); if (a) a.importe = fzR2(n); else S.ajustes.push({ mes: ym, importe: fzR2(n) });
+  }
+  fzPagosRefrescar();
 }
 // ---------------------------------------------------------------- Dashboard
 /* Mismo estilo que los dashboards de Almacén y Transporte: periodo y filtros arriba, cifras con su comparación con el periodo anterior,
