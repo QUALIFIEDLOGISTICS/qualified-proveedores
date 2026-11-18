@@ -598,6 +598,29 @@
     igual(r, ['ES08', 'ES09', 'ES07', 'ES06', 'FR94', 'ES', '', 'FR33'], 'Sin cero inicial solo se corrige en España; un país vacío no tiene zona');
   });
 
+  prueba('Red de Transportistas: una sola fila por transportista — la cobertura manual absorbe las automáticas de su zona (sus viajes se suman sin repetir), las automáticas de las mismas zonas se juntan, y otro vehículo, otras zonas o una grúa van aparte', () => {
+    const r = new Function(`
+      const colabEsGrua = r => (r.servicios || []).includes('GRUA');
+      ${trozo('const COLAB_ZONA_RE', '// Filas que cubren')}
+      ${trozo('const COLAB_SERV_OC', 'function colabStatsViajes')}
+      ${trozo('function colabFusionarFilas', '// Cómo nació la fila')}
+      const ruta = (id, t, o, d, serv, fuente, veh) => ({ id, contactoId: t, origenZona: o, destinoZona: d, servicios: serv, fuente, tipoVehiculo: veh || '' });
+      const it = r => ({ r, c: { id: r.contactoId } });
+      const rutas = [ruta('M', 't1', 'ES', 'FR', ['FTL'], 'manual', 'Lona'), ruta('A1', 't1', 'ES08', 'FR33', ['LTL'], 'auto', 'Lona'), ruta('A2', 't1', 'ES17', 'FR75', ['LTL'], 'auto', 'Lona'), ruta('A3', 't1', 'ES08', 'IT15', ['FTL'], 'auto', 'Lona'),
+        ruta('B1', 't2', 'ES08', 'FR33', ['FTL'], 'auto', 'Lona'), ruta('B2', 't2', 'ES08', 'FR33', ['LTL'], 'auto', 'Lona'), ruta('B3', 't2', 'ES17', 'FR75', ['FTL'], 'auto', 'Lona'),
+        ruta('P', 't3', 'ES', 'FR', ['FTL'], 'manual', 'Piso Móvil'), ruta('L', 't3', 'ES08', 'FR33', ['FTL'], 'auto', 'Lona'), ruta('G1', 't4', 'ES41', 'ES41', ['GRUA'], 'manual'), ruta('G2', 't4', 'ES08', 'ES08', ['GRUA'], 'manual')];
+      const f = colabFusionarFilas(rutas.map(it));
+      const resumen = f.map(x => x.r.id + ':' + x.miembros.map(m => m.id).join('+') + (x.miembros.length > 1 ? '[' + x.r.servicios.join(',') + ']' : ''));
+      // los viajes de una fila no se cuentan dos veces: la manual y la automática encajan con el mismo viaje
+      const viaje = (id, o, d, serv) => ({ transportistaId: 't1', origen: o, destino: d, oc: { id, servicio: serv, tipoVehiculo: 'Lona' } });
+      const viajes = [viaje('o1', 'ES08', 'FR33', 'LTL'), viaje('o2', 'ES17', 'FR75', 'LTL'), viaje('o3', 'ES08', 'FR33', 'FTL')];
+      const m = f.find(x => x.r.id === 'M');
+      return { resumen, n: colabViajesMiembros(m.miembros, viajes).map(v => v.oc.id).sort(), solo: colabViajesMiembros(m.miembros, viajes, v => v.destino === 'FR75').map(v => v.oc.id) };`)();
+    igual(r.resumen.sort(), ['A3:A3', 'B3:B3', 'B1:B1+B2[FTL,LTL]', 'G1:G1', 'G2:G2', 'L:L', 'M:M+A1+A2[FTL,LTL]', 'P:P'].sort(), 'Manual + automáticas de su zona en una fila; las automáticas de mismas zonas juntas; otro vehículo, otra zona y cada grúa aparte');
+    igual(r.n, ['o1', 'o2', 'o3'], 'Cada viaje cuenta una sola vez aunque encaje con varias coberturas de la fila'); igual(r.solo, ['o2'], 'El filtro de la ruta buscada acota los viajes');
+    cierto(/colabFusionarFilas\(/.test(trozo('function colabResultadosHtml', 'function colaboradoresFilteredRutas')) && /colabFuenteMiembrosHtml\(miembros\)/.test(trozo('function colabResultadosHtml', 'function colaboradoresFilteredRutas')), 'Los resultados usan la fusión');
+  });
+
   // ---------- Textos largos en los PDF ----------
   const partir = (texto, ancho) => new Function(`${trozo('function wrapPdfText', '// Genera el PDF nativo del DeCA')}; const font={widthOfTextAtSize:(s)=>s.length*5}; return wrapPdfText(${JSON.stringify(texto)}, font, 10, ${ancho});`)();
   prueba('PDF: un texto normal se reparte en líneas que caben', () => {

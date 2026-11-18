@@ -33165,6 +33165,52 @@ function colabRanking(items){
   });
   return out;
 }
+/* ---- Una fila por transportista ----
+   Las coberturas de un mismo transportista y vehículo se juntan en una sola fila:
+   · una cobertura automática (de las órdenes) que cae dentro de una manual se suma a ella (la manual manda: su tarifa, sus zonas, sus botones);
+   · las automáticas de las mismas zonas (p. ej. FTL y LTL) se juntan entre sí, con los servicios de todas.
+   Las de otras zonas, otro vehículo y las grúas siguen en filas aparte. items: [{ r, c }] → [{ r (con los servicios de todas), c, miembros: [r…] }]. */
+function colabFusionarFilas(items){
+  const grupos = new Map();
+  items.forEach(it => {
+    const k = it.r.contactoId + '|' + (it.r.tipoVehiculo || '') + '|' + (colabEsGrua(it.r) ? it.r.id : '');   // cada grúa va sola
+    if (!grupos.has(k)) grupos.set(k, []);
+    grupos.get(k).push(it);
+  });
+  const out = [];
+  grupos.forEach(g => {
+    const bases = g.filter(x => x.r.fuente !== 'auto').map(x => ({ rep: x, miembros: [x.r] }));
+    const sueltas = new Map();
+    g.filter(x => x.r.fuente === 'auto').forEach(a => {
+      const dueno = bases.find(b => !colabEsGrua(b.rep.r) && colabZonaCubre(b.rep.r.origenZona, a.r.origenZona) && colabZonaCubre(b.rep.r.destinoZona, a.r.destinoZona));
+      if (dueno) { dueno.miembros.push(a.r); return; }
+      const z = a.r.origenZona + '|' + a.r.destinoZona;
+      if (!sueltas.has(z)) sueltas.set(z, { rep: a, miembros: [] });
+      sueltas.get(z).miembros.push(a.r);
+    });
+    [...bases, ...sueltas.values()].forEach(b => {
+      const servicios = [...new Set(b.miembros.flatMap(m => m.servicios || []))];
+      out.push({ r: b.miembros.length > 1 ? Object.assign({}, b.rep.r, { servicios }) : b.rep.r, c: b.rep.c, miembros: b.miembros });
+    });
+  });
+  return out;
+}
+// Los viajes de todas las coberturas de una fila (sin repetir ninguno); «filtro» los acota, p. ej. a la ruta buscada
+function colabViajesMiembros(miembros, todos, filtro){
+  const vistos = new Set(), res = [];
+  miembros.forEach(m => todos.forEach(v => {
+    if (!colabViajeEncaja(m, v) || (filtro && !filtro(v)) || vistos.has(v.oc.id)) return;
+    vistos.add(v.oc.id); res.push(v);
+  }));
+  return res;
+}
+// Cómo nació la fila: a mano, desde las órdenes, o a mano con los viajes de las órdenes sumados
+function colabFuenteMiembrosHtml(ms){
+  const man = ms.some(m => m.fuente !== 'auto'), aut = ms.some(m => m.fuente === 'auto');
+  return man && aut
+    ? `${colabFuenteChipHtml(ms.find(m => m.fuente !== 'auto'))}<span class="colab-chip auto" title="Las órdenes de carga de este transportista en esta ruta se suman a la cobertura apuntada a mano">+ viajes de OC</span>`
+    : colabFuenteChipHtml(ms[0]);
+}
 // Orden por defecto de los resultados: las grúas al final; con «porRuta» (búsqueda solo por país) por la columna Ruta de menos a más;
 // y dentro de cada ruta (o siempre, con zona elegida en los dos lados) por vehículo y, a igualdad, el más barato primero (sin precio, al final).
 function colabOrdenFilas(a, b, porRuta){
@@ -33212,12 +33258,14 @@ function colabResultadosHtml(){
   const filas = todasLasQueCubren.filter(r => colabVehMatch(r, sel) && colabServMatch(r, selS));
   // Lo que ese transportista ha hecho EN ESTA RUTA con ese servicio y vehículo (sale de las órdenes de carga). La grúa no hace viajes.
   const todosViajes = viajesRealizados();
-  const statsDe = r => colabEsGrua(r) ? null : colabStatsViajes(todosViajes.filter(v => colabViajeEncaja(r, v) && colabZonaCubre(origen, v.origen) && colabZonaCubre(destino, v.destino)));
+  // Una cobertura apuntada a mano y las creadas desde las órdenes del mismo transportista salen como UNA sola fila: sus viajes se suman
+  const statsDe = g => colabEsGrua(g.r) ? null : colabStatsViajes(colabViajesMiembros(g.miembros, todosViajes, v => colabZonaCubre(origen, v.origen) && colabZonaCubre(destino, v.destino)));
   // Orden por defecto: por vehículo (los que no lo indican, al final) y, dentro de cada uno, el más barato primero; sin precio, al final.
   // La grúa va aparte, detrás: su precio es por hora y no se compara con el de un viaje.
   // Si en algún lado solo se ha elegido el país (sin zona), salen muchas rutas distintas: se ordenan por la columna Ruta, de menos a más (A → Z).
   const porRuta = !window.__colabBuscarOrigen || !window.__colabBuscarDestino;
-  const conContacto = filas.map(r => ({ r, c: contactos.find(x => x.id === r.contactoId), st: statsDe(r) })).filter(x => x.c)
+  const conContacto = colabFusionarFilas(filas.map(r => ({ r, c: contactos.find(x => x.id === r.contactoId) })).filter(x => x.c))
+    .map(g => Object.assign(g, { st: statsDe(g) }))
     .sort((a, b) => colabOrdenFilas(a, b, porRuta));
   const nombresVeh = sel.map(v => v === COLAB_SIN_VEH ? 'vehículo sin especificar' : v).join(' o ');
   const nombresServ = selS.map(v => v === COLAB_SIN_SERV ? 'servicio sin indicar' : (COLAB_SERVICIOS[v] || v)).join(' o ');
@@ -33240,8 +33288,9 @@ function colabResultadosHtml(){
     indexacion: r.tarifaBase != null && r.indexacion && !colabEsGrua(r), n: st ? st.n : 0, margen: st ? st.margenMedio : null,
   })));
   // «Revisar»: tarifa sin tocar o sin viajes desde hace más de 6 meses (se mira la cobertura entera, no solo esta ruta)
-  const revisar = new Map(conContacto.map(({ r }) => [r.id, colabRevisarDe(r, todosViajes)]));
+  const revisar = new Map(conContacto.map(g => [g.r.id, colabEsGrua(g.r) ? colabRevisar(g.r, null, today()) : colabRevisar(g.r, colabStatsViajes(colabViajesMiembros(g.miembros, todosViajes)), today())]));
   const nRevisar = [...revisar.values()].filter(m => m.length).length;
+  window.__colabMiembros = Object.fromEntries(conContacto.map(g => [g.r.id, g.miembros.map(m => m.id)]));
   const notaRanking = `<div style="font-size:12px;color:var(--muted);margin:-4px 0 10px;">Las etiquetas comparan solo entre coberturas <b>del mismo vehículo</b>${sel.length ? ` (${esc(nombresVeh)})` : ''}. El precio que se compara es la tarifa base o, si no tiene, el último precio pagado. «Viajes», «Último pagado» y «Margen» son los de esta ruta, con el servicio y el vehículo de cada cobertura. Pulsa una cabecera para ordenar.</div>`;
   // Una persona de contacto cuyo "ámbito" nombra la zona (p. ej. "Sevilla") va primero.
   const coincideZona = (p, r) => {
@@ -33253,7 +33302,7 @@ function colabResultadosHtml(){
   // Casillas para «Avisar seleccionados»: solo se pueden elegir los transportistas con algún teléfono o correo apuntado
   const selAv = colabSelSet();
   window.__colabSelPosibles = conContacto.filter(({ r, c }) => colabContactoAviso(c.id, r).tieneContacto).map(({ r }) => r.id);
-  const filasCob = conContacto.map(({ r, c, st }) => {
+  const filasCob = conContacto.map(({ r, c, st, miembros }) => {
     const grua = colabEsGrua(r);
     const avisable = colabContactoAviso(c.id, r).tieneContacto;
     const personas = transportistaContactos.filter(p => p.contactoId === c.id).sort((a, b) => Number(coincideZona(b, r)) - Number(coincideZona(a, r)));
@@ -33267,7 +33316,7 @@ function colabResultadosHtml(){
       : `<span style="font-size:12px;color:var(--danger);font-weight:600;">Sin contacto</span> <a href="#" style="font-size:12px;" onclick="openTransportistaFicha('${c.id}'); return false;" title="Abrir su ficha para apuntar un teléfono o un correo">Completar</a>`;
     return `<tr>
       <td style="width:34px;">${avisable ? `<input type="checkbox" class="colab-sel" data-id="${r.id}" ${selAv.has(r.id) ? 'checked' : ''} onchange="colabSelToggle('${r.id}', this.checked)" title="Elegir para avisarle de una carga" />` : `<input type="checkbox" disabled title="Sin teléfono ni correo apuntado" />`}</td>
-      <td data-sort-value="${esc(c.nombre)}"><span style="font-weight:600;cursor:pointer;" onclick="openTransportistaFicha('${c.id}')">${esc((c.nombreComercial || '').trim() || c.nombre)}</span><div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;align-items:center;">${(ranking.get(r.id) || []).map(colabEtiquetaRankingHtml).join('')}${colabRevisarHtml(revisar.get(r.id))}${colabFuenteChipHtml(r)}</div></td>
+      <td data-sort-value="${esc(c.nombre)}"><span style="font-weight:600;cursor:pointer;" onclick="openTransportistaFicha('${c.id}')">${esc((c.nombreComercial || '').trim() || c.nombre)}</span><div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;align-items:center;">${(ranking.get(r.id) || []).map(colabEtiquetaRankingHtml).join('')}${colabRevisarHtml(revisar.get(r.id))}${colabFuenteMiembrosHtml(miembros)}</div></td>
       <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona + r.destinoZona)}">${grua ? rutaZonaBanderaHtml(r.origenZona) : `${rutaZonaBanderaHtml(r.origenZona)} <span style="color:var(--mutedFaint);">→</span> ${rutaZonaBanderaHtml(r.destinoZona)}`}</td>
       <td data-sort-value="${esc((r.servicios || []).join(','))}">${colabServiciosChipsHtml(r)}</td>
       <td data-sort-value="${esc(r.tipoVehiculo)}">${r.tipoVehiculo ? `<span class="colab-chip veh">${esc(r.tipoVehiculo)}</span>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
@@ -33971,7 +34020,8 @@ function colabViajesCoberturaAbrir(rutaId){
   const r = transportistaRutas.find(x => x.id === rutaId);
   if (!r) return;
   const { origen, destino } = colabBuscarClaves();
-  const lista = viajesRealizados().filter(v => colabViajeEncaja(r, v) && colabZonaCubre(origen, v.origen) && colabZonaCubre(destino, v.destino));
+  const ids = (window.__colabMiembros || {})[rutaId] || [rutaId];   // la fila puede juntar varias coberturas (manual + automáticas)
+  const lista = colabViajesMiembros(transportistaRutas.filter(x => ids.includes(x.id)), viajesRealizados(), v => colabZonaCubre(origen, v.origen) && colabZonaCubre(destino, v.destino));
   viajesModalAbrir(r.contactoId, origen || r.origenZona, destino || r.destinoZona, lista);
 }
 function viajesModalAbrir(tid, origen, destino, lista){
