@@ -4033,18 +4033,19 @@ const AUTONOMOS_SECTIONS = [
   { id: 'liquidaciones', label: 'Autónomos · Liquidaciones', desc: 'Transporte → Autónomos → Liquidaciones: la liquidación mensual de todos los autónomos en una tabla, con importes y su estado.' },
   { id: 'conductores', label: 'Autónomos · Conductores', desc: 'Transporte → Autónomos → Conductores: crear y editar conductores, y su ficha con tarifas, indexaciones, fichajes y liquidación.' },
 ];
-// Forrajes: sus pestañas se dan por separado, igual que las de Transporte y Comercial. La pestaña «Pagos» (reparto del beneficio entre los socios)
-// no está aquí: es solo para administradores y la base de datos tampoco deja leerla a nadie más.
+// Forrajes: sus pestañas se dan por separado, igual que las de Transporte y Comercial. «Pagos» (reparto del beneficio entre los socios) no se hereda:
+// hay que dárselo expresamente a quien deba verlo (los administradores lo ven siempre). La base de datos lo comprueba igual (forrajes-pagos-permiso.sql).
 const FORRAJES_SECTIONS = [
   { id: 'viajes', label: 'Forrajes · Viajes', desc: 'Forrajes → Viajes: ver, crear y editar los viajes (compra, venta, flete y beneficio de cada uno).' },
   { id: 'proveedores', label: 'Forrajes · Proveedores', desc: 'Forrajes → Proveedores: sus datos, calidad y bloqueo, y los productos que venden con sus precios por fechas.' },
   { id: 'clientes', label: 'Forrajes · Clientes', desc: 'Forrajes → Clientes: sus datos y los productos que compran con sus precios por fechas.' },
   { id: 'productos', label: 'Forrajes · Productos', desc: 'Forrajes → Productos: el catálogo de lo que se compra y se vende (paja, fenc, alfalfa…).' },
   { id: 'dashboard', label: 'Forrajes · Dashboard', desc: 'Forrajes → Dashboard: beneficio, precios por tonelada y rankings de clientes, proveedores y regiones.' },
+  { id: 'pagos', label: 'Forrajes · Pagos', desc: 'Forrajes → Pagos: el beneficio repartido entre los socios, sus porcentajes y los pagos que se les hacen. Es información económica de los socios: dalo solo a quien deba verla.' },
 ];
 function moduleSectionList(mod){ return mod === 'trafico' ? TRAFICO_SECTIONS : mod === 'comercial' ? COMERCIAL_SECTIONS : mod === 'administracion' ? ADMINISTRACION_SECTIONS : mod === 'autonomos' ? AUTONOMOS_SECTIONS : mod === 'forrajes' ? FORRAJES_SECTIONS : null; }
 // Apartados que no se heredan: hay que dárselos expresamente a la persona (Gestión de Permisos).
-const SECCIONES_SOLO_EXPLICITAS = ['trafico:configuracion', 'trafico:dashboard'];
+const SECCIONES_SOLO_EXPLICITAS = ['trafico:configuracion', 'trafico:dashboard', 'forrajes:pagos'];
 function sectionAllowedFor(s, mod, sec){
   if (s.isAdmin) return true;
   if (!s.allowedTabs.includes(mod)) return false;
@@ -21154,7 +21155,7 @@ async function fzCargar(forzar){
     return out;
   };
   try {
-    const adm = !!PROFILE.isAdmin;   // el reparto y los pagos de los socios solo se piden a los administradores
+    const adm = fzSeccionPermitida('pagos');   // el reparto y los pagos de los socios solo se piden a quien tiene la pestaña Pagos
     const [v, p, c, pr, pp, pc, so, pg, px] = await Promise.all([
       todo(() => supabaseClient.from('forraje_viajes').select('*').order('fecha', { ascending: false }).order('id')),
       todo(() => supabaseClient.from('forraje_proveedores').select('*').order('nombre').order('id')),
@@ -21205,9 +21206,9 @@ function fzConfirmLeave(){
   if (currentTab === 'forrajes' && (S.view === 'form' || S.view === 'cat') && S.formDirty) return leaveGuard();
   return true;
 }
-// ¿Puede esta cuenta ver esa pestaña de Forrajes? Pagos solo los administradores; las demás, según sus apartados en Gestión de Permisos
-// (con el módulo y sin apartados apuntados —las cuentas de antes— se ven todas)
-function fzSeccionPermitida(id){ return id === 'pagos' ? !!PROFILE.isAdmin : sectionAllowedFor(PROFILE, 'forrajes', id); }
+// ¿Puede esta cuenta ver esa pestaña de Forrajes? Según sus apartados en Gestión de Permisos (con el módulo y sin apartados apuntados —las cuentas
+// de antes— se ven todas menos Pagos, que hay que dar expresamente). Los administradores ven todas.
+function fzSeccionPermitida(id){ return sectionAllowedFor(PROFILE, 'forrajes', id); }
 function fzSeccionInicial(){ const r = FZ_SECCIONES.find(([id]) => fzSeccionPermitida(id)); return r ? r[0] : 'viajes'; }
 function fzBarHtml(){
   const S = fzS();
@@ -21226,7 +21227,7 @@ function tplForrajes(){
   else if (S.view === 'cat') cuerpo = fzCatPantallaHtml();
   else if (S.sec === 'viajes') cuerpo = fzViajesHtml();
   else if (S.sec === 'dashboard') cuerpo = fzDashboardHtml();
-  else if (S.sec === 'pagos') cuerpo = PROFILE.isAdmin ? `<div id="fz-pagos">${fzPagosHtml()}</div>` : '<div class="card" style="padding:24px;text-align:center;color:var(--mutedFaint);">Esta pestaña es solo para administradores.</div>';
+  else if (S.sec === 'pagos') cuerpo = fzSeccionPermitida('pagos') ? `<div id="fz-pagos">${fzPagosHtml()}</div>` : '<div class="card" style="padding:24px;text-align:center;color:var(--mutedFaint);">No tienes acceso a esta pestaña.</div>';
   else cuerpo = fzCatalogoHtml(S.sec);
   return `<div style="--bn-accent:var(--primary);--dc-accent:var(--primary);">${S.view === 'form' || S.view === 'cat' ? '' : fzBarHtml()}${cuerpo}</div>`;
 }
