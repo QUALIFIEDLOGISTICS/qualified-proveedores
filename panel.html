@@ -26134,12 +26134,19 @@ function tplOrdenesCargaPage(){
     <div id="oc-list-body">${ocListBodyHtml()}</div>`;
 }
 function refreshOcListBody(){ const el = document.getElementById('oc-list-body'); if (el) el.innerHTML = ocListBodyHtml(); }
-function ocListBodyHtml(){
+// Las órdenes que se ven en la lista según la búsqueda y los filtros activos (de la más nueva a la más antigua)
+function ocListaFiltrada(){
   const q = (window.__ocSearch || '').toLowerCase();
   const f = ocFiltro();
   const FA = ocFiltroAv(), hayFiltro = ocFiltroAvCount() > 0;
-  const list = ordenesCarga.filter(o => (f === 'todas' || o.estado === f) && (!hayFiltro || ocCumpleFiltro(o, FA)) && (!q || [ocRef(o), o.refFacturacion, ocClienteNombre(o), o.servicio, o.transportistaNombre, o.matriculaTractora, o.matriculaRemolque, o.mercancia,
+  return ordenesCarga.filter(o => (f === 'todas' || o.estado === f) && (!hayFiltro || ocCumpleFiltro(o, FA)) && (!q || [ocRef(o), o.refFacturacion, ocClienteNombre(o), o.servicio, o.transportistaNombre, o.matriculaTractora, o.matriculaRemolque, o.mercancia,
     ...o.cargas.map(p => [p.empresa, p.poblacion, ocPuntoCodigo(p)].join(' ')), ...o.descargas.map(p => [p.empresa, p.poblacion, ocPuntoCodigo(p)].join(' '))].some(v => String(v || '').toLowerCase().includes(q))));
+}
+function ocListBodyHtml(){
+  const q = (window.__ocSearch || '').toLowerCase();
+  const f = ocFiltro();
+  const hayFiltro = ocFiltroAvCount() > 0;
+  const list = ocListaFiltrada();
   if (!list.length) {
     return `<div class="card deca-table-card"><div class="deca-empty"><span class="ico">${homeIcon(HOME_ICON_PATHS.file, 26, '#C1443D', 1.6)}</span><div style="font-size:14px;color:var(--text);font-weight:600;">${q || f !== 'todas' || hayFiltro ? 'Ninguna orden coincide' : 'Todavía no hay ninguna orden de carga'}</div><div style="font-size:12.5px;">${q || f !== 'todas' || hayFiltro ? 'Prueba con otra búsqueda o cambia los filtros.' : 'Pulsa «Nueva orden» para crear la primera.'}</div></div></div>`;
   }
@@ -26180,6 +26187,31 @@ function ocListBodyHtml(){
     </div></div>`;
 }
 
+/* ---- Moverse entre órdenes desde el formulario (flechas de arriba) ----
+   Se recorren las órdenes emitidas (las únicas que se pueden editar) en el orden de la lista, con la búsqueda y los filtros que tuviera
+   puestos; si la orden abierta no entra en ellos, se recorren todas las emitidas. «Anterior» es la de número más bajo y «siguiente» la de más alto. */
+function ocVecinas(id){
+  const emitidas = l => l.filter(o => o.estado === 'emitida');
+  let L = emitidas(ocListaFiltrada());
+  if (!L.some(o => o.id === id)) L = emitidas(ordenesCarga);
+  L = L.slice().sort((a, b) => a.numero - b.numero);
+  const i = L.findIndex(o => o.id === id);
+  return { anterior: i > 0 ? L[i - 1] : null, siguiente: i > -1 && i < L.length - 1 ? L[i + 1] : null, pos: i + 1, total: L.length };
+}
+function ocFormIr(id){
+  if (!id || !ocConfirmLeaveForm()) return;
+  openOcForm(id);
+}
+function ocFlechasHtml(id){
+  const v = ocVecinas(id);
+  if (v.pos < 1) return '';
+  const btn = (o, flecha, lado) => o
+    ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);padding:8px 12px;" onclick="ocFormIr('${o.id}')" title="${lado === 'a' ? 'Orden anterior' : 'Orden siguiente'} · ${esc(ocRef(o))}">${lado === 'a' ? flecha + ' ' + esc(ocRef(o)) : esc(ocRef(o)) + ' ' + flecha}</button>`
+    : `<button type="button" class="btn btn-ghost" style="background:var(--panel);padding:8px 12px;opacity:.4;cursor:default;" disabled title="${lado === 'a' ? 'No hay una orden anterior' : 'No hay una orden siguiente'}">${flecha}</button>`;
+  return `<div class="deca-banner-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    ${btn(v.anterior, '←', 'a')}<span style="font-size:12.5px;color:#fff;opacity:.9;white-space:nowrap;">${v.pos} de ${v.total}</span>${btn(v.siguiente, '→', 's')}
+  </div>`;
+}
 /* ---- Formulario (pantalla completa) ---- */
 function openOcForm(editId){
   window.__traficoSection = 'ordenes';
@@ -26578,6 +26610,7 @@ function tplOcFormPage(){
         <div class="deca-banner-title">${o ? 'Orden de carga' : 'Nueva orden de carga'}${o ? `<span class="deca-code-pill">${esc(ocRef(o))}</span>` : ''}</div>
         <div class="deca-banner-sub">${o ? 'Al guardar cambia la orden; el número se mantiene.' : 'El número se asigna al guardar. Después puedes descargar el PDF para enviárselo al transportista.'}</div>
       </div>
+      ${o ? ocFlechasHtml(o.id) : ''}
     </div>
     <div class="deca-form" oninput="window.__ocFormDirty=true; ocMargenActualizar();" onchange="window.__ocFormDirty=true;">
       <datalist id="oc-direcciones-datalist">${decaDireccionesOptionsHtml()}</datalist>
