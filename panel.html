@@ -574,6 +574,10 @@
   table.oc-tabla tbody tr.oc-r-anulada{background:color-mix(in srgb,var(--danger) 8%,var(--panel)) !important;opacity:.78;}
   table.oc-tabla tbody tr.oc-r-anulada td:first-child{box-shadow:inset 4px 0 0 var(--danger);}
   table.oc-tabla tbody tr td{border-bottom-color:color-mix(in srgb,var(--primary) 12%,var(--border));}
+  /* Orden de carga en modo lectura: el formulario entero deshabilitado, pero con los datos bien legibles */
+  fieldset.oc-ver{border:0;padding:0;margin:0;min-width:0;}
+  fieldset.oc-ver input:disabled,fieldset.oc-ver select:disabled,fieldset.oc-ver textarea:disabled{opacity:1;color:var(--text);-webkit-text-fill-color:var(--text);background:var(--panel2);cursor:default;}
+  fieldset.oc-ver button:disabled{opacity:.55;cursor:default;}
   .oc-sv{display:inline-block;padding:2px 10px;border-radius:999px;font-size:11.5px;font-weight:700;letter-spacing:.3px;}
   /* FTL / LTL siempre en el mismo sitio: la etiqueta con ancho fijo y los metros en un hueco aparte (vacío si no hay), para que no se desplace con ellos */
   .oc-sv-fila{display:inline-flex;align-items:center;gap:6px;}
@@ -18515,6 +18519,7 @@ function closeContactoDetail(){
     window.__traficoView = 'home';
     window.__ocView = 'form';
     window.__ocFormId = window.__ocReturnEditId || null;
+    window.__ocModo = 'editar';
     window.__ocReturnEditId = null;
     window.__ocFormDirty = true;
     renderHeader(); renderTab();
@@ -26236,21 +26241,37 @@ function ocFormIr(id){
   if (!id || !ocConfirmLeaveForm()) return;
   openOcForm(id, true);
 }
-function ocFlechasHtml(id){
+function ocCabeceraAccionesHtml(id, ver){
   const v = ocVecinas(id);
-  if (v.pos < 1 || v.total < 2) return '';
   const ref = x => { const o = ordenesCarga.find(y => y.id === x); return o ? ocRef(o) : ''; };
   const estilo = 'background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 11px;cursor:pointer;color:var(--muted);font-size:13px;';
-  return `<div class="deca-banner-actions" style="display:flex;align-items:center;gap:4px;">
-    <button type="button" onclick="ocFormIr('${v.anterior}')" title="Orden anterior · ${esc(ref(v.anterior))}" style="${estilo}">←</button>
-    <span style="min-width:42px;text-align:center;font-size:12.5px;color:#fff;">${v.pos}/${v.total}</span>
-    <button type="button" onclick="ocFormIr('${v.siguiente}')" title="Orden siguiente · ${esc(ref(v.siguiente))}" style="${estilo}">→</button>
+  const flechas = v.pos >= 1 && v.total >= 2 ? `<div style="display:flex;align-items:center;gap:4px;">
+      <button type="button" onclick="ocFormIr('${v.anterior}')" title="Orden anterior · ${esc(ref(v.anterior))}" style="${estilo}">←</button>
+      <span style="min-width:42px;text-align:center;font-size:12.5px;color:#fff;">${v.pos}/${v.total}</span>
+      <button type="button" onclick="ocFormIr('${v.siguiente}')" title="Orden siguiente · ${esc(ref(v.siguiente))}" style="${estilo}">→</button>
+    </div>` : '';
+  return `<div class="deca-banner-actions" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    ${flechas}
+    <button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="ocNuevaDesdeForm()">+ Nuevo</button>
+    ${ver ? `<button type="button" class="btn btn-ghost" style="background:var(--panel);" onclick="ocEntrarEditar()">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}<span>Editar</span></button>` : ''}
   </div>`;
+}
+// «+ Nuevo» desde una orden abierta: una orden en blanco (pregunta antes si hay cambios sin guardar)
+function ocNuevaDesdeForm(){ if (!ocConfirmLeaveForm()) return; openOcForm(); }
+// «Editar» habilita el formulario de la orden abierta en modo lectura
+function ocEntrarEditar(){ window.__ocModo = 'editar'; window.__ocFormDirty = false; renderTab(); }
+// «Cancelar» al editar una orden ya creada vuelve a verla en modo lectura; al crear una nueva, a la lista
+function ocCancelarEdicion(){
+  if (!window.__ocFormId) { backToOrdenesCarga(); return; }
+  if (!ocConfirmLeaveForm()) return;
+  window.__ocFormDirty = false; window.__ocModo = 'ver'; window.__ocFormDraft = null;
+  renderTab(); window.scrollTo(0, 0);
 }
 /* ---- Formulario (pantalla completa) ---- */
 function openOcForm(editId, desdeFlechas){
   // Al abrir una orden desde la lista se recuerda el orden en que se veía; con las flechas se sigue el mismo
   if (!desdeFlechas) { const ids = editId ? ocNavDesdeLista() : []; window.__ocNav = ids.indexOf(editId) > -1 ? { ids } : null; }
+  window.__ocModo = editId ? 'ver' : 'editar';   // una orden ya creada se abre en modo lectura (botón «Editar»); una nueva, directamente editable
   window.__traficoSection = 'ordenes';
   window.__traficoView = 'home';
   window.__ocView = 'form';
@@ -26374,6 +26395,7 @@ function ocVolverDesdeDireccion(direccionCreada){
   window.__traficoView = 'home';
   window.__ocView = 'form';
   window.__ocFormId = editId || null;
+  window.__ocModo = 'editar';   // se venía editando: se vuelve con el formulario habilitado
   window.__ocFormDirty = true;
   renderHeader(); renderTab();
   window.__ocFormDraft = null;
@@ -26642,6 +26664,7 @@ function tplOcFormPage(){
   const e = window.__ocFormDraft || o || { fechaPedido: today(), indicaciones: ocCfgIndicaciones(), cargas: [{}], descargas: [{}] };
   const cargas = e.cargas.length ? e.cargas : [{}], descargas = e.descargas.length ? e.descargas : [{}];
   const req = '<span class="dc-req">*</span>';
+  const ver = !!o && window.__ocModo === 'ver';   // se abre en modo lectura, como la ficha de contactos; «Editar» la habilita
   const deca = o && o.decaId ? decaDocuments.find(x => x.id === o.decaId) : null;
   // franja horaria: lo que ya tiene reservado la orden, o lo que se estaba escribiendo antes de salir a crear una dirección
   const ya = o ? ocFranjaDe(o.id) : null;
@@ -26660,11 +26683,12 @@ function tplOcFormPage(){
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.file, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;">
         <div class="deca-banner-title">${o ? 'Orden de carga' : 'Nueva orden de carga'}${o ? `<span class="deca-code-pill">${esc(ocRef(o))}</span>` : ''}</div>
-        <div class="deca-banner-sub">${o ? 'Al guardar cambia la orden; el número se mantiene.' : 'El número se asigna al guardar. Después puedes descargar el PDF para enviárselo al transportista.'}</div>
+        <div class="deca-banner-sub">${ver ? 'Solo lectura: pulsa «Editar» para cambiarla.' : o ? 'Al guardar cambia la orden; el número se mantiene.' : 'El número se asigna al guardar. Después puedes descargar el PDF para enviárselo al transportista.'}</div>
       </div>
-      ${o ? ocFlechasHtml(o.id) : ''}
+      ${o ? ocCabeceraAccionesHtml(o.id, ver) : ''}
     </div>
     <div class="deca-form" oninput="window.__ocFormDirty=true; ocMargenActualizar();" onchange="window.__ocFormDirty=true;">
+      ${ver ? '<fieldset disabled class="oc-ver">' : ''}
       <datalist id="oc-direcciones-datalist">${decaDireccionesOptionsHtml()}</datalist>
       <div class="deca-grid" style="margin-bottom:6px;">
         <div class="card deca-card" style="grid-column:1 / -1;--dc-accent:#7C5CBF;">
@@ -26751,12 +26775,15 @@ function tplOcFormPage(){
           <div class="deca-card-body">${ocFranjaHtml(F, ya, editId)}</div>
         </div>
       </div>
+      ${ver ? '</fieldset>' : ''}
     </div>
     <div class="deca-actions">
       <div id="oc-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
       <div class="deca-actions-row">
-        <button class="btn btn-ghost deca-cancel" onclick="backToOrdenesCarga()">Cancelar</button>
-        <button class="btn btn-primary deca-submit oc-save" onclick="submitOcForm('${editId || ''}')">${o ? 'Guardar cambios' : 'Crear orden'}</button>
+        ${ver
+          ? '<button class="btn btn-ghost deca-cancel" onclick="backToOrdenesCarga()">Volver a la lista</button>'
+          : `<button class="btn btn-ghost deca-cancel" onclick="ocCancelarEdicion()">Cancelar</button>
+        <button class="btn btn-primary deca-submit oc-save" onclick="submitOcForm('${editId || ''}')">${o ? 'Guardar cambios' : 'Crear orden'}</button>`}
       </div>
     </div>`;
 }
