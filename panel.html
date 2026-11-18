@@ -4033,7 +4033,16 @@ const AUTONOMOS_SECTIONS = [
   { id: 'liquidaciones', label: 'Autónomos · Liquidaciones', desc: 'Transporte → Autónomos → Liquidaciones: la liquidación mensual de todos los autónomos en una tabla, con importes y su estado.' },
   { id: 'conductores', label: 'Autónomos · Conductores', desc: 'Transporte → Autónomos → Conductores: crear y editar conductores, y su ficha con tarifas, indexaciones, fichajes y liquidación.' },
 ];
-function moduleSectionList(mod){ return mod === 'trafico' ? TRAFICO_SECTIONS : mod === 'comercial' ? COMERCIAL_SECTIONS : mod === 'administracion' ? ADMINISTRACION_SECTIONS : mod === 'autonomos' ? AUTONOMOS_SECTIONS : null; }
+// Forrajes: sus pestañas se dan por separado, igual que las de Transporte y Comercial. La pestaña «Pagos» (reparto del beneficio entre los socios)
+// no está aquí: es solo para administradores y la base de datos tampoco deja leerla a nadie más.
+const FORRAJES_SECTIONS = [
+  { id: 'viajes', label: 'Forrajes · Viajes', desc: 'Forrajes → Viajes: ver, crear y editar los viajes (compra, venta, flete y beneficio de cada uno).' },
+  { id: 'proveedores', label: 'Forrajes · Proveedores', desc: 'Forrajes → Proveedores: sus datos, calidad y bloqueo, y los productos que venden con sus precios por fechas.' },
+  { id: 'clientes', label: 'Forrajes · Clientes', desc: 'Forrajes → Clientes: sus datos y los productos que compran con sus precios por fechas.' },
+  { id: 'productos', label: 'Forrajes · Productos', desc: 'Forrajes → Productos: el catálogo de lo que se compra y se vende (paja, fenc, alfalfa…).' },
+  { id: 'dashboard', label: 'Forrajes · Dashboard', desc: 'Forrajes → Dashboard: beneficio, precios por tonelada y rankings de clientes, proveedores y regiones.' },
+];
+function moduleSectionList(mod){ return mod === 'trafico' ? TRAFICO_SECTIONS : mod === 'comercial' ? COMERCIAL_SECTIONS : mod === 'administracion' ? ADMINISTRACION_SECTIONS : mod === 'autonomos' ? AUTONOMOS_SECTIONS : mod === 'forrajes' ? FORRAJES_SECTIONS : null; }
 // Apartados que no se heredan: hay que dárselos expresamente a la persona (Gestión de Permisos).
 const SECCIONES_SOLO_EXPLICITAS = ['trafico:configuracion', 'trafico:dashboard'];
 function sectionAllowedFor(s, mod, sec){
@@ -4048,7 +4057,7 @@ function moduleAllowedSections(mod){ return tabsOrdenar(mod, moduleSectionList(m
 // que marcar/desmarcar un apartado parta siempre de una lista completa.
 function permExpandTabs(tabs){
   const out = tabs.slice();
-  ['trafico','comercial','administracion','autonomos'].forEach(mod => {
+  ['trafico','comercial','administracion','autonomos','forrajes'].forEach(mod => {
     if (out.includes(mod) && !out.some(t => t.startsWith(mod + ':'))) moduleSectionList(mod).forEach(x => { if (!SECCIONES_SOLO_EXPLICITAS.includes(mod + ':' + x.id)) out.push(mod + ':' + x.id); });
   });
   return out;
@@ -4148,7 +4157,7 @@ async function setTab(id){
   if (id === 'trafico') traficoEnterSection((moduleAllowedSections('trafico')[0] || TRAFICO_SECTIONS[0]).id);
   if (id === 'comercial') { window.__comercialSection = (moduleAllowedSections('comercial')[0] || COMERCIAL_SECTIONS[0]).id; window.__comercialView = 'home'; window.__showingContactoDetail = false; resetComercialClientesState(); resetTarifasState(); }
   if (id === 'clientes') { window.__clientesFilterOpen = false; }
-  if (id === 'forrajes') { const S = fzS(); S.sec = 'viajes'; S.view = 'lista'; S.form = null; S.formDirty = false; S.catFiltro = false; fzCargar(true); }   // al entrar se vuelven a leer los datos
+  if (id === 'forrajes') { const S = fzS(); S.sec = fzSeccionInicial(); S.view = 'lista'; S.form = null; S.formDirty = false; S.catFiltro = false; fzCargar(true); }   // al entrar se vuelven a leer los datos
   if (id === 'admin') {
     window.__adminView = 'list'; window.__adminEditMode = false; window.__adminSearch = '';
     window.__adminFilters = []; window.__adminFilterOpen = false; window.__adminFormDirty = false;
@@ -21196,14 +21205,19 @@ function fzConfirmLeave(){
   if (currentTab === 'forrajes' && (S.view === 'form' || S.view === 'cat') && S.formDirty) return leaveGuard();
   return true;
 }
+// ¿Puede esta cuenta ver esa pestaña de Forrajes? Pagos solo los administradores; las demás, según sus apartados en Gestión de Permisos
+// (con el módulo y sin apartados apuntados —las cuentas de antes— se ven todas)
+function fzSeccionPermitida(id){ return id === 'pagos' ? !!PROFILE.isAdmin : sectionAllowedFor(PROFILE, 'forrajes', id); }
+function fzSeccionInicial(){ const r = FZ_SECCIONES.find(([id]) => fzSeccionPermitida(id)); return r ? r[0] : 'viajes'; }
 function fzBarHtml(){
   const S = fzS();
   return `<div class="mod-bar" style="display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:22px;">
-    <div class="mod-bar-t" style="display:flex;gap:2px;flex-wrap:wrap;">${tabsOrdenar('forrajes', FZ_SECCIONES.filter(([id]) => id !== 'pagos' || PROFILE.isAdmin).map(([id, label]) => ({ id, label }))).map(x => tabsMov('forrajes', x.id, moduleTabBtnHtml(`fzIr('${x.id}')`, x.label, S.sec === x.id && S.view !== 'form' || (S.view === 'form' && x.id === 'viajes')))).join('')}</div>
+    <div class="mod-bar-t" style="display:flex;gap:2px;flex-wrap:wrap;">${tabsOrdenar('forrajes', FZ_SECCIONES.filter(([id]) => fzSeccionPermitida(id)).map(([id, label]) => ({ id, label }))).map(x => tabsMov('forrajes', x.id, moduleTabBtnHtml(`fzIr('${x.id}')`, x.label, S.sec === x.id && S.view !== 'form' || (S.view === 'form' && x.id === 'viajes')))).join('')}</div>
   </div>`;
 }
 function tplForrajes(){
   const S = fzS();
+  if (!fzSeccionPermitida(S.sec)) { S.sec = fzSeccionInicial(); S.view = 'lista'; S.form = null; }   // una pestaña que esta cuenta no tiene: se va a la primera que sí
   if (!S.cargado && !S.cargando && !S.error) setTimeout(() => fzCargar(), 0);
   let cuerpo;
   if (S.error) cuerpo = `<div class="card" style="color:var(--danger);padding:24px;text-align:center;">${esc(S.error)}<div style="margin-top:14px;"><button class="btn btn-ghost" onclick="fzS().error=''; fzCargar(true)">Reintentar</button></div></div>`;
