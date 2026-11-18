@@ -494,6 +494,40 @@
     cierto(/Sin viajes/.test(f) && /No aplica/.test(f), 'Un «—» en Viajes ahora dice por qué (sin viajes o grúa)');
   });
 
+  prueba('Rutas · zonas: se reconocen por código, nombre, país entero o grupo; se valida el código; un grupo cubre sus zonas y un país entero cubre las suyas', () => {
+    const r = new Function(`
+      const CONTACTO_PAIS_CODIGOS = { 'España': 'ES', 'Francia': 'FR', 'Luxemburgo': 'LU', 'Portugal': 'PT' };
+      const COLAB_ZONAS_TABLA = { ES: { '03': 'Alicante', '08': 'Barcelona', '27': 'Lugo', '46': 'Valencia' }, FR: { '33': 'Gironda', '2A': 'Córcega del Sur' } };
+      const tarifaPaisNombre = cc => ({ ES: 'España', FR: 'Francia' })[cc] || cc;
+      ${trozo('let colabGrupos', 'function colabZonaCubre')}
+      ${trozo('function colabZonaCubre', '// Filas que cubren')}
+      ${trozo('const colabNorm', 'function colabZonaInputValor')}
+      ${trozo('function colabGrupoParse', 'function tcfgGrupoPreviewHtml')}
+      colabGrupos = [{ id: 'LEVANTE', nombre: 'Levante', zonas: ['ES03', 'ES46'] }];
+      const z = t => { const x = colabZonaResolver(t); return x.z || ('ERR:' + (x.codigo ? 'codigo' : 'nombre')); };
+      const p = colabGrupoParse('ES03, valencia, PT, Foo, Levante, ES99, ES03');
+      return { res: ['ES08', 'es08', 'ES', 'ES08 · Barcelona', 'Barcelona', 'barcelona', 'Lugo', 'España', 'Levante', 'Grupo Levante', 'FR2A', 'ES99', 'XX08', 'Nowhere', ''].map(z),
+               permitida: colabZonaResolver('ES99', { permitida: 'ES99' }).z,
+               cubre: [colabZonaCubre('@LEVANTE', 'ES46'), colabZonaCubre('@LEVANTE', 'ES'), colabZonaCubre('@LEVANTE', 'ES08'), colabZonaCubre('@LEVANTE', 'FR'), colabZonaCubre('@NOEXISTE', 'ES46'), colabZonaCubre('ES', 'ES08'), colabZonaCubre('ES08', 'ES')],
+               zonas: p.zonas, errores: p.errores.length };`)();
+    igual(r.res, ['ES08', 'ES08', 'ES', 'ES08', 'ES08', 'ES08', 'ES27', 'ES', '@LEVANTE', '@LEVANTE', 'FR2A', 'ERR:codigo', 'ERR:codigo', 'ERR:nombre', 'ERR:nombre'],
+      'Código, nombre (sin mayúsculas ni acentos), «Lugo» no se confunde con el código LU+GO, país entero, grupo; ES99 y XX08 se rechazan como código');
+    igual(r.permitida, 'ES99', 'Una zona ya guardada se deja tal cual al editar');
+    igual(r.cubre, [true, true, false, false, false, true, true], 'Un grupo cubre sus zonas (y el país en el que están), no las demás; un grupo borrado no cubre nada');
+    igual(r.zonas, ['ES03', 'ES46', 'PT'], 'El grupo se arma con zonas sin repetir y los nombres pasan a código'); igual(r.errores, 3, 'Foo, el grupo dentro del grupo y ES99 se marcan como error');
+  });
+  prueba('Rutas · viajes: la tabla lleva zona de origen y de destino, y por encima un resumen por par de zonas con precio mínimo, medio y máximo pagado; los grupos se configuran en Configuración', () => {
+    const r = new Function(`${trozo('function viajesParesStats', 'function viajesParesResumenHtml')}
+      const v = (o, d, c) => ({ origen: o, destino: d, coste: c });
+      return viajesParesStats([v('ES08', 'FR33', 800), v('ES08', 'FR33', 900), v('ES08', 'FR33', 1000), v('ES17', 'FR75', 700), v('ES17', 'FR75', null)]);`)();
+    igual(r.map(x => [x.origen, x.destino, x.n, x.min, x.medio, x.max]), [['ES08', 'FR33', 3, 800, 900, 1000], ['ES17', 'FR75', 1, 700, 700, 700]], 'Por cada par: viajes, mínimo, medio y máximo (los viajes sin precio no cuentan)');
+    const t = trozo('function viajesListaTablaHtml', 'function viajesModalAbrir');
+    cierto(/thSort\('Zona origen', 'text'\)/.test(t) && /thSort\('Zona destino', 'text'\)/.test(t), 'Columnas Zona origen y Zona destino');
+    cierto(/id: 'zonas', label: 'Grupos de zonas'/.test(trozo('const TRAFICO_CONFIG_SECCIONES', 'function tcfgSeccion')), 'Apartado «Grupos de zonas» en Configuración');
+    const f = trozo('async function submitColabRutaForm', 'async function deleteColabRuta');
+    cierto(!/COLAB_ZONA_RE/.test(f) && (f.match(/colabZonaResolver/g) || []).length >= 3, 'Los formularios de cobertura validan con el reconocedor de zonas');
+  });
+
   // ---------- Textos largos en los PDF ----------
   const partir = (texto, ancho) => new Function(`${trozo('function wrapPdfText', '// Genera el PDF nativo del DeCA')}; const font={widthOfTextAtSize:(s)=>s.length*5}; return wrapPdfText(${JSON.stringify(texto)}, font, 10, ${ancho});`)();
   prueba('PDF: un texto normal se reparte en líneas que caben', () => {

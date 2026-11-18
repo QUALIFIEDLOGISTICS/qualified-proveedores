@@ -2174,6 +2174,7 @@
   .colab-best.v{background:#3B7DD8;}
   .colab-best.m{background:#7C5CBF;}
   .colab-best i{font-style:normal;font-weight:600;opacity:.9;text-transform:none;letter-spacing:0;}
+  .colab-chip.grp{background:color-mix(in srgb,#C98A2E 16%,var(--panel));color:#8A5A12;}
   .colab-chip.auto{background:color-mix(in srgb,#7C5CBF 14%,var(--panel));color:#5B3FA0;}
   .colab-chip.man{background:var(--panel2);color:var(--muted);font-weight:600;}
   .av-fila{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 0;border-top:1px solid var(--border);}
@@ -19095,6 +19096,10 @@ function tarifaFlagHtml(z){
 }
 // Zona de una cobertura (Rutas) con su bandera delante, igual que en Tarifas.
 function rutaZonaBanderaHtml(z){
+  if (String(z || '').startsWith('@')) {   // grupo de zonas (se define en Transporte → Configuración)
+    const g = colabGrupoDe(z);
+    return `<span class="colab-chip grp" title="${esc(g ? g.zonas.join(', ') : 'Este grupo ya no existe')}">${g ? 'Grupo ' + esc(g.nombre) : 'Grupo eliminado'}</span>`;
+  }
   return `<span style="display:inline-flex;align-items:center;gap:5px;">${tarifaFlagHtml(z)}${esc(z)}</span>`;
 }
 // Zona con su bandera y, debajo, el CP y la ciudad en pequeño (o la provincia / ciudad de referencia si no hay).
@@ -27104,10 +27109,12 @@ const OC_CONTACTO_PIE = 'comercial@qualified3.com · +34 676952000';   // contac
 const OC_INDICACIONES_DEFECTO ='INDEXACIÓN GASOIL YA INCLUIDA EN EL PRECIO';
 let ocConfig = {};
 async function loadTransporteConfig(){
-  const { data } = await supabaseClient.from('transporte_config').select('*').eq('clave', 'ordenes_carga');
-  const r = data && data[0];
+  const { data } = await supabaseClient.from('transporte_config').select('*').in('clave', ['ordenes_carga', 'grupos_zonas']);
+  const r = (data || []).find(x => x.clave === 'ordenes_carga'), gz = (data || []).find(x => x.clave === 'grupos_zonas');
   ocConfig = (r && r.valor && typeof r.valor === 'object') ? r.valor : {};
   window.__ocConfigMeta = r ? { actualizado: r.updated_at, por: r.updated_by || '' } : null;
+  colabGrupos = gz && gz.valor && Array.isArray(gz.valor.grupos) ? gz.valor.grupos.filter(g => g && g.id && Array.isArray(g.zonas)).map(g => ({ id: String(g.id), nombre: String(g.nombre || g.id), zonas: g.zonas.map(String) })) : [];
+  window.__gruposMeta = gz ? { actualizado: gz.updated_at, por: gz.updated_by || '' } : null;
 }
 function ocCfgEmpresa(){ return Object.assign({}, OC_EMPRESA, ocConfig.empresa || {}); }
 function ocCfgFacturacion(){ return Object.assign({}, OC_FACTURACION_DEFECTO, ocConfig.facturacion || {}); }
@@ -27119,6 +27126,7 @@ function ocCfgCondiciones(){
 // Apartados de Configuración. Para añadir uno nuevo: sumarlo aquí y devolver su contenido en tplTraficoConfigPage.
 const TRAFICO_CONFIG_SECCIONES = [
   { id: 'ordenes', label: 'Órdenes de carga' },
+  { id: 'zonas', label: 'Grupos de zonas' },
 ];
 function tcfgSeccion(){
   return TRAFICO_CONFIG_SECCIONES.some(s => s.id === window.__tcfgSec) ? window.__tcfgSec : TRAFICO_CONFIG_SECCIONES[0].id;
@@ -27133,6 +27141,7 @@ function tplTraficoConfigPage(){
   const sec = tcfgSeccion();
   const tabs = `<div class="doc-seg" style="margin-bottom:16px;">${TRAFICO_CONFIG_SECCIONES.map(s => `<button type="button" class="${s.id === sec ? 'on' : ''}" onclick="tcfgSetSeccion('${s.id}')">${esc(s.label)}</button>`).join('')}</div>`;
   if (sec === 'ordenes') return tabs + tplTcfgOrdenes();
+  if (sec === 'zonas') return tabs + tplTcfgZonas();
   return tabs;
 }
 function tcfgConfirmLeaveForm(){
@@ -27232,6 +27241,120 @@ function tplTcfgOrdenes(){
         <button class="btn btn-primary deca-submit tcfg-save" onclick="submitTraficoConfig()">Guardar configuración</button>
       </div>
     </div>`;
+}
+/* ---- Configuración → Grupos de zonas ----
+   Un grupo es un nombre y una lista de zonas (códigos como ES03, nombres como Valencia, o un país entero como PT). En Rutas se puede apuntar una
+   cobertura a un grupo y el buscador la encuentra cuando buscas cualquier zona del grupo. Se guardan en transporte_config (clave 'grupos_zonas'). */
+// Texto «ES03, Valencia, PT» → { zonas: ['ES03', 'ES46', 'PT'], errores: [...], items: [{ txt, z, error }] }
+function colabGrupoParse(texto){
+  const items = String(texto || '').split(/[,;\n]+/).map(s => s.trim()).filter(Boolean).map(txt => {
+    const r = colabZonaResolver(txt);
+    if (r.grupo) return { txt, error: 'un grupo no puede llevar otro grupo dentro' };
+    return r.error ? { txt, error: r.error.replace(/\.$/, '') } : { txt, z: r.z };
+  });
+  return { items, zonas: [...new Set(items.filter(x => x.z).map(x => x.z))], errores: items.filter(x => x.error).map(x => `«${x.txt}»: ${x.error}`) };
+}
+function tcfgGrupoPreviewHtml(texto){
+  const p = colabGrupoParse(texto);
+  if (!p.items.length) return '<span style="color:var(--mutedFaint);">Escribe las zonas separadas por comas.</span>';
+  return p.items.map(x => x.error
+    ? `<span class="colab-chip" style="background:color-mix(in srgb,var(--danger) 14%,var(--panel));color:var(--danger);" title="${esc(x.error)}">${esc(x.txt)} ✗</span>`
+    : `<span class="colab-chip" title="${esc(tarifaZonaHint(x.z))}">${esc(x.z)}${tarifaZonaHint(x.z) && x.z.length > 2 ? ' · ' + esc(tarifaZonaHint(x.z)) : x.z.length === 2 ? ' · país' : ''}</span>`).join(' ');
+}
+function tcfgGrupoHtml(g){
+  g = g || { id: '', nombre: '', zonas: [] };
+  const usadas = g.id ? transportistaRutas.filter(r => r.origenZona === '@' + g.id || r.destinoZona === '@' + g.id).length : 0;
+  return `
+    <div class="tcfg-grp" data-id="${esc(g.id)}" style="border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px;background:var(--panel2);">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+        <input class="tcfg-gn" maxlength="60" placeholder="Nombre del grupo (ej. Levante)" value="${esc(g.nombre)}" style="flex:1;font-weight:600;" />
+        ${usadas ? `<small style="color:var(--muted);white-space:nowrap;">${usadas} cobertura${usadas === 1 ? '' : 's'}</small>` : ''}
+        <button type="button" class="deca-act danger" onclick="tcfgGrupoQuitar(this)" title="Quitar este grupo">${homeIcon(HOME_ICON_PATHS.trash, 15, 'currentColor', 2)}</button>
+      </div>
+      <textarea class="tcfg-gz" rows="2" maxlength="1500" placeholder="Zonas separadas por comas: ES03, ES12, ES46 · o por nombre: Valencia, Alicante · o un país entero: PT" oninput="tcfgGrupoPreview(this)" style="width:100%;resize:vertical;">${esc(g.zonas.join(', '))}</textarea>
+      <div class="tcfg-gp" style="margin-top:6px;min-height:20px;display:flex;gap:4px;flex-wrap:wrap;">${tcfgGrupoPreviewHtml(g.zonas.join(', '))}</div>
+    </div>`;
+}
+function tcfgGrupoPreview(ta){ const p = ta.closest('.tcfg-grp').querySelector('.tcfg-gp'); if (p) p.innerHTML = tcfgGrupoPreviewHtml(ta.value); }
+function tcfgGrupoAdd(){
+  const cont = document.getElementById('tcfg-grupos');
+  if (!cont) return;
+  cont.insertAdjacentHTML('beforeend', tcfgGrupoHtml(null));
+  window.__tcfgDirty = true;
+  const t = cont.lastElementChild.querySelector('.tcfg-gn'); if (t) t.focus();
+}
+function tcfgGrupoQuitar(btn){ const r = btn.closest('.tcfg-grp'); if (r) r.remove(); window.__tcfgDirty = true; }
+function tplTcfgZonas(){
+  const m = window.__gruposMeta;
+  return `
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.pin, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 280px;">
+        <div class="deca-banner-title">Grupos de zonas</div>
+        <div class="deca-banner-sub">Agrupa zonas con un nombre (por ejemplo «Levante» = Alicante, Castellón y Valencia) para apuntar una cobertura de golpe en Rutas. El buscador la encuentra cuando buscas cualquier zona del grupo${m && m.actualizado ? ` · última modificación el ${esc(fmtDateDMY(String(m.actualizado).slice(0, 10)))}${m.por ? ' por ' + esc(m.por) : ''}` : ''}.</div>
+      </div>
+    </div>
+    <div class="deca-form" oninput="window.__tcfgDirty=true;" onchange="window.__tcfgDirty=true;" style="max-width:980px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
+      <div class="card deca-card">
+        ${decaCardHead('pin', 'Grupos', 'Cada zona es país + 2 cifras del código postal (ES08 = Barcelona); un país solo (PT) es el país entero')}
+        <div class="deca-card-body">
+          <div id="tcfg-grupos">${colabGrupos.map(g => tcfgGrupoHtml(g)).join('')}</div>
+          <button type="button" class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px;" onclick="tcfgGrupoAdd()">+ Añadir grupo</button>
+        </div>
+      </div>
+    </div>
+    <div class="deca-actions" style="max-width:980px;">
+      <div id="tcfg-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
+      <div class="deca-actions-row">
+        <button class="btn btn-ghost deca-cancel" onclick="tcfgDescartar()">Descartar cambios</button>
+        <button class="btn btn-primary deca-submit tcfg-save" onclick="tcfgZonasGuardar()">Guardar grupos</button>
+      </div>
+    </div>`;
+}
+async function tcfgZonasGuardar(){
+  const errEl = document.getElementById('tcfg-error');
+  errEl.textContent = '';
+  if (!sectionAllowedFor(PROFILE, 'trafico', 'configuracion')) { errEl.textContent = 'No tienes permiso para cambiar la configuración.'; return; }
+  const errores = [], grupos = [], nombres = new Set(), ids = new Set();
+  const filas = [...document.querySelectorAll('#tcfg-grupos .tcfg-grp')];
+  filas.forEach(el => { if (el.dataset.id) ids.add(el.dataset.id); });
+  filas.forEach((el, i) => {
+    const nombre = el.querySelector('.tcfg-gn').value.trim(), texto = el.querySelector('.tcfg-gz').value;
+    if (!nombre && !texto.trim()) return;   // fila vacía
+    const que = `Grupo ${i + 1}${nombre ? ' «' + nombre + '»' : ''}`;
+    if (!nombre) { errores.push(`${que}: falta el nombre.`); return; }
+    if (nombres.has(colabNorm(nombre))) { errores.push(`${que}: ya hay otro grupo con ese nombre.`); return; }
+    nombres.add(colabNorm(nombre));
+    const p = colabGrupoParse(texto);
+    if (p.errores.length) { errores.push(`${que}: ${p.errores.join('; ')}.`); return; }
+    if (!p.zonas.length) { errores.push(`${que}: escribe al menos una zona.`); return; }
+    let id = el.dataset.id;
+    if (!id) {   // grupo nuevo: su identificador sale del nombre y ya no cambia aunque se renombre
+      const base = colabNorm(nombre).replace(/ /g, '').toUpperCase().slice(0, 24) || 'GRUPO';
+      id = base; let n = 2; while (ids.has(id)) id = base + (n++);
+      ids.add(id);
+    }
+    grupos.push({ id, nombre, zonas: p.zonas });
+  });
+  if (errores.length) { errEl.textContent = errores.join('\n'); return; }
+  // Un grupo quitado que alguna cobertura usa: esas coberturas dejan de encontrarse, así que se pregunta antes
+  const quitados = colabGrupos.filter(g => !grupos.some(x => x.id === g.id)).map(g => ({ g, n: transportistaRutas.filter(r => r.origenZona === '@' + g.id || r.destinoZona === '@' + g.id).length })).filter(x => x.n);
+  if (quitados.length && !(await appConfirm({ title: 'Quitar grupos en uso', message: `${quitados.map(x => `«${x.g.nombre}» lo usan ${x.n} cobertura${x.n === 1 ? '' : 's'}`).join('; ')}. Si lo quitas, esas coberturas dejarán de aparecer en las búsquedas hasta que les pongas otra zona.`, confirmLabel: 'Quitar igualmente', tone: 'warn', icon: 'warn' }))) return;
+  const btn = document.querySelector('.tcfg-save');
+  if (btn) btn.disabled = true;
+  const por = currentUserEmail();
+  const { error } = await supabaseClient.from('transporte_config').upsert({ clave: 'grupos_zonas', valor: { grupos }, updated_at: new Date().toISOString(), updated_by: por });
+  if (error) {
+    const m = error.message || '';
+    errEl.textContent = 'No se pudo guardar: ' + (/transporte_config|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL «Configuración de Transporte» en Supabase.' : m);
+    if (btn) btn.disabled = false;
+    return;
+  }
+  colabGrupos = grupos;
+  window.__gruposMeta = { actualizado: new Date().toISOString(), por };
+  window.__tcfgDirty = false;
+  renderTab();
+  appToast('Grupos de zonas guardados.', 'ok');
 }
 function tcfgDescartar(){
   window.__tcfgDirty = false;
@@ -30101,6 +30224,7 @@ const IT_REGION = {
 // IT15 → "Campania" (regiones). Un código de país solo (sin dígitos) es "todo el país".
 function tarifaZonaHint(z){
   z = z || '';
+  if (z.startsWith('@')) { const g = colabGrupoDe(z); return g ? `Grupo ${g.nombre} (${g.zonas.length} zona${g.zonas.length === 1 ? '' : 's'})` : 'Grupo eliminado'; }
   if (/^[A-Z]{2}$/.test(z)) return tarifaPaisNombre(z) + ' (todo el país)';
   if (/^ES\d{2}$/.test(z)) return CP_PROVINCIA[z.slice(2)] || '';
   if (/^FR\d{2}$/.test(z)) return FR_DEPT_CIUDAD[z.slice(2)] || '';
@@ -32698,16 +32822,17 @@ function colabZonasDatalistHtml(field){
   const vistos = new Set();
   const opts = [];
   const add = (value, label) => { if (!value || vistos.has(value)) return; vistos.add(value); opts.push({ value, label }); };
+  colabGrupos.forEach(g => add('Grupo ' + g.nombre, `Grupo de zonas · ${g.zonas.length} zona${g.zonas.length === 1 ? '' : 's'}`));
   EU_COUNTRIES.forEach(nombre => {
     const cc = CONTACTO_PAIS_CODIGOS[nombre];
     if (!cc) return;
-    add(cc, `${nombre} (todo el país)`);
+    add(cc, `${nombre} · país completo`);
     const tabla = COLAB_ZONAS_TABLA[cc];
     if (tabla) Object.keys(tabla).sort().forEach(k => add(cc + k, `${nombre} — ${tabla[k]}`));
   });
   // Alguna cobertura ya guardada con un código que no esté en la lista de arriba
   // (p. ej. escrito a mano para un país sin tabla) también se sugiere.
-  [...new Set(transportistaRutas.map(r => r[field]).filter(Boolean))].sort().forEach(z => add(z, tarifaZonaHint(z)));
+  [...new Set(transportistaRutas.map(r => r[field]).filter(z => z && !z.startsWith('@')))].sort().forEach(z => add(z, tarifaZonaHint(z)));
   return opts.map(o => `<option value="${esc(o.value)}" label="${esc(o.label)}">`).join('');
 }
 // País → zona del buscador (igual que el filtro de Tarifas): solo países con alguna
@@ -32724,8 +32849,12 @@ function colabParesRuta(){
 function colabZonasBuscables(field){
   const k = colabBuscarClaves();
   const otro = field === 'origenZona' ? k.destino : k.origen;
-  const pares = colabParesRuta().filter(p => !otro || (!p.grua && colabZonaCubre(field === 'origenZona' ? p.d : p.o, otro)));
-  return [...new Set(pares.map(p => field === 'origenZona' ? p.o : p.d))];
+  // Una cobertura de grupo aporta todas las zonas del grupo (y un grupo que ya no existe, ninguna)
+  // y una cobertura de país entero (ES, FR, IT) aporta todas las zonas de ese país, para poder buscar una concreta (ES08) y encontrarla
+  const lado = z => (z.charAt(0) === '@' ? ((colabGrupoDe(z) || { zonas: [] }).zonas) : [z])
+    .flatMap(x => x.length === 2 && COLAB_ZONAS_TABLA[x] ? [x, ...Object.keys(COLAB_ZONAS_TABLA[x]).map(k => x + k)] : [x]);
+  const pares = colabParesRuta().filter(p => !otro || (!p.grua && lado(field === 'origenZona' ? p.d : p.o).some(z => colabZonaCubre(z, otro))));
+  return [...new Set(pares.flatMap(p => lado(field === 'origenZona' ? p.o : p.d)))];
 }
 function colabPaisesOptionsHtml(field, selected){
   const codes = [...new Set(colabZonasBuscables(field).map(z => z.slice(0, 2)))]
@@ -32749,18 +32878,65 @@ function colabRevisarBusqueda(){
 // Mayúsculas y sin espacios al escribir una zona (formulario de alta), y refresca lo que dependa de ella.
 function colabZonaInput(id, after){
   const el = document.getElementById(id);
-  // No se quitan los espacios al escribir: además del código (ES08) se puede
-  // buscar por nombre ("Campania", "Valle de Aosta"), que sí los lleva.
-  el.value = el.value.toUpperCase();
   const hint = document.getElementById(id + '-hint');
-  if (hint) hint.innerHTML = colabHintHtml(el.value.replace(/\s/g, ''));
+  if (hint) hint.innerHTML = colabHintHtml(el.value);
   if (after) after();
 }
-// Pista bajo una zona: su bandera y su nombre ("ES08" → 🇪🇸 Barcelona), o nada si no hay.
-function colabHintHtml(z){
-  const txt = tarifaZonaHint(z);
-  if (!txt) return '';
-  return `<span style="display:inline-flex;align-items:center;gap:6px;">${tarifaFlagHtml(z)}${esc(txt)}</span>`;
+/* ---- Elegir una zona: código (ES08), nombre (Barcelona), país entero (España) o grupo (Levante) ----
+   Se escribe lo que se sepa y se reconoce: el código se valida (país conocido y, si lo tenemos, que la zona exista en ese país) y un nombre
+   se pasa a su código. Al terminar de escribir queda el código (ES08) o «Grupo X». Lo que se guarda es siempre el código (o «@ID»). */
+const colabNorm = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+let colabZonaIdx = null;
+function colabZonaIndice(){
+  if (colabZonaIdx) return colabZonaIdx;
+  const idx = new Map();
+  const add = (nombre, code) => { const k = colabNorm(nombre); if (!k) return; if (!idx.has(k)) idx.set(k, new Set()); idx.get(k).add(code); };
+  Object.entries(CONTACTO_PAIS_CODIGOS).forEach(([n, cc]) => { add(n, cc); add(n + ' pais completo', cc); add(n + ' todo el pais', cc); });
+  Object.entries(COLAB_ZONAS_TABLA).forEach(([cc, tabla]) => Object.entries(tabla).forEach(([k, n]) => add(n, cc + k)));
+  return (colabZonaIdx = idx);
+}
+// Mensaje si el código no vale (país desconocido o zona que no existe en un país del que tenemos la lista); vacío si vale.
+function colabZonaCodigoError(z){
+  const cc = z.slice(0, 2);
+  if (!Object.values(CONTACTO_PAIS_CODIGOS).includes(cc)) return `«${cc}» no es un país conocido`;
+  const tabla = COLAB_ZONAS_TABLA[cc];
+  if (z.length === 4 && tabla && !(z.slice(2) in tabla)) return `«${z}» no existe en ${tarifaPaisNombre(cc)}`;
+  return '';
+}
+// → { z: 'ES08' | 'ES' | '@ID' } o { error, codigo: true si es un código mal puesto }. «permitida»: una zona ya guardada que se deja tal cual.
+function colabZonaResolver(txt, opts){
+  const t = String(txt == null ? '' : txt).trim();
+  if (!t) return { error: 'Falta la zona.' };
+  if (opts && opts.permitida && t.toUpperCase() === opts.permitida) return { z: opts.permitida };
+  const nt = colabNorm(t), up = t.toUpperCase();
+  const g = colabGrupos.find(x => colabNorm(x.nombre) === nt || colabNorm('grupo ' + x.nombre) === nt || '@' + x.id === up);
+  if (g) return { z: '@' + g.id, grupo: g };
+  const cod = up.match(/^([A-Z]{2}(?:[0-9]{2}|[0-9][AB])?)(?:\s*[·—–-].*)?$/);
+  if (cod) {   // «ES08», «ES», «ES08 · Barcelona»
+    const e = colabZonaCodigoError(cod[1]);
+    return e ? { error: e + '.', codigo: true } : { z: cod[1] };
+  }
+  const hit = colabZonaIndice().get(nt);
+  if (hit && hit.size === 1) return { z: [...hit][0] };
+  if (hit && hit.size > 1) return { error: `«${t}» es ambiguo (${[...hit].sort().join(', ')}): escribe el código.` };
+  return { error: `No reconozco «${t}». Escribe el código (ES08), el nombre (Barcelona), un país entero (España) o un grupo, o elígelo de la lista.` };
+}
+// Cómo se enseña en el campo una zona guardada: el código, o «Grupo X» para un grupo
+function colabZonaInputValor(z){ const g = colabGrupoDe(z); return g ? 'Grupo ' + g.nombre : (z || ''); }
+// Al terminar de escribir: «barcelona» pasa a «ES08» y «Levante» a «Grupo Levante»
+function colabZonaNormalizar(el){
+  const r = colabZonaResolver(el.value);
+  if (r.z) el.value = colabZonaInputValor(r.z);
+}
+// Pista bajo una zona: lo que se ha entendido («ES08 · Barcelona», «País completo · España», «Grupo Levante: ES03, ES12…») o por qué no vale.
+function colabHintHtml(txt){
+  if (!String(txt || '').trim()) return '';
+  const r = colabZonaResolver(txt);
+  if (r.error) return `<span style="color:${r.codigo ? 'var(--danger)' : 'var(--mutedFaint)'};">${esc(r.error)}</span>`;
+  const z = r.z, g = r.grupo;
+  const cuerpo = g ? `Grupo ${esc(g.nombre)}: ${esc(g.zonas.slice(0, 6).join(', '))}${g.zonas.length > 6 ? '…' : ''}`
+    : z.length === 2 ? `País completo · ${esc(tarifaPaisNombre(z))}` : `${esc(z)}${tarifaZonaHint(z) ? ' · ' + esc(tarifaZonaHint(z)) : ''}`;
+  return `<span style="display:inline-flex;align-items:center;gap:6px;color:var(--success);font-weight:600;">✓ ${g ? '' : tarifaFlagHtml(z)}${cuerpo}</span>`;
 }
 // Con un solo lado elegido ("desde ES" o "hacia FR") el texto lo dice tal cual.
 function colabRutaTextoPlano(o, d){ return o && d ? `${o} → ${d}` : o ? `desde ${o}` : `hacia ${d}`; }
@@ -32779,8 +32955,15 @@ function colabMailtoUrl({ to, bcc, subject, body }){
 // "desde Barcelona a toda Italia". Una zona cubre otra si son iguales, o si
 // una de las dos es solo el país y la otra empieza por ese país.
 const COLAB_ZONA_RE = /^[A-Z]{2}([0-9A-Z]{2})?$/;
+/* ---- Grupos de zonas ----
+   Se definen en Transporte → Configuración → Grupos de zonas (ej. «Levante» = ES03, ES12, ES46) y se guardan en transporte_config
+   (clave 'grupos_zonas'). Una cobertura puede apuntar a un grupo en vez de a una zona: se guarda como «@ID» en origen_zona / destino_zona
+   (no cambia la estructura de la tabla) y cubre todas las zonas del grupo. Un grupo puede incluir países enteros (FR). */
+let colabGrupos = [];   // [{ id: 'LEVANTE', nombre: 'Levante', zonas: ['ES03', 'ES12'] }]
+function colabGrupoDe(z){ return String(z || '').startsWith('@') ? colabGrupos.find(g => g.id === String(z).slice(1)) : undefined; }
 function colabZonaCubre(rutaZona, buscada){
   if (!rutaZona || !buscada) return false;
+  if (rutaZona.charAt(0) === '@') { const g = colabGrupoDe(rutaZona); return !!g && g.zonas.some(z => colabZonaCubre(z, buscada)); }
   if (rutaZona === buscada) return true;
   if (rutaZona.length === 2) return buscada.startsWith(rutaZona);
   if (buscada.length === 2) return rutaZona.startsWith(buscada);
@@ -32807,6 +32990,26 @@ function colabCopiar(txt, btn){
     setTimeout(() => { btn.innerHTML = antes; }, 1300);
   }, () => {});
 }
+// Lo pagado a los transportistas por cada par de zonas (origen → destino): nº de viajes y precio mínimo, medio y máximo. Una búsqueda por país
+// agrupa muchos pares (ES08 → FR33, ES17 → FR75…) y sus precios no se pueden mezclar, así que se resumen por separado.
+function viajesParesStats(lista){
+  const g = new Map();
+  lista.filter(v => v.coste != null && isFinite(v.coste)).forEach(v => {
+    const k = v.origen + '|' + v.destino;
+    if (!g.has(k)) g.set(k, { origen: v.origen, destino: v.destino, precios: [] });
+    g.get(k).precios.push(v.coste);
+  });
+  return [...g.values()].map(x => ({ origen: x.origen, destino: x.destino, n: x.precios.length, min: Math.min(...x.precios), max: Math.max(...x.precios), medio: x.precios.reduce((s, p) => s + p, 0) / x.precios.length }))
+    .sort((a, b) => b.n - a.n || (a.origen + a.destino).localeCompare(b.origen + b.destino));
+}
+function viajesParesResumenHtml(lista){
+  const pares = viajesParesStats(lista);
+  if (!pares.length) return '';
+  return `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;margin-bottom:10px;">
+    <table class="tf-table"><thead><tr>${thSort('Par de zonas', 'text')}${thSort('Viajes', 'number', 'style="text-align:right;"')}${thSort('Mínimo pagado', 'number', 'style="text-align:right;"')}${thSort('Medio pagado', 'number', 'style="text-align:right;"')}${thSort('Máximo pagado', 'number', 'style="text-align:right;"')}</tr></thead>
+    <tbody>${pares.map(p => `<tr><td data-sort-value="${esc(p.origen + p.destino)}">${viajeRutaHtml(p.origen, p.destino)}</td><td class="tf-precio" data-sort-value="${p.n}">${p.n}</td>
+      <td class="tf-precio" data-sort-value="${p.min}">${eur2(p.min)}</td><td class="tf-precio" data-sort-value="${p.medio}">${eur2(p.medio)}</td><td class="tf-precio" data-sort-value="${p.max}">${eur2(p.max)}</td></tr>`).join('')}</tbody></table></div>`;
+}
 // Viajes realizados en la ruta buscada (uno por línea), con el servicio elegido en el filtro si lo hay
 function colabViajesRutaHtml(origen, destino, selS){
   const todosViajes = viajesRealizados();
@@ -32820,7 +33023,7 @@ function colabViajesRutaHtml(origen, destino, selS){
       ${tv.margenEur != null ? `<div style="font-size:13px;color:var(--muted);">Margen total <b style="color:var(--text);">${eur2(tv.margenEur)}</b> · medio ${viajeMargenHtml(tv.margenPct, null)}</div>` : ''}
     </div>
     ${viajesRuta.length
-      ? `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;">${viajesListaTablaHtml(viajesRuta, true)}</div>`
+      ? `${viajesParesResumenHtml(viajesRuta)}<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;">${viajesListaTablaHtml(viajesRuta, true)}</div>`
       : '<div style="font-size:12.5px;color:var(--mutedFaint);padding:6px 2px;">Todavía no se ha hecho ningún viaje en esta ruta con nosotros.</div>'}`;
   return bloqueViajes;
 }
@@ -33585,7 +33788,7 @@ function colabViajesBusquedaAbrir(tid){
 // Tabla de viajes uno a uno (ventana de detalle y resultados del buscador de rutas)
 function viajesListaTablaHtml(lista, conTransportista){
   return `<table class="tf-table">
-    <thead><tr>${thSort('Fecha', 'date')}${thSort('Orden', 'text')}${conTransportista ? thSort('Transportista', 'text') : ''}${thSort('Cliente', 'text')}${thSort('Servicio', 'text')}${thSort('Pagado', 'number', 'style="text-align:right;"')}${thSort('Cobrado', 'number', 'style="text-align:right;"')}${thSort('Margen', 'number', 'style="text-align:right;"')}</tr></thead>
+    <thead><tr>${thSort('Fecha', 'date')}${thSort('Orden', 'text')}${thSort('Zona origen', 'text')}${thSort('Zona destino', 'text')}${conTransportista ? thSort('Transportista', 'text') : ''}${thSort('Cliente', 'text')}${thSort('Servicio', 'text')}${thSort('Pagado', 'number', 'style="text-align:right;"')}${thSort('Cobrado', 'number', 'style="text-align:right;"')}${thSort('Margen', 'number', 'style="text-align:right;"')}</tr></thead>
     <tbody>${lista.map(v => {
       const cl = v.oc.clienteId ? contactos.find(x => x.id === v.oc.clienteId) : null;
       const tr = contactos.find(x => x.id === v.transportistaId);
@@ -33593,6 +33796,8 @@ function viajesListaTablaHtml(lista, conTransportista){
       return `<tr>
         <td style="white-space:nowrap;" data-sort-value="${esc(v.fecha)}">${esc(viajeFechaTxt(v.fecha))}</td>
         <td style="font-family:var(--mono);" data-sort-value="${esc(v.ref)}">${esc(v.ref)}</td>
+        <td data-sort-value="${esc(v.origen)}">${tarifaZonaCeldaHtml(v.origen, (v.oc.cargas[0] || {}).cp, (v.oc.cargas[0] || {}).poblacion)}</td>
+        <td data-sort-value="${esc(v.destino)}">${tarifaZonaCeldaHtml(v.destino, (v.oc.descargas[v.oc.descargas.length - 1] || {}).cp, (v.oc.descargas[v.oc.descargas.length - 1] || {}).poblacion)}</td>
         ${conTransportista ? `<td style="font-weight:600;" data-sort-value="${esc(tr ? tr.nombre : '')}">${esc(tr ? ((tr.nombreComercial || '').trim() || tr.nombre) : '—')}</td>` : ''}
         <td data-sort-value="${esc(cl ? cl.nombre : '')}">${esc(cl ? ((cl.nombreComercial || '').trim() || cl.nombre) : '—')}</td>
         <td data-sort-value="${esc(ocServicioTxt(v.oc))}">${viajeServicioChipHtml(v)}</td>
@@ -33797,7 +34002,7 @@ function colabRutaExistentesHtml(c){
   if (!rutas.length) return '';
   return `
     <div style="background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin:-4px 0 16px;font-size:12.5px;color:var(--muted);">
-      <b>${esc((c.nombreComercial||'').trim() || c.nombre)}</b> ya cubre: ${rutas.map(r=>`${esc(r.origenZona)} → ${esc(r.destinoZona)}`).join(', ')}
+      <b>${esc((c.nombreComercial||'').trim() || c.nombre)}</b> ya cubre: ${rutas.map(r=>`${esc(colabZonaInputValor(r.origenZona))} → ${esc(colabZonaInputValor(r.destinoZona))}`).join(', ')}
     </div>`;
 }
 // Al escribir/elegir el transportista (cuando no viene fijado desde su ficha), refresca el aviso de arriba.
@@ -33873,15 +34078,15 @@ function colabRutaEditFieldsHtml(editing){
     <div style="display:flex;gap:14px;flex-wrap:wrap;">
       <div class="field" style="flex:1;min-width:220px;">
         <label><span id="colr-origen-label">Zona de origen</span> <span class="dc-req">*</span></label>
-        ${decaInputIcon('pin', `<input id="colr-origen-zona" maxlength="30" data-combo="colr-origenes-datalist" autocomplete="off" placeholder="ES08 o Barcelona" style="font-family:var(--mono);" oninput="colabZonaInput('colr-origen-zona')" value="${esc(editing.origenZona)}" />`)}
+        ${decaInputIcon('pin', `<input id="colr-origen-zona" maxlength="30" data-combo="colr-origenes-datalist" autocomplete="off" placeholder="ES08, Barcelona, España o un grupo" oninput="colabZonaInput('colr-origen-zona')" onchange="colabZonaNormalizar(this); colabZonaInput('colr-origen-zona')" value="${esc(colabZonaInputValor(editing.origenZona))}" />`)}
         <datalist id="colr-origenes-datalist">${colabZonasDatalistHtml('origenZona')}</datalist>
-        <div id="colr-origen-zona-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;">${zonaHint(editing.origenZona)}</div>
+        <div id="colr-origen-zona-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;">${zonaHint(colabZonaInputValor(editing.origenZona))}</div>
       </div>
       <div class="field" id="colr-destino-field" style="flex:1;min-width:220px;">
         <label>Zona de destino <span class="dc-req">*</span></label>
-        ${decaInputIcon('pin', `<input id="colr-destino-zona" maxlength="30" data-combo="colr-destinos-datalist" autocomplete="off" placeholder="IT o toda Italia" style="font-family:var(--mono);" oninput="colabZonaInput('colr-destino-zona')" value="${esc(editing.destinoZona)}" />`)}
+        ${decaInputIcon('pin', `<input id="colr-destino-zona" maxlength="30" data-combo="colr-destinos-datalist" autocomplete="off" placeholder="FR13, Burdeos, Italia o un grupo" oninput="colabZonaInput('colr-destino-zona')" onchange="colabZonaNormalizar(this); colabZonaInput('colr-destino-zona')" value="${esc(colabZonaInputValor(editing.destinoZona))}" />`)}
         <datalist id="colr-destinos-datalist">${colabZonasDatalistHtml('destinoZona')}</datalist>
-        <div id="colr-destino-zona-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;">${zonaHint(editing.destinoZona)}</div>
+        <div id="colr-destino-zona-hint" style="font-size:12px;color:var(--mutedFaint);min-height:16px;margin-top:3px;">${zonaHint(colabZonaInputValor(editing.destinoZona))}</div>
       </div>
     </div>
     <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;">
@@ -33900,11 +34105,11 @@ function colabRutaRowHtml(i){
     <tr class="colr-row" data-i="${i}">
       <td style="padding:5px 4px;color:var(--mutedFaint);font-size:12px;text-align:right;width:26px;">${i+1}</td>
       <td style="padding:5px 4px;min-width:110px;">
-        <input id="colr-${i}-o" maxlength="30" data-combo="colr-origenes" autocomplete="off" placeholder="ES08" style="font-family:var(--mono);text-transform:uppercase;" oninput="colabRutaRowZonaInput(${i},'o')" />
+        <input id="colr-${i}-o" maxlength="30" data-combo="colr-origenes" autocomplete="off" placeholder="ES08 o Barcelona" oninput="colabRutaRowZonaInput(${i},'o')" onchange="colabZonaNormalizar(this); colabRutaRowZonaInput(${i},'o')" />
         <div id="colr-${i}-oh" class="tf-lugar" style="min-height:14px;margin-top:2px;"></div>
       </td>
       <td style="padding:5px 4px;min-width:110px;">
-        <input id="colr-${i}-d" maxlength="30" data-combo="colr-destinos" autocomplete="off" placeholder="FR13" style="font-family:var(--mono);text-transform:uppercase;" oninput="colabRutaRowZonaInput(${i},'d')" />
+        <input id="colr-${i}-d" maxlength="30" data-combo="colr-destinos" autocomplete="off" placeholder="FR13 o Burdeos" oninput="colabRutaRowZonaInput(${i},'d')" onchange="colabZonaNormalizar(this); colabRutaRowZonaInput(${i},'d')" />
         <div id="colr-${i}-dh" class="tf-lugar" style="min-height:14px;margin-top:2px;"></div>
       </td>
       <td style="padding:5px 4px;min-width:150px;">${colabServCheckboxesHtml(i, [], true)}</td>
@@ -33969,8 +34174,7 @@ function colabRutaDupRow(i){
 }
 function colabRutaRowZonaInput(i, s){
   const el = document.getElementById(`colr-${i}-${s}`);
-  el.value = el.value.toUpperCase();
-  document.getElementById(`colr-${i}-${s}h`).innerHTML = colabHintHtml(el.value.replace(/\s/g, ''));
+  document.getElementById(`colr-${i}-${s}h`).innerHTML = colabHintHtml(el.value);
   window.__colabRutaFormDirty = true;
 }
 function tplColabRutaFormPage(){
@@ -34020,19 +34224,22 @@ async function submitColabRutaForm(editId){
   errEl.textContent = '';
   const servicios = Object.keys(COLAB_SERVICIOS).filter(k => document.getElementById(`colr-e-s-${k}`).checked);
   const grua = servicios.includes('GRUA');
-  const origenZona = document.getElementById('colr-origen-zona').value.trim().toUpperCase();
+  // Las zonas se reconocen por código, nombre, país entero o grupo; una zona ya guardada se deja tal cual aunque no esté en nuestras listas
+  const previa = transportistaRutas.find(r => r.id === editId);
+  const zo = colabZonaResolver(document.getElementById('colr-origen-zona').value, { permitida: previa && previa.origenZona });
+  const zd = grua ? zo : colabZonaResolver(document.getElementById('colr-destino-zona').value, { permitida: previa && previa.destinoZona });
+  if (zo.error) { errEl.textContent = (grua ? 'Zona de servicio: ' : 'Zona de origen: ') + zo.error; return; }
+  if (zd.error) { errEl.textContent = 'Zona de destino: ' + zd.error; return; }
+  const origenZona = zo.z;
   // La grúa actúa solo en su zona de servicio: se guarda con destino = origen y sin vehículo.
-  const destinoZona = grua ? origenZona : document.getElementById('colr-destino-zona').value.trim().toUpperCase();
+  const destinoZona = grua ? origenZona : zd.z;
   const tipoVehiculo = grua ? '' : document.getElementById('colr-tipo-vehiculo').value;
   const tarifaBaseRaw = document.getElementById('colr-tarifa-base').value;
   const indexacion = document.getElementById('colr-indexacion').checked;
   const observaciones = document.getElementById('colr-obs').value.trim();
-  if (!COLAB_ZONA_RE.test(origenZona)) { errEl.textContent = grua ? 'La zona de servicio tiene que ser un país y 2 caracteres (ES41), o solo el país para cubrirlo entero (ES).' : 'La zona de origen tiene que ser un país y 2 caracteres (ES08), o solo el país para cubrirlo entero (ES).'; return; }
-  if (!COLAB_ZONA_RE.test(destinoZona)) { errEl.textContent = 'La zona de destino tiene que ser un país y 2 caracteres (FR13), o solo el país para cubrirlo entero (FR).'; return; }
   const btns = [...document.querySelectorAll('.colr-submit-btn')];
   btns.forEach(b => b.disabled = true);
   // Una cobertura automática que se edita a mano pasa a manual: así las órdenes ya no la pueden sobrescribir
-  const previa = transportistaRutas.find(r => r.id === editId);
   const { error } = await supabaseClient.from('transportista_rutas').update({
     origen_zona: origenZona, destino_zona: destinoZona, tipo_vehiculo: tipoVehiculo || null, servicios,
     tarifa_base: tarifaBaseRaw === '' ? null : Number(tarifaBaseRaw), indexacion, observaciones: observaciones || null,
@@ -34062,15 +34269,18 @@ async function submitColabRutasNuevas(){
     const v = id => (document.getElementById(`colr-${i}-${id}`) || {}).value || '';
     const servicios = Object.keys(COLAB_SERVICIOS).filter(k => (document.getElementById(`colr-${i}-s-${k}`) || {}).checked);
     const grua = servicios.includes('GRUA');
-    const o = v('o').trim().toUpperCase(), vehiculo = grua ? '' : v('v'), obs = v('obs').trim();
-    // La grúa actúa solo en su zona de servicio: destino = origen y sin vehículo.
-    const d = grua ? o : v('d').trim().toUpperCase();
+    const oTxt = v('o').trim(), dTxt = grua ? '' : v('d').trim(), vehiculo = grua ? '' : v('v'), obs = v('obs').trim();
     const tarifaBaseRaw = v('tb');
     const indexacion = (document.getElementById(`colr-${i}-idx`) || {}).checked || false;
-    if (!o && !d && !obs && !servicios.length) return; // fila vacía
+    if (!oTxt && !dTxt && !obs && !servicios.length) return; // fila vacía
     const nombreFila = `Fila ${n + 1}`;
-    if (!COLAB_ZONA_RE.test(o)) { errores.push(grua ? `${nombreFila}: la zona de servicio de la grúa debe ser país y 2 caracteres (ES41), o solo el país para cubrirlo entero (ES).` : `${nombreFila}: la zona de origen debe ser país y 2 caracteres (ES08), o solo el país para cubrirlo entero (ES).`); return; }
-    if (!COLAB_ZONA_RE.test(d)) { errores.push(`${nombreFila}: la zona de destino debe ser país y 2 caracteres (FR13), o solo el país para cubrirlo entero (FR).`); return; }
+    // Las zonas se reconocen por código, nombre, país entero o grupo
+    const zo = colabZonaResolver(oTxt), zd = grua ? zo : colabZonaResolver(dTxt);
+    if (zo.error) { errores.push(`${nombreFila}, ${grua ? 'zona de servicio' : 'origen'}: ${zo.error}`); return; }
+    if (zd.error) { errores.push(`${nombreFila}, destino: ${zd.error}`); return; }
+    const o = zo.z;
+    // La grúa actúa solo en su zona de servicio: destino = origen y sin vehículo.
+    const d = grua ? o : zd.z;
     const key = o + '|' + d;
     if (vistas[key]) { errores.push(`${nombreFila}: repite la ruta de la fila ${vistas[key]}.`); return; }
     if (yaTiene.has(key)) { errores.push(`${nombreFila}: ${c.nombre} ya tiene apuntada esa ruta (${o} → ${d}).`); return; }
