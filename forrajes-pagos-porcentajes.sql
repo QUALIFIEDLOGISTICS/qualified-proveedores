@@ -3,7 +3,7 @@
 -- Cada línea dice «desde esta fecha, este socio tiene este %». El beneficio de cada mes se reparte con el % vigente ese mes:
 -- si un socio cambia de 25 % a 30 % desde enero de 2027, el reparto anterior no cambia y lo nuevo usa el 30 %.
 -- Los socios que ya existen se quedan con su porcentaje actual «desde el inicio» (fecha 2000-01-01), así que no cambia ninguna cifra.
--- Solo administradores. Es seguro ejecutarlo más de una vez.
+-- Solo administradores y cuentas con Forrajes + el apartado «Pagos». Es seguro ejecutarlo más de una vez.
 -- Instrucciones: Supabase → SQL Editor → pega esto ENTERO → Run.
 -- ============================================================
 create table if not exists public.forraje_socio_porcentajes (
@@ -17,9 +17,10 @@ create table if not exists public.forraje_socio_porcentajes (
 
 alter table public.forraje_socio_porcentajes enable row level security;
 drop policy if exists forraje_socio_porcentajes_admin on public.forraje_socio_porcentajes;
-create policy forraje_socio_porcentajes_admin on public.forraje_socio_porcentajes for all
-  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
-  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+drop policy if exists forraje_socio_porcentajes_pagos on public.forraje_socio_porcentajes;
+create policy forraje_socio_porcentajes_pagos on public.forraje_socio_porcentajes for all
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or (p.allowed_tabs ? 'forrajes' and p.allowed_tabs ? 'forrajes:pagos'))))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and (p.is_admin or (p.allowed_tabs ? 'forrajes' and p.allowed_tabs ? 'forrajes:pagos'))));
 
 -- Cada socio ya existente: su porcentaje actual, desde el inicio
 insert into public.forraje_socio_porcentajes (socio_id, desde, porcentaje)
