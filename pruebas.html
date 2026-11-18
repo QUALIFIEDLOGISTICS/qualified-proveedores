@@ -397,6 +397,52 @@
     cierto(/currentTab === 'almacencostes'\) bodyHtml = tplAlmacenCostes\(\)/.test(trozo('function renderTab()', 'const almacenBar')), 'Debía pintarse al elegirla');
   });
 
+  // ---------- Rutas: cobertura automática desde las órdenes de carga ----------
+  prueba('Rutas · cobertura automática: una cobertura por transportista, zonas, servicio y vehículo; una manual que ya cubre el viaje no se duplica ni se sobrescribe, solo se le actualizan las estadísticas', () => {
+    const r = new Function(`
+      const CONTACTO_PAIS_CODIGOS = { 'España': 'ES', 'Francia': 'FR' };
+      ${trozo('function colabEsGrua', '// Cómo se apuntó')}
+      ${trozo('const COLAB_ZONA_RE', '// Filas que cubren')}
+      ${trozo('function viajeZona', 'function viajesRealizados')}
+      ${trozo('function viajesResumen', 'function viajesAgrupados')}
+      ${trozo('const COLAB_SERV_OC', 'const colabFilaStats')}
+      const v = (t, o, d, serv, fecha, coste, venta, veh) => ({ transportistaId: t, origen: o, destino: d, fecha, coste, venta: venta == null ? null : venta, margen: venta == null ? null : venta - coste, oc: { servicio: serv, tipoVehiculo: veh || '' } });
+      const viajes = [v('t1', 'ES08', 'FR33', 'FTL', '2025-01-10', 800, 1000), v('t1', 'ES08', 'FR33', 'FTL', '2025-03-05', 900), v('t1', 'ES08', 'FR33', 'FTL', '2025-02-01', 850, 900),
+                      v('t1', 'ES08', 'FR33', 'LTL', '2025-02-10', 300), v('t1', 'ES08', 'FR33', '', '2025-02-11', 700), v('t2', 'ES17', 'FR75', 'FTL', '2025-04-01', 1000)];
+      const ruta = (o) => Object.assign({ id: 'r', contactoId: 't1', origenZona: 'ES08', destinoZona: 'FR33', servicios: [], tipoVehiculo: '', fuente: 'manual', nViajes: 0, ultimoViaje: '', ultimoPrecio: null, margenMedio: null }, o);
+      const sinNada = colabPlanCoberturas(viajes, [], ['t1']);
+      const manualPais = colabPlanCoberturas(viajes, [ruta({ id: 'm1', origenZona: 'ES', destinoZona: 'FR', servicios: ['FTL'] })], ['t1']);
+      const autoAlDia = ruta({ id: 'a1', fuente: 'auto', servicios: ['FTL'], nViajes: 3, ultimoViaje: '2025-03-05', ultimoPrecio: 900, margenMedio: 13.2 });
+      const alDia = colabPlanCoberturas(viajes, [autoAlDia], ['t1']);
+      const autoViejo = ruta({ id: 'a2', fuente: 'auto', servicios: ['FTL'], nViajes: 1, ultimoViaje: '2025-01-10', ultimoPrecio: 800, margenMedio: 20 });
+      const viejo = colabPlanCoberturas(viajes, [autoViejo], ['t1']);
+      const huerfana = colabPlanCoberturas([], [ruta({ id: 'a3', fuente: 'auto', servicios: ['FTL'], nViajes: 2, ultimoViaje: '2025-01-10', ultimoPrecio: 800 })], ['t1']);
+      const vehiculo = colabPlanCoberturas([v('t1', 'ES08', 'FR33', 'FTL', '2025-05-01', 700, null, 'Piso Móvil'), v('t1', 'ES08', 'FR33', 'FTL', '2025-05-02', 650)], [ruta({ id: 'm2', servicios: ['FTL'], tipoVehiculo: 'Lona' })], ['t1']);
+      const todos = colabPlanCoberturas(viajes, [], null);
+      const oc = (o) => Object.assign({ estado: 'emitida', transportistaId: 't1', servicio: 'FTL', precio: 100, cargas: [{ pais: 'España', cp: '08500' }], descargas: [{ pais: 'Francia', cp: '33000' }] }, o);
+      const om = colabOrdenesOmitidas([oc({}), oc({ servicio: '' }), oc({ precio: null }), oc({ descargas: [{ pais: 'Francia', cp: '' }] }), oc({ estado: 'anulada' }), oc({ transportistaId: '' })]);
+      return { sinNada, manualPais, alDia, viejo, huerfana, vehiculo, todos: todos.crear.length, om };`)();
+    igual(r.sinNada.crear.length, 2, 'Sin coberturas: una automática FTL y otra LTL (la orden sin servicio no cuenta)');
+    const ftl = r.sinNada.crear.find(c => c.servicio === 'FTL');
+    igual([ftl.origenZona, ftl.destinoZona, ftl.stats.n, ftl.stats.ultimoPrecio, ftl.stats.ultimoViaje, ftl.stats.margenMedio], ['ES08', 'FR33', 3, 900, '2025-03-05', 13.2], 'Estadísticas: 3 viajes, último precio del último viaje, margen medio sobre lo cobrado');
+    igual(r.manualPais.crear.map(c => c.servicio), ['LTL'], 'La manual ES→FR FTL ya cubre los FTL: solo se crea la LTL');
+    igual([r.manualPais.actualizar.length, r.manualPais.actualizar[0].ruta.id, r.manualPais.actualizar[0].stats.n], [1, 'm1', 4], 'A la manual solo se le actualizan sus estadísticas (cuenta también la orden sin servicio indicado, que no excluye)');
+    igual([r.alDia.crear.length, r.alDia.actualizar.filter(a => a.ruta.id === 'a1').length], [1, 0], 'Una automática con las estadísticas al día no se vuelve a escribir (y la LTL sí se crea)');
+    igual(r.viejo.actualizar.map(a => [a.ruta.id, a.stats.n]), [['a2', 3]], 'Una automática desfasada se actualiza, no se duplica');
+    igual(r.huerfana.actualizar.map(a => [a.ruta.id, a.stats.n, a.stats.ultimoPrecio]), [['a3', 0, null]], 'Si ya no quedan viajes la cobertura NO se borra: se queda con 0 viajes');
+    igual(r.vehiculo.crear.map(c => c.tipoVehiculo), ['Piso Móvil'], 'Una manual de Lona no cubre un viaje en Piso Móvil (se crea una automática) pero sí uno sin vehículo indicado');
+    igual(r.todos, 3, 'Carga inicial (todos los transportistas): t1 FTL + t1 LTL + t2 FTL');
+    igual(r.om, { total: 4, usables: 1, sinZona: 1, sinServicio: 1, sinPrecio: 1 }, 'Las órdenes inutilizables se cuentan con su motivo; anuladas y sin transportista no cuentan');
+  });
+  prueba('Rutas · cobertura automática: la orden guarda y anula avisando a Rutas, y el formulario pide el vehículo', () => {
+    const f = trozo('async function submitOcForm', 'async function ocCrearDeca');
+    cierto(/colabSincronizarOC\(\[previa\.transportistaId, oc\.transportistaId\]\)/.test(f), 'Guardar una orden recalcula las coberturas del transportista (y del anterior si cambió)');
+    cierto(/tipo_vehiculo/.test(f), 'La orden guarda el tipo de vehículo');
+    cierto(/colabSincronizarOC\(\[o\.transportistaId\]\)/.test(trozo('async function ocAnularConfirmar', 'async function ocEliminar')), 'Anular una orden recalcula las coberturas');
+    cierto(/id="oc-vehiculo"/.test(html), 'El formulario tiene el campo Vehículo');
+    cierto(/fuente: 'manual'/.test(trozo('async function submitColabRutaForm', 'async function submitColabRutasNuevas')), 'Editar a mano una automática la pasa a manual');
+  });
+
   // ---------- Textos largos en los PDF ----------
   const partir = (texto, ancho) => new Function(`${trozo('function wrapPdfText', '// Genera el PDF nativo del DeCA')}; const font={widthOfTextAtSize:(s)=>s.length*5}; return wrapPdfText(${JSON.stringify(texto)}, font, 10, ${ancho});`)();
   prueba('PDF: un texto normal se reparte en líneas que caben', () => {

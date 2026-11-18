@@ -2171,6 +2171,8 @@
   .colab-serv.row{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:13px;}
   .colab-serv label{display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;}
   .colab-chip.veh{background:var(--panel2);color:var(--muted);}
+  .colab-chip.auto{background:color-mix(in srgb,#7C5CBF 14%,var(--panel));color:#5B3FA0;}
+  .colab-chip.man{background:var(--panel2);color:var(--muted);font-weight:600;}
   .colab-chip.grua{background:color-mix(in srgb,#C98A2E 16%,var(--panel));color:#8A5A12;}
   .colab-best{display:inline-block;padding:2px 9px;border-radius:999px;background:#3F8F5F;color:#fff;font-size:10.5px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;}
   .colab-person{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:9px 10px;background:var(--panel2);border-radius:9px;}
@@ -14219,6 +14221,7 @@ async function sgaCrearOcExpedicion(albaranId, d, sale, decaId){
   const oc = ocDeFila(ins.data);
   if (!vinculada) oc.sinVincular = true;
   ordenesCarga.unshift(oc);
+  colabSincronizarOC([oc.transportistaId]);   // la cobertura del transportista en esa ruta se apunta sola (en segundo plano)
   return oc;
 }
 // Si la expedición ya tiene su orden de carga, lo que se cambie en ella y salga en la orden se ofrece actualizar (con confirmación, para no pisar
@@ -14265,6 +14268,7 @@ async function sgaOcSincronizarExpedicion(edit, d, sale, total){
   const { error } = await supabaseClient.from('ordenes_carga').update(upd).eq('id', oc.id);
   if (error) { appToast('La expedición se ha guardado, pero no se pudo actualizar su orden de carga: ' + (error.message || 'error desconocido') + '.', 'error'); return; }
   await loadOrdenesCarga();
+  colabSincronizarOC([oc.transportistaId, upd.transportista_id]);   // si cambió de transportista, se actualizan las coberturas de los dos
   appToast(`Orden de carga ${ocRef(oc)} actualizada (${hechos.join(', ')}).`, 'ok');
 }
 /* ---- Cómo llama cada cliente a su unidad ----
@@ -25892,7 +25896,7 @@ function ocDeFila(r){
     precio: r.precio == null ? null : Number(r.precio),
     cargas: Array.isArray(r.cargas) ? r.cargas : [], descargas: Array.isArray(r.descargas) ? r.descargas : [],
     pesoKg: r.peso_kg || '', decaId: r.deca_id || '', albaranId: r.albaran_id || '', refFacturacion: r.ref_facturacion || '',
-    precioCliente: r.precio_cliente == null ? null : Number(r.precio_cliente), servicio: r.servicio || '', metros: r.metros == null ? '' : String(r.metros),
+    precioCliente: r.precio_cliente == null ? null : Number(r.precio_cliente), servicio: r.servicio || '', metros: r.metros == null ? '' : String(r.metros), tipoVehiculo: r.tipo_vehiculo || '',
     costesExtra: Array.isArray(r.costes_extra) ? r.costes_extra.map(x => ({ concepto: (x && x.concepto) || '', proveedor: (x && x.proveedor) || '', importe: Number(x && x.importe) })).filter(x => isFinite(x.importe)) : [],
   };
 }
@@ -26249,7 +26253,7 @@ function ocSnapshotForm(){
     fechaPedido: v('oc-fecha'), precio: v('oc-precio').replace(/\s*€$/, '').replace(',', '.'), mercancia: v('oc-mercancia'), indicaciones: v('oc-indicaciones'),
     transportistaNombre: v('oc-transp-nombre'), transportistaNif: v('oc-transp-nif'), transportistaPoblacion: v('oc-transp-pob'), transportistaDireccion: v('oc-transp-dir'),
     matriculaTractora: v('oc-mat-tractora'), matriculaRemolque: v('oc-mat-remolque'), observacionesEspeciales: v('oc-obs'),
-    clienteNombre: v('oc-cli-nombre'), precioCliente: v('oc-precio-cli').replace(/\s*€$/, '').replace(',', '.'), servicio: v('oc-servicio'), metros: v('oc-metros'),
+    clienteNombre: v('oc-cli-nombre'), precioCliente: v('oc-precio-cli').replace(/\s*€$/, '').replace(',', '.'), servicio: v('oc-servicio'), metros: v('oc-metros'), tipoVehiculo: v('oc-vehiculo'),
     costesExtra: ocLeerCostes().map(x => ({ concepto: x.concepto, proveedor: x.proveedor, importe: x.txt })),
     refFacturacion: v('oc-ref-fact'), pesoKg: v('oc-peso'), decaOn: !!(document.getElementById('oc-deca-on') && document.getElementById('oc-deca-on').checked),
     cargas: ocLeerPuntos('carga'), descargas: ocLeerPuntos('descarga'),
@@ -26582,6 +26586,8 @@ function tplOcFormPage(){
               <div class="field" id="oc-metros-fld" style="margin-bottom:0;flex:1;min-width:280px;${e.servicio === 'LTL' ? '' : 'display:none;'}"><label>Metros</label>
                 <input type="hidden" id="oc-metros" value="${esc(e.metros || '')}" />
                 <div class="oc-chips" id="oc-metros-grp">${Array.from({ length: 13 }, (_, i) => String(i + 1)).map(k => `<button type="button" class="${String(e.metros) === k ? 'on' : ''}" data-v="${k}" onclick="ocElegirChip('oc-metros', '${k}')">${k}</button>`).join('')}</div></div>
+              <div class="field" style="margin-bottom:0;min-width:170px;"><label>Vehículo <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></label>
+                <select id="oc-vehiculo" title="Con el vehículo, la cobertura del transportista en esta ruta se apunta sola con su tipo de vehículo">${colabTipoVehiculoOptionsHtml(e.tipoVehiculo || '')}</select></div>
               <div id="oc-margen" class="oc-margen">${ocMargenTxt(e.precioCliente, e.precio, ocCostesExtraTotal(e) || (Array.isArray(e.costesExtra) ? e.costesExtra.reduce((s, x) => s + (Number(String(x.importe).replace(',', '.')) || 0), 0) : 0))}</div>
             </div>
             ${ocCostesBloqueHtml(Array.isArray(e.costesExtra) ? e.costesExtra : [])}
@@ -26712,6 +26718,8 @@ async function submitOcForm(editId){
   if (precioCli != null || previa.precioCliente != null) fila.precio_cliente = precioCli;
   if (servicio || previa.servicio) fila.servicio = servicio || null;
   if (metros || previa.metros) fila.metros = metros ? Number(metros) : null;
+  const vehiculo = v('oc-vehiculo');
+  if (vehiculo || previa.tipoVehiculo) fila.tipo_vehiculo = vehiculo || null;
   // Otros costes (segundo transportista, grúa…): igual, solo se mandan si hay algo que guardar o que borrar
   const costes = ocLeerCostes();
   if (costes.some(x => x.mal)) { errEl.textContent = 'Revisa los otros costes: cada uno necesita su importe (un número).'; if (btn) { btn.disabled = false; btn.textContent = editId ? 'Guardar cambios' : 'Crear orden'; } return; }
@@ -26729,6 +26737,8 @@ async function submitOcForm(editId){
       oc = ocDeFila(data);
       ordenesCarga.unshift(oc);
     }
+    // La cobertura del transportista en esta ruta se apunta o se actualiza sola (si cambió de transportista, también la del anterior)
+    const rt = await colabSincronizarOC([previa.transportistaId, oc.transportistaId]);
     let avisoDeca = '';
     if (conDeca && !oc.decaId) {
       try {
@@ -26744,10 +26754,10 @@ async function submitOcForm(editId){
     window.__ocFormDirty = false;
     window.__ocView = 'list';
     renderHeader(); renderTab();
-    appToast(`Orden ${ocRef(oc)} ${editId ? 'actualizada' : 'creada'}.${avisoDeca}${avisoFr}`, avisoDeca || fr.error ? 'error' : 'ok');
+    appToast(`Orden ${ocRef(oc)} ${editId ? 'actualizada' : 'creada'}.${avisoDeca}${avisoFr}${rt.msg ? ' ' + rt.msg : ''}`, avisoDeca || fr.error || rt.error ? 'error' : 'ok');
   } catch (err) {
     const m = err && err.message ? err.message : 'error desconocido.';
-    errEl.textContent = 'No se pudo guardar: ' + (/costes_extra/i.test(m) ? 'falta ejecutar el SQL «Otros costes de la orden» en Supabase (ordenes-carga-costes-extra.sql).' : /precio_cliente|servicio|metros/i.test(m) ? 'falta ejecutar el SQL «Datos internos de la orden» en Supabase.' : /ref_facturacion/i.test(m) ? 'falta ejecutar el SQL «Referencia de facturación» en Supabase.' : /ordenes_carga|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL «Órdenes de carga» en Supabase.' : m);
+    errEl.textContent = 'No se pudo guardar: ' + (/costes_extra/i.test(m) ? 'falta ejecutar el SQL «Otros costes de la orden» en Supabase (ordenes-carga-costes-extra.sql).' : /tipo_vehiculo/i.test(m) ? 'falta ejecutar el SQL «Cobertura automática desde las OC» en Supabase (rutas-cobertura-automatica.sql).' : /precio_cliente|servicio|metros/i.test(m) ? 'falta ejecutar el SQL «Datos internos de la orden» en Supabase.' : /ref_facturacion/i.test(m) ? 'falta ejecutar el SQL «Referencia de facturación» en Supabase.' : /ordenes_carga|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL «Órdenes de carga» en Supabase.' : m);
     if (btn) { btn.disabled = false; btn.textContent = editId ? 'Guardar cambios' : 'Crear orden'; }
   }
 }
@@ -26824,9 +26834,10 @@ async function ocAnularConfirmar(){
   if (error) { errEl.textContent = 'No se pudo anular: ' + error.message; if (btn) btn.disabled = false; return; }
   o.estado = 'anulada'; o.anuladoMotivo = motivo;
   const fr = ocFranjaDe(o.id) ? await ocFranjaSync(o, null) : { msg: '' };   // el camión ya no viene: se quita su franja
+  const rt = await colabSincronizarOC([o.transportistaId]);   // ese viaje ya no cuenta en las estadísticas de la cobertura
   closeModal();
   refreshOcListBody();
-  appToast(`Orden ${ocRef(o)} anulada.${fr.error ? ' Pero ' + fr.error : fr.msg ? ' ' + fr.msg : ''}`, fr.error ? 'error' : 'ok');
+  appToast(`Orden ${ocRef(o)} anulada.${fr.error ? ' Pero ' + fr.error : fr.msg ? ' ' + fr.msg : ''}${rt.msg ? ' ' + rt.msg : ''}`, fr.error || rt.error ? 'error' : 'ok');
 }
 
 // Una orden anulada se puede eliminar del todo (las emitidas solo se anulan). El DeCA que tuviera no se toca.
@@ -32605,6 +32616,18 @@ const COLAB_SERVICIOS = { FTL: 'FTL', LTL: 'LTL', GRANEL: 'Piso móvil / granel'
 const COLAB_SERVICIOS_CORTO = { FTL: 'FTL', LTL: 'LTL', GRANEL: 'Granel', DUO: 'Duo trailer', GRUA: 'Grúa' };
 const COLAB_SIN_SERV = '__none';
 function colabEsGrua(r){ return (r.servicios || []).includes('GRUA'); }
+// Cómo se apuntó la cobertura: a mano, o sola desde las órdenes de carga
+function colabFuenteChipHtml(r){
+  return r.fuente === 'auto'
+    ? '<span class="colab-chip auto" title="La creó el panel desde las órdenes de carga. Si la editas a mano, pasa a manual.">Automática (desde OC)</span>'
+    : '<span class="colab-chip man" title="La apuntó una persona. Las órdenes solo le actualizan las estadísticas, nunca la sobrescriben.">Manual</span>';
+}
+// Tarifa base de una cobertura; si no tiene, el último precio pagado en sus órdenes
+function colabTarifaCeldaHtml(r){
+  if (r.tarifaBase != null) return `${colabPrecioTxt(r)}${r.indexacion && !colabEsGrua(r) ? ' <small>+ indexación</small>' : ''}`;
+  if (r.ultimoPrecio != null) return `${eur2(r.ultimoPrecio)} <small style="color:var(--muted);" title="Último precio pagado en una orden de carga">último pagado</small>`;
+  return '<span style="color:var(--mutedFaint);font-weight:400;">—</span>';
+}
 function colabServiciosChipsHtml(r){
   const s = r.servicios || [];
   if (!s.length) return '<span style="color:var(--mutedFaint);">—</span>';
@@ -32624,6 +32647,9 @@ async function loadTransportistaRutas(){
     tipoVehiculo: r.tipo_vehiculo || '', observaciones: r.observaciones || '', createdAt: r.created_at, updatedAt: r.updated_at || r.created_at,
     tarifaBase: r.tarifa_base === null || r.tarifa_base === undefined ? null : Number(r.tarifa_base), indexacion: !!r.indexacion,
     servicios: Array.isArray(r.servicios) ? r.servicios : [],
+    // Cómo nació la cobertura ('manual' la apuntó una persona; 'auto' la creó el panel desde las órdenes) y sus estadísticas guardadas
+    fuente: r.fuente === 'auto' ? 'auto' : 'manual', ultimoPrecio: r.ultimo_precio == null ? null : Number(r.ultimo_precio),
+    ultimoViaje: r.ultimo_viaje || '', nViajes: Number(r.n_viajes) || 0, margenMedio: r.margen_medio == null ? null : Number(r.margen_medio),
   }));
 }
 // Personas de contacto de un transportista: una empresa grande puede tener
@@ -32870,11 +32896,11 @@ function colabResultadosHtml(){
          </div>`
       : '<span style="font-size:12px;color:var(--mutedFaint);">Sin contacto apuntado</span>';
     return `<tr>
-      <td data-sort-value="${esc(c.nombre)}"><span style="font-weight:600;cursor:pointer;" onclick="openTransportistaFicha('${c.id}')">${esc((c.nombreComercial || '').trim() || c.nombre)}</span>${mejores.has(r.id) ? ' <span class="colab-best">Mejor precio</span>' : ''}</td>
+      <td data-sort-value="${esc(c.nombre)}"><span style="font-weight:600;cursor:pointer;" onclick="openTransportistaFicha('${c.id}')">${esc((c.nombreComercial || '').trim() || c.nombre)}</span>${mejores.has(r.id) ? ' <span class="colab-best">Mejor precio</span>' : ''}<div style="margin-top:3px;">${colabFuenteChipHtml(r)}</div></td>
       <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona + r.destinoZona)}">${grua ? rutaZonaBanderaHtml(r.origenZona) : `${rutaZonaBanderaHtml(r.origenZona)} <span style="color:var(--mutedFaint);">→</span> ${rutaZonaBanderaHtml(r.destinoZona)}`}</td>
       <td data-sort-value="${esc((r.servicios || []).join(','))}">${colabServiciosChipsHtml(r)}</td>
       <td data-sort-value="${esc(r.tipoVehiculo)}">${r.tipoVehiculo ? `<span class="colab-chip veh">${esc(r.tipoVehiculo)}</span>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
-      <td class="tf-precio" data-sort-value="${r.tarifaBase ?? ''}">${r.tarifaBase != null ? `${colabPrecioTxt(r)}${r.indexacion && !grua ? ' <small>+ indexación</small>' : ''}` : '<span style="color:var(--mutedFaint);font-weight:400;">—</span>'}</td>
+      <td class="tf-precio" data-sort-value="${r.tarifaBase ?? r.ultimoPrecio ?? ''}">${colabTarifaCeldaHtml(r)}</td>
       <td class="tf-precio" data-sort-value="${vs ? vs.n : ''}">${vs ? (vs.n ? `<b>${vs.n}</b> <small style="color:var(--muted);">· ${esc(viajeFechaTxt(vs.ultimo))}</small>` : '<span style="color:var(--mutedFaint);">—</span>') : '—'}</td>
       <td class="tf-precio" data-sort-value="${vs && vs.margenPct != null ? vs.margenPct : ''}">${vs ? viajeMargenHtml(vs.margenPct, null) : '—'}</td>
       <td>${contacto}</td>
@@ -33050,8 +33076,164 @@ function viajesAgrupados(lista, porTransportista){
 }
 // Viajes que encajan con una cobertura apuntada de un transportista (su ruta declarada puede ser un país entero o una zona)
 function viajesDeCobertura(r, todos){
-  if (colabEsGrua(r)) return [];
-  return (todos || viajesRealizados()).filter(v => v.transportistaId === r.contactoId && colabZonaCubre(r.origenZona, v.origen) && colabZonaCubre(r.destinoZona, v.destino));
+  return (todos || viajesRealizados()).filter(v => colabViajeEncaja(r, v));
+}
+/* ---- Cobertura automática desde las órdenes de carga ----
+   Cada orden emitida con transportista, zonas, servicio y precio apunta (o actualiza) la cobertura de ese transportista en esa ruta.
+   · Una cobertura MANUAL nunca se sobrescribe ni se duplica: si encaja con el viaje (zona que lo cubre, servicio y vehículo compatibles)
+     solo se le actualizan las estadísticas (nº de viajes, último viaje y precio, margen medio).
+   · Si ninguna manual lo cubre, se crea una AUTOMÁTICA por transportista + zona origen + zona destino + servicio + vehículo.
+   · Las estadísticas se recalculan siempre desde TODAS las órdenes del transportista, así no se quedan desfasadas si una orden se edita o se anula.
+   · Nunca se borra una cobertura: si ya no quedan viajes, la automática se queda con 0 viajes. */
+const COLAB_SERV_OC = ['FTL', 'LTL'];
+// ¿Cuenta este viaje para esa cobertura? La automática es exacta; la manual es más flexible: su zona puede ser un país entero y
+// un servicio o vehículo sin indicar (en la cobertura o en la orden) no excluye.
+function colabViajeEncaja(r, v){
+  if (colabEsGrua(r) || v.transportistaId !== r.contactoId) return false;
+  if (!colabZonaCubre(r.origenZona, v.origen) || !colabZonaCubre(r.destinoZona, v.destino)) return false;
+  const serv = v.oc.servicio || '', veh = v.oc.tipoVehiculo || '';
+  if (r.fuente === 'auto') return r.origenZona === v.origen && r.destinoZona === v.destino && (r.servicios || [])[0] === serv && (r.tipoVehiculo || '') === veh;
+  const sv = (r.servicios || []).filter(s => COLAB_SERV_OC.includes(s));
+  if (sv.length && serv && !sv.includes(serv)) return false;
+  if (r.tipoVehiculo && veh && r.tipoVehiculo !== veh) return false;
+  return true;
+}
+// Estadísticas de un conjunto de viajes de una cobertura
+function colabStatsViajes(lista){
+  const s = viajesResumen(lista);
+  const ult = lista.filter(v => v.fecha && v.coste != null).sort((a, b) => b.fecha.localeCompare(a.fecha))[0];
+  return { n: s.n, ultimoViaje: s.ultimo || '', ultimoPrecio: ult ? ult.coste : null, margenMedio: s.margenPct == null ? null : Math.round(s.margenPct * 10) / 10 };
+}
+function colabStatsCambian(r, st){
+  const r2 = x => x == null ? null : Math.round(Number(x) * 100) / 100;
+  return (r.nViajes || 0) !== st.n || (r.ultimoViaje || '') !== (st.ultimoViaje || '') || r2(r.ultimoPrecio) !== r2(st.ultimoPrecio) || r2(r.margenMedio) !== r2(st.margenMedio);
+}
+// Qué hay que crear y qué estadísticas actualizar. «tids» limita a esos transportistas (al guardar una orden); sin él, todos (carga inicial).
+function colabPlanCoberturas(viajes, rutas, tids){
+  const set = Array.isArray(tids) ? new Set(tids.filter(Boolean)) : null;
+  const vs = set ? viajes.filter(v => set.has(v.transportistaId)) : viajes;
+  const rs = set ? rutas.filter(r => set.has(r.contactoId)) : rutas;
+  const manuales = rs.filter(r => r.fuente !== 'auto' && !colabEsGrua(r)), autos = rs.filter(r => r.fuente === 'auto');
+  const grupos = new Map();
+  vs.filter(v => COLAB_SERV_OC.includes(v.oc.servicio) && v.coste != null && isFinite(v.coste) && v.origen.length > 2 && v.destino.length > 2).forEach(v => {
+    if (manuales.some(r => colabViajeEncaja(r, v))) return;   // una manual ya lo cubre: no se duplica
+    const veh = v.oc.tipoVehiculo || '', k = [v.transportistaId, v.origen, v.destino, v.oc.servicio, veh].join('|');
+    if (!grupos.has(k)) grupos.set(k, { contactoId: v.transportistaId, origenZona: v.origen, destinoZona: v.destino, servicio: v.oc.servicio, tipoVehiculo: veh, viajes: [] });
+    grupos.get(k).viajes.push(v);
+  });
+  const crear = [], actualizar = [], usadas = new Set();
+  grupos.forEach(g => {
+    const ex = autos.find(r => r.contactoId === g.contactoId && r.origenZona === g.origenZona && r.destinoZona === g.destinoZona && (r.servicios || [])[0] === g.servicio && (r.tipoVehiculo || '') === g.tipoVehiculo);
+    const stats = colabStatsViajes(g.viajes);
+    if (ex) { usadas.add(ex.id); actualizar.push({ ruta: ex, stats }); }
+    else crear.push({ contactoId: g.contactoId, origenZona: g.origenZona, destinoZona: g.destinoZona, servicio: g.servicio, tipoVehiculo: g.tipoVehiculo, stats });
+  });
+  manuales.forEach(r => actualizar.push({ ruta: r, stats: colabStatsViajes(vs.filter(v => colabViajeEncaja(r, v))) }));
+  autos.filter(r => !usadas.has(r.id)).forEach(r => actualizar.push({ ruta: r, stats: colabStatsViajes([]) }));
+  return { crear, actualizar: actualizar.filter(a => colabStatsCambian(a.ruta, a.stats)) };
+}
+// Órdenes emitidas con transportista que no se pueden usar para las coberturas, y por qué (para enseñarlo antes de la carga inicial)
+function colabOrdenesOmitidas(ordenes){
+  const r = { total: 0, usables: 0, sinZona: 0, sinServicio: 0, sinPrecio: 0 };
+  ordenes.filter(o => o.estado === 'emitida' && o.transportistaId).forEach(o => {
+    r.total++;
+    if (!o.cargas.length || !o.descargas.length || viajeZona(o.cargas[0]).length < 4 || viajeZona(o.descargas[o.descargas.length - 1]).length < 4) r.sinZona++;
+    else if (!COLAB_SERV_OC.includes(o.servicio)) r.sinServicio++;
+    else if (o.precio == null || !isFinite(o.precio)) r.sinPrecio++;
+    else r.usables++;
+  });
+  return r;
+}
+const colabFilaStats = st => ({ ultimo_precio: st.ultimoPrecio, ultimo_viaje: st.ultimoViaje || null, n_viajes: st.n, margen_medio: st.margenMedio });
+async function colabAplicarPlan(plan){
+  let creadas = 0, actualizadas = 0;
+  for (let i = 0; i < plan.crear.length; i += 200) {
+    const filas = plan.crear.slice(i, i + 200).map(c => ({
+      contacto_id: c.contactoId, origen_zona: c.origenZona, destino_zona: c.destinoZona, servicios: [c.servicio], tipo_vehiculo: c.tipoVehiculo || null,
+      fuente: 'auto', ...colabFilaStats(c.stats),
+    }));
+    const { error } = await supabaseClient.from('transportista_rutas').insert(filas);
+    if (error) throw error;
+    creadas += filas.length;
+  }
+  // Solo las estadísticas: no se toca ni la fecha de última edición ni ningún dato escrito a mano
+  const res = await Promise.all(plan.actualizar.map(a => supabaseClient.from('transportista_rutas').update(colabFilaStats(a.stats)).eq('id', a.ruta.id)));
+  const fallo = res.find(x => x.error);
+  if (fallo) throw fallo.error;
+  actualizadas = plan.actualizar.length;
+  return { creadas, actualizadas };
+}
+function colabErrorSincTxt(err){
+  const m = (err && err.message) || '';
+  if (/policy|permission|denied|row-level/i.test(m)) return '';   // quien no tiene Transporte no mantiene coberturas: no es un fallo
+  if (/fuente|ultimo_precio|ultimo_viaje|n_viajes|margen_medio|schema cache/i.test(m)) return 'falta ejecutar el SQL «Cobertura automática desde las OC» en Supabase (rutas-cobertura-automatica.sql).';
+  return m || 'error desconocido.';
+}
+// Se llama al guardar, anular o cambiar una orden: recalcula las coberturas de esos transportistas. Nunca lanza error ni bloquea guardar la orden.
+async function colabSincronizarOC(tids){
+  tids = [...new Set((tids || []).filter(Boolean))];
+  if (!tids.length) return { msg: '', error: false };
+  try {
+    const plan = colabPlanCoberturas(viajesRealizados(), transportistaRutas, tids);
+    if (!plan.crear.length && !plan.actualizar.length) return { msg: '', error: false };
+    const r = await colabAplicarPlan(plan);
+    await loadTransportistaRutas();
+    return { msg: r.creadas ? `Cobertura apuntada automáticamente en Rutas (${r.creadas} nueva${r.creadas === 1 ? '' : 's'}).` : '', error: false };
+  } catch (err) {
+    const t = colabErrorSincTxt(err);
+    return t ? { msg: 'La orden se ha guardado, pero no se pudo actualizar su cobertura en Rutas: ' + t, error: true } : { msg: '', error: false };
+  }
+}
+// Carga inicial: crea las coberturas de todas las órdenes que ya existen. Primero enseña cuántas crearía; no escribe nada hasta confirmar.
+function colabCargaInicialAbrir(){
+  const plan = colabPlanCoberturas(viajesRealizados(), transportistaRutas, null), om = colabOrdenesOmitidas(ordenesCarga);
+  const manuales = plan.actualizar.filter(a => a.ruta.fuente !== 'auto').length, autos = plan.actualizar.length - manuales;
+  const nombre = id => { const c = contactos.find(x => x.id === id); return c ? ((c.nombreComercial || '').trim() || c.nombre) : '—'; };
+  const transp = new Set(plan.crear.map(c => c.contactoId)).size;
+  window.__colabPlan = plan;
+  const filas = plan.crear.slice().sort((a, b) => nombre(a.contactoId).localeCompare(nombre(b.contactoId), 'es') || (a.origenZona + a.destinoZona).localeCompare(b.origenZona + b.destinoZona)).slice(0, 80).map(c =>
+    `<tr><td>${esc(nombre(c.contactoId))}</td><td style="font-family:var(--mono);white-space:nowrap;">${esc(c.origenZona)} → ${esc(c.destinoZona)}</td><td>${esc(c.servicio)}${c.tipoVehiculo ? ' · ' + esc(c.tipoVehiculo) : ''}</td><td style="text-align:right;">${c.stats.n}</td></tr>`).join('');
+  const omit = om.total - om.usables;
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:680px;padding:0;border-radius:14px;overflow:hidden;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.pin, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Coberturas desde las órdenes de carga</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">Carga inicial · primero ves qué haría, no se escribe nada hasta confirmar</div></div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body" style="padding:18px 22px;">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+            <div class="card" style="padding:12px 16px;flex:1;min-width:150px;"><div style="font-size:26px;font-weight:800;color:var(--primary);">${plan.crear.length}</div><div style="font-size:12.5px;color:var(--muted);">coberturas automáticas nuevas${plan.crear.length ? ` · ${transp} transportista${transp === 1 ? '' : 's'}` : ''}</div></div>
+            <div class="card" style="padding:12px 16px;flex:1;min-width:150px;"><div style="font-size:26px;font-weight:800;">${manuales}</div><div style="font-size:12.5px;color:var(--muted);">manuales a las que solo se actualizan las estadísticas</div></div>
+            <div class="card" style="padding:12px 16px;flex:1;min-width:150px;"><div style="font-size:26px;font-weight:800;">${autos}</div><div style="font-size:12.5px;color:var(--muted);">automáticas ya existentes con estadísticas nuevas</div></div>
+          </div>
+          <div style="font-size:12.5px;color:var(--muted);margin-bottom:12px;">De <b>${om.total}</b> órdenes emitidas con transportista, se usan <b>${om.usables}</b>.${omit ? ` Las otras ${omit} no se pueden usar: ${[om.sinZona ? `${om.sinZona} sin zona de carga o descarga (falta país o código postal)` : '', om.sinServicio ? `${om.sinServicio} sin servicio FTL/LTL` : '', om.sinPrecio ? `${om.sinPrecio} sin precio` : ''].filter(Boolean).join(', ')}.` : ''} No se borra ni se cambia ningún dato escrito a mano.</div>
+          ${plan.crear.length ? `<div style="max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:10px;"><table class="tf-table"><thead><tr><th>Transportista</th><th>Ruta</th><th>Servicio</th><th style="text-align:right;">Viajes</th></tr></thead><tbody>${filas}</tbody></table></div>${plan.crear.length > 80 ? `<div style="font-size:12px;color:var(--mutedFaint);margin-top:6px;">Se enseñan las 80 primeras de ${plan.crear.length}.</div>` : ''}` : '<div style="font-size:13px;color:var(--mutedFaint);">No hay coberturas nuevas que crear.</div>'}
+          <div id="colab-carga-error" style="color:var(--danger);font-size:12.5px;margin-top:10px;white-space:pre-line;"></div>
+          <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end;">
+            <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary colab-carga-ok" onclick="colabCargaInicialConfirmar()" ${plan.crear.length || plan.actualizar.length ? '' : 'disabled'}>${plan.crear.length ? `Crear ${plan.crear.length} cobertura${plan.crear.length === 1 ? '' : 's'}` : 'Actualizar estadísticas'}</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+async function colabCargaInicialConfirmar(){
+  const plan = window.__colabPlan, errEl = document.getElementById('colab-carga-error'), btn = document.querySelector('.colab-carga-ok');
+  if (!plan) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Creando…'; }
+  try {
+    const r = await colabAplicarPlan(plan);
+    await loadTransportistaRutas();
+    window.__colabPlan = null;
+    closeModal(); renderTab();
+    appToast(`Hecho: ${r.creadas} cobertura${r.creadas === 1 ? '' : 's'} nueva${r.creadas === 1 ? '' : 's'} y ${r.actualizadas} con estadísticas actualizadas.`, 'ok');
+  } catch (err) {
+    if (errEl) errEl.textContent = 'No se pudo hacer: ' + (colabErrorSincTxt(err) || 'no tienes permiso para cambiar las coberturas.');
+    if (btn) { btn.disabled = false; btn.textContent = 'Reintentar'; }
+  }
 }
 function viajeMargenHtml(pct, eur){
   if (pct == null) return '<span style="color:var(--mutedFaint);">—</span>';
@@ -33183,11 +33365,11 @@ function colabTablaBodyHtml(){
           return `
           <tr>
             <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(r.updatedAt||'')}">${viajeFechaTxt(r.updatedAt)}</td>
-            <td style="font-weight:600;cursor:${c?'pointer':'default'};" data-sort-value="${esc(nombre)}" ${c?`onclick="openTransportistaFicha('${c.id}')"`:''}>${esc(nombre)}</td>
+            <td style="font-weight:600;cursor:${c?'pointer':'default'};" data-sort-value="${esc(nombre)}" ${c?`onclick="openTransportistaFicha('${c.id}')"`:''}>${esc(nombre)}<div style="margin-top:3px;font-weight:400;">${colabFuenteChipHtml(r)}</div></td>
             <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona+r.destinoZona)}" title="${esc(colabEsGrua(r) ? 'Zona de servicio: ' + tarifaZonaHint(r.origenZona) : [tarifaZonaHint(r.origenZona), tarifaZonaHint(r.destinoZona)].filter(Boolean).join(' → '))}">${colabEsGrua(r) ? `${rutaZonaBanderaHtml(r.origenZona)}<span style="font-family:var(--body);font-size:11px;color:var(--muted);margin-left:6px;">zona de servicio</span>` : `${rutaZonaBanderaHtml(r.origenZona)} → ${rutaZonaBanderaHtml(r.destinoZona)}`}</td>
             <td data-sort-value="${esc((r.servicios||[]).join(','))}">${colabServiciosChipsHtml(r)}</td>
             <td data-sort-value="${esc(r.tipoVehiculo)}">${r.tipoVehiculo ? `<span class="colab-chip veh">${esc(r.tipoVehiculo)}</span>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
-            <td class="tf-precio" data-sort-value="${r.tarifaBase??''}">${r.tarifaBase!==null&&r.tarifaBase!==undefined ? colabPrecioTxt(r) : '<span style="color:var(--mutedFaint);font-weight:400;">—</span>'}</td>
+            <td class="tf-precio" data-sort-value="${r.tarifaBase??r.ultimoPrecio??''}">${colabTarifaCeldaHtml(r)}</td>
             ${(() => { const vv = viajesDeCobertura(r, viajesTodos), s = viajesResumen(vv); return `<td class="tf-precio" data-sort-value="${s.n}" >${s.n ? s.n + ' <small style="color:var(--muted);">· ' + esc(viajeFechaTxt(s.ultimo)) + '</small>' : '<span style="color:var(--mutedFaint);">—</span>'}</td><td class="tf-precio" data-sort-value="${s.margenPct ?? ''}">${viajeMargenHtml(s.margenPct, null)}</td>`; })()}
             <td data-sort-value="${r.indexacion?'Si':'No'}">${r.indexacion ? '<span class="badge" style="background:#3F8F5F;">Sí</span>' : '<span class="badge" style="background:var(--mutedFaint);">No</span>'}</td>
             <td style="color:var(--muted);" data-sort-value="${esc(r.observaciones)}">${r.observaciones ? esc(truncateText(r.observaciones, 40)) : '—'}</td>
@@ -33235,6 +33417,7 @@ function tplColaboradoresPage(){
         <div class="deca-banner-sub">Qué transportistas cubren cada ruta, para saber a quién contactar cuando sobra un viaje.</div>
       </div>
       <div class="deca-banner-actions">
+        ${PROFILE && PROFILE.isAdmin ? `<button class="btn btn-ghost" style="background:var(--panel);" onclick="colabCargaInicialAbrir()" title="Apunta las coberturas de los viajes que ya constan en las órdenes de carga (primero ves cuántas crearía)">${homeIcon(HOME_ICON_PATHS.file, 16, 'currentColor', 1.8)}<span>Coberturas desde las OC</span></button>` : ''}
         <button class="btn btn-primary deca-new-btn" onclick="openColabRutaForm()">${homeIcon(HOME_ICON_PATHS.pin, 17, 'currentColor', 1.8)}<span>Añadir cobertura</span></button>
       </div>
     </div>
@@ -33375,7 +33558,11 @@ function colabAplicaGrua(scope){
 // Edición de una sola cobertura ya existente: una fila de campos, como antes.
 function colabRutaEditFieldsHtml(editing){
   const zonaHint = z => colabHintHtml(z);
+  const nota = editing.fuente === 'auto'
+    ? `<div class="se-aviso" style="margin-bottom:12px;">${colabFuenteChipHtml(editing)} Esta cobertura la creó el panel desde las órdenes de carga (${editing.nViajes} viaje${editing.nViajes === 1 ? '' : 's'}). Si la guardas con cambios pasa a <b>manual</b>.</div>`
+    : `<div style="margin-bottom:10px;">${colabFuenteChipHtml(editing)}${editing.nViajes ? ` <span style="font-size:12px;color:var(--muted);">${editing.nViajes} viaje${editing.nViajes === 1 ? '' : 's'} en las órdenes${editing.ultimoViaje ? ' · último ' + esc(viajeFechaTxt(editing.ultimoViaje)) : ''}</span>` : ''}</div>`;
   return `
+    ${nota}
     <div class="field">
       <label>Servicio <span style="color:var(--mutedFaint);font-weight:400;">(se pueden marcar varios; la grúa va sola)</span></label>
       ${colabServCheckboxesHtml('e', editing.servicios, false)}
@@ -33541,10 +33728,12 @@ async function submitColabRutaForm(editId){
   if (!COLAB_ZONA_RE.test(destinoZona)) { errEl.textContent = 'La zona de destino tiene que ser un país y 2 caracteres (FR13), o solo el país para cubrirlo entero (FR).'; return; }
   const btns = [...document.querySelectorAll('.colr-submit-btn')];
   btns.forEach(b => b.disabled = true);
+  // Una cobertura automática que se edita a mano pasa a manual: así las órdenes ya no la pueden sobrescribir
+  const previa = transportistaRutas.find(r => r.id === editId);
   const { error } = await supabaseClient.from('transportista_rutas').update({
     origen_zona: origenZona, destino_zona: destinoZona, tipo_vehiculo: tipoVehiculo || null, servicios,
     tarifa_base: tarifaBaseRaw === '' ? null : Number(tarifaBaseRaw), indexacion, observaciones: observaciones || null,
-    updated_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(), ...(previa && previa.fuente === 'auto' ? { fuente: 'manual' } : {}),
   }).eq('id', editId);
   if (error) {
     errEl.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido.');
@@ -33552,6 +33741,7 @@ async function submitColabRutaForm(editId){
     return;
   }
   await loadTransportistaRutas();
+  await colabSincronizarOC([previa && previa.contactoId]);   // estadísticas de la cobertura editada (y de las automáticas que pudiera sustituir)
   colabRutaReturn();
 }
 async function submitColabRutasNuevas(){
@@ -33595,6 +33785,7 @@ async function submitColabRutasNuevas(){
     return;
   }
   await loadTransportistaRutas();
+  await colabSincronizarOC([c.id]);   // las estadísticas de las coberturas nuevas salen solas de las órdenes que ya existan
   colabRutaReturn();
 }
 async function deleteColabRuta(id){
