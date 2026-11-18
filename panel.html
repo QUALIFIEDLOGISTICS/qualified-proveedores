@@ -26651,7 +26651,7 @@ function tplOcFormPage(){
                 <input type="hidden" id="oc-metros" value="${esc(e.metros || '')}" />
                 <div class="oc-chips" id="oc-metros-grp">${Array.from({ length: 13 }, (_, i) => String(i + 1)).map(k => `<button type="button" class="${String(e.metros) === k ? 'on' : ''}" data-v="${k}" onclick="ocElegirChip('oc-metros', '${k}')">${k}</button>`).join('')}</div></div>
               <div class="field" style="margin-bottom:0;min-width:170px;"><label>Vehículo <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></label>
-                <select id="oc-vehiculo" title="Con el vehículo, la cobertura del transportista en esta ruta se apunta sola con su tipo de vehículo">${colabTipoVehiculoOptionsHtml(e.tipoVehiculo || '')}</select></div>
+                <select id="oc-vehiculo" title="Con el vehículo, la cobertura del transportista en esta ruta se apunta sola con su tipo de vehículo">${colabTipoVehiculoOptionsHtml(e.tipoVehiculo || '', true)}</select></div>
               <div id="oc-margen" class="oc-margen">${ocMargenTxt(e.precioCliente, e.precio, ocCostesExtraTotal(e) || (Array.isArray(e.costesExtra) ? e.costesExtra.reduce((s, x) => s + (Number(String(x.importe).replace(',', '.')) || 0), 0) : 0))}</div>
             </div>
             ${ocCostesBloqueHtml(Array.isArray(e.costesExtra) ? e.costesExtra : [])}
@@ -32849,7 +32849,7 @@ function tplTransportistasPage(){
    Transporte → Transportistas.
 ========================================================= */
 let transportistaRutas = [];
-const COLAB_TIPOS_VEHICULO = ['Lona', 'Frigorífico', 'Cisterna', 'Plataforma', 'Furgón', 'Portacontenedores', 'Bañera', 'Piso Móvil'];
+const COLAB_TIPOS_VEHICULO = ['Lona', 'Frigorífico', 'Cisterna', 'Plataforma', 'Furgón', 'Portacontenedores', 'Bañera', 'Piso Móvil', 'Grúa'];   // la grúa también es un «vehículo»: así se filtra y se ve como los demás
 /* Servicio que hace el transportista en esa cobertura (los mismos tipos que
    Tarifas Transporte). Se pueden combinar (FTL + LTL) salvo la Grúa,
    que funciona distinto: no es una ruta A → B sino una ZONA DE SERVICIO (solo
@@ -32880,14 +32880,14 @@ function colabServiciosChipsHtml(r){
 function colabPrecioTxt(r){
   return r.tarifaBase == null ? '' : eur2(r.tarifaBase) + (colabEsGrua(r) ? '/h' : '');
 }
-function colabTipoVehiculoOptionsHtml(selected){
-  return `<option value="">Sin especificar</option>${COLAB_TIPOS_VEHICULO.map(t => `<option value="${esc(t)}" ${t===selected?'selected':''}>${esc(t)}</option>`).join('')}`;
+function colabTipoVehiculoOptionsHtml(selected, sinGrua){
+  return `<option value="">Sin especificar</option>${COLAB_TIPOS_VEHICULO.filter(t => !(sinGrua && t === 'Grúa')).map(t => `<option value="${esc(t)}" ${t===selected?'selected':''}>${esc(t)}</option>`).join('')}`;
 }
 async function loadTransportistaRutas(){
   const { data } = await supabaseClient.from('transportista_rutas').select('*').order('created_at', { ascending: false });
   transportistaRutas = (data||[]).map(r => ({
     id: r.id, contactoId: r.contacto_id, origenZona: (r.origen_zona||'').toUpperCase(), destinoZona: (r.destino_zona||'').toUpperCase(),
-    tipoVehiculo: r.tipo_vehiculo || '', observaciones: r.observaciones || '', createdAt: r.created_at, updatedAt: r.updated_at || r.created_at,
+    tipoVehiculo: r.tipo_vehiculo || (Array.isArray(r.servicios) && r.servicios.includes('GRUA') ? 'Grúa' : ''), observaciones: r.observaciones || '', createdAt: r.created_at, updatedAt: r.updated_at || r.created_at,
     tarifaBase: r.tarifa_base === null || r.tarifa_base === undefined ? null : Number(r.tarifa_base), indexacion: !!r.indexacion,
     servicios: Array.isArray(r.servicios) ? r.servicios : [],
     // Cómo nació la cobertura ('manual' la apuntó una persona; 'auto' la creó el panel desde las órdenes) y sus estadísticas guardadas
@@ -33239,7 +33239,9 @@ function colabResultadosHtml(){
   // Un viaje necesita origen Y destino (con el país basta, la zona es opcional): con un solo
   // lado saldría todo lo que pasa por ahí, que no sirve. La grúa es la excepción: trabaja por
   // zona de servicio, así que con filtrar por Grúa basta con una zona (o un país).
-  const soloGrua = (window.__colabBuscarServ || []).length > 0 && (window.__colabBuscarServ || []).every(s => s === 'GRUA');
+  // (se busca grúa eligiendo el servicio Grúa o el vehículo Grúa: en los dos casos solo se pide su zona)
+  const soloGrua = ((window.__colabBuscarServ || []).length > 0 && (window.__colabBuscarServ || []).every(s => s === 'GRUA'))
+    || ((window.__colabBuscarVeh || []).length > 0 && (window.__colabBuscarVeh || []).every(v => v === 'Grúa'));
   if (!origen && !destino) {
     return aviso(soloGrua
       ? 'Elige el país o la zona donde necesitas la grúa.'
@@ -34273,7 +34275,7 @@ function colabAplicaGrua(scope){
   const grua = document.getElementById(ids.s('GRUA')).checked;
   const d = document.getElementById(ids.d), v = document.getElementById(ids.v), tb = document.getElementById(ids.tb);
   if (d) { d.disabled = grua; if (grua) d.value = ''; d.placeholder = grua ? 'Misma zona' : (scope === 'e' ? 'IT o toda Italia' : 'FR13'); }
-  if (v) { v.disabled = grua; if (grua) v.value = ''; }
+  if (v) { v.disabled = grua; if (grua) v.value = 'Grúa'; else if (v.value === 'Grúa') v.value = ''; }   // la grúa lleva siempre el vehículo «Grúa»
   if (tb) tb.placeholder = grua ? '€/hora' : (scope === 'e' ? 'Ej. 850' : '€');
   if (scope === 'e') {
     const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
@@ -34452,7 +34454,7 @@ async function submitColabRutaForm(editId){
   const origenZona = zo.z;
   // La grúa actúa solo en su zona de servicio: se guarda con destino = origen y sin vehículo.
   const destinoZona = grua ? origenZona : zd.z;
-  const tipoVehiculo = grua ? '' : document.getElementById('colr-tipo-vehiculo').value;
+  const tipoVehiculo = grua ? 'Grúa' : document.getElementById('colr-tipo-vehiculo').value;
   const tarifaBaseRaw = document.getElementById('colr-tarifa-base').value;
   const indexacion = document.getElementById('colr-indexacion').checked;
   const observaciones = document.getElementById('colr-obs').value.trim();
@@ -34488,7 +34490,7 @@ async function submitColabRutasNuevas(){
     const v = id => (document.getElementById(`colr-${i}-${id}`) || {}).value || '';
     const servicios = Object.keys(COLAB_SERVICIOS).filter(k => (document.getElementById(`colr-${i}-s-${k}`) || {}).checked);
     const grua = servicios.includes('GRUA');
-    const oTxt = v('o').trim(), dTxt = grua ? '' : v('d').trim(), vehiculo = grua ? '' : v('v'), obs = v('obs').trim();
+    const oTxt = v('o').trim(), dTxt = grua ? '' : v('d').trim(), vehiculo = grua ? 'Grúa' : v('v'), obs = v('obs').trim();
     const tarifaBaseRaw = v('tb');
     const indexacion = (document.getElementById(`colr-${i}-idx`) || {}).checked || false;
     if (!oTxt && !dTxt && !obs && !servicios.length) return; // fila vacía
