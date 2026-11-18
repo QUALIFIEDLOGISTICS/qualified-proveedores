@@ -560,23 +560,6 @@
     cierto(/id: 'alertas'/.test(trozo('const TRAFICO_CONFIG_SECCIONES', 'function tcfgSeccion')), 'El mínimo de margen se cambia en Configuración');
   });
 
-  prueba('Órdenes de carga: las flechas del formulario llevan a la anterior y a la siguiente emitida (según la lista filtrada; anuladas fuera), con su posición', () => {
-    const r = new Function(`
-      const esc = s => String(s); const ocRef = o => 'OC-' + o.numero;
-      let ordenesCarga = [10, 9, 8, 7, 6, 5].map(n => ({ id: 'o' + n, numero: n, estado: n === 8 ? 'anulada' : 'emitida' }));
-      let filtro = ordenesCarga.filter(o => o.numero >= 6);
-      const ocListaFiltrada = () => filtro;
-      ${trozo('function ocVecinas', 'function ocFlechasHtml')}
-      const id = x => x ? x.id : null, v = i => { const r = ocVecinas(i); return [id(r.anterior), id(r.siguiente), r.pos, r.total]; };
-      const medio = v('o9'), primera = v('o6'), ultima = v('o10');
-      filtro = ordenesCarga.filter(o => o.numero === 6);   // la orden abierta no entra en el filtro: se recorren todas las emitidas
-      const fuera = v('o9');
-      return { medio, primera, ultima, fuera, anulada: ocVecinas('o8').pos };`)();
-    igual(r.medio, ['o7', 'o10', 3, 4], 'Entre la 9 y la 7 no está la 8 (anulada): anterior OC-7, siguiente OC-10, la 3.ª de 4 (el filtro deja de ver la 5)');
-    igual(r.primera, [null, 'o7', 1, 4], 'La primera no tiene anterior'); igual(r.ultima, ['o9', null, 4, 4], 'La última no tiene siguiente');
-    igual(r.fuera, ['o7', 'o10', 4, 5], 'Si la orden abierta no entra en el filtro, se usan todas las emitidas'); igual(r.anulada, 0, 'Una anulada no se recorre');
-    cierto(/ocFlechasHtml\(o\.id\)/.test(trozo('function tplOcFormPage', 'async function submitOcForm')), 'Las flechas salen en la cabecera de la orden abierta');
-  });
 
   prueba('Red de Transportistas: buscando solo por país, los resultados salen ordenados por la columna Ruta de menos a más (grúas al final); con zona elegida, por vehículo y precio', () => {
     const r = new Function(`
@@ -649,6 +632,30 @@
     cierto(/<select data-k="pais">/.test(p) && /'España'/.test(p), 'El país del formulario es un desplegable con España por defecto en los puntos nuevos');
     const s = trozo('async function submitOcForm', 'try {\n    let oc;');
     cierto(/if \(!p\.pais\) errores\.push\(`Carga/.test(s) && /if \(!p\.pais\) errores\.push\(`Descarga/.test(s), 'No se deja guardar la orden si a una carga o descarga le falta el país');
+  });
+
+  prueba('Órdenes de carga: las flechas del formulario siguen el orden de la lista (como en contactos): ← fila de arriba, → fila de abajo, con la vuelta al llegar al final y la posición n/total', () => {
+    const r = new Function(`
+      const esc = s => String(s); const ocRef = o => 'OC-' + o.numero;
+      let ordenesCarga = [10, 9, 8, 7, 6, 5].map(n => ({ id: 'o' + n, numero: n, estado: n === 8 ? 'anulada' : 'emitida' }));
+      let filtro = ordenesCarga.filter(o => o.numero >= 6);
+      const ocListaFiltrada = () => filtro;
+      const window = { __ocNav: null };
+      ${trozo('function ocNavIds', '/* ---- Formulario (pantalla completa)')}
+      const v = i => { const r = ocVecinas(i); return [r.anterior, r.siguiente, r.pos, r.total]; };
+      const porDefecto = v('o9');                                  // sin lista abierta: la filtrada por defecto (más nueva primero), sin la anulada
+      window.__ocNav = { ids: ['o7', 'o10', 'o5', 'o9'] };         // el orden que tenía la lista en pantalla (el usuario había pulsado una cabecera)
+      const enLista = [v('o7'), v('o10'), v('o9')];
+      window.__ocNav = null; filtro = ordenesCarga.filter(o => o.numero === 6);
+      const fuera = v('o9');                                       // la orden no entra en el filtro: se usan todas las emitidas
+      const html = ocFlechasHtml('o9');
+      return { porDefecto, enLista, fuera, anulada: ocVecinas('o8').pos };`)();
+    igual(r.porDefecto, ['o10', 'o7', 2, 4], 'Por defecto: lista filtrada de más nueva a más antigua; la 9 es la 2.ª de 4 (la anulada no cuenta)');
+    igual(r.enLista, [['o9', 'o10', 1, 4], ['o7', 'o5', 2, 4], ['o5', 'o7', 4, 4]], 'Con el orden de la lista en pantalla: ← la fila de arriba y → la de abajo, y se da la vuelta (la última va a la primera)');
+    igual(r.fuera, ['o10', 'o7', 2, 5], 'Si la orden abierta no entra en el filtro, se usan todas las emitidas'); igual(r.anulada, 0, 'Una anulada no se recorre');
+    const f = trozo('function tplOcFormPage', 'async function submitOcForm');
+    cierto(/ocFlechasHtml\(o\.id\)/.test(f), 'Las flechas salen en la cabecera de la orden abierta');
+    cierto(/ocNavDesdeLista\(\)/.test(trozo('function openOcForm', 'function ocConfirmLeaveForm')), 'Al abrir una orden desde la lista se recuerda su orden');
   });
 
   // ---------- Textos largos en los PDF ----------
