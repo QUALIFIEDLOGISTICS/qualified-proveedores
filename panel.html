@@ -14225,6 +14225,10 @@ async function sgaCrearOcExpedicion(albaranId, d, sale, decaId){
   const descarga = dd ? punto(dd.nombre, dd, { horario: dd.horarios || '', maps: dd.mapsUrl || '', observaciones: dd.observacionesOc || '' }) : manual;
   if (!carga.poblacion) throw new Error('el almacén no tiene población en su ficha.');
   if (!descarga.poblacion) throw new Error(dd ? 'el destinatario no tiene población en su dirección.' : 'no se pudo leer la población de la dirección escrita a mano (usa el formato «calle, 28001 Madrid, España»).');
+  // El país tiene que ser uno de la lista de la web: lo escrito a mano se reconoce (sin importar mayúsculas ni acentos, o «Spain», «ES»…) o no se crea la orden
+  carga.pais = ocPaisDeLista(carga.pais); descarga.pais = ocPaisDeLista(descarga.pais);
+  if (!carga.pais) throw new Error('el almacén no tiene un país válido en su ficha.');
+  if (!descarga.pais) throw new Error(dd ? 'el destinatario no tiene un país válido en su dirección.' : 'no se pudo leer el país de la dirección escrita a mano: acaba la dirección con el país (por ejemplo «calle, 28001 Madrid, España»).');
   const peso = sgaSalidaPesoCalculado(sale);
   const pesoTxt = peso || Number(((document.getElementById('sl-deca-peso') || {}).value || '').replace(',', '.')) || 0;
   const fila = {
@@ -26270,7 +26274,7 @@ function ocPuntoRowHtml(tipo, p, quitar){
       ${grupo('Lugar')}
       <div class="oc-g">
         ${f('empresa', 'Empresa', 'Ej. Qualified Logistics', 7)}${f('poblacion', 'Población', '', 5)}
-        ${f('direccion', 'Dirección', 'Calle, número, polígono…', 7)}${f('cp', 'C.P.', '', 2)}<div class="field oc-c3"><label>País</label><select data-k="pais"><option value="">Elige…</option>${ocPaisOptionsHtml(p.pais || (Object.keys(p).length ? '' : 'España'))}</select></div>
+        ${f('direccion', 'Dirección', 'Calle, número, polígono…', 7)}${f('cp', 'C.P.', '', 2)}<div class="field oc-c3"><label>País</label><select data-k="pais"><option value="">Elige…</option>${ocPaisOptionsHtml(ocPaisDeLista(p.pais) || (Object.keys(p).length ? '' : 'España'))}</select></div>
       </div>
       ${grupo(esC ? 'Día de carga' : 'Día de descarga')}
       <div class="oc-g">
@@ -26474,10 +26478,16 @@ function ocPuntoQuitar(btn){ const r = btn.closest('.oc-pt'); if (r) r.remove();
 // El país es un desplegable con los mismos países que el resto de la web (en orden alfabético). Un punto nuevo sale con España puesta, así que solo el país
 // no cuenta como «datos»: un punto sin nada más escrito sigue siendo un punto vacío y no se guarda.
 function ocPaisOptionsHtml(actual){
-  const lista = EU_COUNTRIES.slice();
-  if (actual && !lista.includes(actual)) lista.push(actual);   // un país escrito antes a mano que no esté en la lista no se pierde
-  lista.sort((a, b) => a.localeCompare(b, 'es'));
+  const lista = EU_COUNTRIES.slice().sort((a, b) => a.localeCompare(b, 'es'));
   return lista.map(p => `<option value="${esc(p)}"${p === actual ? ' selected' : ''}>${esc(p)}</option>`).join('');
+}
+// Un país escrito antes a mano («españa», «ESPAÑA», «Spain», «ES»…) se pasa al de la lista; si no se reconoce, queda vacío y hay que elegirlo
+const OC_PAIS_ALIAS = { spain: 'España', es: 'España', france: 'Francia', fr: 'Francia', italy: 'Italia', it: 'Italia', germany: 'Alemania', de: 'Alemania', pt: 'Portugal', uk: 'Reino Unido', gb: 'Reino Unido', ad: 'Andorra', ma: 'Marruecos' };
+function ocPaisDeLista(txt){
+  const n = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z ]/g, '').trim();
+  const k = n(txt);
+  if (!k) return '';
+  return EU_COUNTRIES.find(p => n(p) === k) || OC_PAIS_ALIAS[k] || '';
 }
 const ocPuntoConDatos = p => Object.entries(p).some(([k, v]) => k !== 'pais' && v);
 function ocLeerPuntos(tipo){
