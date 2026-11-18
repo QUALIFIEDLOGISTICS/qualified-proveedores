@@ -2173,6 +2173,9 @@
   .colab-chip.veh{background:var(--panel2);color:var(--muted);}
   .colab-chip.auto{background:color-mix(in srgb,#7C5CBF 14%,var(--panel));color:#5B3FA0;}
   .colab-chip.man{background:var(--panel2);color:var(--muted);font-weight:600;}
+  .av-fila{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 0;border-top:1px solid var(--border);}
+  .av-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 14px;}
+  @media (max-width:560px){ .av-grid{grid-template-columns:minmax(0,1fr);} }
   .colab-chip.grua{background:color-mix(in srgb,#C98A2E 16%,var(--panel));color:#8A5A12;}
   .colab-best{display:inline-block;padding:2px 9px;border-radius:999px;background:#3F8F5F;color:#fff;font-size:10.5px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;}
   .colab-person{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:9px 10px;background:var(--panel2);border-radius:9px;}
@@ -32883,8 +32886,12 @@ function colabResultadosHtml(){
   };
   const todosViajes = viajesRealizados();
   // 1) Coberturas de la ruta, en una tabla
+  // Casillas para «Avisar seleccionados»: solo se pueden elegir los transportistas con algún teléfono o correo apuntado
+  const selAv = colabSelSet();
+  window.__colabSelPosibles = conContacto.filter(({ r, c }) => colabContactoAviso(c.id, r).tieneContacto).map(({ r }) => r.id);
   const filasCob = conContacto.map(({ r, c }) => {
     const grua = colabEsGrua(r);
+    const avisable = colabContactoAviso(c.id, r).tieneContacto;
     const personas = transportistaContactos.filter(p => p.contactoId === c.id).sort((a, b) => Number(coincideZona(b, r)) - Number(coincideZona(a, r)));
     const p = personas[0];
     const vs = grua ? null : viajesResumen(todosViajes.filter(v => v.transportistaId === c.id && colabZonaCubre(origen, v.origen) && colabZonaCubre(destino, v.destino)));
@@ -32894,8 +32901,9 @@ function colabResultadosHtml(){
            ${p.telefono ? `<a class="btn btn-ghost" style="padding:3px 8px;font-size:12px;" href="tel:${esc(p.telefono.replace(/[^\d+]/g,''))}" title="Llamar · ${esc(phoneFormat(p.telefono))}">${homeIcon(HOME_ICON_PATHS.phone, 13, 'currentColor', 2)}</a><button type="button" class="btn btn-ghost" style="padding:3px 8px;" data-copy="${esc(p.telefono)}" onclick="colabCopiar(this.dataset.copy, this)" title="Copiar el teléfono">${homeIcon(HOME_ICON_PATHS.copy, 13, 'currentColor', 2)}</button>` : ''}
            ${p.email ? `<a class="btn btn-ghost" style="padding:3px 8px;font-size:12px;" href="${esc(colabMailtoUrl({ to: p.email, subject: asunto, body: cuerpo }))}" title="Correo · ${esc(p.email)}">${homeIcon(HOME_ICON_PATHS.mail, 13, 'currentColor', 2)}</a>` : ''}
          </div>`
-      : '<span style="font-size:12px;color:var(--mutedFaint);">Sin contacto apuntado</span>';
+      : `<span style="font-size:12px;color:var(--danger);font-weight:600;">Sin contacto</span> <a href="#" style="font-size:12px;" onclick="openTransportistaFicha('${c.id}'); return false;" title="Abrir su ficha para apuntar un teléfono o un correo">Completar</a>`;
     return `<tr>
+      <td style="width:34px;">${avisable ? `<input type="checkbox" class="colab-sel" data-id="${r.id}" ${selAv.has(r.id) ? 'checked' : ''} onchange="colabSelToggle('${r.id}', this.checked)" title="Elegir para avisarle de una carga" />` : `<input type="checkbox" disabled title="Sin teléfono ni correo apuntado" />`}</td>
       <td data-sort-value="${esc(c.nombre)}"><span style="font-weight:600;cursor:pointer;" onclick="openTransportistaFicha('${c.id}')">${esc((c.nombreComercial || '').trim() || c.nombre)}</span>${mejores.has(r.id) ? ' <span class="colab-best">Mejor precio</span>' : ''}<div style="margin-top:3px;">${colabFuenteChipHtml(r)}</div></td>
       <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona + r.destinoZona)}">${grua ? rutaZonaBanderaHtml(r.origenZona) : `${rutaZonaBanderaHtml(r.origenZona)} <span style="color:var(--mutedFaint);">→</span> ${rutaZonaBanderaHtml(r.destinoZona)}`}</td>
       <td data-sort-value="${esc((r.servicios || []).join(','))}">${colabServiciosChipsHtml(r)}</td>
@@ -32912,13 +32920,16 @@ function colabResultadosHtml(){
     </tr>`;
   }).join('');
   const tablaCob = `<div style="overflow-x:auto;"><table class="tf-table">
-    <thead><tr>${thSort('Transportista', 'text')}${thSort('Ruta', 'text')}${thSort('Servicio', 'text')}${thSort('Vehículo', 'text')}${thSort('Tarifa base', 'number', 'style="text-align:right;"')}${thSort('Viajes hechos', 'number', 'style="text-align:right;"')}${thSort('Margen medio', 'number', 'style="text-align:right;"')}<th>Contacto</th><th></th><th></th></tr></thead>
+    <thead><tr><th style="width:34px;"><input type="checkbox" id="colab-sel-all" ${window.__colabSelPosibles.length && window.__colabSelPosibles.every(id => selAv.has(id)) ? 'checked' : ''} onchange="colabSelTodos(this.checked)" title="Elegir a todos los que tienen contacto" /></th>${thSort('Transportista', 'text')}${thSort('Ruta', 'text')}${thSort('Servicio', 'text')}${thSort('Vehículo', 'text')}${thSort('Tarifa base', 'number', 'style="text-align:right;"')}${thSort('Viajes hechos', 'number', 'style="text-align:right;"')}${thSort('Margen medio', 'number', 'style="text-align:right;"')}<th>Contacto</th><th></th><th></th></tr></thead>
     <tbody>${filasCob}</tbody></table></div>`;
   const bloqueViajes = colabViajesRutaHtml(origen, destino, selS);
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0 10px;">
       <div style="font-size:14px;font-weight:700;">Quién cubre <span style="font-family:var(--mono);font-weight:600;">${rutaTxt}</span> <span style="font-weight:400;color:var(--muted);">· ${conContacto.length} transportista${conContacto.length === 1 ? '' : 's'}${filtroTxt ? ' con ' + esc(filtroTxt) : ''}</span></div>
-      ${contactarTodos}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-primary" id="colab-avisar-btn" onclick="colabAvisoAbrir()" ${colabSelElegidas().length ? '' : 'disabled'}>${homeIcon(HOME_ICON_PATHS.mail, 15, 'currentColor', 2)}<span>${colabSelElegidas().length ? `Avisar seleccionados (${colabSelElegidas().length})` : 'Avisar seleccionados'}</span></button>
+        ${contactarTodos}
+      </div>
     </div>
     <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;">${tablaCob}</div>
     ${notaSinTipo}
@@ -33235,6 +33246,257 @@ async function colabCargaInicialConfirmar(){
     if (btn) { btn.disabled = false; btn.textContent = 'Reintentar'; }
   }
 }
+/* ---- Avisar a los transportistas de una carga (Rutas → «Avisar seleccionados») ----
+   Se marcan filas del resultado del buscador y se abre una ventana con el mensaje (editable) y, por cada transportista, un botón de
+   WhatsApp y otro de correo. Cada vez que se pulsa uno queda registrado el aviso (quién, cuándo, a quién y por qué canal), y después se
+   puede marcar cómo va cada uno: respondió, precio ofertado o adjudicado. */
+let traficoAvisos = [], traficoAvisoDest = [];
+const COLAB_AVISO_ESTADOS = { avisado: 'Avisado', respondio: 'Respondió', ofertado: 'Precio ofertado', adjudicado: 'Adjudicado' };
+// Teléfono para el enlace de WhatsApp (solo cifras, con prefijo de país): con «+», con «00», o un móvil/fijo español de 9 cifras. Si no, no se adivina.
+function colabTelWa(t){
+  const s = String(t || '').trim(), mas = s.startsWith('+');
+  let d = s.replace(/\D/g, '');
+  if (!mas && d.startsWith('00')) d = d.slice(2);
+  else if (!mas && /^[6-9]\d{8}$/.test(d)) d = '34' + d;
+  else if (!mas) return '';
+  return d.length >= 9 && d.length <= 15 ? d : '';
+}
+// Con quién hablar de ese transportista: el teléfono y el correo salen de sus personas de contacto (primero la que nombra la zona)
+function colabContactoAviso(contactoId, r){
+  const a = p => (p.ambito || '').toLowerCase();
+  const coincide = p => !!a(p) && [r && r.origenZona, r && tarifaZonaHint(r.origenZona), r && tarifaZonaHint(r.destinoZona)].some(t => t && a(p).includes(String(t).toLowerCase()));
+  const personas = transportistaContactos.filter(p => p.contactoId === contactoId).sort((x, y) => Number(coincide(y)) - Number(coincide(x)));
+  const pt = personas.find(p => p.telefono), pe = personas.find(p => p.email);
+  const nom = p => p ? ([p.nombre, p.apellidos].filter(Boolean).join(' ') || '') : '';
+  return { telefono: pt ? pt.telefono : '', email: pe ? pe.email : '', nombre: nom(pt) || nom(pe) || nom(personas[0]), tieneContacto: !!(pt || pe) };
+}
+function colabZonaTxt(z){ const h = z ? tarifaZonaHint(z) : ''; return z ? z + (h ? ' · ' + h : '') : ''; }
+function colabAvisoMensaje(f){
+  const l = ['Hola,', '', 'Tenemos una carga disponible:'];
+  const fila = (t, v) => { if (v) l.push(`• ${t}: ${v}`); };
+  fila('Origen', f.origen); fila('Destino', f.destino); fila('Fecha de carga', f.fecha ? viajeFechaTxt(f.fecha) : '');
+  fila('Servicio', f.servicio ? (COLAB_SERVICIOS[f.servicio] || f.servicio) : ''); fila('Vehículo', f.vehiculo); fila('Mercancía / peso', f.mercancia); fila('Observaciones', f.observaciones);
+  l.push('', '¿Podéis cubrirla? Si es así, indicadnos precio y disponibilidad.', '', 'Gracias y un saludo.');
+  return l.join('\n');
+}
+function colabAvisoAsunto(f){
+  const z = s => String(s || '').split(' · ')[0];
+  return `Carga disponible ${[z(f.origen), z(f.destino)].filter(Boolean).join(' → ')}${f.fecha ? ' · ' + viajeFechaTxt(f.fecha) : ''}`;
+}
+// Selección de filas del resultado del buscador (por cobertura; los transportistas sin contacto no se pueden elegir)
+function colabSelSet(){ if (!(window.__colabSel instanceof Set)) window.__colabSel = new Set(); return window.__colabSel; }
+function colabSelElegidas(){ const pos = new Set(window.__colabSelPosibles || []); return [...colabSelSet()].filter(id => pos.has(id)); }
+function colabSelRefrescar(){
+  const n = colabSelElegidas().length, btn = document.getElementById('colab-avisar-btn');
+  if (btn) { btn.disabled = !n; const s = btn.querySelector('span'); if (s) s.textContent = n ? `Avisar seleccionados (${n})` : 'Avisar seleccionados'; }
+  const sel = colabSelSet(), pos = window.__colabSelPosibles || [];
+  document.querySelectorAll('.colab-sel').forEach(cb => { cb.checked = sel.has(cb.dataset.id); });
+  const all = document.getElementById('colab-sel-all');
+  if (all) { all.checked = !!pos.length && pos.every(id => sel.has(id)); all.indeterminate = !all.checked && pos.some(id => sel.has(id)); }
+}
+function colabSelToggle(id, on){ const s = colabSelSet(); if (on) s.add(id); else s.delete(id); colabSelRefrescar(); }
+function colabSelTodos(on){ const s = colabSelSet(); (window.__colabSelPosibles || []).forEach(id => { if (on) s.add(id); else s.delete(id); }); colabSelRefrescar(); }
+function colabAvisoCampos(){
+  const v = id => (document.getElementById(id) || {}).value || '';
+  return { origen: v('av-origen').trim(), destino: v('av-destino').trim(), fecha: v('av-fecha'), servicio: v('av-servicio'), vehiculo: v('av-vehiculo'), mercancia: v('av-mercancia').trim(), observaciones: v('av-obs').trim(), mensaje: v('av-msg') };
+}
+function colabAvisoRegen(){
+  const S = window.__colabAviso, el = document.getElementById('av-msg');
+  if (!S || !el || S.msgManual) return;
+  el.value = colabAvisoMensaje(colabAvisoCampos());
+}
+function colabAvisoRestablecer(){ const S = window.__colabAviso; if (S) S.msgManual = false; colabAvisoRegen(); const b = document.getElementById('av-restablecer'); if (b) b.style.display = 'none'; }
+function colabAvisoAbrir(){
+  const ids = colabSelElegidas();
+  const porTransp = new Map();
+  ids.forEach(id => { const r = transportistaRutas.find(x => x.id === id); if (r && !porTransp.has(r.contactoId)) porTransp.set(r.contactoId, r); });
+  if (!porTransp.size) return;
+  const { origen, destino } = colabBuscarClaves();
+  const selS = (window.__colabBuscarServ || []).filter(s => s !== COLAB_SIN_SERV && s !== 'GRUA'), selV = (window.__colabBuscarVeh || []).filter(s => s !== COLAB_SIN_VEH);
+  const f0 = { origen: colabZonaTxt(origen), destino: colabZonaTxt(destino), fecha: '', servicio: selS.length === 1 ? selS[0] : '', vehiculo: selV.length === 1 ? selV[0] : '', mercancia: '', observaciones: '' };
+  window.__colabAviso = { items: [...porTransp.entries()].map(([contactoId, ruta]) => ({ contactoId, ruta })), avisoId: null, firma: '', enviados: {}, msgManual: false, cola: Promise.resolve() };
+  const filas = window.__colabAviso.items.map(it => {
+    const c = contactos.find(x => x.id === it.contactoId), ct = colabContactoAviso(it.contactoId, it.ruta), wa = colabTelWa(ct.telefono);
+    const nombre = c ? ((c.nombreComercial || '').trim() || c.nombre) : '—';
+    return `<div class="av-fila" id="av-f-${it.contactoId}">
+      <div style="flex:1 1 200px;min-width:0;"><div style="font-weight:700;">${esc(nombre)}</div>
+        <div style="font-size:12px;color:var(--muted);">${esc(ct.nombre || 'Sin nombre')}${ct.telefono ? ' · ' + esc(phoneFormat(ct.telefono)) : ''}${ct.email ? ' · ' + esc(ct.email) : ''}</div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        ${wa ? `<a class="btn btn-ghost" style="text-decoration:none;" href="#" target="_blank" rel="noopener" onclick="colabAvisoClick(this,'${it.contactoId}','whatsapp')">${homeIcon(HOME_ICON_PATHS.phone, 14, 'currentColor', 2)}<span>WhatsApp</span></a>`
+          : `<span class="btn btn-ghost" style="opacity:.45;cursor:not-allowed;" title="${ct.telefono ? 'El teléfono no lleva prefijo de país (+34…): ábrelo en su ficha y complétalo' : 'Sin teléfono'}">${homeIcon(HOME_ICON_PATHS.phone, 14, 'currentColor', 2)}<span>WhatsApp</span></span>`}
+        ${ct.email ? `<a class="btn btn-ghost" style="text-decoration:none;" href="#" onclick="colabAvisoClick(this,'${it.contactoId}','email')">${homeIcon(HOME_ICON_PATHS.mail, 14, 'currentColor', 2)}<span>Correo</span></a>`
+          : `<span class="btn btn-ghost" style="opacity:.45;cursor:not-allowed;" title="Sin correo">${homeIcon(HOME_ICON_PATHS.mail, 14, 'currentColor', 2)}<span>Correo</span></span>`}
+        <span id="av-st-${it.contactoId}" style="font-size:12px;font-weight:700;color:var(--success);min-width:90px;"></span>
+      </div></div>`;
+  }).join('');
+  const nCorreos = window.__colabAviso.items.filter(it => colabContactoAviso(it.contactoId, it.ruta).email).length;
+  const opt = (arr, sel) => arr.map(([v, t]) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(t)}</option>`).join('');
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:820px;padding:0;border-radius:14px;overflow:hidden;max-height:92vh;display:flex;flex-direction:column;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.mail, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Avisar de una carga</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">${porTransp.size} transportista${porTransp.size === 1 ? '' : 's'} · revisa el mensaje y pulsa WhatsApp o Correo en cada uno</div></div>
+          <button class="close-x" onclick="colabAvisoCerrar()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="padding:16px 22px;overflow:auto;" oninput="colabAvisoRegen()" onchange="colabAvisoRegen()">
+          <div class="av-grid">
+            <div class="field"><label>Origen</label><input id="av-origen" maxlength="120" value="${esc(f0.origen)}" /></div>
+            <div class="field"><label>Destino</label><input id="av-destino" maxlength="120" value="${esc(f0.destino)}" /></div>
+            <div class="field"><label>Fecha de carga</label><input id="av-fecha" type="date" value="" /></div>
+            <div class="field"><label>Servicio</label><select id="av-servicio"><option value="">Sin indicar</option>${opt(['FTL', 'LTL', 'GRANEL', 'DUO'].map(k => [k, COLAB_SERVICIOS[k]]), f0.servicio)}</select></div>
+            <div class="field"><label>Vehículo</label><select id="av-vehiculo"><option value="">Sin indicar</option>${opt(COLAB_TIPOS_VEHICULO.map(t => [t, t]), f0.vehiculo)}</select></div>
+            <div class="field"><label>Mercancía / peso</label><input id="av-mercancia" maxlength="160" placeholder="Ej. 33 palets, 24 t" /></div>
+          </div>
+          <div class="field"><label>Observaciones</label><input id="av-obs" maxlength="300" placeholder="Horarios, descarga con muelle, ADR…" /></div>
+          <div class="field"><label>Mensaje <small style="color:var(--mutedFaint);font-weight:400;">· se arma solo con lo de arriba; puedes escribir encima</small>
+            <button type="button" id="av-restablecer" class="colab-vclear" style="display:none;margin-left:8px;" onclick="colabAvisoRestablecer()">Restablecer texto</button></label>
+            <textarea id="av-msg" rows="9" oninput="window.__colabAviso.msgManual = true; document.getElementById('av-restablecer').style.display = '';">${esc(colabAvisoMensaje(f0))}</textarea></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0 4px;">
+            <div style="font-size:13.5px;font-weight:700;">A quién</div>
+            ${nCorreos > 1 ? `<a class="btn btn-primary" style="text-decoration:none;" href="#" onclick="colabAvisoClickTodos(this)">${homeIcon(HOME_ICON_PATHS.mail, 15, 'currentColor', 2)}<span>Correo a los ${nCorreos} (copia oculta)</span></a>` : ''}
+          </div>
+          <div>${filas}</div>
+          <div style="font-size:12px;color:var(--mutedFaint);margin-top:10px;">Cada vez que pulsas WhatsApp o Correo queda apuntado el aviso (tú, la fecha, el transportista y la carga). Después puedes marcar si respondió, qué precio ofreció o si se le adjudicó, en «Avisos enviados».</div>
+          <div style="display:flex;justify-content:flex-end;margin-top:12px;"><button class="btn btn-ghost" onclick="colabAvisoCerrar()">Cerrar</button></div>
+        </div>
+      </div>
+    </div>`;
+}
+function colabAvisoCerrar(){
+  closeModal();
+  window.__colabAviso = null;
+  const el = document.getElementById('colab-avisos'); if (el) el.innerHTML = colabAvisosCardHtml();
+}
+function colabAvisoEnlace(canal, it, f){
+  const ct = colabContactoAviso(it.contactoId, it.ruta);
+  return canal === 'whatsapp'
+    ? `https://wa.me/${colabTelWa(ct.telefono)}?text=${encodeURIComponent(f.mensaje)}`
+    : colabMailtoUrl({ to: ct.email, subject: colabAvisoAsunto(f), body: f.mensaje });
+}
+// El enlace se arma al pulsar, con el mensaje tal como esté en ese momento; el registro va aparte y no impide abrir WhatsApp o el correo
+function colabAvisoClick(a, contactoId, canal){
+  const S = window.__colabAviso, it = S && S.items.find(x => x.contactoId === contactoId);
+  if (!it) return;
+  a.href = colabAvisoEnlace(canal, it, colabAvisoCampos());
+  colabAvisoRegistrar(contactoId, canal);
+}
+function colabAvisoClickTodos(a){
+  const S = window.__colabAviso, f = colabAvisoCampos();
+  const con = S.items.filter(it => colabContactoAviso(it.contactoId, it.ruta).email);
+  a.href = colabMailtoUrl({ bcc: [...new Set(con.map(it => colabContactoAviso(it.contactoId, it.ruta).email))].join(','), subject: colabAvisoAsunto(f), body: f.mensaje });
+  con.forEach(it => colabAvisoRegistrar(it.contactoId, 'email'));
+}
+const avisoDeFila = r => ({ id: r.id, createdAt: r.created_at, createdBy: r.created_by || '', origen: r.origen || '', destino: r.destino || '', fecha: r.fecha_carga || '', servicio: r.servicio || '', vehiculo: r.vehiculo || '', mercancia: r.mercancia || '', observaciones: r.observaciones || '', mensaje: r.mensaje || '' });
+const avisoDestDeFila = r => ({ id: r.id, avisoId: r.aviso_id, contactoId: r.contacto_id || '', nombre: r.contacto_nombre || '', canal: r.canal, estado: r.estado || 'avisado', precio: r.precio_ofertado == null ? null : Number(r.precio_ofertado), createdAt: r.created_at });
+function colabAvisoRegistrar(contactoId, canal){
+  const S = window.__colabAviso;
+  if (!S) return;
+  S.cola = S.cola.then(() => colabAvisoRegistrarUno(S, contactoId, canal)).catch(() => {});   // una a una: así el aviso se crea una sola vez
+}
+async function colabAvisoRegistrarUno(S, contactoId, canal){
+  const f = colabAvisoCampos();
+  const fila = { origen: f.origen || null, destino: f.destino || null, fecha_carga: f.fecha || null, servicio: f.servicio || null, vehiculo: f.vehiculo || null, mercancia: f.mercancia || null, observaciones: f.observaciones || null, mensaje: f.mensaje };
+  try {
+    if (!S.avisoId) {
+      const { data, error } = await supabaseClient.from('trafico_avisos').insert({ ...fila, created_by: currentUserEmail() }).select().single();
+      if (error || !data) throw (error || new Error('sin datos'));
+      S.avisoId = data.id; S.firma = JSON.stringify(fila); traficoAvisos.unshift(avisoDeFila(data));
+    } else if (S.firma !== JSON.stringify(fila)) {   // si se ha cambiado el mensaje entre un envío y otro, el aviso guarda el último
+      const { error } = await supabaseClient.from('trafico_avisos').update(fila).eq('id', S.avisoId);
+      if (error) throw error;
+      S.firma = JSON.stringify(fila);
+      const a = traficoAvisos.find(x => x.id === S.avisoId); if (a) Object.assign(a, avisoDeFila({ ...fila, id: S.avisoId, created_at: a.createdAt, created_by: a.createdBy }));
+    }
+    const c = contactos.find(x => x.id === contactoId), prev = S.enviados[contactoId];
+    if (!prev) {
+      const { data, error } = await supabaseClient.from('trafico_aviso_destinatarios').insert({ aviso_id: S.avisoId, contacto_id: contactoId, contacto_nombre: c ? ((c.nombreComercial || '').trim() || c.nombre) : null, canal }).select().single();
+      if (error || !data) throw (error || new Error('sin datos'));
+      S.enviados[contactoId] = { id: data.id, canal }; traficoAvisoDest.push(avisoDestDeFila(data));
+    } else if (prev.canal !== canal && prev.canal !== 'ambos') {
+      const { error } = await supabaseClient.from('trafico_aviso_destinatarios').update({ canal: 'ambos' }).eq('id', prev.id);
+      if (error) throw error;
+      prev.canal = 'ambos'; const d = traficoAvisoDest.find(x => x.id === prev.id); if (d) d.canal = 'ambos';
+    }
+    const st = document.getElementById('av-st-' + contactoId), cn = S.enviados[contactoId].canal;
+    if (st) st.textContent = '✓ ' + (cn === 'ambos' ? 'WhatsApp y correo' : cn === 'email' ? 'Correo' : 'WhatsApp');
+  } catch (err) {
+    const m = (err && err.message) || '';
+    appToast('No se pudo apuntar el aviso: ' + (/trafico_aviso|schema cache|does not exist/i.test(m) ? 'falta ejecutar el SQL «Avisos de carga» en Supabase (rutas-avisos.sql).' : m || 'error desconocido.') + ' El mensaje sí se ha abierto.', 'error');
+  }
+}
+async function colabAvisosCargar(){
+  window.__colabAvisosEstado = 'cargando';
+  const a = await supabaseClient.from('trafico_avisos').select('*').order('created_at', { ascending: false });
+  const d = a.error ? { data: null, error: a.error } : await supabaseClient.from('trafico_aviso_destinatarios').select('*').order('created_at', { ascending: true });
+  const err = a.error || d.error;
+  if (err) window.__colabAvisosEstado = /trafico_aviso|schema cache|does not exist/i.test(err.message || '') ? 'sinsql' : 'error';
+  else { traficoAvisos = (a.data || []).map(avisoDeFila); traficoAvisoDest = (d.data || []).map(avisoDestDeFila); window.__colabAvisosEstado = 'ok'; }
+  const el = document.getElementById('colab-avisos'); if (el) el.innerHTML = colabAvisosCardHtml();
+}
+function colabAvisosCardHtml(){
+  const est = window.__colabAvisosEstado;
+  const cab = decaCardHead('mail', 'Avisos enviados', 'Cargas que se han ofrecido a los transportistas y cómo va cada una');
+  if (est === 'sinsql') return `${cab}<div class="deca-card-body"><div class="se-aviso">Para guardar los avisos falta ejecutar el SQL «Avisos de carga» en Supabase (rutas-avisos.sql).</div></div>`;
+  if (est === 'error') return `${cab}<div class="deca-card-body"><div style="color:var(--danger);font-size:13px;">No se pudieron cargar los avisos.</div></div>`;
+  if (est !== 'ok') return `${cab}<div class="deca-card-body"><div style="color:var(--mutedFaint);font-size:13px;">Cargando…</div></div>`;
+  if (!traficoAvisos.length) return `${cab}<div class="deca-card-body"><div style="color:var(--mutedFaint);font-size:13px;">Todavía no se ha avisado a nadie. Busca una ruta, marca los transportistas y pulsa «Avisar seleccionados».</div></div>`;
+  const filas = traficoAvisos.slice(0, 30).map(a => {
+    const ds = traficoAvisoDest.filter(d => d.avisoId === a.id), adj = ds.find(d => d.estado === 'adjudicado'), resp = ds.filter(d => d.estado !== 'avisado').length;
+    const z = s => String(s || '').split(' · ')[0] || '—';
+    return `<tr style="cursor:pointer;" onclick="colabAvisoDetalle('${a.id}')" title="Ver y marcar cómo va cada transportista">
+      <td style="white-space:nowrap;" data-sort-value="${esc(a.createdAt)}">${esc(viajeFechaTxt(String(a.createdAt).slice(0, 10)))}</td>
+      <td style="font-size:12.5px;color:var(--muted);" data-sort-value="${esc(a.createdBy)}">${esc(a.createdBy.split('@')[0] || '—')}</td>
+      <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(z(a.origen) + z(a.destino))}">${esc(z(a.origen))} → ${esc(z(a.destino))}</td>
+      <td style="white-space:nowrap;" data-sort-value="${esc(a.fecha)}">${a.fecha ? esc(viajeFechaTxt(a.fecha)) : '—'}</td>
+      <td data-sort-value="${esc(a.servicio + a.vehiculo)}">${a.servicio ? `<span class="colab-chip">${esc(COLAB_SERVICIOS_CORTO[a.servicio] || a.servicio)}</span> ` : ''}${a.vehiculo ? `<span class="colab-chip veh">${esc(a.vehiculo)}</span>` : (a.servicio ? '' : '—')}</td>
+      <td class="tf-precio" data-sort-value="${ds.length}">${ds.length}</td>
+      <td class="tf-precio" data-sort-value="${resp}">${resp}</td>
+      <td data-sort-value="${esc(adj ? adj.nombre : '')}">${adj ? `<span class="colab-best">${esc(adj.nombre)}</span>` : '<span style="color:var(--mutedFaint);">—</span>'}</td></tr>`;
+  }).join('');
+  return `${cab}<div style="overflow-x:auto;"><table class="tf-table"><thead><tr>${thSort('Fecha', 'date')}${thSort('Quién', 'text')}${thSort('Ruta', 'text')}${thSort('Carga', 'date')}${thSort('Servicio', 'text')}${thSort('Avisados', 'number', 'style="text-align:right;"')}${thSort('Han respondido', 'number', 'style="text-align:right;"')}${thSort('Adjudicado a', 'text')}</tr></thead><tbody>${filas}</tbody></table></div>`;
+}
+function colabAvisoDetalle(id){
+  const a = traficoAvisos.find(x => x.id === id);
+  if (!a) return;
+  const ds = traficoAvisoDest.filter(d => d.avisoId === id);
+  const canalTxt = c => c === 'ambos' ? 'WhatsApp y correo' : c === 'email' ? 'Correo' : 'WhatsApp';
+  const filas = ds.map(d => `<div class="av-fila">
+      <div style="flex:1 1 180px;min-width:0;"><div style="font-weight:700;">${esc(d.nombre || '—')}</div><div style="font-size:12px;color:var(--muted);">${esc(canalTxt(d.canal))}</div></div>
+      <select id="avd-e-${d.id}" style="width:auto;min-width:160px;" onchange="colabAvisoDestGuardar('${d.id}')">${Object.entries(COLAB_AVISO_ESTADOS).map(([k, t]) => `<option value="${k}"${d.estado === k ? ' selected' : ''}>${t}</option>`).join('')}</select>
+      <div style="width:130px;"><input id="avd-p-${d.id}" inputmode="decimal" maxlength="12" placeholder="Precio €" title="Precio que ofreció (opcional)" style="text-align:right;" value="${d.precio == null ? '' : esc(String(d.precio).replace('.', ','))}" onchange="colabAvisoDestGuardar('${d.id}')" /></div>
+    </div>`).join('');
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:700px;padding:0;border-radius:14px;overflow:hidden;max-height:92vh;display:flex;flex-direction:column;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.mail, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">${esc(String(a.origen || '').split(' · ')[0])} → ${esc(String(a.destino || '').split(' · ')[0])}</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">Avisado el ${esc(viajeFechaTxt(String(a.createdAt).slice(0, 10)))} por ${esc(a.createdBy || '—')}${a.fecha ? ' · carga ' + esc(viajeFechaTxt(a.fecha)) : ''}</div></div>
+          <button class="close-x" onclick="closeModal(); colabAvisoCerrar()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="padding:16px 22px;overflow:auto;">
+          <div style="font-size:13.5px;font-weight:700;margin-bottom:2px;">Cómo va cada transportista</div>
+          <div>${filas || '<div style="color:var(--mutedFaint);font-size:13px;padding:8px 0;">No se llegó a avisar a nadie.</div>'}</div>
+          <details style="margin-top:12px;"><summary style="cursor:pointer;font-size:12.5px;color:var(--muted);">Ver el mensaje enviado</summary><pre style="white-space:pre-wrap;font-family:var(--body);font-size:12.5px;background:var(--panel2);border-radius:8px;padding:10px 12px;margin-top:8px;">${esc(a.mensaje)}</pre></details>
+          <div id="avd-error" style="color:var(--danger);font-size:12.5px;margin-top:8px;"></div>
+        </div>
+      </div>
+    </div>`;
+}
+async function colabAvisoDestGuardar(id){
+  const d = traficoAvisoDest.find(x => x.id === id), errEl = document.getElementById('avd-error');
+  if (!d) return;
+  const estado = document.getElementById('avd-e-' + id).value, ptxt = document.getElementById('avd-p-' + id).value.trim().replace(/\s*€$/, '').replace(/\./g, '').replace(',', '.');
+  const precio = ptxt === '' ? null : Number(ptxt);
+  if (precio != null && (!isFinite(precio) || precio < 0)) { if (errEl) errEl.textContent = 'El precio no es válido (un número).'; return; }
+  if (errEl) errEl.textContent = '';
+  const { error } = await supabaseClient.from('trafico_aviso_destinatarios').update({ estado, precio_ofertado: precio, updated_at: new Date().toISOString() }).eq('id', id);
+  if (error) { if (errEl) errEl.textContent = 'No se pudo guardar: ' + error.message; return; }
+  d.estado = estado; d.precio = precio;
+  appToast('Guardado.', 'ok');
+}
 function viajeMargenHtml(pct, eur){
   if (pct == null) return '<span style="color:var(--mutedFaint);">—</span>';
   const c = pct < 0 ? 'var(--danger)' : pct < 5 ? '#B26B00' : '#3F8F5F';
@@ -33404,10 +33666,12 @@ function colabBuscando(){ const { origen, destino } = colabBuscarClaves(); retur
 function colabLimpiarBusqueda(){
   window.__colabBuscarPaisO = ''; window.__colabBuscarOrigen = ''; window.__colabBuscarPaisD = ''; window.__colabBuscarDestino = '';
   window.__colabBuscarServ = []; window.__colabBuscarVeh = [];
+  colabSelSet().clear();
   renderTab();
 }
 function tplColaboradoresPage(){
   colabRevisarBusqueda();
+  if (!window.__colabAvisosEstado) setTimeout(colabAvisosCargar, 0);   // los avisos se cargan la primera vez que se abre Rutas
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
@@ -33438,6 +33702,7 @@ function tplColaboradoresPage(){
         <div id="colab-resultados">${colabResultadosHtml()}</div>
       </div>
     </div>
+    <div class="card deca-card" id="colab-avisos" style="--dc-accent:var(--primary);margin-bottom:16px;">${colabAvisosCardHtml()}</div>
     </div>`;
 }
 // ---- Cobertura de un transportista: pantalla completa (antes era una ventana

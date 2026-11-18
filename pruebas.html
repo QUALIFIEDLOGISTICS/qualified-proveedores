@@ -443,6 +443,36 @@
     cierto(/fuente: 'manual'/.test(trozo('async function submitColabRutaForm', 'async function submitColabRutasNuevas')), 'Editar a mano una automática la pasa a manual');
   });
 
+  prueba('Rutas · avisar: el teléfono de WhatsApp solo se acepta con prefijo (no se adivina), el contacto sale de las personas del transportista y el mensaje se arma con los datos de la carga', () => {
+    const r = new Function(`
+      const COLAB_SERVICIOS = { FTL: 'FTL', LTL: 'LTL' }; const viajeFechaTxt = d => d.split('-').reverse().join('-');
+      const tarifaZonaHint = z => ({ ES08: 'Barcelona', ES41: 'Sevilla' })[z] || '';
+      const transportistaContactos = [
+        { contactoId: 'a', nombre: 'Ana', apellidos: 'Pons', ambito: 'Sevilla', email: 'ana@x.com', telefono: '' },
+        { contactoId: 'a', nombre: 'Beto', apellidos: '', ambito: '', email: '', telefono: '+34 600 111 222' },
+        { contactoId: 'b', nombre: 'Solo', apellidos: 'Nombre', ambito: '', email: '', telefono: '' } ];
+      ${trozo('function colabTelWa', 'function colabAvisoMensaje')}
+      ${trozo('function colabAvisoMensaje', '// Selección de filas')}
+      const ct = colabContactoAviso('a', { origenZona: 'ES08', destinoZona: 'FR33' });
+      return { tel: ['+34 612 345 678', '612 34 56 78', '0033 6 12 34 56 78', '06 12 34 56 78', '', '+34'].map(colabTelWa), ct, sin: colabContactoAviso('b', null).tieneContacto, nada: colabContactoAviso('zz', null).tieneContacto,
+               msg: colabAvisoMensaje({ origen: 'ES08 · Barcelona', destino: 'FR33', fecha: '2026-11-20', servicio: 'FTL', vehiculo: '', mercancia: '33 palets', observaciones: '' }),
+               asunto: colabAvisoAsunto({ origen: 'ES08 · Barcelona', destino: 'FR33 · Burdeos', fecha: '2026-11-20' }), zona: colabZonaTxt('ES08') };`)();
+    igual(r.tel, ['34612345678', '34612345678', '33612345678', '', '', ''], 'Con +, con 00 o un número español de 9 cifras; un número francés sin prefijo no se adivina');
+    igual([r.ct.telefono, r.ct.email, r.ct.tieneContacto], ['+34 600 111 222', 'ana@x.com', true], 'El teléfono sale de quien lo tiene y el correo de quien lo tiene');
+    igual([r.sin, r.nada], [false, false], 'Una persona sin teléfono ni correo, o un transportista sin personas, no se puede avisar');
+    cierto(/• Origen: ES08 · Barcelona\n• Destino: FR33\n• Fecha de carga: 20-11-2026\n• Servicio: FTL\n• Mercancía \/ peso: 33 palets\n\n¿Podéis cubrirla\?/.test(r.msg) && !/Vehículo|Observaciones/.test(r.msg), 'El mensaje lleva solo los datos rellenados');
+    igual(r.asunto, 'Carga disponible ES08 → FR33 · 20-11-2026'); igual(r.zona, 'ES08 · Barcelona');
+  });
+  prueba('Rutas · avisar: el buscador tiene casillas por fila (deshabilitadas sin contacto) y el botón «Avisar seleccionados»; el aviso se registra al pulsar y se puede marcar respondió / precio / adjudicado', () => {
+    const f = trozo('function colabResultadosHtml', 'function colaboradoresFilteredRutas');
+    cierto(/class="colab-sel"/.test(f) && /Sin teléfono ni correo apuntado/.test(f) && /id="colab-avisar-btn"/.test(f) && /id="colab-sel-all"/.test(f), 'Casilla por fila, casilla de todos y botón');
+    cierto(/Completar<\/a>/.test(f), 'Los que no tienen contacto llevan un enlace para completarlo');
+    const g = trozo('function colabAvisoRegistrar(', 'async function colabAvisosCargar');
+    cierto(/trafico_avisos/.test(g) && /trafico_aviso_destinatarios/.test(g) && /created_by: currentUserEmail\(\)/.test(g), 'Se apunta el aviso, el usuario y cada transportista');
+    cierto(['avisado', 'respondio', 'ofertado', 'adjudicado'].every(k => new RegExp(k + ':').test(trozo('const COLAB_AVISO_ESTADOS', '// Teléfono para el enlace')))
+      , 'Estados: avisado, respondió, precio ofertado y adjudicado');
+  });
+
   // ---------- Textos largos en los PDF ----------
   const partir = (texto, ancho) => new Function(`${trozo('function wrapPdfText', '// Genera el PDF nativo del DeCA')}; const font={widthOfTextAtSize:(s)=>s.length*5}; return wrapPdfText(${JSON.stringify(texto)}, font, 10, ${ancho});`)();
   prueba('PDF: un texto normal se reparte en líneas que caben', () => {
