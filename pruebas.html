@@ -353,6 +353,33 @@
     igual(r.expandido.filter(t => t.startsWith('forrajes:')), ['forrajes:viajes', 'forrajes:proveedores', 'forrajes:clientes', 'forrajes:productos', 'forrajes:dashboard']);
   });
 
+  prueba('Almacén · Costes: equivalente al mes por periodicidad, estado según la vigencia, reparto por meses y totales', () => {
+    const r = new Function(`
+      ${trozo('const AC_PERIODOS', 'function acS(')}
+      const c = (o) => Object.assign({ categoria: 'alquiler', warehouseId: 'a', periodicidad: 'mensual', fin: '' }, o);
+      const alq = c({ importe: 2500, inicio: '2024-01-01' }), ext = c({ categoria: 'mantenimiento', importe: 600, periodicidad: 'anual', inicio: '2025-01-01', fin: '2025-12-31' }),
+            vig = c({ categoria: 'seguridad', warehouseId: '', importe: 900, periodicidad: 'trimestral', inicio: '2025-01-01', fin: '2025-07-20' }), sem = c({ importe: 1200, periodicidad: 'semestral', inicio: '2025-01-01' }),
+            viejo = c({ categoria: 'maquinaria', importe: 400, inicio: '2023-01-01', fin: '2023-12-31' }), futuro = c({ importe: 100, inicio: '2026-01-01' }),
+            parcial = c({ importe: 3100, inicio: '2025-03-16', fin: '2025-04-15' });
+      const hoy = '2025-06-10', R = acResumen([alq, ext, vig, sem, viejo, futuro], hoy, '2025');
+      return { mens: [alq, ext, vig, sem].map(acMensual), est: [alq, ext, vig, viejo, futuro].map(x => acEstado(x, hoy).k), hoyTermina: acEstado(c({ importe: 1, inicio: '2025-01-01', fin: '2025-06-10' }), hoy).t,
+        dias: acEstado(vig, hoy).t, marzo: acMesCoste(parcial, '2025-03'), abril: acMesCoste(parcial, '2025-04'), mayo: acMesCoste(parcial, '2025-05'), febrero: acMesCoste(alq, '2025-02'),
+        mensual: R.mensual, anual: R.anual, vigentes: R.vigentes, vencen: R.vencen, porCat: R.porCat, porAlm: R.porAlm, enero: R.meses[0], junio: R.meses[5], agosto: R.meses[7], total: R.totalAnio };`)();
+    igual(r.mens, [2500, 50, 300, 200], 'Mensual, anual /12, trimestral /3 y semestral /6');
+    igual(r.est, ['vigente', 'vigente', 'vence', 'finalizado', 'futuro'], 'Un contrato que termina en menos de 60 días sale «vence»'); igual(r.hoyTermina, 'Termina hoy'); igual(r.dias, 'Termina en 40 días');
+    igual([r.marzo, r.abril, r.mayo], [1600, 1550, 0], 'Un contrato de 3.100 €/mes del 16-03 al 15-04 cuesta 16/31 en marzo y 15/30 en abril');
+    igual(r.febrero, 2500); igual(r.mensual, 3050); igual(r.vigentes, 4); igual(r.anual, 36600); igual(r.vencen, 1);
+    igual(r.porCat, [{ k: 'alquiler', v: 2700 }, { k: 'seguridad', v: 300 }, { k: 'mantenimiento', v: 50 }]); igual(r.porAlm, [{ k: 'a', v: 2750 }, { k: '', v: 300 }]);
+    igual(r.enero, 3050, 'Enero: alquiler 2.500 + extintores 50 + vigilancia 300 + semestral 200'); igual(r.junio, 3050);
+    igual(r.agosto, 2750, 'En agosto la vigilancia ya ha terminado (20 de julio)'); igual(r.total, 34993.55, 'El año: 6 meses a 3.050, julio con la vigilancia a 20/31 y 5 meses a 2.750');
+  });
+  prueba('Almacén · Costes: la pestaña «Costes» está en el menú de Almacén y en Gestión de Permisos', () => {
+    const t = trozo('const TABS = [', 'const ADMIN_TAB');
+    cierto(/id:'almacencostes', label:'Costes de almacén', group:'Almacén'/.test(t), 'Debía estar entre los permisos del grupo Almacén');
+    cierto(/id: 'almacencostes', label: 'Costes' }/.test(trozo('const ALMACEN_SECTIONS = [', 'const ALMACEN_CONFIG_TAB')), 'Debía estar en la barra de Almacén');
+    cierto(/currentTab === 'almacencostes'\) bodyHtml = tplAlmacenCostes\(\)/.test(trozo('function renderTab()', 'const almacenBar')), 'Debía pintarse al elegirla');
+  });
+
   // ---------- Textos largos en los PDF ----------
   const partir = (texto, ancho) => new Function(`${trozo('function wrapPdfText', '// Genera el PDF nativo del DeCA')}; const font={widthOfTextAtSize:(s)=>s.length*5}; return wrapPdfText(${JSON.stringify(texto)}, font, 10, ${ancho});`)();
   prueba('PDF: un texto normal se reparte en líneas que caben', () => {
