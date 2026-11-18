@@ -33165,6 +33165,23 @@ function colabRanking(items){
   });
   return out;
 }
+// Orden por defecto de los resultados: las grúas al final; con «porRuta» (búsqueda solo por país) por la columna Ruta de menos a más;
+// y dentro de cada ruta (o siempre, con zona elegida en los dos lados) por vehículo y, a igualdad, el más barato primero (sin precio, al final).
+function colabOrdenFilas(a, b, porRuta){
+  const ga = colabEsGrua(a.r) ? 1 : 0, gb = colabEsGrua(b.r) ? 1 : 0;
+  if (ga !== gb) return ga - gb;
+  if (porRuta) {
+    const ra = a.r.origenZona + '|' + a.r.destinoZona, rb = b.r.origenZona + '|' + b.r.destinoZona;
+    if (ra !== rb) return ra < rb ? -1 : 1;
+  }
+  const va = a.r.tipoVehiculo || '', vb = b.r.tipoVehiculo || '';
+  if (va !== vb) return !va ? 1 : !vb ? -1 : va.localeCompare(vb, 'es');
+  const pa = colabPrecioRef(a.r, a.st), pb = colabPrecioRef(b.r, b.st);
+  if (pa == null && pb == null) return 0;
+  if (pa == null) return 1;
+  if (pb == null) return -1;
+  return pa - pb;
+}
 function colabEtiquetaRankingHtml(e){
   if (e.k === 'barato') return `<span class="colab-best" title="El precio más bajo entre las coberturas del mismo vehículo${e.indexacion ? '. Su tarifa es la base: aparte se le suma la indexación del gasoil' : ''}">Más barato${e.indexacion ? ' <i>+ indexación</i>' : ''}</span>`;
   if (e.k === 'viajes') return '<span class="colab-best v" title="El que más viajes ha hecho en esta ruta entre las coberturas del mismo vehículo">Más viajes</span>';
@@ -33198,18 +33215,10 @@ function colabResultadosHtml(){
   const statsDe = r => colabEsGrua(r) ? null : colabStatsViajes(todosViajes.filter(v => colabViajeEncaja(r, v) && colabZonaCubre(origen, v.origen) && colabZonaCubre(destino, v.destino)));
   // Orden por defecto: por vehículo (los que no lo indican, al final) y, dentro de cada uno, el más barato primero; sin precio, al final.
   // La grúa va aparte, detrás: su precio es por hora y no se compara con el de un viaje.
+  // Si en algún lado solo se ha elegido el país (sin zona), salen muchas rutas distintas: se ordenan por la columna Ruta, de menos a más (A → Z).
+  const porRuta = !window.__colabBuscarOrigen || !window.__colabBuscarDestino;
   const conContacto = filas.map(r => ({ r, c: contactos.find(x => x.id === r.contactoId), st: statsDe(r) })).filter(x => x.c)
-    .sort((a, b) => {
-      const ga = colabEsGrua(a.r) ? 1 : 0, gb = colabEsGrua(b.r) ? 1 : 0;
-      if (ga !== gb) return ga - gb;
-      const va = a.r.tipoVehiculo || '', vb = b.r.tipoVehiculo || '';
-      if (va !== vb) return !va ? 1 : !vb ? -1 : va.localeCompare(vb, 'es');
-      const pa = colabPrecioRef(a.r, a.st), pb = colabPrecioRef(b.r, b.st);
-      if (pa == null && pb == null) return 0;
-      if (pa == null) return 1;
-      if (pb == null) return -1;
-      return pa - pb;
-    });
+    .sort((a, b) => colabOrdenFilas(a, b, porRuta));
   const nombresVeh = sel.map(v => v === COLAB_SIN_VEH ? 'vehículo sin especificar' : v).join(' o ');
   const nombresServ = selS.map(v => v === COLAB_SIN_SERV ? 'servicio sin indicar' : (COLAB_SERVICIOS[v] || v)).join(' o ');
   const filtroTxt = [nombresServ, nombresVeh].filter(Boolean).join(', ');
