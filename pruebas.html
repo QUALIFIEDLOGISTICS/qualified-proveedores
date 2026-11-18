@@ -528,6 +528,38 @@
     cierto(!/COLAB_ZONA_RE/.test(f) && (f.match(/colabZonaResolver/g) || []).length >= 3, 'Los formularios de cobertura validan con el reconocedor de zonas');
   });
 
+  prueba('Rutas · alertas: «Revisar» si la tarifa lleva más de 6 meses sin tocarse o no hay viajes en 6 meses (una cobertura nueva sin viajes no); margen por debajo del mínimo configurable (6 % por defecto) en rojo', () => {
+    const r = new Function(`
+      const esc = s => String(s == null ? '' : s); const eur2 = n => Number(n).toFixed(2) + ' €'; const viajeFechaTxt = d => d.split('-').reverse().join('-');
+      const colabEsGrua = r => (r.servicios || []).includes('GRUA');
+      ${trozo('let colabAlertas', 'const colabRevisarDe')}
+      const hoy = '2026-11-18', ruta = o => Object.assign({ servicios: ['FTL'], tarifaBase: null, createdAt: '2025-01-01T10:00:00Z', updatedAt: '2025-01-01T10:00:00Z' }, o), st = (n, ult) => ({ n, ultimoViaje: ult || '' });
+      const k = (r, s) => colabRevisar(r, s, hoy).map(m => m.k + (m.nunca ? '*' : ''));
+      const rojo = p => /var\\(--danger\\)/.test(viajeMargenHtml(p, null));
+      const antes = [rojo(5.9), rojo(6), rojo(-3), rojo(12)];
+      colabAlertas = { margenMinimo: 10 };
+      return { corte: colabFechaHaceMeses(hoy, 6), antes, con10: [rojo(8), rojo(10)], titulo: /Por debajo del margen mínimo \\(10 %\\)/.test(viajeMargenHtml(8, null)),
+        tarifaVieja: k(ruta({ tarifaBase: 800, updatedAt: '2026-03-01T00:00:00Z' }), st(3, '2026-10-01')),
+        todoAlDia: k(ruta({ tarifaBase: 800, updatedAt: '2026-09-01T00:00:00Z' }), st(3, '2026-10-01')),
+        nuncaViajes: k(ruta({ createdAt: '2026-01-10T00:00:00Z' }), st(0)),
+        nueva: k(ruta({ createdAt: '2026-09-01T00:00:00Z' }), st(0)),
+        viajesViejos: k(ruta({ createdAt: '2025-01-10T00:00:00Z' }), st(4, '2026-02-01')),
+        ambas: k(ruta({ tarifaBase: 700, updatedAt: '2025-06-01T00:00:00Z' }), st(1, '2026-01-01')),
+        grua: k(ruta({ servicios: ['GRUA'], tarifaBase: 60, updatedAt: '2025-06-01T00:00:00Z' }), null),
+        gruaSinTarifa: k(ruta({ servicios: ['GRUA'] }), null),
+        html: colabRevisarHtml(colabRevisar(ruta({ createdAt: '2026-01-10T00:00:00Z' }), st(0), hoy)) };`)();
+    igual(r.corte, '2026-05-18', 'El corte es hoy menos 6 meses');
+    igual(r.antes, [true, false, true, false], 'Por defecto el mínimo es 6 %: 5,9 y negativos en rojo; 6 y más, no');
+    igual(r.con10, [true, false], 'Con el mínimo en 10 %, 8 sale en rojo'); cierto(r.titulo, 'El rojo explica por qué');
+    igual([r.tarifaVieja, r.todoAlDia], [['tarifa'], []], 'Tarifa de hace más de 6 meses → Revisar; al día → nada');
+    igual([r.nuncaViajes, r.nueva, r.viajesViejos], [['viajes*'], [], ['viajes']], 'Sin viajes desde que se apuntó (hace más de 6 meses), nueva sin viajes (no se marca) y último viaje antiguo');
+    igual(r.ambas, ['tarifa', 'viajes'], 'Pueden darse las dos razones'); igual([r.grua, r.gruaSinTarifa], [['tarifa'], []], 'A la grúa solo se le mira la tarifa');
+    cierto(/colab-revisar/.test(r.html) && /Sin ningún viaje desde que se apuntó/.test(r.html), 'La etiqueta explica el motivo');
+    const f = trozo('function colabResultadosHtml', 'function colaboradoresFilteredRutas');
+    cierto(/colabRevisarHtml\(revisar\.get\(r\.id\)\)/.test(f) && /por revisar/.test(f), 'Las coberturas por revisar se marcan en los resultados y se cuentan en la cabecera');
+    cierto(/id: 'alertas'/.test(trozo('const TRAFICO_CONFIG_SECCIONES', 'function tcfgSeccion')), 'El mínimo de margen se cambia en Configuración');
+  });
+
   // ---------- Textos largos en los PDF ----------
   const partir = (texto, ancho) => new Function(`${trozo('function wrapPdfText', '// Genera el PDF nativo del DeCA')}; const font={widthOfTextAtSize:(s)=>s.length*5}; return wrapPdfText(${JSON.stringify(texto)}, font, 10, ${ancho});`)();
   prueba('PDF: un texto normal se reparte en líneas que caben', () => {

@@ -2171,6 +2171,7 @@
   .colab-serv.row{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:13px;}
   .colab-serv label{display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;}
   .colab-chip.veh{background:var(--panel2);color:var(--muted);}
+  .colab-revisar{display:inline-block;padding:2px 9px;border-radius:999px;background:color-mix(in srgb,#C98A2E 20%,var(--panel));color:#8A5A12;border:1px solid color-mix(in srgb,#C98A2E 45%,var(--panel));font-size:10.5px;font-weight:800;letter-spacing:.3px;text-transform:uppercase;cursor:help;}
   .colab-best.v{background:#3B7DD8;}
   .colab-best.m{background:#7C5CBF;}
   .colab-best i{font-style:normal;font-weight:600;opacity:.9;text-transform:none;letter-spacing:0;}
@@ -19040,7 +19041,7 @@ function tplContactoTabTransporte(c){
         <tbody>
           ${rutas.map(r => `
             <tr>
-              <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona+r.destinoZona)}">${colabEsGrua(r) ? `${rutaZonaBanderaHtml(r.origenZona)}<span style="font-family:var(--body);font-size:11px;color:var(--muted);margin-left:6px;">zona de servicio</span>` : `${rutaZonaBanderaHtml(r.origenZona)} → ${rutaZonaBanderaHtml(r.destinoZona)}`}</td>
+              <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona+r.destinoZona)}">${colabRevisarHtml(colabRevisarDe(r))} ${colabEsGrua(r) ? `${rutaZonaBanderaHtml(r.origenZona)}<span style="font-family:var(--body);font-size:11px;color:var(--muted);margin-left:6px;">zona de servicio</span>` : `${rutaZonaBanderaHtml(r.origenZona)} → ${rutaZonaBanderaHtml(r.destinoZona)}`}</td>
               <td data-sort-value="${esc((r.servicios||[]).join(','))}">${colabServiciosChipsHtml(r)}</td>
               <td data-sort-value="${esc(r.tipoVehiculo)}">${r.tipoVehiculo ? `<span class="colab-chip veh">${esc(r.tipoVehiculo)}</span>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
               <td class="tf-precio" data-sort-value="${r.tarifaBase??''}">${r.tarifaBase !== null && r.tarifaBase !== undefined ? `${colabPrecioTxt(r)}${r.indexacion ? ' <small>+ indexación</small>' : ''}` : '<span style="color:var(--mutedFaint);font-weight:400;">—</span>'}</td>
@@ -27109,8 +27110,10 @@ const OC_CONTACTO_PIE = 'comercial@qualified3.com · +34 676952000';   // contac
 const OC_INDICACIONES_DEFECTO ='INDEXACIÓN GASOIL YA INCLUIDA EN EL PRECIO';
 let ocConfig = {};
 async function loadTransporteConfig(){
-  const { data } = await supabaseClient.from('transporte_config').select('*').in('clave', ['ordenes_carga', 'grupos_zonas']);
-  const r = (data || []).find(x => x.clave === 'ordenes_carga'), gz = (data || []).find(x => x.clave === 'grupos_zonas');
+  const { data } = await supabaseClient.from('transporte_config').select('*').in('clave', ['ordenes_carga', 'grupos_zonas', 'alertas_rutas']);
+  const r = (data || []).find(x => x.clave === 'ordenes_carga'), gz = (data || []).find(x => x.clave === 'grupos_zonas'), al = (data || []).find(x => x.clave === 'alertas_rutas');
+  colabAlertas = Object.assign({ margenMinimo: 6 }, al && al.valor && typeof al.valor === 'object' ? al.valor : {});
+  window.__alertasMeta = al ? { actualizado: al.updated_at, por: al.updated_by || '' } : null;
   ocConfig = (r && r.valor && typeof r.valor === 'object') ? r.valor : {};
   window.__ocConfigMeta = r ? { actualizado: r.updated_at, por: r.updated_by || '' } : null;
   colabGrupos = gz && gz.valor && Array.isArray(gz.valor.grupos) ? gz.valor.grupos.filter(g => g && g.id && Array.isArray(g.zonas)).map(g => ({ id: String(g.id), nombre: String(g.nombre || g.id), zonas: g.zonas.map(String) })) : [];
@@ -27127,6 +27130,7 @@ function ocCfgCondiciones(){
 const TRAFICO_CONFIG_SECCIONES = [
   { id: 'ordenes', label: 'Órdenes de carga' },
   { id: 'zonas', label: 'Grupos de zonas' },
+  { id: 'alertas', label: 'Alertas de Rutas' },
 ];
 function tcfgSeccion(){
   return TRAFICO_CONFIG_SECCIONES.some(s => s.id === window.__tcfgSec) ? window.__tcfgSec : TRAFICO_CONFIG_SECCIONES[0].id;
@@ -27142,6 +27146,7 @@ function tplTraficoConfigPage(){
   const tabs = `<div class="doc-seg" style="margin-bottom:16px;">${TRAFICO_CONFIG_SECCIONES.map(s => `<button type="button" class="${s.id === sec ? 'on' : ''}" onclick="tcfgSetSeccion('${s.id}')">${esc(s.label)}</button>`).join('')}</div>`;
   if (sec === 'ordenes') return tabs + tplTcfgOrdenes();
   if (sec === 'zonas') return tabs + tplTcfgZonas();
+  if (sec === 'alertas') return tabs + tplTcfgAlertas();
   return tabs;
 }
 function tcfgConfirmLeaveForm(){
@@ -27355,6 +27360,62 @@ async function tcfgZonasGuardar(){
   window.__tcfgDirty = false;
   renderTab();
   appToast('Grupos de zonas guardados.', 'ok');
+}
+/* ---- Configuración → Alertas de Rutas ---- */
+function tplTcfgAlertas(){
+  const m = window.__alertasMeta;
+  return `
+    <div class="deca-banner">
+      <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.shield, 26, '#fff', 1.8)}</span>
+      <div style="min-width:0;flex:1 1 280px;">
+        <div class="deca-banner-title">Alertas de Rutas</div>
+        <div class="deca-banner-sub">Cuándo se marca un viaje con poco margen y cuándo una cobertura hay que revisarla${m && m.actualizado ? ` · última modificación el ${esc(fmtDateDMY(String(m.actualizado).slice(0, 10)))}${m.por ? ' por ' + esc(m.por) : ''}` : ''}.</div>
+      </div>
+    </div>
+    <div class="deca-form" oninput="window.__tcfgDirty=true;" onchange="window.__tcfgDirty=true;" style="max-width:980px;--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;">
+      <div class="card deca-card">
+        ${decaCardHead('tag', 'Margen mínimo', 'Un viaje (o un margen medio) por debajo de este porcentaje sale en rojo en Rutas y en los viajes realizados')}
+        <div class="deca-card-body">
+          <div class="field" style="max-width:220px;margin-bottom:0;"><label>Margen mínimo sobre lo cobrado</label>${decaInputIcon('weight', `<input id="tc-al-margen" inputmode="decimal" maxlength="6" value="${esc(String(colabMargenMinimo()).replace('.', ','))}" />`, '%')}</div>
+        </div>
+      </div>
+      <div class="card deca-card">
+        ${decaCardHead('clock', 'Cobertura para revisar', 'Fijo: más de ' + COLAB_REVISAR_MESES + ' meses')}
+        <div class="deca-card-body" style="font-size:13px;color:var(--muted);line-height:1.5;">
+          Una cobertura sale con la etiqueta <span class="colab-revisar">Revisar</span> si su <b>tarifa base no se ha tocado en más de ${COLAB_REVISAR_MESES} meses</b>, o si <b>no ha hecho ningún viaje en los últimos ${COLAB_REVISAR_MESES} meses</b>. Una cobertura apuntada hace menos de ${COLAB_REVISAR_MESES} meses que aún no ha hecho viajes no se marca, porque es nueva. A las grúas solo se les mira la tarifa.
+        </div>
+      </div>
+    </div>
+    <div class="deca-actions" style="max-width:980px;">
+      <div id="tcfg-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
+      <div class="deca-actions-row">
+        <button class="btn btn-ghost deca-cancel" onclick="tcfgDescartar()">Descartar cambios</button>
+        <button class="btn btn-primary deca-submit tcfg-save" onclick="tcfgAlertasGuardar()">Guardar alertas</button>
+      </div>
+    </div>`;
+}
+async function tcfgAlertasGuardar(){
+  const errEl = document.getElementById('tcfg-error');
+  errEl.textContent = '';
+  if (!sectionAllowedFor(PROFILE, 'trafico', 'configuracion')) { errEl.textContent = 'No tienes permiso para cambiar la configuración.'; return; }
+  const txt = document.getElementById('tc-al-margen').value.trim().replace(/\s*%$/, '').replace(',', '.');
+  const margen = Number(txt);
+  if (txt === '' || !isFinite(margen) || margen < 0 || margen > 100) { errEl.textContent = 'El margen mínimo tiene que ser un número entre 0 y 100.'; return; }
+  const btn = document.querySelector('.tcfg-save');
+  if (btn) btn.disabled = true;
+  const por = currentUserEmail();
+  const { error } = await supabaseClient.from('transporte_config').upsert({ clave: 'alertas_rutas', valor: { margenMinimo: margen }, updated_at: new Date().toISOString(), updated_by: por });
+  if (error) {
+    const m = error.message || '';
+    errEl.textContent = 'No se pudo guardar: ' + (/transporte_config|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL «Configuración de Transporte» en Supabase.' : m);
+    if (btn) btn.disabled = false;
+    return;
+  }
+  colabAlertas = { margenMinimo: margen };
+  window.__alertasMeta = { actualizado: new Date().toISOString(), por };
+  window.__tcfgDirty = false;
+  renderTab();
+  appToast('Alertas guardadas.', 'ok');
 }
 function tcfgDescartar(){
   window.__tcfgDirty = false;
@@ -33117,6 +33178,9 @@ function colabResultadosHtml(){
     id: r.id, grupo: colabEsGrua(r) ? '__grua' : (r.tipoVehiculo || COLAB_SIN_VEH), precio: colabPrecioRef(r, st),
     indexacion: r.tarifaBase != null && r.indexacion && !colabEsGrua(r), n: st ? st.n : 0, margen: st ? st.margenMedio : null,
   })));
+  // «Revisar»: tarifa sin tocar o sin viajes desde hace más de 6 meses (se mira la cobertura entera, no solo esta ruta)
+  const revisar = new Map(conContacto.map(({ r }) => [r.id, colabRevisarDe(r, todosViajes)]));
+  const nRevisar = [...revisar.values()].filter(m => m.length).length;
   const notaRanking = `<div style="font-size:12px;color:var(--muted);margin:-4px 0 10px;">Las etiquetas comparan solo entre coberturas <b>del mismo vehículo</b>${sel.length ? ` (${esc(nombresVeh)})` : ''}. El precio que se compara es la tarifa base o, si no tiene, el último precio pagado. «Viajes», «Último pagado» y «Margen» son los de esta ruta, con el servicio y el vehículo de cada cobertura. Pulsa una cabecera para ordenar.</div>`;
   // Una persona de contacto cuyo "ámbito" nombra la zona (p. ej. "Sevilla") va primero.
   const coincideZona = (p, r) => {
@@ -33142,7 +33206,7 @@ function colabResultadosHtml(){
       : `<span style="font-size:12px;color:var(--danger);font-weight:600;">Sin contacto</span> <a href="#" style="font-size:12px;" onclick="openTransportistaFicha('${c.id}'); return false;" title="Abrir su ficha para apuntar un teléfono o un correo">Completar</a>`;
     return `<tr>
       <td style="width:34px;">${avisable ? `<input type="checkbox" class="colab-sel" data-id="${r.id}" ${selAv.has(r.id) ? 'checked' : ''} onchange="colabSelToggle('${r.id}', this.checked)" title="Elegir para avisarle de una carga" />` : `<input type="checkbox" disabled title="Sin teléfono ni correo apuntado" />`}</td>
-      <td data-sort-value="${esc(c.nombre)}"><span style="font-weight:600;cursor:pointer;" onclick="openTransportistaFicha('${c.id}')">${esc((c.nombreComercial || '').trim() || c.nombre)}</span><div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;align-items:center;">${(ranking.get(r.id) || []).map(colabEtiquetaRankingHtml).join('')}${colabFuenteChipHtml(r)}</div></td>
+      <td data-sort-value="${esc(c.nombre)}"><span style="font-weight:600;cursor:pointer;" onclick="openTransportistaFicha('${c.id}')">${esc((c.nombreComercial || '').trim() || c.nombre)}</span><div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;align-items:center;">${(ranking.get(r.id) || []).map(colabEtiquetaRankingHtml).join('')}${colabRevisarHtml(revisar.get(r.id))}${colabFuenteChipHtml(r)}</div></td>
       <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona + r.destinoZona)}">${grua ? rutaZonaBanderaHtml(r.origenZona) : `${rutaZonaBanderaHtml(r.origenZona)} <span style="color:var(--mutedFaint);">→</span> ${rutaZonaBanderaHtml(r.destinoZona)}`}</td>
       <td data-sort-value="${esc((r.servicios || []).join(','))}">${colabServiciosChipsHtml(r)}</td>
       <td data-sort-value="${esc(r.tipoVehiculo)}">${r.tipoVehiculo ? `<span class="colab-chip veh">${esc(r.tipoVehiculo)}</span>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
@@ -33165,7 +33229,7 @@ function colabResultadosHtml(){
   const bloqueViajes = colabViajesRutaHtml(origen, destino, selS);
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0 10px;">
-      <div style="font-size:14px;font-weight:700;">Quién cubre <span style="font-family:var(--mono);font-weight:600;">${rutaTxt}</span> <span style="font-weight:400;color:var(--muted);">· ${conContacto.length} transportista${conContacto.length === 1 ? '' : 's'}${filtroTxt ? ' con ' + esc(filtroTxt) : ''}</span></div>
+      <div style="font-size:14px;font-weight:700;">Quién cubre <span style="font-family:var(--mono);font-weight:600;">${rutaTxt}</span> <span style="font-weight:400;color:var(--muted);">· ${conContacto.length} transportista${conContacto.length === 1 ? '' : 's'}${filtroTxt ? ' con ' + esc(filtroTxt) : ''}</span>${nRevisar ? ` <span class="colab-revisar" style="margin-left:4px;" title="Coberturas con la tarifa sin tocar o sin viajes desde hace más de ${COLAB_REVISAR_MESES} meses">${nRevisar} por revisar</span>` : ''}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button type="button" class="btn btn-primary" id="colab-avisar-btn" onclick="colabAvisoAbrir()" ${colabSelElegidas().length ? '' : 'disabled'}>${homeIcon(HOME_ICON_PATHS.mail, 15, 'currentColor', 2)}<span>${colabSelElegidas().length ? `Avisar seleccionados (${colabSelElegidas().length})` : 'Avisar seleccionados'}</span></button>
         ${contactarTodos}
@@ -33738,11 +33802,42 @@ async function colabAvisoDestGuardar(id){
   d.estado = estado; d.precio = precio;
   appToast('Guardado.', 'ok');
 }
+/* ---- Alertas de Rutas ----
+   · Margen: un viaje (o un margen medio) por debajo del mínimo sale en rojo. El mínimo se cambia en Transporte → Configuración → Alertas
+     (transporte_config, clave 'alertas_rutas'); por defecto 6 %.
+   · «Revisar»: una cobertura con la tarifa sin tocar desde hace más de 6 meses, o sin ningún viaje en los últimos 6 meses (una cobertura
+     apuntada hace menos de 6 meses sin viajes todavía no se marca: es nueva). */
+let colabAlertas = { margenMinimo: 6 };
+const COLAB_REVISAR_MESES = 6;
+function colabMargenMinimo(){ const n = Number(colabAlertas && colabAlertas.margenMinimo); return isFinite(n) ? n : 6; }
 function viajeMargenHtml(pct, eur){
   if (pct == null) return '<span style="color:var(--mutedFaint);">—</span>';
-  const c = pct < 0 ? 'var(--danger)' : pct < 5 ? '#B26B00' : '#3F8F5F';
-  return `<b style="color:${c};">${pct.toLocaleString('es-ES', { maximumFractionDigits: 1 })} %</b>${eur != null ? `<small style="color:var(--muted);"> · ${eur2(eur)}</small>` : ''}`;
+  const min = colabMargenMinimo(), bajo = pct < min;
+  return `<b style="color:${bajo ? 'var(--danger)' : '#3F8F5F'};"${bajo ? ` title="Por debajo del margen mínimo (${min.toLocaleString('es-ES', { maximumFractionDigits: 1 })} %)"` : ''}>${pct.toLocaleString('es-ES', { maximumFractionDigits: 1 })} %</b>${eur != null ? `<small style="color:var(--muted);"> · ${eur2(eur)}</small>` : ''}`;
 }
+function colabFechaHaceMeses(hoy, meses){
+  const d = new Date(hoy + 'T00:00:00'); d.setMonth(d.getMonth() - meses);
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+// Motivos para revisar una cobertura: [{ k: 'tarifa' | 'viajes', desde: 'AAAA-MM-DD', nunca? }]. st: estadísticas de sus viajes (colabStatsViajes).
+function colabRevisar(r, st, hoy){
+  const corte = colabFechaHaceMeses(hoy, COLAB_REVISAR_MESES), motivos = [];
+  const editada = String(r.updatedAt || r.createdAt || '').slice(0, 10);
+  if (r.tarifaBase != null && editada && editada < corte) motivos.push({ k: 'tarifa', desde: editada });
+  if (!colabEsGrua(r)) {   // la grúa no hace viajes A → B: solo se le mira la tarifa
+    const ult = (st && st.ultimoViaje) || String(r.createdAt || '').slice(0, 10);
+    if (ult && ult < corte) motivos.push({ k: 'viajes', desde: ult, nunca: !(st && st.n) });
+  }
+  return motivos;
+}
+function colabRevisarHtml(motivos){
+  if (!motivos.length) return '';
+  const txt = motivos.map(m => m.k === 'tarifa' ? `La tarifa no se toca desde el ${viajeFechaTxt(m.desde)} (más de ${COLAB_REVISAR_MESES} meses)`
+    : m.nunca ? `Sin ningún viaje desde que se apuntó, el ${viajeFechaTxt(m.desde)} (más de ${COLAB_REVISAR_MESES} meses)` : `Sin viajes desde el ${viajeFechaTxt(m.desde)} (más de ${COLAB_REVISAR_MESES} meses)`).join('\n');
+  return `<span class="colab-revisar" title="${esc(txt)}">Revisar</span>`;
+}
+const colabRevisarDe = (r, todos) => colabRevisar(r, colabStatsViajes(viajesDeCobertura(r, todos)), today());
 function viajeRutaHtml(o, d){
   return `<span style="font-family:var(--mono);white-space:nowrap;display:inline-flex;align-items:center;gap:6px;">${rutaZonaBanderaHtml(o)} <span style="color:var(--mutedFaint);">→</span> ${rutaZonaBanderaHtml(d)}</span>`;
 }
@@ -33870,7 +33965,7 @@ function colabTablaBodyHtml(){
           return `
           <tr>
             <td style="color:var(--muted);white-space:nowrap;" data-sort-value="${esc(r.updatedAt||'')}">${viajeFechaTxt(r.updatedAt)}</td>
-            <td style="font-weight:600;cursor:${c?'pointer':'default'};" data-sort-value="${esc(nombre)}" ${c?`onclick="openTransportistaFicha('${c.id}')"`:''}>${esc(nombre)}<div style="margin-top:3px;font-weight:400;">${colabFuenteChipHtml(r)}</div></td>
+            <td style="font-weight:600;cursor:${c?'pointer':'default'};" data-sort-value="${esc(nombre)}" ${c?`onclick="openTransportistaFicha('${c.id}')"`:''}>${esc(nombre)}<div style="margin-top:3px;font-weight:400;display:flex;gap:4px;flex-wrap:wrap;">${colabRevisarHtml(colabRevisarDe(r, viajesTodos))}${colabFuenteChipHtml(r)}</div></td>
             <td style="font-family:var(--mono);white-space:nowrap;" data-sort-value="${esc(r.origenZona+r.destinoZona)}" title="${esc(colabEsGrua(r) ? 'Zona de servicio: ' + tarifaZonaHint(r.origenZona) : [tarifaZonaHint(r.origenZona), tarifaZonaHint(r.destinoZona)].filter(Boolean).join(' → '))}">${colabEsGrua(r) ? `${rutaZonaBanderaHtml(r.origenZona)}<span style="font-family:var(--body);font-size:11px;color:var(--muted);margin-left:6px;">zona de servicio</span>` : `${rutaZonaBanderaHtml(r.origenZona)} → ${rutaZonaBanderaHtml(r.destinoZona)}`}</td>
             <td data-sort-value="${esc((r.servicios||[]).join(','))}">${colabServiciosChipsHtml(r)}</td>
             <td data-sort-value="${esc(r.tipoVehiculo)}">${r.tipoVehiculo ? `<span class="colab-chip veh">${esc(r.tipoVehiculo)}</span>` : '<span style="color:var(--mutedFaint);">—</span>'}</td>
