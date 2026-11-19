@@ -774,6 +774,27 @@
     cierto(/sgaAlbLayout\(cols, orden, lineas, W, PAD, tw\)/.test(html), 'El PDF usa el reparto');
   });
 
+  prueba('CRM: al volver a la pantalla se leen de nuevo las cotizaciones (lo creado desde otro sitio aparece), sin pisar una ficha en edición ni repetir la lectura a cada momento', async () => {
+    const f = (S, filas) => new Function('S', 'filas', `
+      let pintado = 0, lecturas = 0;
+      const document = { addEventListener(){}, getElementById: id => id === 'crm-root' ? {} : null };
+      const currentTab = 'comercial', comercialSection = () => 'crm', crmS = () => S;
+      const crmOppDeFila = r => ({ id: r.id, oferta: r.oferta || '' }), crmProspectoDeFila = r => ({ id: r.id });
+      const crmPinta = () => { pintado++; }, crmDrawerPinta = () => {};
+      const supabaseClient = { from: t => ({ select: () => ({ order: async () => { lecturas++; return { data: t === 'crm_oportunidades' ? filas : [], error: null }; } }) }) };
+      ${trozo('const CRM_REFRESCO_SEG', 'async function crmHidratar')}
+      return (async () => { const antes = S.opps.slice(); await crmRefrescar(); const r1 = { opps: S.opps.map(x => x.id + ':' + x.oferta).join(','), mismo: S.opps.find(x => x.id === 'a') === antes.find(x => x.id === 'a'), pintado, lecturas };
+        await crmRefrescar(); r1.lecturas2 = lecturas; return r1; })();`)(S, filas);
+    const vieja = Date.now() - 60000;
+    const r = await f({ cargado: true, cargadoAt: vieja, opps: [{ id: 'a', oferta: '' }, { id: 'z', oferta: 'OF-0' }], prospectos: [], drawer: null }, [{ id: 'n13', oferta: 'OF-2026-0013' }, { id: 'a', oferta: 'OF-2026-0001' }]);
+    igual(r.opps, 'n13:OF-2026-0013,a:OF-2026-0001', 'Aparece la cotización nueva, se actualiza la que cambió y desaparece la que ya no existe');
+    cierto(r.mismo && r.pintado === 1 && r.lecturas === 2, 'La cotización existente conserva su objeto (lo que esté abierto sigue valiendo) y se repinta una vez');
+    igual(r.lecturas2, 2, 'Una segunda llamada seguida no vuelve a leer (menos de 20 segundos)');
+    const e = await f({ cargado: true, cargadoAt: vieja, opps: [{ id: 'a', oferta: '' }], prospectos: [], drawer: { tipo: 'form', id: 'a' } }, [{ id: 'b' }]);
+    igual([e.opps, e.lecturas], ['a:', 0], 'Con una ficha de edición abierta no se lee ni se cambia nada');
+    cierto(/else crmRefrescar\(\);/.test(trozo('async function crmHidratar', 'function crmPinta')), 'Al entrar en el CRM con datos ya cargados se refrescan en segundo plano');
+  });
+
 
   // ---------- Textos largos en los PDF ----------
   const partir = (texto, ancho) => new Function(`${trozo('function wrapPdfText', '// Genera el PDF nativo del DeCA')}; const font={widthOfTextAtSize:(s)=>s.length*5}; return wrapPdfText(${JSON.stringify(texto)}, font, 10, ${ancho});`)();

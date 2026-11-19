@@ -27906,7 +27906,7 @@ function crmCargar(){
       S.prospectos = (p.data || []).map(crmProspectoDeFila);
       S.opps = (o.data || []).map(crmOppDeFila);
       try { if (!almacenajeProductos.length) await loadAlmacenajeProductos(); if (!operativas.length) await loadOperativas(); if (!tarifas.length) await loadTarifas(); if (!almacenajeTarifas.length) await loadAlmacenajeTarifas(); } catch (e) { /* los catálogos son opcionales para ver el CRM */ }
-      S.cargado = true;
+      S.cargado = true; S.cargadoAt = Date.now();
     } catch (e) {
       const m = (e && e.message) || 'error desconocido';
       S.error = /relation|does not exist|schema cache/i.test(m) ? 'Falta ejecutar el SQL «comercial-crm.sql» en Supabase.' : 'No se pudo cargar el CRM: ' + m;
@@ -27943,11 +27943,38 @@ function crmVista(v){
   document.querySelectorAll('.crm-tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   crmPinta();
 }
+/* Las cotizaciones se leen al abrir el CRM y se guardaban en memoria hasta recargar la página: lo creado desde otra pestaña, el móvil u otra persona no salía.
+   Ahora, al volver a una pantalla del CRM (o a la ventana) con datos de más de 20 segundos, se leen de nuevo en segundo plano y se actualizan en el sitio,
+   sin tocar lo que se está editando (no se refresca con una ficha de edición abierta). */
+const CRM_REFRESCO_SEG = 20;
+async function crmRefrescar(forzar){
+  const S = crmS();
+  if (!S.cargado || S.refrescando || S.promesa) return;
+  if (!forzar && Date.now() - (S.cargadoAt || 0) < CRM_REFRESCO_SEG * 1000) return;
+  if (S.drawer && (S.drawer.tipo === 'form' || S.drawer.tipo === 'prospecto')) return;
+  S.refrescando = true;
+  try {
+    const [p, o] = await Promise.all([
+      supabaseClient.from('crm_prospectos').select('*').order('nombre', { ascending: true }),
+      supabaseClient.from('crm_oportunidades').select('*').order('created_at', { ascending: false }),
+    ]);
+    if (o.error || p.error) return;   // si falla se queda lo que había
+    if (S.drawer && (S.drawer.tipo === 'form' || S.drawer.tipo === 'prospecto')) return;   // se abrió una ficha mientras se leía
+    const previas = new Map(S.opps.map(x => [x.id, x]));
+    S.opps = (o.data || []).map(r => { const n = crmOppDeFila(r), v = previas.get(n.id); return v ? Object.assign(v, n) : n; });
+    S.prospectos = (p.data || []).map(crmProspectoDeFila);
+    S.cargadoAt = Date.now();
+    if (currentTab === 'comercial' && comercialSection() === 'crm' && document.getElementById('crm-root')) { crmPinta(); if (S.drawer && S.drawer.tipo === 'detalle') crmDrawerPinta(); }
+  } catch (e) { /* sin red: se queda lo que había */ }
+  finally { S.refrescando = false; }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && typeof crmHidratar === 'function') crmHidratar(); });
 async function crmHidratar(){
   if (currentTab === 'comercial' && window.__crm && window.__crm.cargado) crmContadores();   // el contador de la pestaña se ve también desde Clientes o Tarifas
   if (currentTab !== 'comercial' || comercialSection() !== 'crm' || !document.getElementById('crm-root')) return;
   const S = crmS();
   if (!S.cargado) await crmCargar();
+  else crmRefrescar();   // lo cargado puede haberse quedado antiguo (otra pestaña, el móvil, otra persona): se vuelve a leer sin molestar
   if (!document.getElementById('crm-root')) return;
   if (S.error) { const b = document.getElementById('crm-body'); if (b) b.innerHTML = `<div class="card" style="padding:34px;text-align:center;color:var(--danger);">${esc(S.error)}</div>`; return; }
   crmPinta();
