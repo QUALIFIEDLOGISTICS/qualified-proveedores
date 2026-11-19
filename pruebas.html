@@ -719,6 +719,25 @@
   });
 
 
+  prueba('SGA · regularización: se pueden añadir palets del catálogo que el cliente no tiene en el stock (artículo, tipo de carga, tipo de palet y cantidad), con sus avisos', () => {
+    const r = new Function(`
+      const sgaArticulos = [{ id: 'A', referencia: 'REF-1', nombre: 'Palet A', bultos: 2 }];
+      const sgaClienteConArticulos = () => true, sgaEntradaConTipo = () => true, sgaTiposPaletElegir = () => ['Normal', 'Especial'], sgaTipoPaletUnico = () => '', sgaClienteConBultos = () => true;
+      const sgaUnidadCfg = () => ({ p: 'palets' });
+      let filas = [];
+      const document = { querySelectorAll: () => filas.map((f, i) => ({ dataset: { i: String(i) } })), getElementById: id => { const m = id.match(/^rgn-(\\d+)-(\\w+)$/); return m && filas[m[1]] ? { value: filas[m[1]][m[2]] || '' } : null; } };
+      ${trozo('function sgaRegulNuevasLeer', '// Comprueba las líneas nuevas')}
+      ${trozo('function sgaRegulNuevasPreparar', 'async function sgaRegulConfirmar')}
+      filas = [{ art: 'A', prod: 'p1', sub: 'Normal', cant: '3' }, {}, { prod: 'p1', sub: 'Normal', cant: '2' }, { art: 'A', prod: 'p1', sub: 'Normal', cant: '1.5' }, { art: 'A', prod: 'p1', cant: '2' }];
+      const x = sgaRegulNuevasPreparar('c');
+      return { nuevas: x.nuevas, errores: x.errores };`)();
+    igual(r.nuevas, [{ producto_id: 'p1', articulo_id: 'A', referencia: 'REF-1', descripcion: 'Palet A', cantidad: 3, bultos: 6, atributos: { subtipo: 'Normal' } }], 'La línea buena sale con su artículo, tipo de carga, tipo de palet y bultos; la fila vacía no cuenta');
+    igual(r.errores, ['Línea nueva 3: elige el artículo.', 'Línea nueva 4: indica cuántos palets (un número entero, 1 o más).', 'Línea nueva 5: elige el tipo de palet.'], 'Faltas: sin artículo, cantidad no entera y sin tipo de palet (el número es el de la fila en pantalla)');
+    const t = trozo('function tplStockRegulPage', 'async function sgaRegulConfirmar');
+    cierto(/id="rg-nuevas"/.test(t), 'La pantalla tiene el apartado «Añadir palets del catálogo»');
+    cierto(/nuevas: np\.nuevas/.test(trozo('async function sgaRegulConfirmar', '/* ---- Cambio de almacén')), 'Las líneas nuevas viajan a la base de datos junto con las partidas que cambian');
+  });
+
   // ---------- Textos largos en los PDF ----------
   const partir = (texto, ancho) => new Function(`${trozo('function wrapPdfText', '// Genera el PDF nativo del DeCA')}; const font={widthOfTextAtSize:(s)=>s.length*5}; return wrapPdfText(${JSON.stringify(texto)}, font, 10, ${ancho});`)();
   prueba('PDF: un texto normal se reparte en líneas que caben', () => {

@@ -14896,6 +14896,7 @@ function sgaRegulVerAgotadas(on){
 async function sgaRegulAlmacenCambio(){
   const clienteId = sgaRegulCliente(), wid = sgaRegulWh();
   const cont = document.getElementById('rg-stock');
+  sgaRegulNuevasRender();   // las líneas del catálogo dependen del cliente y del almacén: se rehacen al cambiarlos
   if (!clienteId || !wid) { cont.innerHTML = `<div style="color:var(--mutedFaint);font-size:12.5px;">${!clienteId ? 'Elige primero el cliente.' : 'Elige el almacén.'}</div>`; sgaRegulRefrescar(); return; }
   const ps = sgaStockCliente(clienteId, wid);
   const yaCargadas = window.__rgAg && window.__rgAg.k === clienteId + '|' + wid;
@@ -14963,7 +14964,8 @@ function sgaRegulRefrescar(){
   });
   const cambian = d.items.filter(x => x.delta).length;
   const t = document.getElementById('rg-total');
-  if (t) t.innerHTML = cambian ? `Se regularizan <b>${cambian}</b> partida${cambian !== 1 ? 's' : ''}.` : 'Todavía no has cambiado ninguna cantidad.';
+  const nN = sgaRegulNuevasLeer().length;
+  if (t) t.innerHTML = (cambian || nN) ? `${cambian ? `Se regularizan <b>${cambian}</b> partida${cambian !== 1 ? 's' : ''}` : ''}${cambian && nN ? ' y ' : ''}${nN ? `se añaden <b>${nN}</b> línea${nN !== 1 ? 's' : ''} del catálogo` : ''}.` : 'Todavía no has cambiado ninguna cantidad.';
 }
 function tplStockRegulPage(){
   const clientes = sgaClientesAlmacenLista(), ed = window.__rgEdit;   // ed: la regularización que se está editando (misma pantalla, con sus datos)
@@ -14993,6 +14995,10 @@ function tplStockRegulPage(){
         ${decaCardHead('box', 'Lo que hay de verdad', 'Cambia solo las cantidades que no coincidan; el resto se queda igual')}
         <div class="deca-card-body"><div id="rg-stock"><div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente.</div></div><div id="rg-total" style="margin-top:10px;font-size:13px;color:var(--muted);"></div></div>
       </div>
+      <div class="card deca-card">
+        ${decaCardHead('tag', 'Añadir palets del catálogo', 'Mercancía que el cliente no tiene en el SGA en este almacén: elige del catálogo y se crea como partida nueva')}
+        <div class="deca-card-body"><div id="rg-nuevas"><div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente y el almacén.</div></div></div>
+      </div>
     </div>
     <div class="deca-actions" style="max-width:1180px;">
       <div id="rg-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
@@ -15002,6 +15008,79 @@ function tplStockRegulPage(){
       </div>
     </div>
     </div>`;
+}
+/* ---- Palets del catálogo que el cliente no tiene en el stock ----
+   Debajo de la tabla de partidas: se elige del catálogo (artículo, tipo de carga y tipo de palet, según lo que use ese cliente) y la cantidad, y al guardar
+   se crea cada línea como una partida nueva de esa regularización. No cobra nada (una regularización no cobra). Los clientes con un código por palet
+   se dan de alta como stock inicial, que sí pide cada código. */
+function sgaRegulNuevasRender(){
+  const el = document.getElementById('rg-nuevas');
+  if (!el) return;
+  const clienteId = sgaRegulCliente(), wid = sgaRegulWh();
+  if (!clienteId || !wid) { el.innerHTML = '<div style="color:var(--mutedFaint);font-size:12.5px;">Elige primero el cliente y el almacén.</div>'; return; }
+  if (sgaClienteCfg(clienteId).codigosUnicos) {
+    el.innerHTML = '<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);"><span>Este cliente lleva un código por palet: para dar de alta palets nuevos hace falta cada código, así que se hace como <b>stock inicial</b>.</span><button type="button" class="btn btn-primary" onclick="sgaRegulAInicial()">Alta de stock inicial</button></div>';
+    return;
+  }
+  const conArt = sgaClienteConArticulos(clienteId), conTipo = sgaEntradaConTipo(clienteId), subs = sgaTiposPaletElegir(clienteId);
+  window.__rgnN = 0;
+  el.innerHTML = `<div style="overflow-x:auto;"><table class="qr-table" style="width:100%;min-width:${420 + (conArt ? 280 : 0) + (conTipo ? 190 : 0) + (subs.length ? 150 : 0)}px;">
+      <thead><tr><th style="padding:6px 4px;text-align:right;width:30px;">#</th>${conArt ? '<th style="padding:6px 4px;">Artículo</th>' : '<th style="padding:6px 4px;">Descripción</th>'}${conTipo ? '<th style="padding:6px 4px;">Tipo de carga</th>' : ''}${subs.length ? '<th style="padding:6px 4px;">Tipo de palet</th>' : ''}<th style="padding:6px 4px;">${esc(sgaCap(sgaUnidadCfg(clienteId).p))}</th><th></th></tr></thead>
+      <tbody id="rgn-rows"></tbody></table></div>
+    <button type="button" class="btn btn-ghost" style="margin-top:10px;" onclick="sgaRegulNuevaAdd()">+ Añadir línea</button>
+    <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">Se crean como partidas nuevas (con la fecha de la regularización) y salen en el stock del cliente. Después puedes darles zona y ubicación con «Cambio de sitio».</div>`;
+}
+function sgaRegulNuevaAdd(){
+  const clienteId = sgaRegulCliente();
+  const i = window.__rgnN++, conArt = sgaClienteConArticulos(clienteId), conTipo = sgaEntradaConTipo(clienteId), subs = sgaTiposPaletElegir(clienteId);
+  const td = x => `<td style="padding:5px 4px;">${x}</td>`;
+  document.getElementById('rgn-rows').insertAdjacentHTML('beforeend', `<tr class="rgn-row" data-i="${i}">
+      <td style="padding:5px 4px;text-align:right;color:var(--mutedFaint);font-size:12px;">${i + 1}</td>
+      ${conArt ? td(`<select id="rgn-${i}-art" onchange="sgaRegulNuevaArt(${i})">${sgaArticuloOptionsHtml(clienteId, '').replace('<option value="__nuevo">+ Artículo nuevo…</option>', '')}</select>`) : td(`<input id="rgn-${i}-desc" maxlength="120" placeholder="Qué es (opcional)" />`)}
+      ${conTipo ? td(`<select id="rgn-${i}-prod">${sgaProdOptionsHtml(clienteId, '')}</select>`) : ''}
+      ${subs.length ? td(`<select id="rgn-${i}-sub"><option value="">Elige el tipo…</option>${subs.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('')}</select>`) : ''}
+      ${td(`<input id="rgn-${i}-cant" inputmode="numeric" maxlength="6" placeholder="Nº de ${esc(sgaUnidadCfg(clienteId).p)}" style="width:110px;" />`)}
+      <td style="padding:5px 0 5px 4px;"><button type="button" class="deca-act danger" title="Quitar esta línea" onclick="sgaRegulNuevaQuitar(${i})">${homeIcon(HOME_ICON_PATHS.x, 14, 'currentColor', 2)}</button></td></tr>`);
+  window.__stockDirty = true;
+  sgaRegulRefrescar();
+}
+function sgaRegulNuevaQuitar(i){ const r = document.querySelector(`.rgn-row[data-i="${i}"]`); if (r) r.remove(); sgaRegulRefrescar(); }
+// Al elegir el artículo salen solos su tipo de carga y su tipo de palet, como al recibir
+function sgaRegulNuevaArt(i){
+  const art = sgaArticulos.find(a => a.id === (document.getElementById(`rgn-${i}-art`) || {}).value);
+  if (!art) return;
+  const prod = document.getElementById(`rgn-${i}-prod`);
+  if (prod && art.productoId && [...prod.options].some(o => o.value === art.productoId)) prod.value = art.productoId;
+  const sub = document.getElementById(`rgn-${i}-sub`), subArt = (art.atributos || {}).subtipo;
+  if (sub && subArt) { const o = [...sub.options].find(x => sgaNormSub(x.value) === sgaNormSub(subArt)); if (o) sub.value = o.value; }
+}
+// Las líneas nuevas que se han rellenado (una fila sin tocar no cuenta)
+function sgaRegulNuevasLeer(){
+  const v = id => ((document.getElementById(id) || {}).value || '').trim();
+  return [...document.querySelectorAll('.rgn-row')].map((tr, n) => {
+    const i = tr.dataset.i;
+    return { n: n + 1, art: v(`rgn-${i}-art`), prod: v(`rgn-${i}-prod`), sub: v(`rgn-${i}-sub`), desc: v(`rgn-${i}-desc`), cantTxt: v(`rgn-${i}-cant`) };
+  }).filter(l => l.art || l.desc || l.cantTxt);
+}
+// Comprueba las líneas nuevas y las deja listas para la base de datos: { errores, nuevas }
+function sgaRegulNuevasPreparar(clienteId){
+  const errores = [], nuevas = [];
+  const conArt = sgaClienteConArticulos(clienteId), conTipo = sgaEntradaConTipo(clienteId), subs = sgaTiposPaletElegir(clienteId);
+  sgaRegulNuevasLeer().forEach(l => {
+    const f = `Línea nueva ${l.n}`, cant = parseInt(l.cantTxt, 10);
+    if (conArt && !l.art) { errores.push(`${f}: elige el artículo.`); return; }
+    if (conTipo && !l.prod) { errores.push(`${f}: elige el tipo de carga.`); return; }
+    if (subs.length && !l.sub) { errores.push(`${f}: elige el tipo de palet.`); return; }
+    if (!isFinite(cant) || cant < 1 || String(cant) !== l.cantTxt) { errores.push(`${f}: indica cuántos ${sgaUnidadCfg(clienteId).p} (un número entero, 1 o más).`); return; }
+    const art = sgaArticulos.find(a => a.id === l.art);
+    const atributos = {};
+    if (l.sub) atributos.subtipo = l.sub; else if (sgaTipoPaletUnico(clienteId)) atributos.subtipo = sgaTipoPaletUnico(clienteId);   // con él se cobra la salida
+    nuevas.push({
+      producto_id: l.prod || null, articulo_id: art ? art.id : null, referencia: art ? art.referencia || '' : '', descripcion: art ? art.nombre || '' : l.desc, cantidad: cant,
+      bultos: art && sgaClienteConBultos(clienteId) ? Math.round(cant * art.bultos * 100) / 100 : null, atributos,
+    });
+  });
+  return { errores, nuevas };
 }
 async function sgaRegulConfirmar(){
   const errEl = document.getElementById('rg-error');
@@ -15017,19 +15096,22 @@ async function sgaRegulConfirmar(){
     if (!isFinite(x.delta) || Math.floor(x.real) !== x.real || x.real < 0) { errores.push(`${sgaProdTxt(x.p.productoId)}${x.p.referencia ? ' · ' + x.p.referencia : ''}: la cantidad real tiene que ser un número entero, 0 o más.`); return; }
     if (x.delta) cambios.push(x);
   });
-  if (!errores.length && !cambios.length) errores.push(window.__rgEdit ? 'La regularización se quedaría sin ninguna línea: alguna partida tiene que diferir de lo que había antes.' : 'No has cambiado ninguna cantidad.');
+  const np = d.clienteId ? sgaRegulNuevasPreparar(d.clienteId) : { errores: [], nuevas: [] };
+  errores.push(...np.errores);
+  if (!errores.length && !cambios.length && !np.nuevas.length) errores.push(window.__rgEdit ? 'La regularización se quedaría sin ninguna línea: alguna partida tiene que diferir de lo que había antes, o añade palets del catálogo.' : 'No has cambiado ninguna cantidad ni añadido palets del catálogo.');
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const btn = document.querySelector('.rg-save');
   if (btn) btn.disabled = true;
   const payload = {
     albaran: { created_by: currentUserEmail(), cliente_id: d.clienteId, warehouse_id: d.wid, fecha: d.fecha, motivo: d.motivo },
     items: cambios.map(x => ({ partida_id: x.p.id, delta: x.delta, bultos: x.p.bultos != null ? (x.delta > 0 ? 1 : -1) * sgaBultosSalida(x.p, Math.abs(x.delta)) : null })),
+    nuevas: np.nuevas,
   };
   const ed = window.__rgEdit;   // editando: la base de datos deshace la regularización original y aplica la nueva, todo o nada
   const { error } = ed ? await supabaseClient.rpc('sga_editar_regularizacion', { p_id: ed.id, p: payload }) : await supabaseClient.rpc('sga_regularizar', { p: payload });
   if (error) {
     const m = error.message || 'error desconocido.';
-    errEl.textContent = 'No se pudo guardar: ' + (/function .*sga_editar_regularizacion/i.test(m) ? 'falta ejecutar el SQL «editar regularización» en Supabase (sga-editar-regularizacion.sql).' : /function .*sga_regularizar|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL de «anular y regularizar» en Supabase.' : m);
+    errEl.textContent = 'No se pudo guardar: ' + (/function .*sga_editar_regularizacion/i.test(m) ? 'falta ejecutar el SQL «regularización con palets del catálogo» en Supabase (sga-regularizar-catalogo.sql).' : /function .*sga_regularizar|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL de «anular y regularizar» en Supabase.' : m);
     if (btn) btn.disabled = false;
     return;
   }
