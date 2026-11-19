@@ -4784,7 +4784,7 @@ function acHtml(){
     </div>`;
   // Reparto del coste de cada mes (lo vigente hoy) por categoría y por almacén, con barras
   const barras = (items, nombre, color) => items.length ? items.map(i => { const pct = R.mensual > 0 ? i.v / R.mensual * 100 : 0, [n, col] = [nombre(i.k), color(i.k)];
-      return `<div class="ac-bar"><div class="ac-bar-t"><span><i style="background:${col};"></i>${esc(n)}</span><b>${fzEur(i.v)}</b><small>${fzNum(pct, 0)} %</small></div><div class="ac-bar-pista"><i style="width:${pct.toFixed(1)}%;background:${col};"></i></div></div>`; }).join('')
+      return `<div class="ac-bar"><div class="ac-bar-t"><span><i style="background:${col};"></i>${esc(n)}</span><b>${fzEur(i.v)}</b><small>${fzNum(pct, 0)} %</small></div><div class="ac-bar-pista"><i style="width:${Math.max(0, pct).toFixed(1)}%;background:${col};"></i></div></div>`; }).join('')
     : '<div style="color:var(--mutedFaint);font-size:13px;padding:8px 0;">No hay costes vigentes con este filtro.</div>';
   const colAlm = id => id ? (WAREHOUSE_COLORS[Math.max(0, WAREHOUSES.findIndex(w => w.id === id)) % WAREHOUSE_COLORS.length]) : '#5C6670';
   const cardCat = `<div class="card dr-card"><div class="dr-sec"><span class="dr-n">1</span><div><b>En qué se va el dinero</b><small>Lo que cuesta cada mes lo vigente hoy, por categoría.</small></div></div>${barras(R.porCat, k => acCat(k)[0], k => acCat(k)[1])}</div>`;
@@ -4799,8 +4799,8 @@ function acHtml(){
       <td data-sort-value="${esc(c.concepto)}"><b>${esc(c.concepto)}</b>${c.proveedor ? `<div class="cg-ref">${esc(c.proveedor)}</div>` : ''}${c.notas ? `<div class="cg-ref">${esc(c.notas)}</div>` : ''}</td>
       <td data-sort-value="${esc(acAlmNombre(c.warehouseId))}">${esc(acAlmNombre(c.warehouseId))}</td>
       <td data-sort-value="${esc(cn)}"><span class="cg-chip" style="background:${cc}1A;color:${cc};">${esc(cn.replace(/ \(.*\)$/, ''))}</span></td>
-      <td data-sort-value="${c.importe}" style="text-align:right;white-space:nowrap;">${fzEur(c.importe)} <small style="color:var(--muted);">${esc(per.txt)}</small></td>
-      <td data-sort-value="${acMensual(c)}" style="text-align:right;white-space:nowrap;font-weight:700;">${fzEur(acMensual(c))}</td>
+      <td data-sort-value="${c.importe}" style="text-align:right;white-space:nowrap;${c.importe < 0 ? 'color:var(--success);' : ''}">${c.importe < 0 ? '<span class="cg-chip" style="background:color-mix(in srgb,var(--success) 14%,var(--panel));color:var(--success);margin-right:4px;">Descuento</span>' : ''}${fzEur(c.importe)} <small style="color:var(--muted);">${esc(per.txt)}</small></td>
+      <td data-sort-value="${acMensual(c)}" style="text-align:right;white-space:nowrap;font-weight:700;${c.importe < 0 ? 'color:var(--success);' : ''}">${fzEur(acMensual(c))}</td>
       <td data-sort-value="${esc(c.inicio)}" style="white-space:nowrap;font-size:12.5px;">${esc(fmtDateDMY(c.inicio))} → ${c.fin ? esc(fmtDateDMY(c.fin)) : '<b>Indefinido</b>'}</td>
       <td data-sort-value="${e.k}">${chipEst(e)}</td>
       <td class="td-acc" style="text-align:right;"><button type="button" class="deca-act" title="Editar" onclick="event.stopPropagation(); acForm('${c.id}')">${homeIcon(HOME_ICON_PATHS.edit, 15, 'currentColor', 2)}</button></td></tr>`; }).join('');
@@ -4833,26 +4833,28 @@ async function acVolver(){
 }
 // Resumen del coste que se está escribiendo: lo que cuesta cada mes y al año, la vigencia, su estado y lo que cuesta el contrato entero
 function acResHtml(c){
-  const per = AC_PERIODOS[c.periodicidad] || AC_PERIODOS.mensual, ok = isFinite(c.importe) && c.importe >= 0, fila = (t, v) => `<div class="fz-res-f"><span>${t}</span><b>${v}</b></div>`;
+  const per = AC_PERIODOS[c.periodicidad] || AC_PERIODOS.mensual, ok = isFinite(c.importe), desc = c.importe < 0, fila = (t, v) => `<div class="fz-res-f"><span>${t}</span><b>${v}</b></div>`;
   if (!ok) return '<div class="fz-res-t">Resumen del coste</div><div class="fz-res-aviso">Escribe el importe para ver cuánto cuesta cada mes y al año.</div>';
   const mensual = acMensual(c), valido = c.inicio && (!c.fin || c.fin >= c.inicio);
   let total = '', duracion = '';
   if (valido && c.fin) {
     let ym = c.inicio.slice(0, 7), suma = 0, n = 0; const fin = c.fin.slice(0, 7);
     while (ym <= fin && n < 600) { suma += acMesCoste(c, ym); const [y, m] = ym.split('-').map(Number); ym = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`; n++; }
-    total = fila('Coste total del contrato', fzEur(acR2(suma)));
+    total = fila(desc ? 'Descuento total del contrato' : 'Coste total del contrato', fzEur(acR2(suma)));
     const dias = acDia(c.fin) - acDia(c.inicio) + 1; duracion = dias >= 60 ? ` · ${fzNum(dias / 30.4375, 1)} meses` : ` · ${dias} día${dias !== 1 ? 's' : ''}`;
   }
   const est = valido ? acEstado(c, today()) : null;
   return `<div class="fz-res-t">Resumen del coste</div>
-    <div class="fz-res-ben" style="--c:var(--primary);"><small>Cuesta cada mes</small><b>${fzEur(mensual)}</b><span>= ${fzEur(acR2(mensual * 12))} al año</span></div>
+    <div class="fz-res-ben" style="--c:${desc ? 'var(--success)' : 'var(--primary)'};"><small>${desc ? 'Descuenta cada mes' : 'Cuesta cada mes'}</small><b>${fzEur(mensual)}</b><span>= ${fzEur(acR2(mensual * 12))} al año</span></div>
     ${fila('Cada pago', `${fzEur(c.importe)} <small style="color:var(--muted);font-weight:400;">${esc(per.txt)}</small>`)}
     ${c.inicio ? fila('Vigencia', `${esc(fmtDateDMY(c.inicio))} → ${c.fin ? esc(fmtDateDMY(c.fin)) : 'Indefinido'}<small style="color:var(--muted);font-weight:400;">${duracion}</small>`) : ''}
     ${est ? fila('Estado', acChip(est)) : ''}${total}
     ${!valido && c.inicio ? '<div class="fz-res-aviso mal">La fecha de fin no puede ser anterior a la de inicio.</div>' : ''}
     <div class="fz-res-aviso">El importe es sin IVA. «Cuesta cada mes» reparte cada pago entre los meses que cubre.</div>`;
 }
-function acFormLeer(){ const indef = document.getElementById('ac-indef'); return { importe: fzImporte(fzV('ac-importe')), periodicidad: fzV('ac-per') || 'mensual', inicio: fzV('ac-inicio'), fin: indef && indef.checked ? '' : fzV('ac-fin') }; }
+// El importe se escribe siempre en positivo; con «Es un descuento» se guarda en negativo y resta de los costes
+const acSigno = () => { const d = document.getElementById('ac-desc'); return d && d.checked ? -1 : 1; };
+function acFormLeer(){ const indef = document.getElementById('ac-indef'); return { importe: fzImporte(fzV('ac-importe')) * acSigno(), periodicidad: fzV('ac-per') || 'mensual', inicio: fzV('ac-inicio'), fin: indef && indef.checked ? '' : fzV('ac-fin') }; }
 function acFormCalc(){ const el = document.getElementById('ac-res'); if (el) el.innerHTML = acResHtml(acFormLeer()); }
 function acFormHtml(){
   const S = acS(), c = S.formId ? S.costes.find(x => x.id === S.formId) : null;
@@ -4881,7 +4883,8 @@ function acFormHtml(){
         <div class="card dr-card">
           ${sec(2, 'Importe y cada cuánto se paga', 'Lo que cuesta cada pago, sin IVA, y la periodicidad del pago')}
           <div class="dr-g">
-            <div class="field"><label>Importe sin IVA (€) <span class="dc-req">*</span></label><input id="ac-importe" inputmode="decimal" maxlength="14" placeholder="Ej. 2.500" style="text-align:right;" value="${c ? esc(String(c.importe).replace('.', ',')) : ''}" /></div>
+            <div class="field"><label>Importe sin IVA (€) <span class="dc-req">*</span></label><input id="ac-importe" inputmode="decimal" maxlength="14" placeholder="Ej. 2.500" style="text-align:right;" value="${c ? esc(String(Math.abs(c.importe)).replace('.', ',')) : ''}" />
+              <label class="dr-chk" style="margin:8px 0 0;" title="Para un descuento o una bonificación del contrato: el importe se resta del coste total en vez de sumarse"><input type="checkbox" id="ac-desc" ${c && c.importe < 0 ? 'checked' : ''} /> Es un descuento (se resta)</label></div>
             <div class="field"><label>Se paga cada… <span class="dc-req">*</span></label><select id="ac-per">${Object.entries(AC_PERIODOS).map(([k, x]) => `<option value="${k}"${(c ? c.periodicidad : 'mensual') === k ? ' selected' : ''}>${x.t}</option>`).join('')}</select></div>
           </div>
         </div>
@@ -4913,13 +4916,13 @@ async function acGuardar(){
   err.textContent = '';
   const concepto = fzV('ac-concepto').replace(/\s+/g, ' '), importe = fzImporte(fzV('ac-importe')), inicio = fzV('ac-inicio'), indef = document.getElementById('ac-indef').checked, fin = indef ? '' : fzV('ac-fin');
   if (!concepto) { err.textContent = 'Escribe el concepto.'; return; }
-  if (!isFinite(importe) || importe < 0) { err.textContent = 'Escribe el importe (un número, sin IVA).'; return; }
+  if (!isFinite(importe) || importe < 0) { err.textContent = 'Escribe el importe (un número positivo, sin IVA). Si es un descuento, marca «Es un descuento».'; return; }
   if (!inicio) { err.textContent = 'Indica desde qué fecha vale.'; return; }
   if (!indef && !fin) { err.textContent = 'Pon la fecha de fin o marca «Indefinido».'; return; }
   if (fin && fin < inicio) { err.textContent = 'La fecha de fin no puede ser anterior a la de inicio.'; return; }
-  const row = { concepto, categoria: fzV('ac-cat') || 'otros', warehouse_id: fzV('ac-alm') || null, proveedor: fzV('ac-prov') || null, importe: acR2(importe), periodicidad: fzV('ac-per') || 'mensual', fecha_inicio: inicio, fecha_fin: fin || null, notas: fzV('ac-notas') || null };
+  const row = { concepto, categoria: fzV('ac-cat') || 'otros', warehouse_id: fzV('ac-alm') || null, proveedor: fzV('ac-prov') || null, importe: acR2(importe * acSigno()), periodicidad: fzV('ac-per') || 'mensual', fecha_inicio: inicio, fecha_fin: fin || null, notas: fzV('ac-notas') || null };
   const { data, error } = id ? await supabaseClient.from('almacen_costes').update(row).eq('id', id).select().single() : await supabaseClient.from('almacen_costes').insert({ ...row, created_by: currentUserEmail() }).select().single();
-  if (error || !data) { err.textContent = 'No se pudo guardar: ' + (/relation|does not exist|schema cache/i.test((error && error.message) || '') ? 'falta ejecutar el SQL «almacen-costes.sql» en Supabase.' : ((error && error.message) || 'error desconocido.')); return; }
+  if (error || !data) { err.textContent = 'No se pudo guardar: ' + (/importe_check/i.test((error && error.message) || '') ? 'para guardar descuentos falta ejecutar el SQL «almacen-costes-descuentos.sql» en Supabase.' : /relation|does not exist|schema cache/i.test((error && error.message) || '') ? 'falta ejecutar el SQL «almacen-costes.sql» en Supabase.' : ((error && error.message) || 'error desconocido.')); return; }
   const nuevo = acFila(data), i = S.costes.findIndex(x => x.id === nuevo.id);
   if (i >= 0) S.costes[i] = nuevo; else S.costes.push(nuevo);
   S.vista = 'lista'; S.formId = null; S.formDirty = false;
