@@ -14823,6 +14823,7 @@ async function sgaAjustesModo(modo){
 function sgaRegulAbrir(clienteId){
   window.__stockView = 'regul';
   window.__stockDirty = false;
+  window.__rgAg = null;   // las partidas a 0 se vuelven a pedir al elegir cliente y almacén
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
   if (clienteId) { const s = document.getElementById('rg-cliente'); if (s) { s.value = clienteId; sgaRegulClienteCambio(); } }
@@ -14843,27 +14844,50 @@ function sgaRegulClienteCambio(){
   if (whs.length === 1) alm.value = whs[0].id;
   sgaRegulAlmacenCambio();
 }
-function sgaRegulAlmacenCambio(){
+// Partidas del cliente en ese almacén que están a 0 (agotadas): no están en la memoria del SGA, que solo carga las activas, así que se piden al abrir.
+// Sirven para volver a poner palets en algo que ya existió; la base de datos las reactiva sola al sumarles cantidad.
+async function sgaRegulAgotadas(clienteId, wid){
+  const k = clienteId + '|' + wid, c = window.__rgAg;
+  if (c && c.k === k) return c.list;
+  const filas = [];
+  for (let desde = 0; desde < 5000; desde += 1000) {
+    const r = await supabaseClient.from('sga_partidas').select('*').eq('cliente_id', clienteId).eq('warehouse_id', wid).eq('estado', 'agotada').order('fecha_entrada', { ascending: false }).range(desde, desde + 999);
+    if (r.error) break;
+    filas.push(...(r.data || []));
+    if ((r.data || []).length < 1000) break;
+  }
+  const list = filas.map(sgaPartidaDeFila).filter(p => !(p.actual > 0));
+  window.__rgAg = { k, list };
+  return list;
+}
+const sgaRegulPartida = id => sgaPartidas.find(x => x.id === id) || ((window.__rgAg && window.__rgAg.list) || []).find(x => x.id === id);
+function sgaRegulVerAgotadas(on){
+  window.__rgVerAg = !!on;
+  document.querySelectorAll('#rg-stock tr.rg-ag').forEach(tr => { tr.style.display = on ? '' : 'none'; });
+}
+async function sgaRegulAlmacenCambio(){
   const clienteId = sgaRegulCliente(), wid = sgaRegulWh();
   const cont = document.getElementById('rg-stock');
   if (!clienteId || !wid) { cont.innerHTML = `<div style="color:var(--mutedFaint);font-size:12.5px;">${!clienteId ? 'Elige primero el cliente.' : 'Elige el almacén.'}</div>`; sgaRegulRefrescar(); return; }
   const ps = sgaStockCliente(clienteId, wid);
-  if (!ps.length) {
+  const yaCargadas = window.__rgAg && window.__rgAg.k === clienteId + '|' + wid;
+  if (!yaCargadas) cont.innerHTML = '<div style="color:var(--mutedFaint);font-size:12.5px;">Cargando el stock…</div>';
+  const ag = await sgaRegulAgotadas(clienteId, wid);
+  if (sgaRegulCliente() !== clienteId || sgaRegulWh() !== wid) return;   // mientras se cargaba se ha cambiado de cliente o de almacén
+  if (!ps.length && !ag.length) {
     cont.innerHTML = `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);"><span>Este cliente no tiene stock en el SGA en este almacén. Si lo llevabas en Excel, dalo de alta como <b>stock inicial</b>.</span><button type="button" class="btn btn-primary" onclick="sgaRegulAInicial()">Alta de stock inicial</button></div>`;
     sgaRegulRefrescar();
     return;
   }
+  const AG_MAX = 200, agVis = ag.slice(0, AG_MAX), todas = [...ps, ...agVis];
+  if (window.__rgVerAg == null) window.__rgVerAg = true;
   // Solo se enseñan los datos que este cliente usa (un apartado sin nada relleno en sus partidas se oculta)
-  const rgDesc = ps.some(p => p.descripcion), rgTipo = ps.some(p => p.productoId), rgRef = ps.some(p => p.referencia), rgSitio = ps.some(p => { const s = sgaSitioTxt(p); return s && s !== '—'; });
-  const rgRefCol = rgRef || ps.some(p => p.codigo);
+  const rgDesc = todas.some(p => p.descripcion), rgTipo = todas.some(p => p.productoId), rgRef = todas.some(p => p.referencia), rgSitio = todas.some(p => { const s = sgaSitioTxt(p); return s && s !== '—'; });
+  const rgRefCol = rgRef || todas.some(p => p.codigo);
   const claves = sgaUnicoCampos(clienteId);   // lo que distingue a los artículos de este cliente (p. ej. el lote)
-  cont.innerHTML = `
-    ${ps.length > 8 ? sgaBuscadorFilasHtml('rg-buscar', '#rg-stock .tc-hist-box table', 'Buscar en el stock: artículo, descripción, código, sitio…') : ''}
-    <div class="tc-hist-box" style="max-height:460px;"><table class="tf-table" style="min-width:620px;">
-      <thead><tr>${thSort('Recepción','date')}${rgDesc ? '<th>Artículo</th>' : ''}${rgTipo ? thSort('Tipo de carga','text') : ''}${rgRefCol ? thSort('Referencia','text') : ''}${claves.map(f => thSort(esc(f.nombre), f.tipo === 'numero' ? 'number' : 'text')).join('')}${rgSitio ? '<th>Sitio</th>' : ''}<th style="text-align:right;">En el SGA</th><th style="text-align:right;">Hay de verdad</th><th style="text-align:right;">Diferencia</th></tr></thead>
-      <tbody>${ps.map(p => `
-        <tr data-pid="${p.id}">
-          <td style="white-space:nowrap;" data-sort-value="${esc(p.fechaEntrada)}">${fmtDateDMY(p.fechaEntrada)}</td>
+  const fila = (p, esAg) => `
+        <tr data-pid="${p.id}"${esAg ? ` class="rg-ag" style="${window.__rgVerAg ? '' : 'display:none;'}"` : ''}>
+          <td style="white-space:nowrap;" data-sort-value="${esc(p.fechaEntrada)}">${fmtDateDMY(p.fechaEntrada)}${esAg ? ' <span class="tc-chip" style="font-size:10.5px;padding:1px 7px;" title="Esta partida está a 0 en el SGA: si de verdad hay palets, escríbelos en «Hay de verdad»">a 0</span>' : ''}</td>
           ${rgDesc ? `<td>${esc(p.descripcion) || '—'}</td>` : ''}
           ${rgTipo ? `<td data-sort-value="${esc(sgaProdTxt(p.productoId))}">${esc(sgaProdTxt(p.productoId))}</td>` : ''}
           ${rgRefCol ? `<td data-sort-value="${esc(p.referencia)}">${esc(p.referencia) || '—'}${p.codigo ? `<div style="font-family:var(--mono);font-size:11px;color:var(--muted);">${esc(p.codigo)}</div>` : ''}</td>` : ''}
@@ -14872,7 +14896,13 @@ function sgaRegulAlmacenCambio(){
           <td class="tf-precio">${p.actual}</td>
           <td style="text-align:right;width:120px;"><input class="rg-in" id="rg-in-${p.id}" data-pid="${p.id}" inputmode="numeric" maxlength="6" value="${p.actual}" style="width:90px;text-align:right;" /></td>
           <td class="tf-precio rg-dif" id="rg-dif-${p.id}">0</td>
-        </tr>`).join('')}</tbody>
+        </tr>`;
+  cont.innerHTML = `
+    ${ag.length ? `<label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px;cursor:pointer;"><input type="checkbox" ${window.__rgVerAg ? 'checked' : ''} onchange="sgaRegulVerAgotadas(this.checked)" style="width:auto;" /> Enseñar también las partidas que están a 0 (${ag.length}) para poder volver a ponerles palets${ag.length > AG_MAX ? ` · se ven las ${AG_MAX} más recientes` : ''}</label>` : ''}
+    ${todas.length > 8 ? sgaBuscadorFilasHtml('rg-buscar', '#rg-stock .tc-hist-box table', 'Buscar en el stock: artículo, descripción, código, sitio…') : ''}
+    <div class="tc-hist-box" style="max-height:460px;"><table class="tf-table" style="min-width:620px;">
+      <thead><tr>${thSort('Recepción','date')}${rgDesc ? '<th>Artículo</th>' : ''}${rgTipo ? thSort('Tipo de carga','text') : ''}${rgRefCol ? thSort('Referencia','text') : ''}${claves.map(f => thSort(esc(f.nombre), f.tipo === 'numero' ? 'number' : 'text')).join('')}${rgSitio ? '<th>Sitio</th>' : ''}<th style="text-align:right;">En el SGA</th><th style="text-align:right;">Hay de verdad</th><th style="text-align:right;">Diferencia</th></tr></thead>
+      <tbody>${ps.map(p => fila(p, false)).join('')}${agVis.map(p => fila(p, true)).join('')}</tbody>
     </table></div>`;
   sgaRegulRefrescar();
 }
@@ -14880,7 +14910,7 @@ function sgaRegulLeer(){
   const wid = sgaRegulWh();
   const items = [];
   document.querySelectorAll('.rg-in').forEach(el => {
-    const p = sgaPartidas.find(x => x.id === el.dataset.pid);
+    const p = sgaRegulPartida(el.dataset.pid);
     if (!p) return;
     const t = el.value.trim();
     const real = t === '' ? p.actual : Number(t);
