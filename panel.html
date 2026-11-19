@@ -14464,7 +14464,7 @@ async function sgaAlbaranImprimir(id){
     .r{text-align:right;white-space:nowrap;}
     tfoot td{border-top:2px solid var(--az);border-bottom:none;font-weight:800;font-size:13px;color:var(--az);background:var(--az2);}
     .obs{margin-top:12px;border:1px dashed var(--li);border-radius:3px;padding:8px 11px;font-size:11.5px;overflow-wrap:anywhere;word-break:break-word;}   /* un enlace largo (Google Maps…) no puede ensanchar la hoja */
-    .hoja,.centro,.caja{min-width:0;} td,.caja .v,.caja .s{overflow-wrap:anywhere;}
+    .hoja,.centro,.caja{min-width:0;} .caja .v,.caja .s{overflow-wrap:anywhere;} td{overflow-wrap:break-word;}   /* en la tabla, un texto solo se parte si es más ancho que la hoja: con «anywhere» las columnas se estrechaban y un lote se partía en dos líneas */
     .obs b{font-size:9px;text-transform:uppercase;letter-spacing:1.2px;color:var(--gr);display:block;margin-bottom:3px;}
     .pie{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:16px;}
     .firma{border:1px solid var(--li);border-radius:3px;height:34mm;padding:7px 10px;font-size:9px;text-transform:uppercase;font-weight:700;letter-spacing:1px;color:var(--gr);display:flex;flex-direction:column;justify-content:space-between;}
@@ -14475,7 +14475,7 @@ async function sgaAlbaranImprimir(id){
   const colDef = Object.assign({}, { '@codigo': { th: 'Código de artículo', td: l => `<td><b>${esc(l.producto)}</b>${l.codigo ? `<div style="font-size:10.5px;color:#444;">Código: ${esc(l.codigo)}</div>` : ''}</td>` }, '@descripcion': { th: 'Descripción', td: l => `<td>${esc(l.modelo) || '—'}</td>` }, '@medidas': { th: 'Medidas', td: l => { const ls = catMedidasLineas(l.medidas); return `<td>${ls.length ? ls.map(x => `<div style="margin-bottom:2px;">${esc(x)}</div>`).join('') : '—'}</td>`; } },
     '@palets': { th: sgaCap(sgaUnidadCfg(a.clienteId).p), r: true, td: l => `<td class="r"><b>${sgaNumTxt(l.palets)}</b></td>`, tot: sgaNumTxt(totPalets) },
     '@cajas': { th: 'Cajas', r: true, td: l => `<td class="r"><b>${sgaNumTxt(l.cajas)}</b></td>`, tot: sgaNumTxt(totCajas) }, '@peso': { th: sgaPesoLabel(false), r: true, td: l => `<td class="r">${l.peso != null ? sgaNumTxt(l.peso) + ' kg' : '—'}</td>`, tot: totPeso ? sgaNumTxt(totPeso) + ' kg' : '—' } });
-  extraCols.forEach(c => { colDef[c.clave] = { th: c.nombre, td: l => `<td>${esc(l.extra[c.k])}</td>` }; });
+  extraCols.forEach(c => { const corto = lineas.every(l => String(l.extra[c.k] == null ? '' : l.extra[c.k]).length <= 24); colDef[c.clave] = { th: c.nombre, td: l => `<td${corto ? ' style="white-space:nowrap;"' : ''}>${esc(l.extra[c.k])}</td>` }; });   // el lote, la serie… son códigos cortos: una sola línea
   const colOrden = sgaAlbExpandir(colList, conBultos).filter(k => colDef[k]);
   const filas = lineas.length ? lineas.map(l => `<tr>${colOrden.map(k => colDef[k].td(l)).join('')}</tr>`).join('') : `<tr><td colspan="${colOrden.length}">Sin líneas.</td></tr>`;
   const dirAlm = w ? sgaDirHtml(sgaDirLineas(w)) : '';
@@ -14530,6 +14530,19 @@ async function sgaAlbaranImprimir(id){
     document.title = tituloPrevio;
     setTimeout(() => f.remove(), 3000);
   }, 150);
+}
+// Anchos de las columnas del PDF del albarán: cada una parte de su peso, pero las «fijas» (cantidades y datos como el lote) tienen siempre el ancho
+// que necesita su texto más largo, para que un código no se parta en dos líneas; lo que sobra se quita de las demás columnas (nunca más del 60 %).
+function sgaAlbAnchos(pesos, necesita, fijas, W){
+  const wsum = pesos.reduce((s, n) => s + n, 0);
+  let cwid = pesos.map((p, i) => Math.max(W * p / wsum, necesita[i] || 0));
+  let exceso = cwid.reduce((s, n) => s + n, 0) - W;
+  if (exceso > 0) {
+    const libres = cwid.map((w, i) => fijas[i] ? 0 : w), sl = libres.reduce((s, n) => s + n, 0);
+    if (sl > 0) { const quitar = Math.min(exceso, sl * 0.6); cwid = cwid.map((w, i) => w - libres[i] / sl * quitar); exceso -= quitar; }
+  }
+  if (exceso > 0.01) cwid = cwid.map(w => w * W / (W + exceso));   // último recurso: si ni así caben, todas se estrechan un poco
+  return cwid;
 }
 /* ---- PDF del albarán (se genera al momento con el mismo contenido que el impreso) ----
    Sirve para adjuntarlo a la franja horaria de la expedición. Si la expedición tiene DeCA, su QR sale también. */
@@ -14633,15 +14646,18 @@ async function sgaAlbaranPdfBytes(id){
     '@codigo': { th: 'Código de artículo', wt: 2, b0: true, ls: l => [l.producto, ...(l.codigo ? ['Código: ' + l.codigo] : [])] },
     '@descripcion': { th: 'Descripción', wt: 2, ls: l => [l.modelo || '—'] },
     '@medidas': { th: 'Medidas', wt: 2.2, ls: l => { const m = catMedidasLineas(l.medidas); return m.length ? m : ['—']; } },
-    '@palets': { th: sgaCap(sgaUnidadCfg(a.clienteId).p), wt: 0.9, r: true, b: true, ls: l => [sgaNumTxt(l.palets)], tot: sgaNumTxt(totPalets) },
-    '@cajas': { th: 'Cajas', wt: 0.9, r: true, b: true, ls: l => [sgaNumTxt(l.cajas)], tot: sgaNumTxt(totCajas) },
-    '@peso': { th: sgaPesoLabel(false), wt: 1, r: true, ls: l => [l.peso != null ? sgaNumTxt(l.peso) + ' kg' : '—'], tot: totPeso ? sgaNumTxt(totPeso) + ' kg' : '—' },
+    '@palets': { th: sgaCap(sgaUnidadCfg(a.clienteId).p), wt: 0.9, fijo: true, r: true, b: true, ls: l => [sgaNumTxt(l.palets)], tot: sgaNumTxt(totPalets) },
+    '@cajas': { th: 'Cajas', wt: 0.9, fijo: true, r: true, b: true, ls: l => [sgaNumTxt(l.cajas)], tot: sgaNumTxt(totCajas) },
+    '@peso': { th: sgaPesoLabel(false), wt: 1, fijo: true, r: true, ls: l => [l.peso != null ? sgaNumTxt(l.peso) + ' kg' : '—'], tot: totPeso ? sgaNumTxt(totPeso) + ' kg' : '—' },
   };
-  extraCols.forEach(c => { cols[c.clave] = { th: c.nombre, wt: 1.4, ls: l => [l.extra[c.k]] }; });
+  extraCols.forEach(c => { cols[c.clave] = { th: c.nombre, wt: 1.4, fijo: true, ls: l => [l.extra[c.k]] }; });   // el lote, la serie… son códigos cortos: no se parten en dos líneas si caben
   const orden = sgaAlbExpandir(colList, conBultos).filter(k => cols[k]);
   const wsum = orden.reduce((s, k) => s + cols[k].wt, 0);
-  const cwid = orden.map(k => W * cols[k].wt / wsum);
   const PAD = 5, FS = 9, LH = 11;
+  // Anchos: cada columna parte de su peso, pero las «fijas» (cantidades y datos como el lote) tienen siempre el ancho que necesita su texto más largo
+  // (hasta un tope) para que un código como un lote no se parta en dos líneas; lo que sobra se quita de las demás columnas.
+  const necesita = orden.map(k => cols[k].fijo ? Math.min(W * 0.3, Math.max(tw(cols[k].th.toUpperCase(), 7, true), ...lineas.flatMap(l => cols[k].ls(l).map(s => tw(s, FS, !!cols[k].b)))) + 2 * PAD + 2) : 0);
+  const cwid = sgaAlbAnchos(orden.map(k => cols[k].wt), necesita, orden.map(k => !!cols[k].fijo), W);
   const xCol = i => M + cwid.slice(0, i).reduce((s, n) => s + n, 0);
   const cabTabla = () => {
     page.drawRectangle({ x: M, y: y - 20, width: W, height: 20, color: AZ2 });
