@@ -14827,13 +14827,38 @@ function sgaRegulAbrir(clienteId){
   window.__stockView = 'regul';
   window.__stockDirty = false;
   window.__rgAg = null;   // las partidas a 0 se vuelven a pedir al elegir cliente y almacén
+  window.__rgEdit = null;   // pantalla nueva: no se está editando ninguna regularización
   renderHeader(); renderTab();
   window.scrollTo(0, 0);
   if (clienteId) { const s = document.getElementById('rg-cliente'); if (s) { s.value = clienteId; sgaRegulClienteCambio(); } }
 }
 async function sgaRegulCancelar(){
   if (window.__stockDirty && !(await appConfirm({ title: 'Descartar la regularización', message: 'Has empezado a rellenar esta regularización. Si sales, se pierde lo escrito.', confirmLabel: 'Descartar', cancelLabel: 'Seguir editando', tone: 'warn', icon: 'warn' }))) return;
+  window.__rgEdit = null;
   stockVolver();
+}
+/* ---- Editar una regularización ya hecha: la misma pantalla de regularización, con sus datos ----
+   «En el SGA» enseña lo que había ANTES de esa regularización y «Hay de verdad» lo que hay ahora; se cambia lo que haga falta (también partidas que no
+   tocaba) y la diferencia se recalcula. Se guarda en una sola operación: la base de datos deshace la regularización original y aplica la nueva. */
+async function sgaRegulEditar(id){
+  const a = sgaAlbaranes.find(x => x.id === id);
+  if (!a || a.tipo !== 'regularizacion' || a.estado !== 'confirmado') return;
+  const m = await supabaseClient.from('sga_movimientos').select('partida_id,cantidad').eq('albaran_id', id).eq('tipo', 'ajuste');
+  if (m.error || !(m.data || []).length) { appToast('No se pudieron leer las líneas de esta regularización.', 'error'); return; }
+  const old = {};
+  m.data.forEach(x => { old[x.partida_id] = (old[x.partida_id] || 0) + Number(x.cantidad); });
+  window.__rgEdit = { id, a, old };
+  window.__rgAg = null; window.__rgVerAg = true;
+  window.__stockView = 'regul'; window.__stockDirty = false;
+  renderHeader(); renderTab(); window.scrollTo(0, 0);
+  const sc = document.getElementById('rg-cliente'), sw = document.getElementById('rg-almacen');
+  if (!sc || !sw) return;
+  sc.value = a.clienteId;
+  sgaRegulClienteCambio();
+  if (![...sw.options].some(o => o.value === a.warehouseId)) sw.insertAdjacentHTML('beforeend', `<option value="${esc(a.warehouseId)}">${esc((allWarehouses.find(w => w.id === a.warehouseId) || {}).name || 'Almacén')}</option>`);
+  sw.value = a.warehouseId;
+  sc.disabled = true; sw.disabled = true;   // el cliente y el almacén de una regularización no se cambian
+  await sgaRegulAlmacenCambio();
 }
 function sgaRegulAInicial(){ const c = sgaRegulCliente(); window.__stockDirty = false; sgaEntradaAbrir(true, c); }
 function sgaRegulWh(){ const el = document.getElementById('rg-almacen'); return el && el.value ? el.value : ''; }
@@ -14882,21 +14907,26 @@ async function sgaRegulAlmacenCambio(){
     sgaRegulRefrescar();
     return;
   }
-  const AG_MAX = 200, agVis = ag.slice(0, AG_MAX), todas = [...ps, ...agVis];
+  const ed = window.__rgEdit, tocada = p => !!(ed && ed.old[p.id]);
+  if (ed) {   // las partidas que tocó esta regularización salen siempre, aunque estén a 0 y fuera de las más recientes
+    const faltan = Object.keys(ed.old).filter(pid => !ps.some(p => p.id === pid) && !ag.some(p => p.id === pid));
+    if (faltan.length) { const rr = await supabaseClient.from('sga_partidas').select('*').in('id', faltan); (rr.data || []).map(sgaPartidaDeFila).forEach(p => ag.push(p)); }
+  }
+  const AG_MAX = 200, agVis = [...ag.filter(tocada), ...ag.filter(p => !tocada(p)).slice(0, AG_MAX)], todas = [...ps, ...agVis];
   if (window.__rgVerAg == null) window.__rgVerAg = true;
   // Solo se enseñan los datos que este cliente usa (un apartado sin nada relleno en sus partidas se oculta)
   const rgDesc = todas.some(p => p.descripcion), rgTipo = todas.some(p => p.productoId), rgRef = todas.some(p => p.referencia), rgSitio = todas.some(p => { const s = sgaSitioTxt(p); return s && s !== '—'; });
   const rgRefCol = rgRef || todas.some(p => p.codigo);
   const claves = sgaUnicoCampos(clienteId);   // lo que distingue a los artículos de este cliente (p. ej. el lote)
   const fila = (p, esAg) => `
-        <tr data-pid="${p.id}"${esAg ? ` class="rg-ag" style="${window.__rgVerAg ? '' : 'display:none;'}"` : ''}>
-          <td style="white-space:nowrap;" data-sort-value="${esc(p.fechaEntrada)}">${fmtDateDMY(p.fechaEntrada)}${esAg ? ' <span class="tc-chip" style="font-size:10.5px;padding:1px 7px;" title="Esta partida está a 0 en el SGA: si de verdad hay palets, escríbelos en «Hay de verdad»">a 0</span>' : ''}</td>
+        <tr data-pid="${p.id}"${esAg && !tocada(p) ? ` class="rg-ag" style="${window.__rgVerAg ? '' : 'display:none;'}"` : ''}>
+          <td style="white-space:nowrap;" data-sort-value="${esc(p.fechaEntrada)}">${fmtDateDMY(p.fechaEntrada)}${esAg && !tocada(p) ? ' <span class="tc-chip" style="font-size:10.5px;padding:1px 7px;" title="Esta partida está a 0 en el SGA: si de verdad hay palets, escríbelos en «Hay de verdad»">a 0</span>' : ''}</td>
           ${rgDesc ? `<td>${esc(p.descripcion) || '—'}</td>` : ''}
           ${rgTipo ? `<td data-sort-value="${esc(sgaProdTxt(p.productoId))}">${esc(sgaProdTxt(p.productoId))}</td>` : ''}
           ${rgRefCol ? `<td data-sort-value="${esc(p.referencia)}">${esc(p.referencia) || '—'}${p.codigo ? `<div style="font-family:var(--mono);font-size:11px;color:var(--muted);">${esc(p.codigo)}</div>` : ''}</td>` : ''}
           ${claves.map(f => `<td data-sort-value="${esc(sgaClaveValorTxt(f, p))}"><b>${esc(sgaClaveValorTxt(f, p))}</b></td>`).join('')}
           ${rgSitio ? `<td>${esc(sgaSitioTxt(p))}</td>` : ''}
-          <td class="tf-precio">${p.actual}</td>
+          <td class="tf-precio"${ed ? ' title="Lo que había antes de esta regularización"' : ''}>${sgaRegulBase(p)}</td>
           <td style="text-align:right;width:120px;"><input class="rg-in" id="rg-in-${p.id}" data-pid="${p.id}" inputmode="numeric" maxlength="6" value="${p.actual}" style="width:90px;text-align:right;" /></td>
           <td class="tf-precio rg-dif" id="rg-dif-${p.id}">0</td>
         </tr>`;
@@ -14909,6 +14939,8 @@ async function sgaRegulAlmacenCambio(){
     </table></div>`;
   sgaRegulRefrescar();
 }
+// Lo que había en la partida ANTES de la regularización que se está editando (al crear una nueva, lo que hay ahora)
+const sgaRegulBase = p => p.actual - (((window.__rgEdit || {}).old || {})[p.id] || 0);
 function sgaRegulLeer(){
   const wid = sgaRegulWh();
   const items = [];
@@ -14917,7 +14949,7 @@ function sgaRegulLeer(){
     if (!p) return;
     const t = el.value.trim();
     const real = t === '' ? p.actual : Number(t);
-    items.push({ p, txt: t, real, delta: isFinite(real) ? real - p.actual : NaN });
+    items.push({ p, txt: t, real, delta: isFinite(real) ? real - sgaRegulBase(p) : NaN });
   });
   return { clienteId: sgaRegulCliente(), wid, fecha: (document.getElementById('rg-fecha') || {}).value || '', motivo: ((document.getElementById('rg-motivo') || {}).value || '').trim(), items };
 }
@@ -14934,17 +14966,17 @@ function sgaRegulRefrescar(){
   if (t) t.innerHTML = cambian ? `Se regularizan <b>${cambian}</b> partida${cambian !== 1 ? 's' : ''}.` : 'Todavía no has cambiado ninguna cantidad.';
 }
 function tplStockRegulPage(){
-  const clientes = sgaClientesAlmacenLista();
+  const clientes = sgaClientesAlmacenLista(), ed = window.__rgEdit;   // ed: la regularización que se está editando (misma pantalla, con sus datos)
   return `
     <div style="--bn-accent:var(--primary);">
     <div class="deca-banner">
       <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.edit, 26, '#fff', 1.8)}</span>
       <div style="min-width:0;flex:1 1 260px;">
-        <div class="deca-banner-title">Ajustes de stock</div>
-        <div class="deca-banner-sub">Regularización de inventario: cuando lo que hay en el almacén no coincide con el SGA, escribe lo que hay de verdad y queda anotado con su motivo.</div>
+        <div class="deca-banner-title">${ed ? 'Editar regularización ' + esc(sgaNumAlbaran(ed.a)) : 'Ajustes de stock'}</div>
+        <div class="deca-banner-sub">${ed ? '«En el SGA» es lo que había antes de esta regularización y «Hay de verdad» lo que hay ahora. Cambia lo que haga falta (también partidas que no tocaba) y guarda: el stock se recalcula.' : 'Regularización de inventario: cuando lo que hay en el almacén no coincide con el SGA, escribe lo que hay de verdad y queda anotado con su motivo.'}</div>
       </div>
     </div>
-    ${sgaAjustesToggleHtml('regul')}
+    ${ed ? '' : sgaAjustesToggleHtml('regul')}
     <div class="deca-form" oninput="window.__stockDirty=true; sgaRegulRefrescar();" style="--dc-accent:var(--primary);display:flex;flex-direction:column;gap:16px;max-width:1180px;">
       <div class="card deca-card">
         ${decaCardHead('file', 'Datos de la regularización', 'De qué cliente, en qué almacén y por qué')}
@@ -14952,9 +14984,9 @@ function tplStockRegulPage(){
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
             <div class="field" style="flex:2;min-width:240px;"><label>Cliente <span class="dc-req">*</span></label><select id="rg-cliente" onchange="sgaRegulClienteCambio()"><option value="">${clientes.length ? 'Elige el cliente…' : 'No hay clientes activos en el SGA'}</option>${clientes.map(c => `<option value="${c.id}">${esc((c.nombreComercial || '').trim() || c.nombre)}</option>`).join('')}</select></div>
             <div class="field" style="flex:1;min-width:190px;"><label>Almacén <span class="dc-req">*</span></label><select id="rg-almacen" onchange="sgaRegulAlmacenCambio()"><option value="">Elige primero el cliente</option></select></div>
-            <div class="field" style="flex:1;min-width:150px;"><label>Fecha <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="rg-fecha" type="date" value="${today()}" />`)}</div>
+            <div class="field" style="flex:1;min-width:150px;"><label>Fecha <span class="dc-req">*</span></label>${decaInputIcon('calendar', `<input id="rg-fecha" type="date" value="${ed ? esc(ed.a.fecha) : today()}" />`)}</div>
           </div>
-          <div class="field" style="margin-bottom:0;"><label>Motivo <span class="dc-req">*</span></label>${decaInputIcon('file', `<input id="rg-motivo" maxlength="200" placeholder="Ej. Inventario del 08/10: faltan 2 palets" />`)}</div>
+          <div class="field" style="margin-bottom:0;"><label>Motivo <span class="dc-req">*</span></label>${decaInputIcon('file', `<input id="rg-motivo" maxlength="200" placeholder="Ej. Inventario del 08/10: faltan 2 palets" value="${ed ? esc(ed.a.observaciones || '') : ''}" />`)}</div>
         </div>
       </div>
       <div class="card deca-card">
@@ -14966,7 +14998,7 @@ function tplStockRegulPage(){
       <div id="rg-error" style="color:var(--danger);font-size:12.5px;margin-bottom:8px;white-space:pre-line;"></div>
       <div class="deca-actions-row">
         <button class="btn btn-ghost deca-cancel" onclick="sgaRegulCancelar()">Cancelar</button>
-        <button class="btn btn-primary deca-submit rg-save" onclick="sgaRegulConfirmar()">Confirmar regularización</button>
+        <button class="btn btn-primary deca-submit rg-save" onclick="sgaRegulConfirmar()">${ed ? 'Guardar cambios' : 'Confirmar regularización'}</button>
       </div>
     </div>
     </div>`;
@@ -14985,7 +15017,7 @@ async function sgaRegulConfirmar(){
     if (!isFinite(x.delta) || Math.floor(x.real) !== x.real || x.real < 0) { errores.push(`${sgaProdTxt(x.p.productoId)}${x.p.referencia ? ' · ' + x.p.referencia : ''}: la cantidad real tiene que ser un número entero, 0 o más.`); return; }
     if (x.delta) cambios.push(x);
   });
-  if (!errores.length && !cambios.length) errores.push('No has cambiado ninguna cantidad.');
+  if (!errores.length && !cambios.length) errores.push(window.__rgEdit ? 'La regularización se quedaría sin ninguna línea: alguna partida tiene que diferir de lo que había antes.' : 'No has cambiado ninguna cantidad.');
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const btn = document.querySelector('.rg-save');
   if (btn) btn.disabled = true;
@@ -14993,102 +15025,19 @@ async function sgaRegulConfirmar(){
     albaran: { created_by: currentUserEmail(), cliente_id: d.clienteId, warehouse_id: d.wid, fecha: d.fecha, motivo: d.motivo },
     items: cambios.map(x => ({ partida_id: x.p.id, delta: x.delta, bultos: x.p.bultos != null ? (x.delta > 0 ? 1 : -1) * sgaBultosSalida(x.p, Math.abs(x.delta)) : null })),
   };
-  const { error } = await supabaseClient.rpc('sga_regularizar', { p: payload });
+  const ed = window.__rgEdit;   // editando: la base de datos deshace la regularización original y aplica la nueva, todo o nada
+  const { error } = ed ? await supabaseClient.rpc('sga_editar_regularizacion', { p_id: ed.id, p: payload }) : await supabaseClient.rpc('sga_regularizar', { p: payload });
   if (error) {
     const m = error.message || 'error desconocido.';
-    errEl.textContent = 'No se pudo guardar: ' + (/function .*sga_regularizar|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL de «anular y regularizar» en Supabase.' : m);
+    errEl.textContent = 'No se pudo guardar: ' + (/function .*sga_editar_regularizacion/i.test(m) ? 'falta ejecutar el SQL «editar regularización» en Supabase (sga-editar-regularizacion.sql).' : /function .*sga_regularizar|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL de «anular y regularizar» en Supabase.' : m);
     if (btn) btn.disabled = false;
     return;
   }
   await loadSgaStock();
-  appToast('Regularización registrada.', 'ok');
+  appToast(ed ? 'Regularización actualizada.' : 'Regularización registrada.', 'ok');
+  window.__rgEdit = null;
   window.__stockSeg = 'entradas';
   stockVolver();
-}
-
-/* ---- Editar una regularización ya hecha ----
-   Se cambia la diferencia de cada línea (+ suma palets, − quita), la fecha o el motivo. El stock de cada partida se recalcula en la base de datos
-   (se deshace lo de la regularización original y se aplica lo nuevo); una línea que se deja en 0 se quita. No se puede dejar una partida en negativo. */
-async function sgaRegulEditar(id){
-  const a = sgaAlbaranes.find(x => x.id === id);
-  if (!a || a.tipo !== 'regularizacion' || a.estado !== 'confirmado') return;
-  const m = await supabaseClient.from('sga_movimientos').select('id,partida_id,cantidad').eq('albaran_id', id).eq('tipo', 'ajuste');
-  if (m.error || !(m.data || []).length) { appToast('No se pudieron leer las líneas de esta regularización.', 'error'); return; }
-  const pids = [...new Set(m.data.map(x => x.partida_id))];
-  const pr = await supabaseClient.from('sga_partidas').select('id,producto_id,referencia,descripcion,articulo_id,cantidad_actual,fecha_entrada').in('id', pids);
-  const pm = {}; (pr.data || []).forEach(x => { pm[x.id] = x; });
-  window.__rgEd = { id, lineas: m.data.map(x => ({ mov: x.id, partida: x.partida_id, delta: Number(x.cantidad), actual: pm[x.partida_id] ? Number(pm[x.partida_id].cantidad_actual) : 0, p: pm[x.partida_id] || {} })) };
-  const filas = window.__rgEd.lineas.map(l => {
-    const art = l.p.articulo_id ? sgaArticulos.find(x => x.id === l.p.articulo_id) : null;
-    const nombre = (art ? art.nombre : l.p.descripcion) || l.p.referencia || '—', tipo = l.p.producto_id ? sgaProdTxt(l.p.producto_id).replace(/\s*·\s*sin subtipo definido/i, '') : '';
-    return `<tr><td><b>${esc(nombre)}</b>${tipo ? `<div style="font-size:11.5px;color:var(--muted);">${esc(tipo)}</div>` : ''}${l.p.fecha_entrada ? `<div style="font-size:11.5px;color:var(--muted);">Recepción ${esc(fmtDateDMY(l.p.fecha_entrada))}</div>` : ''}</td>
-      <td class="tf-precio">${l.actual}</td>
-      <td style="text-align:right;width:120px;"><input class="rge-in" id="rge-d-${l.mov}" data-mov="${l.mov}" inputmode="numeric" maxlength="7" value="${l.delta > 0 ? '+' : ''}${l.delta}" style="width:90px;text-align:right;" /></td>
-      <td class="tf-precio" id="rge-q-${l.mov}">${l.actual}</td></tr>`;
-  }).join('');
-  document.getElementById('modal-slot').innerHTML = `
-    <div class="modal-overlay">
-      <div class="modal-box" style="max-width:760px;padding:0;border-radius:14px;overflow:hidden;max-height:92vh;display:flex;flex-direction:column;">
-        <div class="deca-view-head pri">
-          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.edit, 21, '#fff', 1.8)}</span>
-          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Editar regularización ${esc(sgaNumAlbaran(a))}</div>
-            <div class="deca-banner-sub" style="margin-top:1px;">Cambia la diferencia de cada línea, la fecha o el motivo; el stock se recalcula</div></div>
-          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
-        </div>
-        <div class="deca-view-body deca-form" style="padding:16px 22px;overflow:auto;" oninput="sgaRegulEdRefrescar()">
-          <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <div class="field" style="flex:1;min-width:150px;"><label>Fecha <span class="dc-req">*</span></label><input id="rge-fecha" type="date" value="${esc(a.fecha)}" /></div>
-            <div class="field" style="flex:3;min-width:240px;"><label>Motivo <span class="dc-req">*</span></label><input id="rge-motivo" maxlength="200" value="${esc(a.observaciones || '')}" /></div>
-          </div>
-          <div class="tc-hist-box" style="max-height:340px;"><table class="tf-table"><thead><tr><th>Artículo</th><th style="text-align:right;">Ahora en el SGA</th><th style="text-align:right;">Diferencia</th><th style="text-align:right;">Quedará</th></tr></thead><tbody>${filas}</tbody></table></div>
-          <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">«Diferencia» es lo que sumó (+) o quitó (−) la regularización a esa partida. Para anularla en una línea, déjala en 0.</div>
-          <div id="rge-error" style="color:var(--danger);font-size:12.5px;margin-top:8px;white-space:pre-line;"></div>
-          <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px;">
-            <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
-            <button class="btn btn-primary rge-save" onclick="sgaRegulEdGuardar()">Guardar cambios</button>
-          </div>
-        </div>
-      </div>
-    </div>`;
-  sgaRegulEdRefrescar();
-}
-// Lo que se ha escrito en cada línea (la diferencia nueva) y lo que quedaría en la partida
-function sgaRegulEdLeer(){
-  const E = window.__rgEd;
-  return E ? E.lineas.map(l => { const t = ((document.getElementById('rge-d-' + l.mov) || {}).value || '').trim().replace(/^\+/, ''), delta = t === '' ? 0 : Number(t); return { l, delta, ok: isFinite(delta) && Math.floor(delta) === delta, quedara: l.actual - l.delta + delta }; }) : [];
-}
-function sgaRegulEdRefrescar(){
-  sgaRegulEdLeer().forEach(x => {
-    const q = document.getElementById('rge-q-' + x.l.mov);
-    if (q) { q.textContent = x.ok ? String(x.quedara) : '?'; q.style.color = !x.ok || x.quedara < 0 ? 'var(--danger)' : (x.delta !== x.l.delta ? 'var(--primary)' : ''); q.style.fontWeight = x.delta !== x.l.delta ? '700' : ''; }
-  });
-}
-async function sgaRegulEdGuardar(){
-  const E = window.__rgEd, errEl = document.getElementById('rge-error');
-  if (!E) return;
-  errEl.textContent = '';
-  const fecha = (document.getElementById('rge-fecha') || {}).value || '', motivo = ((document.getElementById('rge-motivo') || {}).value || '').trim(), xs = sgaRegulEdLeer(), errores = [];
-  if (!fecha) errores.push('Indica la fecha.');
-  if (!motivo) errores.push('Escribe el motivo de la regularización.');
-  xs.forEach(x => {
-    if (!x.ok) errores.push('La diferencia tiene que ser un número entero (por ejemplo +2 o -3).');
-    else if (x.quedara < 0) errores.push(`Una partida quedaría en negativo (hay ${x.l.actual}, y esta regularización ya sumaba ${x.l.delta > 0 ? '+' : ''}${x.l.delta}).`);
-  });
-  if (!errores.length && xs.every(x => x.delta === 0)) errores.push('Si dejas todas las líneas en 0, la regularización no tendría nada. Para eso, déjala como está.');
-  if (errores.length) { errEl.textContent = [...new Set(errores)].join('\n'); return; }
-  const btn = document.querySelector('.rge-save'); if (btn) btn.disabled = true;
-  const { error } = await supabaseClient.rpc('sga_editar_regularizacion', { p_id: E.id, p: { albaran: { fecha, motivo, created_by: currentUserEmail() }, items: xs.map(x => ({ movimiento_id: x.l.mov, delta: x.delta })) } });
-  if (error) {
-    const m = error.message || 'error desconocido.';
-    errEl.textContent = 'No se pudo guardar: ' + (/function .*sga_editar_regularizacion|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL «editar regularización» en Supabase (sga-editar-regularizacion.sql).' : m);
-    if (btn) btn.disabled = false;
-    return;
-  }
-  window.__rgEd = null; window.__rgAg = null;
-  closeModal();
-  await loadSgaStock();
-  renderTab();
-  appToast('Regularización actualizada.', 'ok');
 }
 
 /* ---- Cambio de almacén o de ubicación: la mercancía cambia de sitio (otro almacén, otra zona u otra ubicación) sin movimientos ni cobros ----

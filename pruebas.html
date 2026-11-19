@@ -697,17 +697,27 @@
     cierto(/id="ac-desc"/.test(f), 'El formulario tiene la casilla «Es un descuento»');
   });
 
-  prueba('SGA · editar una regularización: la diferencia nueva recalcula lo que quedaría en cada partida (se deshace la original y se aplica la nueva), avisa si quedaría en negativo y el menú del albarán ofrece «Editar»', () => {
+  prueba('SGA · editar una regularización: es la misma pantalla de regularizar; «En el SGA» es lo de antes de ella y la diferencia nueva se calcula contra eso', () => {
     const r = new Function(`
-      const window = { __rgEd: { id: 'x', lineas: [{ mov: 'm1', actual: 10, delta: -2 }, { mov: 'm2', actual: 1, delta: 3 }, { mov: 'm3', actual: 5, delta: 1 }] } };
-      const valores = { 'rge-d-m1': '+3', 'rge-d-m2': '0', 'rge-d-m3': '1.5' };
-      const document = { getElementById: id => ({ value: valores[id] }) };
-      ${trozo('function sgaRegulEdLeer', 'function sgaRegulEdRefrescar')}
-      return sgaRegulEdLeer().map(x => [x.delta, x.ok, x.quedara]);`)();
-    igual(r, [[3, true, 15], [0, true, -2], [1.5, false, 5.5]], 'Hay 10 con −2 aplicados: se deshace (12) y se aplica +3 → 15; la 2.ª quedaría en −2 (se rechaza); 1,5 no es entero');
-    cierto(/a\.tipo === 'regularizacion'\) && puede\) it\.push\(\['Editar'[^\n]*sgaRegulEditar/.test(trozo('function sgaAlbMenuItems', 'function sgaAlbAccionesHtml')), 'El menú del albarán de una regularización tiene «Editar»');
-    cierto(/rpc\('sga_editar_regularizacion'/.test(trozo('async function sgaRegulEdGuardar', '/* ---- Cambio de almacén')), 'Guardar llama a la base de datos con todo o nada');
+      const window = { __rgEdit: { id: 'x', old: { p1: -2, p2: 3 } } };
+      const partidas = { p1: { id: 'p1', actual: 8 }, p2: { id: 'p2', actual: 4 }, p3: { id: 'p3', actual: 5 } };
+      const valores = { p1: '8', p2: '1', p3: '7' };
+      const sgaRegulPartida = id => partidas[id], sgaRegulWh = () => 'w', sgaRegulCliente = () => 'c';
+      const document = { querySelectorAll: () => Object.keys(partidas).map(pid => ({ dataset: { pid }, value: valores[pid] })), getElementById: () => ({ value: '' }) };
+      ${trozo('const sgaRegulBase', 'function sgaRegulRefrescar')}
+      const edit = sgaRegulLeer().items.map(x => [sgaRegulBase(x.p), x.real, x.delta]);
+      window.__rgEdit = null;
+      const nueva = sgaRegulLeer().items.map(x => [sgaRegulBase(x.p), x.delta]);
+      return { edit, nueva };`)();
+    igual(r.edit, [[10, 8, -2], [1, 1, 0], [5, 7, 2]], 'Antes de la regularización p1 tenía 10 (8 − (−2)): sigue en 8 → −2; p2 tenía 1 (4 − 3): si ahora la dejas en 1 → 0 y se quita la línea; p3 no la tocaba: 5 → 7 la añade con +2');
+    igual(r.nueva, [[8, 0], [4, -3], [5, 2]], 'Al crear una regularización nueva la base es lo que hay ahora');
+    const m = trozo('function sgaAlbMenuItems', 'function sgaAlbAccionesHtml');
+    cierto(/a\.tipo === 'regularizacion'\) && puede\) it\.push\(\['Editar'[^\n]*sgaRegulEditar/.test(m), 'El menú del albarán de una regularización tiene «Editar»');
+    const t = trozo('function tplStockRegulPage', 'async function sgaRegulConfirmar');
+    cierto(/ed \? 'Editar regularización '/.test(t) && /ed \? '' : sgaAjustesToggleHtml/.test(t) && /ed\.a\.fecha/.test(t) && /ed\.a\.observaciones/.test(t), 'La pantalla de regularizar, en modo edición, lleva el título, la fecha y el motivo de la regularización');
+    cierto(/rpc\('sga_editar_regularizacion'/.test(trozo('async function sgaRegulConfirmar', '/* ---- Cambio de almacén')) && !/sgaRegulEdGuardar/.test(html), 'Guardar la edición llama a la base de datos (todo o nada) y ya no existe la ventana antigua');
   });
+
 
   // ---------- Textos largos en los PDF ----------
   const partir = (texto, ancho) => new Function(`${trozo('function wrapPdfText', '// Genera el PDF nativo del DeCA')}; const font={widthOfTextAtSize:(s)=>s.length*5}; return wrapPdfText(${JSON.stringify(texto)}, font, 10, ${ancho});`)();
