@@ -14477,6 +14477,8 @@ async function sgaAlbaranImprimir(id){
     '@cajas': { th: 'Cajas', r: true, td: l => `<td class="r"><b>${sgaNumTxt(l.cajas)}</b></td>`, tot: sgaNumTxt(totCajas) }, '@peso': { th: sgaPesoLabel(false), r: true, td: l => `<td class="r">${l.peso != null ? sgaNumTxt(l.peso) + ' kg' : '—'}</td>`, tot: totPeso ? sgaNumTxt(totPeso) + ' kg' : '—' } });
   extraCols.forEach(c => { const corto = lineas.every(l => String(l.extra[c.k] == null ? '' : l.extra[c.k]).length <= 24); colDef[c.clave] = { th: c.nombre, td: l => `<td${corto ? ' style="white-space:nowrap;"' : ''}>${esc(l.extra[c.k])}</td>` }; });   // el lote, la serie… son códigos cortos: una sola línea
   const colOrden = sgaAlbExpandir(colList, conBultos).filter(k => colDef[k]);
+  // Con muchas columnas la letra baja un poco (como en el PDF) antes de que los textos tengan que apretarse
+  const cssCols = colOrden.length >= 9 ? 'td{font-size:10.5px;padding:8px 6px;} th{font-size:8.5px;padding:7px 6px;}' : colOrden.length >= 7 ? 'td{font-size:11px;padding:9px 7px;} th{padding:7px 7px;}' : '';
   const filas = lineas.length ? lineas.map(l => `<tr>${colOrden.map(k => colDef[k].td(l)).join('')}</tr>`).join('') : `<tr><td colspan="${colOrden.length}">Sin líneas.</td></tr>`;
   const dirAlm = w ? sgaDirHtml(sgaDirLineas(w)) : '';
   // si la expedición tiene DeCA, su QR sale en el albarán (el mismo que lleva el PDF del DeCA)
@@ -14490,7 +14492,7 @@ async function sgaAlbaranImprimir(id){
     const partes = String(a.destinatarioDireccion || '').split(/\s*,\s*/).filter(Boolean), i = partes.findIndex(p => /^\d{4,6}\b/.test(p));
     return i < 0 ? partes : [...partes.slice(0, i), partes.slice(i).join(', ')];
   })());
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(sgaNumAlbaran(a))}</title><style>${css}${SGA_ALB_BN_CSS}${sgaPgCss(10)}</style></head><body>${sgaPgHtml(`<div class="hoja">
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(sgaNumAlbaran(a))}</title><style>${css}${cssCols}${SGA_ALB_BN_CSS}${sgaPgCss(10)}</style></head><body>${sgaPgHtml(`<div class="hoja">
     <div class="cab">
       <div class="l"><img src="${logoPropio}" alt="Qualified Logistics" /></div>
       <div class="c"><div class="t">ALBARÁN</div><div class="n">${esc(sgaNumAlbaran(a))}</div></div>
@@ -14531,18 +14533,49 @@ async function sgaAlbaranImprimir(id){
     setTimeout(() => f.remove(), 3000);
   }, 150);
 }
-// Anchos de las columnas del PDF del albarán: cada una parte de su peso, pero las «fijas» (cantidades y datos como el lote) tienen siempre el ancho
-// que necesita su texto más largo, para que un código no se parta en dos líneas; lo que sobra se quita de las demás columnas (nunca más del 60 %).
-function sgaAlbAnchos(pesos, necesita, fijas, W){
+/* Reparto de las columnas del PDF del albarán, para que NINGUNA palabra ni código (un lote, un código de artículo, una medida) se parta en mitad:
+   1) cada columna tiene como mínimo el ancho de su palabra más larga (las «fijas» —cantidades y datos como el lote— el de su texto entero);
+   2) si con la letra de 9 pt esos mínimos no caben en la hoja, la letra baja (8,5 · 8 · 7,5 · 7) hasta que quepan;
+   3) lo que sobra se reparte por pesos, quitándoselo a las columnas que tengan holgura, sin bajar nunca de su mínimo.
+   Solo si ni con 7 pt caben, las columnas se estrechan todas un poco (última salida). tw(texto, tamaño, negrita) mide un texto. */
+function sgaAlbNecesita(cols, orden, lineas, fs, W, PAD, tw){
+  const mx = (arr, f) => arr.reduce((m, s) => Math.max(m, f(s)), 0);
+  return orden.map(k => {
+    const c = cols[k], txt = lineas.flatMap(l => c.ls(l).map(s => String(s == null ? '' : s)));
+    const palabra = mx(txt.flatMap(s => s.split(/\s+/)).filter(Boolean), s => tw(s, fs, !!c.b));
+    const entera = mx(txt, s => tw(s, fs, !!c.b));
+    const cab = mx(c.th.toUpperCase().split(/\s+/).filter(Boolean), s => tw(s, 7, true));
+    return Math.min(W * 0.4, Math.max(cab, c.fijo ? entera : palabra) + 2 * PAD + 2);
+  });
+}
+function sgaAlbAnchos(pesos, necesita, W){
   const wsum = pesos.reduce((s, n) => s + n, 0);
   let cwid = pesos.map((p, i) => Math.max(W * p / wsum, necesita[i] || 0));
   let exceso = cwid.reduce((s, n) => s + n, 0) - W;
   if (exceso > 0) {
-    const libres = cwid.map((w, i) => fijas[i] ? 0 : w), sl = libres.reduce((s, n) => s + n, 0);
-    if (sl > 0) { const quitar = Math.min(exceso, sl * 0.6); cwid = cwid.map((w, i) => w - libres[i] / sl * quitar); exceso -= quitar; }
+    const holgura = cwid.map((w, i) => w - (necesita[i] || 0)), sh = holgura.reduce((s, n) => s + n, 0);
+    if (sh > 0) { const quitar = Math.min(exceso, sh); cwid = cwid.map((w, i) => w - holgura[i] / sh * quitar); exceso -= quitar; }
   }
-  if (exceso > 0.01) cwid = cwid.map(w => w * W / (W + exceso));   // último recurso: si ni así caben, todas se estrechan un poco
+  if (exceso > 0.01) cwid = cwid.map(w => w * W / (W + exceso));   // última salida: ni con la letra más pequeña caben los mínimos
   return cwid;
+}
+function sgaAlbLayout(cols, orden, lineas, W, PAD, tw){
+  const pesos = orden.map(k => cols[k].wt);
+  let fs = 9, need = [];
+  for (const f of [9, 8.5, 8, 7.5, 7]) {
+    fs = f; need = sgaAlbNecesita(cols, orden, lineas, f, W, PAD, tw);
+    if (need.reduce((s, n) => s + n, 0) <= W) break;
+  }
+  return { fs, lh: Math.round((fs + 2) * 10) / 10, necesita: need, cwid: sgaAlbAnchos(pesos, need, W) };
+}
+// Cuántas palabras seguirían partiéndose con ese reparto (debe ser 0 salvo que una palabra sea más ancha que casi toda la hoja)
+function sgaAlbPalabrasPartidas(cols, orden, lineas, L, PAD, tw){
+  let n = 0;
+  orden.forEach((k, i) => {
+    const c = cols[k], inner = L.cwid[i] - 2 * PAD;
+    lineas.forEach(l => c.ls(l).forEach(s => String(s == null ? '' : s).split(/\s+/).filter(Boolean).forEach(w => { if (tw(w, L.fs, !!c.b) > inner + 0.01) n++; })));
+  });
+  return n;
 }
 /* ---- PDF del albarán (se genera al momento con el mismo contenido que el impreso) ----
    Sirve para adjuntarlo a la franja horaria de la expedición. Si la expedición tiene DeCA, su QR sale también. */
@@ -14652,12 +14685,7 @@ async function sgaAlbaranPdfBytes(id){
   };
   extraCols.forEach(c => { cols[c.clave] = { th: c.nombre, wt: 1.4, fijo: true, ls: l => [l.extra[c.k]] }; });   // el lote, la serie… son códigos cortos: no se parten en dos líneas si caben
   const orden = sgaAlbExpandir(colList, conBultos).filter(k => cols[k]);
-  const wsum = orden.reduce((s, k) => s + cols[k].wt, 0);
-  const PAD = 5, FS = 9, LH = 11;
-  // Anchos: cada columna parte de su peso, pero las «fijas» (cantidades y datos como el lote) tienen siempre el ancho que necesita su texto más largo
-  // (hasta un tope) para que un código como un lote no se parta en dos líneas; lo que sobra se quita de las demás columnas.
-  const necesita = orden.map(k => cols[k].fijo ? Math.min(W * 0.3, Math.max(tw(cols[k].th.toUpperCase(), 7, true), ...lineas.flatMap(l => cols[k].ls(l).map(s => tw(s, FS, !!cols[k].b)))) + 2 * PAD + 2) : 0);
-  const cwid = sgaAlbAnchos(orden.map(k => cols[k].wt), necesita, orden.map(k => !!cols[k].fijo), W);
+  const PAD = 5, LAY = sgaAlbLayout(cols, orden, lineas, W, PAD, tw), FS = LAY.fs, LH = LAY.lh, cwid = LAY.cwid;   // letra y anchos: ninguna palabra se parte (la letra baja si hace falta)
   const xCol = i => M + cwid.slice(0, i).reduce((s, n) => s + n, 0);
   const cabTabla = () => {
     page.drawRectangle({ x: M, y: y - 20, width: W, height: 20, color: AZ2 });
@@ -14676,7 +14704,7 @@ async function sgaAlbaranPdfBytes(id){
     if (!hueco(rh)) { nuevaPagina(); cabTabla(); }
     if (ri % 2) page.drawRectangle({ x: M, y: y - rh, width: W, height: rh, color: rgb(0.969, 0.976, 0.988) });
     page.drawRectangle({ x: M, y: y - rh, width: W, height: 0.6, color: LI });
-    cel.forEach((c, i) => c.forEach((o, j) => draw(o.t, cols[orden[i]].r ? xCol(i) + cwid[i] - PAD : xCol(i) + PAD, y - PAD - 7.5 - j * LH, FS, { bold: o.b, right: !!cols[orden[i]].r })));
+    cel.forEach((c, i) => c.forEach((o, j) => draw(o.t, cols[orden[i]].r ? xCol(i) + cwid[i] - PAD : xCol(i) + PAD, y - PAD - FS * 0.85 - j * LH, FS, { bold: o.b, right: !!cols[orden[i]].r })));
     y -= rh;
   });
   if (!hueco(22)) { nuevaPagina(); cabTabla(); }
