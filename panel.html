@@ -7391,7 +7391,7 @@ function sgaAlbMenuItems(a){
   const it = [];
   if (conf && a.tipo === 'salida' && a.borrador) it.push(['Imprimir albarán', 'file', `sgaAlbaranImprimir('${a.id}')`]);
   if (conf && a.tipo === 'salida') it.push(['Etiqueta de envío', 'tag', `sgaEtiquetaAbrir('${a.id}')`]);
-  if (conf && (a.tipo === 'salida' || a.tipo === 'entrada' || a.tipo === 'apertura') && puede) it.push(['Editar', 'edit', `${a.tipo === 'salida' ? 'sgaSalidaEditar' : 'sgaEntradaEditar'}('${a.id}')`]);
+  if (conf && (a.tipo === 'salida' || a.tipo === 'entrada' || a.tipo === 'apertura' || a.tipo === 'regularizacion') && puede) it.push(['Editar', 'edit', `${a.tipo === 'salida' ? 'sgaSalidaEditar' : a.tipo === 'regularizacion' ? 'sgaRegulEditar' : 'sgaEntradaEditar'}('${a.id}')`]);
   if (conf && a.tipo === 'salida' && !a.borrador && puede) it.push(['Volver a borrador', 'clock', `sgaSalidaABorrador('${a.id}')`]);
   if (conf && a.tipo !== 'regularizacion' && puede) it.push(['Anular albarán', 'trash', `sgaAnularAbrir('${a.id}')`, true]);
   return it;
@@ -15004,6 +15004,91 @@ async function sgaRegulConfirmar(){
   appToast('Regularización registrada.', 'ok');
   window.__stockSeg = 'entradas';
   stockVolver();
+}
+
+/* ---- Editar una regularización ya hecha ----
+   Se cambia la diferencia de cada línea (+ suma palets, − quita), la fecha o el motivo. El stock de cada partida se recalcula en la base de datos
+   (se deshace lo de la regularización original y se aplica lo nuevo); una línea que se deja en 0 se quita. No se puede dejar una partida en negativo. */
+async function sgaRegulEditar(id){
+  const a = sgaAlbaranes.find(x => x.id === id);
+  if (!a || a.tipo !== 'regularizacion' || a.estado !== 'confirmado') return;
+  const m = await supabaseClient.from('sga_movimientos').select('id,partida_id,cantidad').eq('albaran_id', id).eq('tipo', 'ajuste');
+  if (m.error || !(m.data || []).length) { appToast('No se pudieron leer las líneas de esta regularización.', 'error'); return; }
+  const pids = [...new Set(m.data.map(x => x.partida_id))];
+  const pr = await supabaseClient.from('sga_partidas').select('id,producto_id,referencia,descripcion,articulo_id,cantidad_actual,fecha_entrada').in('id', pids);
+  const pm = {}; (pr.data || []).forEach(x => { pm[x.id] = x; });
+  window.__rgEd = { id, lineas: m.data.map(x => ({ mov: x.id, partida: x.partida_id, delta: Number(x.cantidad), actual: pm[x.partida_id] ? Number(pm[x.partida_id].cantidad_actual) : 0, p: pm[x.partida_id] || {} })) };
+  const filas = window.__rgEd.lineas.map(l => {
+    const art = l.p.articulo_id ? sgaArticulos.find(x => x.id === l.p.articulo_id) : null;
+    const nombre = (art ? art.nombre : l.p.descripcion) || l.p.referencia || '—', tipo = l.p.producto_id ? sgaProdTxt(l.p.producto_id).replace(/\s*·\s*sin subtipo definido/i, '') : '';
+    return `<tr><td><b>${esc(nombre)}</b>${tipo ? `<div style="font-size:11.5px;color:var(--muted);">${esc(tipo)}</div>` : ''}${l.p.fecha_entrada ? `<div style="font-size:11.5px;color:var(--muted);">Recepción ${esc(fmtDateDMY(l.p.fecha_entrada))}</div>` : ''}</td>
+      <td class="tf-precio">${l.actual}</td>
+      <td style="text-align:right;width:120px;"><input class="rge-in" id="rge-d-${l.mov}" data-mov="${l.mov}" inputmode="numeric" maxlength="7" value="${l.delta > 0 ? '+' : ''}${l.delta}" style="width:90px;text-align:right;" /></td>
+      <td class="tf-precio" id="rge-q-${l.mov}">${l.actual}</td></tr>`;
+  }).join('');
+  document.getElementById('modal-slot').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-box" style="max-width:760px;padding:0;border-radius:14px;overflow:hidden;max-height:92vh;display:flex;flex-direction:column;">
+        <div class="deca-view-head pri">
+          <span class="deca-banner-icon">${homeIcon(HOME_ICON_PATHS.edit, 21, '#fff', 1.8)}</span>
+          <div style="min-width:0;flex:1;"><div class="deca-banner-title" style="font-size:19px;">Editar regularización ${esc(sgaNumAlbaran(a))}</div>
+            <div class="deca-banner-sub" style="margin-top:1px;">Cambia la diferencia de cada línea, la fecha o el motivo; el stock se recalcula</div></div>
+          <button class="close-x" onclick="closeModal()" title="Cerrar" style="display:flex;padding:6px;">${homeIcon(HOME_ICON_PATHS.x, 18, 'currentColor', 2)}</button>
+        </div>
+        <div class="deca-view-body deca-form" style="padding:16px 22px;overflow:auto;" oninput="sgaRegulEdRefrescar()">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <div class="field" style="flex:1;min-width:150px;"><label>Fecha <span class="dc-req">*</span></label><input id="rge-fecha" type="date" value="${esc(a.fecha)}" /></div>
+            <div class="field" style="flex:3;min-width:240px;"><label>Motivo <span class="dc-req">*</span></label><input id="rge-motivo" maxlength="200" value="${esc(a.observaciones || '')}" /></div>
+          </div>
+          <div class="tc-hist-box" style="max-height:340px;"><table class="tf-table"><thead><tr><th>Artículo</th><th style="text-align:right;">Ahora en el SGA</th><th style="text-align:right;">Diferencia</th><th style="text-align:right;">Quedará</th></tr></thead><tbody>${filas}</tbody></table></div>
+          <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">«Diferencia» es lo que sumó (+) o quitó (−) la regularización a esa partida. Para anularla en una línea, déjala en 0.</div>
+          <div id="rge-error" style="color:var(--danger);font-size:12.5px;margin-top:8px;white-space:pre-line;"></div>
+          <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px;">
+            <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary rge-save" onclick="sgaRegulEdGuardar()">Guardar cambios</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  sgaRegulEdRefrescar();
+}
+// Lo que se ha escrito en cada línea (la diferencia nueva) y lo que quedaría en la partida
+function sgaRegulEdLeer(){
+  const E = window.__rgEd;
+  return E ? E.lineas.map(l => { const t = ((document.getElementById('rge-d-' + l.mov) || {}).value || '').trim().replace(/^\+/, ''), delta = t === '' ? 0 : Number(t); return { l, delta, ok: isFinite(delta) && Math.floor(delta) === delta, quedara: l.actual - l.delta + delta }; }) : [];
+}
+function sgaRegulEdRefrescar(){
+  sgaRegulEdLeer().forEach(x => {
+    const q = document.getElementById('rge-q-' + x.l.mov);
+    if (q) { q.textContent = x.ok ? String(x.quedara) : '?'; q.style.color = !x.ok || x.quedara < 0 ? 'var(--danger)' : (x.delta !== x.l.delta ? 'var(--primary)' : ''); q.style.fontWeight = x.delta !== x.l.delta ? '700' : ''; }
+  });
+}
+async function sgaRegulEdGuardar(){
+  const E = window.__rgEd, errEl = document.getElementById('rge-error');
+  if (!E) return;
+  errEl.textContent = '';
+  const fecha = (document.getElementById('rge-fecha') || {}).value || '', motivo = ((document.getElementById('rge-motivo') || {}).value || '').trim(), xs = sgaRegulEdLeer(), errores = [];
+  if (!fecha) errores.push('Indica la fecha.');
+  if (!motivo) errores.push('Escribe el motivo de la regularización.');
+  xs.forEach(x => {
+    if (!x.ok) errores.push('La diferencia tiene que ser un número entero (por ejemplo +2 o -3).');
+    else if (x.quedara < 0) errores.push(`Una partida quedaría en negativo (hay ${x.l.actual}, y esta regularización ya sumaba ${x.l.delta > 0 ? '+' : ''}${x.l.delta}).`);
+  });
+  if (!errores.length && xs.every(x => x.delta === 0)) errores.push('Si dejas todas las líneas en 0, la regularización no tendría nada. Para eso, déjala como está.');
+  if (errores.length) { errEl.textContent = [...new Set(errores)].join('\n'); return; }
+  const btn = document.querySelector('.rge-save'); if (btn) btn.disabled = true;
+  const { error } = await supabaseClient.rpc('sga_editar_regularizacion', { p_id: E.id, p: { albaran: { fecha, motivo, created_by: currentUserEmail() }, items: xs.map(x => ({ movimiento_id: x.l.mov, delta: x.delta })) } });
+  if (error) {
+    const m = error.message || 'error desconocido.';
+    errEl.textContent = 'No se pudo guardar: ' + (/function .*sga_editar_regularizacion|does not exist|schema cache/i.test(m) ? 'falta ejecutar el SQL «editar regularización» en Supabase (sga-editar-regularizacion.sql).' : m);
+    if (btn) btn.disabled = false;
+    return;
+  }
+  window.__rgEd = null; window.__rgAg = null;
+  closeModal();
+  await loadSgaStock();
+  renderTab();
+  appToast('Regularización actualizada.', 'ok');
 }
 
 /* ---- Cambio de almacén o de ubicación: la mercancía cambia de sitio (otro almacén, otra zona u otra ubicación) sin movimientos ni cobros ----
