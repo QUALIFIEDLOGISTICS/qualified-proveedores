@@ -1081,6 +1081,31 @@
     cierto(/create unique index if not exists sga_clientes_prefijo_uq on public\.sga_clientes \(upper\(prefijo\)\)/.test(sql), 'El SQL asegura en la base de datos que no se repitan las guardadas');
   });
 
+  prueba('Tarifas de almacén: «Mínimo por albarán» solo sale en los movimientos (no en Almacenaje, Extra ni Operativa) y se vacía al cambiar de actividad', () => {
+    const caja = document.createElement('div');
+    caja.innerHTML = '<div class="af-row" data-i="7"><input type="hidden" id="af-7-actividad" value=""><select id="af-7-tipo"></select><div class="field af-fld af-f-min" style="display:none;"><input id="af-7-min"></div></div>';
+    document.body.appendChild(caja);
+    let o;
+    try {
+      o = new Function(`
+        const almacenajeTipoOptionsHtml = () => '<option value="">—</option>', almacenajeFilaTipoChange = () => {};
+        ${trozo('function almacenajeFilaActividadChange', '// Paso 2: al elegir el producto')}
+        const $ = id => document.getElementById(id), fm = () => document.querySelector('.af-row[data-i="7"] .af-f-min');
+        const cambia = cat => { $('af-7-actividad').value = cat; almacenajeFilaActividadChange(7); return fm().style.display; };
+        const out = {};
+        out.almacenaje = cambia('almacenaje');
+        out.movimiento = cambia('movimiento');
+        $('af-7-min').value = '12,5';
+        out.extra = cambia('extra'); out.valorTrasExtra = $('af-7-min').value;
+        out.operativa = cambia('operativa');
+        return out;`)();
+    } finally { caja.remove(); }
+    igual([o.almacenaje, o.movimiento, o.extra, o.operativa], ['none', '', 'none', 'none'], 'El mínimo por albarán solo se ve al elegir Movimiento');
+    igual(o.valorTrasExtra, '', 'Al cambiar a otra actividad se vacía lo que se hubiera escrito (no se guarda un mínimo oculto)');
+    const fila = trozo('function almacenajeFilaRowHtml', '// «Editar tarifa»: cambio de precio con fecha');
+    cierto(/af-f-min"\$\{\(cat === 'movimiento' \|\| \(preset && preset\.importeMinimo != null\)\) \? '' : ' style="display:none;"'\}/.test(fila), 'La línea nueva lo trae oculto salvo en Movimiento (o si la línea ya tenía un mínimo)');
+  });
+
   prueba('CRM: al volver a la pantalla se leen de nuevo las cotizaciones (lo creado desde otro sitio aparece), sin pisar una ficha en edición ni repetir la lectura a cada momento', async () => {
     const f = (S, filas) => new Function('S', 'filas', `
       let pintado = 0, lecturas = 0;
