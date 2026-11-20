@@ -979,6 +979,27 @@
     cierto(f.indexOf('id="sl-destpais"') > f.indexOf('id="sl-destdir"') && f.indexOf('id="sl-destpais"') < f.indexOf('id="sl-transp"'), 'El campo va debajo de la dirección del destinatario');
   });
 
+  prueba('SGA · CMR: casilla 1 (remitente) = el cliente si el transporte lo hace Qualified; si lo hace otro transportista, Qualified', () => {
+    const r = new Function(`
+      const contactos = [{ id: 'c1', nombre: 'CARTONAJES SL', nif: 'B111', calle1: 'Calle Uno 1', codigoPostal: '08000', ciudad: 'Barcelona', pais: 'España' }];
+      const ocCfgEmpresa = () => ({ nombre: 'QUALIFIED S.L.', direccion: 'C/PONT, 22', cp: '08650', poblacion: 'Sallent', provincia: 'Barcelona', pais: 'España', cif: 'ESB98650062' });
+      const sgaSalidaPaises = () => ({ w: { name: 'Alm', ciudad: 'Sallent' }, dd: null, origen: 'España', destino: 'Francia' });
+      const sgaTransportistaContacto = n => n === 'AUTONOMO JUAN' ? { nombre: 'AUTONOMO JUAN', nombreComercial: 'Colaborador Qualified' } : null;
+      const sgaMatriculaSplit = () => ({ tractora: '', remolque: '' }), sgaProdTxt = () => '', sgaNumTxt = n => String(n), fmtDateDMY = f => f;
+      const sgaDirLineas = o => [o.calle1, [[o.codigoPostal, o.ciudad].filter(Boolean).join(' '), o.provincia, o.pais].filter(Boolean).join(', ')].filter(Boolean);
+      ${trozo('const sgaTransportistaEsQualified', 'async function sgaGuardarCmrExpedicion')}
+      const d = t => ({ clienteId: 'c1', transportista: t, destinatario: 'Lyon', destinatarioDireccion: 'Rue 1, 69002 Lyon, Francia', matricula: '', fecha: '2026-11-20' });
+      const rem = t => sgaCmrCampos(d(t), [], 'A-1').remitente;
+      return { propio: rem('QUALIFIED LOGISTICS'), minusculas: rem('transportes qualified sl').nombre, contacto: rem('AUTONOMO JUAN').nombre, externo: rem('TRANSPORTES HERNANDEZ SL'), esQ: [sgaTransportistaEsQualified('Qualified', null), sgaTransportistaEsQualified('Hernández', null), sgaTransportistaEsQualified('', null)] };`)();
+    igual(r.propio.nombre, 'CARTONAJES SL', 'Transporta Qualified: el remitente es el cliente');
+    igual(r.propio.lineas, ['Calle Uno 1', '08000 Barcelona, España', 'NIF: B111'], 'Con su dirección y NIF');
+    igual([r.minusculas, r.contacto], ['CARTONAJES SL', 'CARTONAJES SL'], 'Se reconoce «Qualified» en minúsculas o en el nombre comercial del transportista');
+    igual(r.externo, { nombre: 'QUALIFIED S.L.', lineas: ['C/PONT, 22', '08650 Sallent, Barcelona, España', 'NIF: ESB98650062'] }, 'Transporta otro: el remitente es Qualified, con sus datos de empresa');
+    igual(r.esQ, [true, false, false], 'La regla solo salta con «Qualified» en el nombre');
+    const rf = trozo('function sgaSalidaCmrRefrescar', 'function sgaSalidaCmrErrores');
+    cierto(/sl-cmr-rem/.test(rf) && /id="sl-cmr-rem"/.test(trozo('function sgaSalidaCmrHtml', 'function sgaSalidaCmrToggle')), 'La tarjeta dice quién saldrá de remitente según el transportista');
+  });
+
   prueba('CRM: al volver a la pantalla se leen de nuevo las cotizaciones (lo creado desde otro sitio aparece), sin pisar una ficha en edición ni repetir la lectura a cada momento', async () => {
     const f = (S, filas) => new Function('S', 'filas', `
       let pintado = 0, lecturas = 0;

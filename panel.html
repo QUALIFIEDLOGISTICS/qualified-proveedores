@@ -14129,11 +14129,11 @@ function sgaSalidaCmrHtml(){
         <div class="field" style="flex:1;min-width:150px;max-width:240px;margin-bottom:12px;"><label>Marcas y números <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></label><input id="sl-cmr-marcas" maxlength="80" value="${esc(c.marcas || '')}" /></div>
       </div>
       <div class="field" style="margin:0;"><label>Instrucciones del remitente <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></label><textarea id="sl-cmr-ins" rows="2" maxlength="400" placeholder="Aduanas, horarios de entrega, avisos al conductor…" style="width:100%;resize:vertical;">${esc(c.instrucciones || '')}</textarea></div>
-      <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">El remitente es el cliente de la expedición. También hace falta el transportista y el destinatario con su país. Forma de pago, reembolso y lo que se paga salen en blanco.</div>
+      <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;"><span id="sl-cmr-rem" style="color:var(--muted);"></span> También hace falta el transportista y el destinatario con su país. Forma de pago, reembolso y lo que se paga salen en blanco.</div>
     </div>`;
   if (ya) return `<div style="font-size:13.5px;">Esta expedición ya tiene su CMR: <button type="button" class="deca-code-pill" style="cursor:pointer;border:none;" onclick="sgaCmrAbrir('${ya.id}')" title="Abrir el CMR en PDF">${esc(ya.codigo || 'CMR')}</button> <span style="color:var(--muted);font-size:12.5px;">· al guardar la expedición se actualiza con sus datos.</span></div>${campos}`;
   return `<label style="display:flex;align-items:flex-start;gap:10px;font-size:13.5px;cursor:pointer;"><input type="checkbox" class="switch" id="sl-cmr-on" onchange="this.dataset.manual='1'; sgaSalidaCmrToggle()" style="margin-top:2px;" />
-      <span><b>Generar el CMR</b><br><span style="font-size:12px;color:var(--muted);">Carta de porte internacional con el cliente como remitente. Se marca sola cuando el país del almacén y el del destinatario son distintos; se crea al guardar la expedición y desde su menú se abre en PDF (3 ejemplares).</span></span></label>${aviso}${campos}`;
+      <span><b>Generar el CMR</b><br><span style="font-size:12px;color:var(--muted);">Carta de porte internacional (remitente: el cliente si el transporte lo hace Qualified; si no, Qualified). Se marca sola cuando el país del almacén y el del destinatario son distintos; se crea al guardar la expedición y desde su menú se abre en PDF (3 ejemplares).</span></span></label>${aviso}${campos}`;
 }
 function sgaSalidaCmrToggle(){
   const on = (document.getElementById('sl-cmr-on') || {}).checked;
@@ -14159,6 +14159,8 @@ function sgaSalidaCmrRefrescar(){
   // La casilla sigue al envío (internacional → marcada) mientras nadie la toque a mano
   if (on && on.dataset.manual !== '1' && on.checked !== P.internacional) { on.checked = P.internacional; campos.style.display = P.internacional ? '' : 'none'; }
   if (campos.style.display === 'none') return;
+  const rem = document.getElementById('sl-cmr-rem');   // quién sale como remitente en la casilla 1
+  if (rem) rem.textContent = !d.transportista ? 'Remitente (casilla 1): el cliente si el transporte lo hace Qualified; si lo hace otro transportista, Qualified.' : sgaTransportistaEsQualified(d.transportista, sgaTransportistaContacto(d.transportista)) ? 'Remitente (casilla 1): el cliente, porque el transporte lo hace Qualified.' : 'Remitente (casilla 1): Qualified, porque el transporte lo hace otro transportista.';
   const peso = document.getElementById('sl-cmr-peso'), emb = document.getElementById('sl-cmr-emb');
   const calc = sgaSalidaPesoCalculado(d.items);
   if (peso && peso.dataset.manual !== '1') peso.value = calc ? String(calc) : '';
@@ -14177,6 +14179,8 @@ function sgaSalidaCmrErrores(d){
   return e;
 }
 // Los datos del CMR tal y como salen ahora del formulario (se guardan así y de ahí se dibuja el PDF)
+// ¿El transporte lo hace Qualified (su nombre lleva «Qualified»)? Entonces el remitente (casilla 1) es el cliente; si lo hace otro transportista, el remitente es Qualified
+const sgaTransportistaEsQualified = (nombre, tc) => /qualified/i.test([nombre, tc && tc.nombre, tc && tc.nombreComercial].filter(Boolean).join(' '));
 function sgaCmrCampos(d, sale, numAlbaran){
   const v = id => ((document.getElementById(id) || {}).value || '').trim();
   const P = sgaSalidaPaises(d), w = P.w || {};
@@ -14188,7 +14192,9 @@ function sgaCmrCampos(d, sale, numAlbaran){
   sale.forEach(x => { const n = String(x.p.descripcion || sgaProdTxt(x.p.productoId) || '').trim(); if (n) nombres.set(n, (nombres.get(n) || 0) + x.n); });
   const total = sale.reduce((s, x) => s + x.n, 0), kg = Number(v('sl-cmr-peso').replace(',', '.')) || 0, vol = v('sl-cmr-vol');
   return {
-    remitente: { nombre: cli.nombre || '', lineas: [...sgaDirLineas(cli), cli.nif ? 'NIF: ' + cli.nif : ''].filter(Boolean) },
+    remitente: sgaTransportistaEsQualified(d.transportista, tc)
+      ? { nombre: cli.nombre || '', lineas: [...sgaDirLineas(cli), cli.nif ? 'NIF: ' + cli.nif : ''].filter(Boolean) }
+      : (emp => ({ nombre: emp.nombre, lineas: [emp.direccion, `${emp.cp} ${emp.poblacion}, ${emp.provincia}, ${emp.pais}`, emp.cif ? 'NIF: ' + emp.cif : ''].filter(Boolean) }))(ocCfgEmpresa()),
     destinatario: { nombre: P.dd ? P.dd.nombre : d.destinatario, lineas: destLineas },
     entrega: destLineas,
     carga: [[w.name, w.ciudad].filter(Boolean).join(' · '), P.origen, 'Fecha de carga: ' + fmtDateDMY(d.fecha)].filter(Boolean),
