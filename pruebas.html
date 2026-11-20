@@ -1052,6 +1052,35 @@
     cierto(/altaAlmBarraHtml\('tarifa'\)/.test(html) && /altaAlmBarraHtml\('almacen'\)\}\$\{altaAlmBarraHtml\('operativas'\)/.test(html) && /window\.__altaAlm = null;   \/\/ salir de la ficha/.test(html), 'La ficha y la tarifa también la llevan, y salir de la ficha acaba el asistente');
   });
 
+  prueba('SGA · letras del albarán: obligatorias (2 o 3 letras) y no se pueden repetir con otro cliente, ni con las que otro usa por defecto', async () => {
+    const r = new Function(`
+      const contactos = [
+        { id: 'a', nombre: 'CARTONAJES SL', esClienteAlmacen: true },
+        { id: 'b', nombre: 'PALETS DEL SUR', esClienteAlmacen: true },
+        { id: 'c', nombre: 'Otra Empresa', nombreComercial: 'Zeta', esClienteAlmacen: true },
+        { id: 'd', nombre: 'Transportes Pepe', esClienteAlmacen: false },
+      ];
+      const guardado = { a: { prefijo: 'CAR' }, b: { prefijo: '' }, c: { prefijo: 'ZET' }, d: { prefijo: 'TRA' } };
+      const sgaClienteCfg = id => guardado[id] || { prefijo: '' };
+      ${trozo('function sgaPrefijoPorDefecto', 'function sgaAlbaranEjemplo')}
+      ${trozo('function sgaPrefijoEnUso', '// Al escribir las letras, el ejemplo')}
+      return {
+        vacio: sgaPrefijoProblema('', 'x'), una: sgaPrefijoProblema('A', 'x'), simbolos: sgaPrefijoProblema('1-', 'x'),
+        libre: sgaPrefijoProblema('ABC', 'x'), repetidaGuardada: sgaPrefijoProblema('car', 'x'), repetidaPorDefecto: sgaPrefijoProblema('PAL', 'x'),
+        suya: sgaPrefijoProblema('CAR', 'a'), suyaPorDefecto: sgaPrefijoProblema('PAL', 'b'), noEsClienteAlmacen: sgaPrefijoProblema('TRA', 'x'),
+      };`)();
+    cierto(/obligatorias/.test(r.vacio) && /obligatorias/.test(r.una) && /obligatorias/.test(r.simbolos), 'Vacío, de una sola letra o sin letras: no vale');
+    igual([r.libre, r.suya, r.suyaPorDefecto, r.noEsClienteAlmacen], ['', '', '', ''], 'Unas letras libres, las del propio cliente (guardadas o por defecto) y las de quien no es cliente de almacén valen');
+    cierto(/«CAR» ya las usa el cliente CARTONAJES SL/.test(r.repetidaGuardada), 'Repetida con las guardadas de otro cliente: avisa de cuál');
+    cierto(/«PAL» ya las usa el cliente PALETS DEL SUR/.test(r.repetidaPorDefecto), 'También cuentan las que otro cliente usa por defecto (las 3 primeras letras de su nombre)');
+    const sub = trozo('async function submitSgaCliente', '/* ===================== SGA · STOCK');
+    cierto(/const problemaPref = sgaPrefijoProblema\(prefijo, id\);/.test(sub) && /if \(problemaPref\)/.test(sub) && /sga_clientes_prefijo_uq/.test(sub), 'Al guardar la ficha SGA no se deja guardar con letras vacías o repetidas');
+    const pag = trozo('function tplSgaClientePage', 'async function submitSgaCliente');
+    cierto(/\(2 o 3 · obligatorio\)/.test(pag) && /id="sgaalb-aviso"/.test(pag) && /value="\$\{esc\(cfg\.prefijo \|\| sgaPrefijoPorDefecto\(c\)\)\}"/.test(pag), 'El campo se ve obligatorio, sale ya sugerido con las 3 primeras letras del nombre y avisa en vivo');
+    const sql = await (await fetch('sga-prefijo-unico.sql?' + Date.now())).text();
+    cierto(/create unique index if not exists sga_clientes_prefijo_uq on public\.sga_clientes \(upper\(prefijo\)\)/.test(sql), 'El SQL asegura en la base de datos que no se repitan las guardadas');
+  });
+
   prueba('CRM: al volver a la pantalla se leen de nuevo las cotizaciones (lo creado desde otro sitio aparece), sin pisar una ficha en edición ni repetir la lectura a cada momento', async () => {
     const f = (S, filas) => new Function('S', 'filas', `
       let pintado = 0, lecturas = 0;

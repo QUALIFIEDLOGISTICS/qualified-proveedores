@@ -6987,7 +6987,20 @@ function sgaAlbaranEjemplo(pref){
   const [y, m, d] = today().split('-');
   return `${pref}${d}${m}${y}-1`;
 }
-// Al escribir las letras, el ejemplo del número se actualiza en vivo.
+// ¿Otro cliente de almacén usa ya esas letras? Cuenta las que tiene guardadas y, si no tiene, las que usa por defecto (las 3 primeras de su nombre),
+// porque con ellas ya se han numerado sus albaranes. Devuelve ese cliente o null.
+function sgaPrefijoEnUso(pref, clienteId){
+  const p = String(pref || '').toUpperCase();
+  return p ? contactos.find(c => c.id !== clienteId && c.esClienteAlmacen && String(sgaClienteCfg(c.id).prefijo || sgaPrefijoPorDefecto(c)).toUpperCase() === p) || null : null;
+}
+// Lo que falla en las letras del albarán (texto) o '' si valen: obligatorias (2 o 3 letras) y que no las use otro cliente
+function sgaPrefijoProblema(pref, clienteId){
+  const p = String(pref || '').toUpperCase().replace(/[^A-Z]/g, '');
+  if (p.length < 2) return 'Las letras del albarán son obligatorias: escribe 2 o 3 letras.';
+  const otro = sgaPrefijoEnUso(p, clienteId);
+  return otro ? `Las letras «${p}» ya las usa el cliente ${(otro.nombreComercial || '').trim() || otro.nombre}: elige otras para que los albaranes no se confundan.` : '';
+}
+// Al escribir las letras, el ejemplo del número se actualiza en vivo (y se avisa si faltan o si las usa otro cliente).
 function sgaPrefijoVista(){
   const inp = document.getElementById('sgac-prefijo');
   if (!inp) return;
@@ -6996,6 +7009,7 @@ function sgaPrefijoVista(){
   const c = contactos.find(x => x.id === window.__sgaClienteFormId);
   const ej = sgaAlbaranEjemplo(limpio || sgaPrefijoPorDefecto(c));
   ['sgaalb-ej', 'sgaalb-svgnum'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = ej; });
+  const av = document.getElementById('sgaalb-aviso'); if (av) av.textContent = sgaPrefijoProblema(limpio, window.__sgaClienteFormId);
 }
 // Columnas del albarán del cliente (ficha SGA): se eligen todas y se ordenan. Disponibles: las de serie y los datos extra que el cliente usa.
 function sgacAlbPool(){
@@ -7161,10 +7175,11 @@ function tplSgaClientePage(c){
         ${decaCardHead('file', 'Albaranes', 'Cómo se numeran y qué datos llevan')}
         <div class="deca-card-body">
           <div class="sgac-row">
-            <div class="sgac-rq">Letras del albarán <small>(3 · opcional)</small></div>
-            <input id="sgac-prefijo" maxlength="3" autocomplete="off" placeholder="${esc(sgaPrefijoPorDefecto(c))}" style="width:96px;text-transform:uppercase;" oninput="sgaPrefijoVista()" value="${esc(cfg.prefijo || '')}" />
+            <div class="sgac-rq">Letras del albarán <small>(2 o 3 · obligatorio)</small></div>
+            <input id="sgac-prefijo" maxlength="3" autocomplete="off" placeholder="${esc(sgaPrefijoPorDefecto(c))}" style="width:96px;text-transform:uppercase;" oninput="sgaPrefijoVista()" value="${esc(cfg.prefijo || sgaPrefijoPorDefecto(c))}" />
             <span class="sgac-ejn">→ <b id="sgaalb-ej">${esc(sgaAlbaranEjemplo(cfg.prefijo || sgaPrefijoPorDefecto(c)))}</b></span>
-            <div class="sgac-h">Vacío = las 3 primeras letras del nombre (<b id="sgaalb-def">${esc(sgaPrefijoPorDefecto(c))}</b>). Después van la fecha y el orden del día.</div>
+            <div class="sgac-h">Obligatorias y distintas de las de cualquier otro cliente. Sugerencia: las 3 primeras letras del nombre (<b id="sgaalb-def">${esc(sgaPrefijoPorDefecto(c))}</b>). Después van la fecha y el orden del día.</div>
+            <div class="sgac-h" id="sgaalb-aviso" style="color:var(--danger);font-weight:700;">${esc(sgaPrefijoProblema(cfg.prefijo || sgaPrefijoPorDefecto(c), c.id))}</div>
           </div>
           <div class="sgac-row" style="display:block;">
             <div class="sgac-rq">Columnas de su albarán</div>
@@ -7210,10 +7225,12 @@ async function submitSgaCliente(){
   const salidaAntes = sgaClienteSalida(id);
   const observaciones = document.getElementById('sgac-obs').value.trim();
   const prefijo = ((document.getElementById('sgac-prefijo') || {}).value || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
+  const problemaPref = sgaPrefijoProblema(prefijo, id);   // obligatorias y no repetidas con otro cliente
+  if (problemaPref) { errEl.textContent = problemaPref; const pi = document.getElementById('sgac-prefijo'); if (pi) { pi.focus(); pi.scrollIntoView({ block: 'center', behavior: 'smooth' }); } return; }
   const btn = document.querySelector('.sgac-save');
   if (btn) btn.disabled = true;
   const { error } = await supabaseClient.from('sga_clientes').upsert({ cliente_id: id, activo_desde: activoDesde || null, codigos_unicos: codigosUnicos, campos, observaciones: observaciones || null, prefijo: prefijo || null, updated_at: new Date().toISOString() });
-  if (error) { errEl.textContent = 'No se pudo guardar: ' + (error.message || 'error desconocido.'); if (btn) btn.disabled = false; return; }
+  if (error) { errEl.textContent = 'No se pudo guardar: ' + (/sga_clientes_prefijo_uq/i.test(error.message || '') ? `las letras «${prefijo}» ya las usa otro cliente: elige otras.` : (error.message || 'error desconocido.')); if (btn) btn.disabled = false; return; }
   sgaClientes[id] = { activoDesde, codigosUnicos, campos, observaciones, prefijo };
   const dif = [];
   if (previa.activoDesde !== activoDesde) dif.push(activoDesde ? `activación desde el ${fmtDateDMY(activoDesde)}` : 'desactivado');
