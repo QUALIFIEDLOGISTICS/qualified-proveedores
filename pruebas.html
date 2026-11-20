@@ -826,6 +826,21 @@
     cierto(/vehiculo_obligatorio/.test(trozo('async function sgaCrearOcExpedicion', 'async function sgaOcSincronizarExpedicion')), 'La orden creada desde una expedición también explica el rechazo');
   });
 
+  prueba('Forrajes · viaje: «Pagos y facturas» pregunta por separado si ha llegado/se ha emitido la factura (con su nº) y si ya se ha pagado/cobrado, y lo guarda sin romper si falta el SQL', async () => {
+    const m = new Function(`${trozo('function fzViajeDeFila', 'const fzCatDeFila')}; return fzViajeDeFila;`)();
+    const v = m({ id: 'a', pagado_proveedor: true, cobrado_cliente: false, facturado_proveedor: true, factura_proveedor: 'F-1' }), vacio = m({ id: 'b' });
+    igual([v.pagadoProveedor, v.cobradoCliente, v.facturadoProveedor, v.facturaProveedor, vacio.pagadoProveedor, vacio.cobradoCliente], [true, false, true, 'F-1', false, false], 'El viaje lee «pagado al proveedor» y «cobrado al cliente» (sin dato = no)');
+    const form = trozo('function fzFormHtml', 'function fzFactura');
+    ['¿Ha llegado la factura del proveedor?', '¿Se le ha pagado ya al proveedor?', '¿Se le ha facturado al cliente?', '¿Ya ha pagado el cliente (cobrado)?'].forEach(q => cierto(form.includes(q), 'Falta la pregunta «' + q + '»'));
+    cierto(/'fz-ppg', f\.pagadoProveedor/.test(form) && /'fz-ccb', f\.cobradoCliente/.test(form) && /class="fz-q-n"/.test(form), 'Cada pregunta tiene su casilla y el nº de factura va en su propia fila');
+    const g = trozo('async function fzGuardarViaje', 'async function fzEliminarViaje');
+    cierto(/if \(pagP \|\| previo\.pagadoProveedor\) row\.pagado_proveedor = pagP;/.test(g) && /if \(cobC \|\| previo\.cobradoCliente\) row\.cobrado_cliente = cobC;/.test(g), 'Las casillas nuevas solo se mandan si hay algo que guardar o quitar (guardar sigue funcionando sin el SQL)');
+    cierto(/forrajes-pagado-cobrado\.sql/.test(g), 'Si falta el SQL se avisa cuál ejecutar');
+    cierto(/pg\.checked/.test(trozo('function fzGuardarBorradorForm', 'async function fzCatArchivar')), 'Las casillas no se pierden al repintar el formulario');
+    const sql = await (await fetch('forrajes-pagado-cobrado.sql?' + Date.now())).text();
+    cierto(/add column if not exists pagado_proveedor boolean not null default false/.test(sql) && /add column if not exists cobrado_cliente\s+boolean not null default false/.test(sql), 'El SQL añade las dos columnas, sin tocar los viajes existentes');
+  });
+
   prueba('CRM: al volver a la pantalla se leen de nuevo las cotizaciones (lo creado desde otro sitio aparece), sin pisar una ficha en edición ni repetir la lectura a cada momento', async () => {
     const f = (S, filas) => new Function('S', 'filas', `
       let pintado = 0, lecturas = 0;
