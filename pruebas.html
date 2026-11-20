@@ -1011,6 +1011,47 @@
     cierto(/caja\(M, y, aw, 84, '22', 'Firma y sello del remitente', \[\]\);\s*dibujarSello\(M \+ aw \/ 2, y - 52\)/.test(f) && /fetch\('sello-qualified\.png'\)/.test(f), 'El sello de Qualified sale ya puesto en la casilla 22 (imagen sello-qualified.png si existe; si no, dibujado con los datos de la empresa)');
   });
 
+  prueba('Contactos · cliente de almacén nuevo: al guardarlo se le lleva paso a paso por almacenes (si no tiene), Gestión de stock SGA, Tarifa de almacenaje y Operativas; cada paso se salta o se acaba', () => {
+    const r = new Function(`
+      const win = { scrollTo() {} }, window = win, log = [], toasts = [];
+      const contactos = [{ id: 'c1', warehouseIds: ['w1'] }, { id: 'c2', warehouseIds: [] }];
+      const esc = s => String(s == null ? '' : s);
+      const openContactoModal = id => { win.__contactoDetailId = id; log.push('ficha'); };
+      const openSgaClienteForm = id => { win.__sgaClienteFormId = id; log.push('sga'); };
+      const openAlmacenajeTarifaForm = (id, o) => { win.__almacenajeFormClienteId = id; log.push('tarifa:' + o); };
+      const renderTab = () => log.push('render'), renderHeader = () => {}, contactoConfirmLeaveEdit = () => true, appToast = t => toasts.push(t);
+      ${trozo('const ALTA_ALM_PASOS', 'async function submitContactoForm')}
+      const out = {};
+      altaAlmIniciar('c1'); out.pasos1 = win.__altaAlm.pasos.join('>'); out.log1 = log.splice(0).join(',');
+      out.barraSga = altaAlmBarraHtml('sga'); out.barraOtro = altaAlmBarraHtml('tarifa');
+      out.malPaso = altaAlmContinuar('tarifa'); out.iTrasMalPaso = win.__altaAlm.i;
+      out.sgaSigue = altaAlmContinuar('sga'); out.log2 = log.splice(0).join(',');
+      out.tarifaSigue = altaAlmContinuar('tarifa'); out.i3 = win.__altaAlm.i; out.log3 = log.splice(0).join(','); out.barraOp = altaAlmBarraHtml('operativas').includes('paso 3 de 3') && altaAlmBarraHtml('operativas').includes('Nueva operativa');
+      win.__contactoDetailId = 'otro'; out.barraOtraFicha = altaAlmBarraHtml('operativas'); win.__contactoDetailId = 'c1';
+      out.fin = altaAlmContinuar('operativas'); out.finEstado = win.__altaAlm;
+      altaAlmIniciar('c2'); out.pasos2 = win.__altaAlm.pasos.join('>'); out.editAlmacen = win.__contactoDetailEditMode; log.length = 0;
+      win.__sgaClienteFormId = 'c2'; altaAlmContinuar('almacen'); out.log4 = log.splice(0).join(','); out.editTrasAlmacen = win.__contactoDetailEditMode;
+      win.__almacenajeFormClienteId = 'c2'; altaAlmSaltar(); out.saltar = [win.__altaAlm.pasos[win.__altaAlm.i], win.__almacenajeFormClienteId, win.__sgaClienteFormId]; log.length = 0;
+      altaAlmTerminar(); out.terminar = [win.__altaAlm, toasts.length];
+      return out;`)();
+    igual([r.pasos1, r.log1], ['sga>tarifa>operativas', 'ficha,sga'], 'Con almacén ya asignado empieza directamente por la Gestión de stock SGA');
+    cierto(r.barraSga.includes('paso 1 de 3: Gestión de stock (SGA)') && r.barraSga.includes('Saltar este paso') && r.barraOtro === '', 'La barra dice en qué paso va y solo sale en la pantalla de ese paso');
+    igual([r.malPaso, r.iTrasMalPaso], [false, 0], 'Una pantalla que no es la del paso actual no avanza el asistente');
+    igual([r.sgaSigue, r.log2], [true, 'ficha,tarifa:ficha'], 'Guardar (o cancelar) el SGA lleva a la tarifa de almacenaje');
+    igual([r.tarifaSigue, r.i3, r.log3, r.barraOp], [true, 2, 'ficha,render', true], 'Tras la tarifa se llega a las Operativas, en la ficha, con su botón «+ Nueva operativa»');
+    igual(r.barraOtraFicha, '', 'Si se abre la ficha de otro cliente, la barra no sale');
+    igual([r.fin, r.finEstado], [false, null], 'Tras el último paso el asistente acaba y la pantalla vuelve a la ficha');
+    igual([r.pasos2, r.editAlmacen], ['almacen>sga>tarifa>operativas', true], 'Un cliente sin almacenes empieza por marcar sus almacenes');
+    igual([r.log4, r.editTrasAlmacen], ['ficha,sga', false], 'Tras los almacenes pasa a la Gestión de stock SGA');
+    igual(r.saltar, ['tarifa', 'c2', null], 'Saltar este paso pasa al siguiente (abre la tarifa) y deja limpia la pantalla anterior (el SGA)');
+    igual(r.terminar, [null, 1], 'Terminar aquí acaba el asistente y avisa');
+    const sub = trozo('async function submitContactoForm', '// Un contacto puede ser a la vez cliente de almacén');
+    cierto(/if \(!editId && esClienteAlmacen && altaAlmIniciar\(contactoId\)\) return;/.test(sub), 'Al guardar un contacto nuevo que es cliente de almacén arranca el asistente');
+    cierto(/altaAlmContinuar\('sga'\)/.test(trozo('function sgaClienteCerrar', 'function openSgaClienteModal')) && /altaAlmContinuar\('tarifa'\)/.test(trozo('function backFromAlmacenajeForm', 'function almacenajeSubtipoAplicar')) && /altaAlmContinuar\('tarifa'\)/.test(trozo('async function submitAlmacenajeTarifaForm', 'async function deleteAlmacenajeTarifaCompleta')) && /const finish = \(\) => \{[^\n]*altaAlmContinuar\('almacen'\)/.test(html) && /altaAlmContinuar\('almacen'\)\) return;[^\n]*\n\s*renderTab\(\);\s*\}\s*function contactoPresetForNavLabel/.test(html), 'Las salidas de cada pantalla (guardar y cancelar) enganchan con el siguiente paso');
+    cierto(/\$\{altaAlmBarraHtml\('sga'\)\}\s*<div class="deca-banner">/.test(html), 'La pantalla de Gestión de stock lleva la barra del asistente');
+    cierto(/altaAlmBarraHtml\('tarifa'\)/.test(html) && /altaAlmBarraHtml\('almacen'\)\}\$\{altaAlmBarraHtml\('operativas'\)/.test(html) && /window\.__altaAlm = null;   \/\/ salir de la ficha/.test(html), 'La ficha y la tarifa también la llevan, y salir de la ficha acaba el asistente');
+  });
+
   prueba('CRM: al volver a la pantalla se leen de nuevo las cotizaciones (lo creado desde otro sitio aparece), sin pisar una ficha en edición ni repetir la lectura a cada momento', async () => {
     const f = (S, filas) => new Function('S', 'filas', `
       let pintado = 0, lecturas = 0;
