@@ -2465,6 +2465,15 @@
   .fz-vj.via .fz-res-ben span{font-size:14px;}
   .fz-vj.via .fz-res-f{font-size:16px;}
   .fz-vj.via .fz-res-aviso{font-size:14px;padding:11px 13px;}
+  /* Estados de la lista de viajes (Todos / Pendientes de facturar / Pendientes de pagar) */
+  .fz-estados{display:flex;gap:8px;flex-wrap:wrap;margin:-4px 0 14px;}
+  .fz-est{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;border:1px solid var(--border);background:var(--panel);color:var(--muted);font-family:inherit;font-size:13px;font-weight:700;line-height:1;cursor:pointer;transition:border-color .12s,background .12s;}
+  .fz-est i{width:9px;height:9px;border-radius:50%;background:var(--c);}
+  .fz-est em{font-style:normal;font-size:11.5px;font-weight:800;padding:2px 8px;border-radius:99px;background:var(--panel2);color:var(--muted);}
+  .fz-est:hover{border-color:var(--primary);color:var(--text);}
+  .fz-est.on{background:var(--primary);border-color:var(--primary);color:#fff;}
+  .fz-est.on em{background:rgba(255,255,255,.22);color:#fff;}
+  .fz-est.on i{box-shadow:0 0 0 2px rgba(255,255,255,.55);}
   .fz-q{padding:10px 0;border-top:1px solid var(--border);}
   .fz-q .dr-chk{margin:0;font-weight:600;cursor:pointer;}
   .fz-q-n{display:block;width:100%;margin-top:8px;}
@@ -21676,7 +21685,7 @@ const FZ_FORMATOS = ['Redonda', 'Rectangular', 'Ensilada'];   // formato de la b
 const FZ_MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 function fzS(){
   return (window.__fz = window.__fz || { cargado: false, cargando: false, error: '', sec: 'viajes', view: 'lista', viajes: [], proveedores: [], clientes: [], productos: [], precios: [], preciosOk: true, preciosCli: [], preciosCliOk: true, socios: [], pagos: [], pagosOk: true, pcts: [], pctsOk: true, pgAnio: today().slice(0, 4), pgSocio: '',
-    q: '', anio: today().slice(0, 4), mes: today().slice(5, 7), fprov: '', fcli: '', producto: '', formato: '', pend: false, cq: '', archivados: false, da: today().slice(0, 4), dm: '', dvista: 'resumen', dmet: 'beneficio', dtramo: false, df: { producto: '', formato: '', prov: '', cli: '', reg: '' }, form: null, formDirty: false });
+    q: '', anio: today().slice(0, 4), mes: today().slice(5, 7), fprov: '', fcli: '', producto: '', formato: '', estado: '', cq: '', archivados: false, da: today().slice(0, 4), dm: '', dvista: 'resumen', dmet: 'beneficio', dtramo: false, df: { producto: '', formato: '', prov: '', cli: '', reg: '' }, form: null, formDirty: false });
 }
 const fzR2 = n => Math.round((Number(n) || 0) * 100) / 100;
 const fzNorm = s => String(s == null ? '' : s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -21794,8 +21803,13 @@ function fzAniosOpciones(S){
 function fzMesesOpciones(S){
   return `<option value="">Todos los meses</option>${FZ_MESES.map((m, i) => { const v = String(i + 1).padStart(2, '0'); return `<option value="${v}"${v === S.mes ? ' selected' : ''}>${m.charAt(0).toUpperCase() + m.slice(1)}</option>`; }).join('')}`;
 }
-function fzViajesFiltrados(){
-  const S = fzS(), M = fzMaps(), q = fzNorm(S.q).trim();
+// Estados de cobro y pago que se pueden filtrar: lo que todavía no se ha hecho
+const FZ_ESTADOS = {
+  facturar: { t: 'Pendientes de facturar', c: '#E0A100', ayuda: 'Falta que llegue la factura del proveedor o facturar al cliente', pend: v => !(v.facturadoProveedor && v.facturadoCliente) },
+  pagar: { t: 'Pendientes de pagar', c: '#C1443D', ayuda: 'Todavía no se ha pagado al proveedor', pend: v => !v.pagadoProveedor },
+};
+function fzViajesFiltrados(estado){
+  const S = fzS(), M = fzMaps(), q = fzNorm(S.q).trim(), est = estado === undefined ? S.estado : estado;
   return S.viajes.filter(v => {
     const f = String(v.fecha);
     if (S.anio && f.slice(0, 4) !== S.anio) return false;
@@ -21804,7 +21818,7 @@ function fzViajesFiltrados(){
     if (S.formato && v.formato !== S.formato) return false;
     if (S.fprov && v.proveedorId !== S.fprov) return false;
     if (S.fcli && v.clienteId !== S.fcli) return false;
-    if (S.pend && v.facturadoProveedor && v.facturadoCliente) return false;
+    if (est && FZ_ESTADOS[est] && !FZ_ESTADOS[est].pend(v)) return false;
     if (q) {
       const p = M.prov.get(v.proveedorId), c = M.cli.get(v.clienteId), pr = M.prod.get(v.productoId);
       const txt = fzNorm([v.numero, p && p.nombre, c && c.nombre, pr && pr.nombre, v.formato, v.zonaCarga, v.zonaDescarga, v.facturaProveedor, v.facturaCliente, v.notas].join(' '));
@@ -21814,9 +21828,16 @@ function fzViajesFiltrados(){
   });
 }
 function fzFiltro(k, val){ const S = fzS(); S[k] = val; fzRefrescarLista(); }
+// Fila de estados bajo la barra de filtros: Todos / Pendientes de facturar / Pendientes de pagar, cada uno con cuántos viajes son (con el resto de filtros aplicados)
+function fzEstadosHtml(){
+  const S = fzS();
+  const chip = (id, t, n, c, ayuda) => `<button type="button" class="fz-est${(S.estado || '') === id ? ' on' : ''}"${c ? ` style="--c:${c}"` : ''} title="${esc(ayuda || '')}" onclick="fzFiltro('estado', '${id}')">${c ? '<i></i>' : ''}${esc(t)}<em>${n}</em></button>`;
+  return chip('', 'Todos', fzViajesFiltrados('').length, '', 'Todos los viajes') + Object.keys(FZ_ESTADOS).map(k => chip(k, FZ_ESTADOS[k].t, fzViajesFiltrados(k).length, FZ_ESTADOS[k].c, FZ_ESTADOS[k].ayuda)).join('');
+}
 function fzRefrescarLista(){
   const el = document.getElementById('fz-lista'); if (!el) return;
   el.innerHTML = fzViajesTablaHtml();
+  const es = document.getElementById('fz-estados'); if (es) es.innerHTML = fzEstadosHtml();
 }
 const fzEur = n => eur2(n);
 function fzViajesTablaHtml(){
@@ -21877,9 +21898,9 @@ function fzViajesHtml(){
       <select id="fz-formato-f" onchange="fzFiltro('formato', this.value)" style="width:auto;flex:0 1 170px;"><option value="">Todos los formatos</option>${FZ_FORMATOS.map(f => opt(f, f, f === S.formato)).join('')}</select>
       <select id="fz-fprov" onchange="fzFiltro('fprov', this.value)" style="width:auto;flex:0 1 200px;"><option value="">Todos los proveedores</option>${S.proveedores.filter(p => !p.archived || p.id === S.fprov).map(p => opt(p.id, p.nombre, p.id === S.fprov)).join('')}</select>
       <select id="fz-fcli" onchange="fzFiltro('fcli', this.value)" style="width:auto;flex:0 1 200px;"><option value="">Todos los clientes</option>${S.clientes.filter(c => !c.archived || c.id === S.fcli).map(c => opt(c.id, c.nombre, c.id === S.fcli)).join('')}</select>
-      <label class="dr-chk" style="margin:0;white-space:nowrap;"><input type="checkbox" ${S.pend ? 'checked' : ''} onchange="fzFiltro('pend', this.checked)" /> Pendientes de facturar</label>
       <button class="btn btn-ghost" style="background:var(--panel);" onclick="fzExportarCsv()" title="Descarga en Excel (CSV) los viajes que se ven">Exportar</button>
     </div>
+    <div class="fz-estados" id="fz-estados">${fzEstadosHtml()}</div>
     <div id="fz-lista">${fzViajesTablaHtml()}</div>`;
 }
 function fzExportarCsv(){
@@ -22791,7 +22812,7 @@ function fzFiltrar(d, h, mes){
 function fzDashTiempo(k, v){ fzS()[k] = v; renderTab(); }
 function fzDashFiltro(k, v){ fzS().df[k] = v; renderTab(); }
 function fzDashLimpiar(){ fzS().df = { producto: '', formato: '', prov: '', cli: '', reg: '' }; renderTab(); }
-function fzIrPend(){ const S = fzS(); S.pend = true; S.anio = ''; S.mes = ''; S.producto = ''; S.formato = ''; S.fprov = ''; S.fcli = ''; S.q = ''; fzIr('viajes'); }
+function fzIrPend(){ const S = fzS(); S.estado = 'facturar'; S.anio = ''; S.mes = ''; S.producto = ''; S.formato = ''; S.fprov = ''; S.fcli = ''; S.q = ''; fzIr('viajes'); }
 // Totales con los datos «por tonelada» (solo los viajes en toneladas: las balas no se mezclan)
 function fzTot(list){
   const t = fzTotales(list); t.tnT = 0; t.compraT = 0; t.ventaT = 0; t.fleteT = 0;
