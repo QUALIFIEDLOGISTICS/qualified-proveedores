@@ -874,18 +874,21 @@
   prueba('Almacén · Franjas horarias: botón «Albarán de salida» que imprime un albarán en blanco con solo los datos del almacén (cabe en una hoja)', async () => {
     const html = new Function(`
       const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-      const location = { href: 'http://x/panel.html' };
+      const location = { href: ${JSON.stringify(new URL('panel.html', location.href).href)} };   // con la ruta real, el logo se carga y la altura medida es la de verdad
       ${trozo('function sgaDirLineas', 'function sgaDirWh')}
       ${trozo('const SGA_ALB_BN_CSS', '// «Ver albarán» desde el formulario')}
       ${trozo('const SGA_ALB_BLANCO_FILAS', 'async function citasAlbaranBlanco')}
       return sgaAlbaranBlancoHtml({ name: 'Sant Fruitós', calle1: 'Pol. Les Brucardes 12', codigoPostal: '08272', ciudad: 'Sant Fruitós de Bages', provincia: 'Barcelona', pais: 'España' });`)();
     ['QUALIFIED LOGISTICS', 'Sant Fruitós', 'Pol. Les Brucardes 12', '08272 Sant Fruitós de Bages, Barcelona, España', 'ALBARÁN DE SALIDA'].forEach(t => cierto(html.includes(t), 'Falta «' + t + '»'));
-    cierto(/<h1>ALBARÁN DE SALIDA<\/h1><div>Fecha:<span><\/span><\/div>/.test(html) && /<div class="n">Cliente:<span><\/span><\/div>/.test(html) && !/Ref\.:|Nº<span/.test(html), 'La fecha va a la derecha de la barra «ALBARÁN DE SALIDA» con espacio para escribirla, arriba hay un campo «Cliente:» y ya no hay Ref. ni nº de albarán');
+    cierto(/<h1>ALBARÁN DE SALIDA<\/h1><div>Fecha:<span><\/span><\/div>/.test(html) && /<\/div>\s*<div class="cli">Cliente:<span><\/span><\/div>/.test(html) && !/Ref\.:|Nº<span/.test(html), 'La fecha va a la derecha de la barra «ALBARÁN DE SALIDA» con espacio para escribirla, justo debajo hay un campo «Cliente:» y ya no hay Ref. ni nº de albarán');
     cierto(!/class="lin"/.test(html) && !/\.mat i\{[^}]*border/.test(html) && /class="hueco"/.test(html), 'Destino y Transportista van en blanco, sin rayas debajo');
-    cierto(!/\d{2}-\d{2}-\d{4}/.test(html.replace(/08272/g, '')) && (html.match(/<tr><td><\/td><td class="r"><\/td><td class="r"><\/td><\/tr>/g) || []).length === 11, 'Sin fecha ni datos de ningún cliente: solo 11 filas vacías para rellenar a mano');
-    cierto(/<th>Descripción de la mercancía<\/th><th class="r"[^>]*>Palets<\/th><th class="r"[^>]*>Peso \(kg\)<\/th>/.test(html) && !/>Cliente<\/th>|Lote|Cajas/.test(html) && /<tfoot><tr><td>RECUENTO<\/td><td class="r"><\/td><td class="r"><\/td><\/tr><\/tfoot>/.test(html), 'La tabla solo tiene Descripción de la mercancía, Palets y Peso, y una última fila «RECUENTO» para apuntar el total');
+    cierto(!/\d{2}-\d{2}-\d{4}/.test(html.replace(/08272/g, '')) && (html.match(/<tr><td><\/td><td class="r"><\/td><td class="r"><\/td><\/tr>/g) || []).length === 10, 'Sin fecha ni datos de ningún cliente: solo 10 filas vacías para rellenar a mano');
+    cierto(/<th>Descripción de la mercancía<\/th><th class="r"[^>]*>Palets<\/th><th class="r"[^>]*>Peso \(kg\)<\/th>/.test(html) && !/>Cliente<\/th>|Lote|Cajas/.test(html) && /<tfoot><tr><td>TOTAL<\/td><td class="r"><\/td><td class="r"><\/td><\/tr><\/tfoot>/.test(html) && /Palets<\/th>/.test(html) && (html.match(/style="width:24mm;"/g) || []).length === 2, 'La tabla solo tiene Descripción de la mercancía, Palets y Peso (las dos últimas estrechas, para 6 cifras) y una última fila «TOTAL» para apuntar el total');
     const f = document.createElement('iframe'); f.style.cssText = 'position:absolute;left:-9999px;width:794px;height:1200px;border:0;'; document.body.appendChild(f);
-    f.contentDocument.open(); f.contentDocument.write(html); f.contentDocument.close(); await new Promise(r => setTimeout(r, 300));
+    f.contentDocument.open(); f.contentDocument.write(html); f.contentDocument.close();
+    for (let i = 0; i < 50 && [...f.contentDocument.images].some(im => !im.complete); i++) await new Promise(r => setTimeout(r, 100));   // espera al logo: sin él la cabecera mide menos
+    await new Promise(r => setTimeout(r, 200));
+    cierto([...f.contentDocument.images].every(im => im.naturalHeight > 0), 'El logo se ha cargado para medir la hoja');
     const alto = f.contentDocument.querySelector('.hoja').getBoundingClientRect().height; f.remove();
     cierto(alto <= 272 / 25.4 * 96, 'El albarán en blanco cabe en una hoja A4 con margen de seguridad (' + Math.round(alto / 96 * 25.4) + ' mm de 277)');
     const tpl = trozo('function tplCitas', 'function tplUnscheduled');
