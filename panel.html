@@ -12594,6 +12594,7 @@ function sgaSalidaDestinatarioCambio(){
     ok.style.color = d ? 'var(--success)' : 'var(--muted)';
     ok.textContent = d ? '✓ Vinculado a una dirección' : 'Escrito a mano: no está en Direcciones; escribe su dirección a la derecha.';
   }
+  sgaSalidaDestPaisRefrescar();
   sgaSalidaOcDirAyuda();
   window.__stockDirty = true;
 }
@@ -12664,7 +12665,7 @@ function sgaSalidaLeer(){
     const bu = document.getElementById('sl-bu-' + el.dataset.pid), bt = bu ? bu.value.trim().replace(',', '.') : '';   // bultos escritos a mano (vacío: automático)
     return { p, txt: n, n: typeof n === 'number' ? n : (n === '' ? 0 : Number(n)), bt, bm: bt === '' ? null : Number(bt) };
   }).filter(x => x.p);
-  return { clienteId: val('sl-cliente'), fecha: val('sl-fecha'), referencia: val('sl-ref'), modalidad: val('sl-modalidad') || 'palet', transportista: val('sl-transp'), matricula: sgaMatriculaJoin(val('sl-matr'), val('sl-matr2')), observaciones: val('sl-obs'), destinatario: val('sl-dest'), destinatarioDireccion: val('sl-destdir'), productoMov: val('sl-mov'), items, servicios: sgaServiciosLeer() };
+  return { clienteId: val('sl-cliente'), fecha: val('sl-fecha'), referencia: val('sl-ref'), modalidad: val('sl-modalidad') || 'palet', transportista: val('sl-transp'), matricula: sgaMatriculaJoin(val('sl-matr'), val('sl-matr2')), observaciones: val('sl-obs'), destinatario: val('sl-dest'), destinatarioDireccion: sgaDestDireccionConPais({ destinatario: val('sl-dest'), destinatarioDireccion: val('sl-destdir') }), productoMov: val('sl-mov'), items, servicios: sgaServiciosLeer() };
 }
 // FIFO (o LIFO, según el cliente) dentro de cada tipo de carga + referencia: no se puede sacar de una partida más nueva (o más antigua,
 // en LIFO) si hay otra anterior sin vaciar. En «manual» no se avisa de nada.
@@ -12723,6 +12724,7 @@ function sgaSalidaRefrescar(){
   const d = sgaSalidaLeer();
   window.__slCache = d;   // el DeCA y la orden de carga también leen el formulario: que reutilicen esta lectura
   try {
+    sgaSalidaDestPaisRefrescar();
     sgaSalidaDecaRefrescar();
     sgaSalidaOcRefrescar();
     sgaSalidaCmrRefrescar();
@@ -12799,6 +12801,11 @@ function tplStockSalidaPage(){
             <div class="field" style="flex:2;min-width:260px;"><label>Dirección del destinatario</label>${decaInputIcon('pin', `<input id="sl-destdir" maxlength="250" oninput="sgaSalidaOcDirAyuda()" placeholder="Se rellena sola al elegir un destinatario de la lista; si lo escribes a mano, escribe aquí su dirección" />`)}<div id="sl-dest-oc-ayuda" style="display:none;font-size:11.5px;margin-top:4px;"></div></div>
           </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:0;">
+            <div class="field" style="flex:1;min-width:200px;max-width:340px;"><label>País del destinatario <span class="dc-req" id="sl-destpais-req" style="display:none;">*</span></label>
+              <select id="sl-destpais" onchange="this.dataset.manual='1'; sgaSalidaDestPaisCambio()"><option value="">Elige el país…</option>${ocPaisOptionsHtml('')}</select>
+              <div id="sl-destpais-ayuda" style="font-size:11.5px;color:var(--mutedFaint);margin-top:4px;"></div></div>
+          </div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:0;">
             <div class="field" style="flex:1;min-width:200px;"><label>Transportista</label>${decaInputIcon('truck', `<input id="sl-transp" data-mayusc data-combo="sl-transp-datalist" autocomplete="off" style="text-transform:uppercase;" maxlength="120" placeholder="Escribe o elige un proveedor de transporte" />`)}<datalist id="sl-transp-datalist">${contactos.filter(c => !c.archived && c.esTransportista).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).map(c => `<option value="${esc(c.nombre.toUpperCase())}" label="${esc([c.nombreComercial, c.nif].filter(Boolean).join(' · '))}">`).join('')}</datalist></div>
             <div class="field" style="flex:1;min-width:150px;"><label>Matrícula tractora</label>${decaInputIcon('truck', `<input id="sl-matr" data-mayusc style="text-transform:uppercase;" maxlength="15" placeholder="Opcional" />`)}</div>
             <div class="field" style="flex:1;min-width:150px;"><label>Matrícula remolque</label>${decaInputIcon('trailer', `<input id="sl-matr2" data-mayusc style="text-transform:uppercase;" maxlength="15" placeholder="Opcional" />`)}</div>
@@ -12856,6 +12863,7 @@ async function sgaSalidaConfirmar(comoBorrador){
   if (!d.clienteId) errores.push('Elige el cliente.');
   if (!d.fecha) errores.push('Indica la fecha de expedición.');
   if (d.clienteId && !sgaSalidaWh()) errores.push('Elige el almacén de donde sale la mercancía.');
+  if (d.destinatario && !sgaSalidaDestPais(d)) errores.push('Elige el país del destinatario (hace falta para el CMR, la orden de carga y el DeCA).');
   const destOriginal = window.__slEdit ? window.__slEdit.albaran.destinatario : '';
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const cfg = sgaClienteCfg(d.clienteId);
@@ -14051,12 +14059,60 @@ async function loadCmrDocumentos(){
   } catch (e) { cmrDocumentos = []; }
 }
 function sgaCmrDeExpedicion(albaranId){ return cmrDocumentos.find(c => c.albaranId === albaranId) || null; }
-// País de origen (el almacén) y de destino (la dirección del destinatario, de Direcciones o escrita a mano) con los nombres de la lista de países de la web
+/* País del destinatario: si el destinatario es de Direcciones, el de su dirección guardada (el campo se rellena solo y no se toca); si se escribe a mano
+   (o su dirección no tiene un país válido), se elige de la lista y es obligatorio. El país elegido se añade al final de la dirección que se guarda
+   («calle, 28001 Madrid, España»), así lo leen igual el CMR, la orden de carga y el DeCA. */
+function sgaSalidaDestPais(d){
+  const dd = d.destinatario ? sgaDireccionPorNombre(d.destinatario) : null;
+  const ddPais = dd ? ocPaisDeLista(dd.pais) : '';
+  if (ddPais) return ddPais;
+  const elegido = ((document.getElementById('sl-destpais') || {}).value || '').trim();
+  if (elegido) return elegido;
+  if (dd || !d.destinatario) return '';
+  const partes = String(d.destinatarioDireccion || '').split(/\s*,\s*/).filter(Boolean);   // lo que ya viniera escrito al final de la dirección
+  return (partes.length ? ocPaisDeLista(partes[partes.length - 1]) : '') || ocPaisDeLista(sgaDestinoManual(d.destinatario, d.destinatarioDireccion).pais);
+}
+function sgaDestDireccionConPais(d){
+  const txt = String(d.destinatarioDireccion || '').trim();
+  if (!txt || !d.destinatario || sgaDireccionPorNombre(d.destinatario)) return txt;   // de Direcciones: su país ya va en la dirección guardada
+  const pais = sgaSalidaDestPais(d);
+  if (!pais) return txt;
+  const partes = txt.split(/\s*,\s*/).filter(Boolean), ult = partes.length - 1;
+  if (ocPaisDeLista(partes[ult])) { if (ocPaisDeLista(partes[ult]) === pais) return txt; partes[ult] = pais; return partes.join(', '); }   // acaba en otro país: se cambia por el elegido
+  return txt + ', ' + pais;
+}
+function sgaSalidaDestPaisRefrescar(){
+  const sel = document.getElementById('sl-destpais');
+  if (!sel) return;
+  const val = id => ((document.getElementById(id) || {}).value || '').trim();
+  const nombre = val('sl-dest'), dir = val('sl-destdir');
+  const dd = nombre ? sgaDireccionPorNombre(nombre) : null, ddPais = dd ? ocPaisDeLista(dd.pais) : '';
+  const ay = document.getElementById('sl-destpais-ayuda'), req = document.getElementById('sl-destpais-req');
+  const ayuda = (t, c) => { if (ay) { ay.textContent = t; ay.style.color = c || 'var(--mutedFaint)'; } };
+  if (dd && ddPais) {   // de Direcciones, con país: se rellena solo
+    sel.value = ddPais; sel.disabled = true; sel.dataset.auto = '1'; sel.dataset.manual = '';
+    if (req) req.style.display = 'none';
+    ayuda('Sale de la dirección guardada en Direcciones.');
+    return;
+  }
+  sel.disabled = false;
+  if (sel.dataset.auto === '1') { sel.value = ''; sel.dataset.auto = ''; sel.dataset.manual = ''; }   // lo que venía de una dirección de la lista se quita
+  if (!nombre) { if (req) req.style.display = 'none'; if (sel.dataset.manual !== '1') sel.value = ''; ayuda(''); return; }
+  if (sel.dataset.manual !== '1') {   // mientras no se toque, se propone el país con el que acabe lo escrito en la dirección
+    const partes = dir.split(/\s*,\s*/).filter(Boolean);
+    sel.value = (partes.length ? ocPaisDeLista(partes[partes.length - 1]) : '') || ocPaisDeLista(sgaDestinoManual(nombre, dir).pais) || '';
+  }
+  if (req) req.style.display = '';
+  if (sel.value) ayuda(dd ? 'La dirección guardada no tenía país: el elegido aquí se usa en el CMR.' : 'Escrito a mano: este país sale en el CMR, la orden de carga y el DeCA.');
+  else ayuda(dd ? 'La dirección guardada no tiene un país válido: elígelo aquí (o complétala en Direcciones).' : 'Obligatorio: elige el país del destinatario.', 'var(--danger)');
+}
+function sgaSalidaDestPaisCambio(){ window.__stockDirty = true; sgaSalidaOcDirAyuda(); sgaSalidaRefrescar(); }
+// País de origen (el almacén) y de destino (el del campo «País del destinatario»), con los nombres de la lista de países de la web
 function sgaSalidaPaises(d){
   const w = allWarehouses.find(x => x.id === sgaSalidaWh()) || null;
   const dd = d.destinatario ? sgaDireccionPorNombre(d.destinatario) : null;
   const man = dd || !d.destinatario ? null : sgaDestinoManual(d.destinatario, d.destinatarioDireccion);
-  const origen = w ? ocPaisDeLista(w.pais) : '', destino = ocPaisDeLista(dd ? dd.pais : (man ? man.pais : ''));
+  const origen = w ? ocPaisDeLista(w.pais) : '', destino = sgaSalidaDestPais(d);
   return { w, dd, man, origen, destino, internacional: !!(origen && destino && origen !== destino) };
 }
 function sgaSalidaCmrHtml(){

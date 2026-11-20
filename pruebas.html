@@ -903,7 +903,7 @@
       const sgaDireccionPorNombre = n => dir[n] || null;
       const sgaDestinoManual = (n, t) => ({ empresa: n, pais: String(t || '').split(/\\s*,\\s*/).pop() });
       const ocPaisDeLista = t => ({ francia: 'Francia', 'españa': 'España' }[String(t || '').toLowerCase()] || '');
-      ${trozo('function sgaSalidaPaises', 'function sgaSalidaCmrHtml')}
+      ${trozo('function sgaSalidaDestPais', 'function sgaSalidaCmrHtml')}
       const r = d => { const p = sgaSalidaPaises(d); return [p.origen, p.destino, p.internacional]; };
       return { lyon: r({ destinatario: 'Lyon SARL' }), barna: r({ destinatario: 'Barna SL' }), manual: r({ destinatario: 'Otro', destinatarioDireccion: 'Rue 1, 75001 Paris, Francia' }), manualSinPais: r({ destinatario: 'Otro', destinatarioDireccion: 'Calle 1, 28001 Madrid' }), vacio: r({ destinatario: '' }) };`)();
     igual(P.lyon, ['España', 'Francia', true], 'Destinatario de Direcciones en Francia: internacional');
@@ -940,6 +940,43 @@
     igual([doc.getPageCount(), Math.round(doc.getPage(0).getWidth()), Math.round(doc.getPage(0).getHeight())], [3, 595, 842], 'Tres ejemplares en A4');
     const vacio = await PDFLib.PDFDocument.load(await f('CMR-2026-0002', {}));
     igual(vacio.getPageCount(), 3, 'Con todo en blanco también se genera');
+  });
+
+  prueba('SGA · Expediciones: campo «País del destinatario» — se rellena solo con el de Direcciones; si se escribe a mano se elige y es obligatorio; el país se guarda al final de la dirección', () => {
+    const caja = document.createElement('div');
+    caja.innerHTML = '<input id="sl-dest"><input id="sl-destdir"><select id="sl-destpais"><option value="">Elige el país…</option><option>España</option><option>Francia</option><option>Bélgica</option></select><span id="sl-destpais-req" style="display:none"></span><div id="sl-destpais-ayuda"></div>';
+    document.body.appendChild(caja);
+    let o;
+    try {
+      o = new Function(`
+        const sgaDireccionPorNombre = n => n === 'Lyon SARL' ? { nombre: n, pais: 'Francia' } : null;
+        const ocPaisDeLista = t => ({ francia: 'Francia', 'españa': 'España', 'bélgica': 'Bélgica' }[String(t || '').toLowerCase()] || '');
+        const sgaDestinoManual = (n, t) => ({ pais: String(t || '').split(/\\s*,\\s*/).pop() });
+        ${trozo('function sgaSalidaDestPais', 'function sgaSalidaDestPaisCambio')}
+        const $ = id => document.getElementById(id), set = (n, dir) => { $('sl-dest').value = n; $('sl-destdir').value = dir; };
+        const out = {}, sel = $('sl-destpais');
+        set('Lyon SARL', '12 Rue X'); sgaSalidaDestPaisRefrescar(); out.direcciones = [sel.value, sel.disabled, $('sl-destpais-req').style.display];
+        set('Otro', 'Calle 1, 28001 Madrid, España'); sgaSalidaDestPaisRefrescar(); out.manualConPais = [sel.value, sel.disabled];
+        set('Otro2', 'Calle 1, 28001 Madrid'); sel.dataset.manual = ''; sgaSalidaDestPaisRefrescar(); out.manualSinPais = [sel.value, $('sl-destpais-req').style.display, $('sl-destpais-ayuda').textContent];
+        sel.value = 'Bélgica'; sel.dataset.manual = '1';
+        out.sePega = sgaDestDireccionConPais({ destinatario: 'Otro2', destinatarioDireccion: 'Calle 1, 28001 Madrid' });
+        out.sustituye = sgaDestDireccionConPais({ destinatario: 'Otro2', destinatarioDireccion: 'Calle 1, 28001 Madrid, España' });
+        sel.value = 'España';
+        out.igual = sgaDestDireccionConPais({ destinatario: 'Otro2', destinatarioDireccion: 'Calle 1, 28001 Madrid, España' });
+        out.deDirecciones = sgaDestDireccionConPais({ destinatario: 'Lyon SARL', destinatarioDireccion: '12 Rue X' });
+        out.vacio = sgaDestDireccionConPais({ destinatario: 'Otro2', destinatarioDireccion: '' });
+        sel.value = ''; out.sinPais = sgaSalidaDestPais({ destinatario: 'Otro3', destinatarioDireccion: 'Calle 1, 28001 Madrid' });
+        return out;`)();
+    } finally { caja.remove(); }
+    igual(o.direcciones, ['Francia', true, 'none'], 'Destinatario de Direcciones: el país sale solo, bloqueado y sin asterisco');
+    igual(o.manualConPais, ['España', false], 'Escrito a mano con el país al final de la dirección: se propone ese país (se puede cambiar)');
+    igual(o.manualSinPais, ['', '', 'Obligatorio: elige el país del destinatario.'], 'Escrito a mano sin país: hay que elegirlo (obligatorio, con aviso)');
+    igual([o.sePega, o.sustituye, o.igual, o.deDirecciones, o.vacio], ['Calle 1, 28001 Madrid, Bélgica', 'Calle 1, 28001 Madrid, Bélgica', 'Calle 1, 28001 Madrid, España', '12 Rue X', ''], 'El país elegido se añade al final de la dirección guardada (o sustituye al que hubiera); la de Direcciones no se toca');
+    igual(o.sinPais, '', 'Sin país elegido ni escrito, no hay país');
+    cierto(/destinatarioDireccion: sgaDestDireccionConPais\(/.test(trozo('function sgaSalidaLeer', 'function sgaSalidaFifo')), 'Lo que se guarda, el CMR, la orden de carga y el DeCA leen la dirección con el país');
+    cierto(/Elige el país del destinatario/.test(trozo('async function sgaSalidaConfirmar', 'function sgaArticulosDe')), 'Sin país del destinatario no se deja guardar');
+    const f = trozo('function tplStockSalidaPage', 'async function sgaSalidaConfirmar');
+    cierto(f.indexOf('id="sl-destpais"') > f.indexOf('id="sl-destdir"') && f.indexOf('id="sl-destpais"') < f.indexOf('id="sl-transp"'), 'El campo va debajo de la dirección del destinatario');
   });
 
   prueba('CRM: al volver a la pantalla se leen de nuevo las cotizaciones (lo creado desde otro sitio aparece), sin pisar una ficha en edición ni repetir la lectura a cada momento', async () => {
