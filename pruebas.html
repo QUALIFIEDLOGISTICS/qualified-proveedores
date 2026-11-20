@@ -896,6 +896,52 @@
     cierto(/onclick="citasAlbaranBlanco\(\)"/.test(tpl) && tpl.indexOf('citasAlbaranBlanco') > tpl.indexOf('Carga${cargas') && tpl.indexOf('citasAlbaranBlanco') < tpl.indexOf('openQuickCreateModal'), 'El botón está en la cabecera, después de Descargas y Cargas');
   });
 
+  prueba('SGA · CMR: una expedición es internacional cuando el país del almacén y el del destinatario son distintos (Direcciones o dirección escrita a mano), y el CMR se engancha al formulario, al guardado y a los menús', () => {
+    const P = new Function(`
+      const allWarehouses = [{ id: 'w1', pais: 'España' }], sgaSalidaWh = () => 'w1';
+      const dir = { 'Lyon SARL': { nombre: 'Lyon SARL', pais: 'Francia' }, 'Barna SL': { nombre: 'Barna SL', pais: 'España' } };
+      const sgaDireccionPorNombre = n => dir[n] || null;
+      const sgaDestinoManual = (n, t) => ({ empresa: n, pais: String(t || '').split(/\\s*,\\s*/).pop() });
+      const ocPaisDeLista = t => ({ francia: 'Francia', 'españa': 'España' }[String(t || '').toLowerCase()] || '');
+      ${trozo('function sgaSalidaPaises', 'function sgaSalidaCmrHtml')}
+      const r = d => { const p = sgaSalidaPaises(d); return [p.origen, p.destino, p.internacional]; };
+      return { lyon: r({ destinatario: 'Lyon SARL' }), barna: r({ destinatario: 'Barna SL' }), manual: r({ destinatario: 'Otro', destinatarioDireccion: 'Rue 1, 75001 Paris, Francia' }), manualSinPais: r({ destinatario: 'Otro', destinatarioDireccion: 'Calle 1, 28001 Madrid' }), vacio: r({ destinatario: '' }) };`)();
+    igual(P.lyon, ['España', 'Francia', true], 'Destinatario de Direcciones en Francia: internacional');
+    igual(P.barna, ['España', 'España', false], 'Destinatario en el mismo país: nacional');
+    igual(P.manual, ['España', 'Francia', true], 'Dirección escrita a mano que acaba en Francia: internacional');
+    igual(P.manualSinPais, ['España', '', false], 'Dirección a mano sin país reconocible: no se adivina (se avisa)');
+    igual(P.vacio, ['España', '', false], 'Sin destinatario no se sabe');
+    const form = trozo('function tplStockSalidaPage', 'async function sgaSalidaConfirmar');
+    cierto(form.indexOf("'CMR'") > form.indexOf('sgaSalidaDecaHtml()') && form.indexOf("'CMR'") < form.indexOf('sgaSalidaOcHtml()') && /sgaSalidaCmrHtml\(\)/.test(form), 'El formulario de la expedición tiene su tarjeta CMR entre el DeCA y la orden de carga');
+    cierto(/sgaSalidaCmrRefrescar\(\);/.test(trozo('function sgaSalidaRefrescar', 'function tplStockSalidaPage')), 'La casilla del CMR se recalcula al cambiar destinatario, almacén…');
+    const conf = trozo('async function sgaSalidaConfirmar', 'function sgaArticulosDe');
+    cierto(/sgaSalidaCmrErrores\(d\)/.test(conf) && /sgaGuardarCmrExpedicion\(albDeca, d, sale\)/.test(conf), 'Al guardar la expedición se comprueba y se crea (o actualiza) el CMR');
+    cierto(/\['loadCmrDocumentos', loadCmrDocumentos\]/.test(html) && /sgaCmrAbrirDeAlbaran/.test(trozo('function sgaAlbMenuItems', 'function sgaAlbAccionesHtml')) && /chipCmr/.test(trozo('function sgaAlbEstadoHtml', 'function sgaAlbEstadoBase')), 'Los CMR se cargan al arrancar y salen en el menú y como chip de la expedición');
+    const pdfFn = trozo('async function sgaCmrPdfBytes', '/* ---- DeCA dentro de la expedición');
+    cierto(['6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23', '24'].every(n => new RegExp("'" + n + "'").test(pdfFn)) && /'Remitente \(nombre, domicilio, país\)'/.test(pdfFn) && /\['1', 'Remitente/.test(pdfFn), 'El PDF lleva las 24 casillas de la plantilla convencional');
+  });
+  prueba('SGA · CMR: el SQL crea la tabla con su numeración CMR-AAAA-NNNN por año y los permisos', async () => {
+    const sql = await (await fetch('cmr-expedicion.sql?' + Date.now())).text();
+    cierto(/create table if not exists public\.cmr_documentos/.test(sql) && /albaran_id uuid references public\.sga_albaranes\(id\)/.test(sql) && /create unique index if not exists cmr_documentos_albaran_uq/.test(sql), 'Tabla con un CMR por expedición');
+    cierto(/'CMR-' \|\| v_anio \|\| '-' \|\| lpad\(v_n::text, 4, '0'\)/.test(sql) && /on conflict \(anio\) do update/.test(sql) && /before insert on public\.cmr_documentos/.test(sql), 'El número CMR-AAAA-NNNN se asigna solo al crear y vuelve a 1 cada año');
+    cierto(/cmr_documentos_select[^;]*sga_permiso\('stock', 'trafico'\)/.test(sql) && /cmr_documentos_insert[^;]*sga_permiso\('stock'\)/.test(sql), 'Permisos: ver con stock o transporte, crear y editar con stock');
+  });
+  prueba('SGA · CMR: el PDF son 3 ejemplares A4 con los datos escritos', async () => {
+    if (typeof PDFLib === 'undefined') {   // pdf-lib se descarga aparte (como en la web): si no hay red, esta comprobación se salta
+      try { await new Promise((ok, ko) => { const s = document.createElement('script'); s.src = 'https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js'; s.onload = ok; s.onerror = () => ko(new Error('sin red')); document.head.appendChild(s); setTimeout(() => ko(new Error('tiempo')), 8000); }); } catch (e) { return; }
+    }
+    const f = new Function('PDFLib', `
+      ${trozo('function ocPdfTxt', '\n}\n') + '\n}'}
+      const ocCfgEmpresa = () => ({ nombre: 'Qualified' }), fmtDateDMY = x => x;
+      ${trozo('async function sgaCmrPdfBytes', '/* ---- DeCA dentro de la expedición')}
+      return sgaCmrPdfBytes;`)(PDFLib);
+    const campos = { remitente: { nombre: 'CLIENTE SL', lineas: ['Calle 1', '08000 Barcelona, España'] }, destinatario: { nombre: 'LYON SARL', lineas: ['Rue 1', '69002 Lyon, Francia'] }, entrega: ['Rue 1'], carga: ['Almacén'], documentos: ['Albarán X-1'], transportista: { nombre: 'TRANS SL', lineas: [], tractora: '1234ABC', remolque: '' }, bultos: '26', embalaje: 'Palets', naturaleza: ['CAJAS (26)'], peso: '12.500', pesoKg: '12500', formalizado: { lugar: 'Barcelona', fecha: '2026-11-20' } };
+    const bytes = await f('CMR-2026-0001', campos), doc = await PDFLib.PDFDocument.load(bytes);
+    igual([doc.getPageCount(), Math.round(doc.getPage(0).getWidth()), Math.round(doc.getPage(0).getHeight())], [3, 595, 842], 'Tres ejemplares en A4');
+    const vacio = await PDFLib.PDFDocument.load(await f('CMR-2026-0002', {}));
+    igual(vacio.getPageCount(), 3, 'Con todo en blanco también se genera');
+  });
+
   prueba('CRM: al volver a la pantalla se leen de nuevo las cotizaciones (lo creado desde otro sitio aparece), sin pisar una ficha en edición ni repetir la lectura a cada momento', async () => {
     const f = (S, filas) => new Function('S', 'filas', `
       let pintado = 0, lecturas = 0;

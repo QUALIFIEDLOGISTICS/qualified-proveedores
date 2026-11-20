@@ -7447,7 +7447,9 @@ function stockClienteRowHtml(c, ps){
 function sgaAlbEstadoHtml(a){
   const dc = a.tipo === 'salida' ? sgaDecaDeExpedicion(a.id) : null;
   const chipDeca = dc ? ` <span class="cfg-chip" style="cursor:pointer;color:var(--primary);background:color-mix(in srgb, var(--primary) 12%, var(--panel));margin-left:4px;" onclick="openDecaViewModal('${dc.id}')" title="Abrir el DeCA de esta expedición">DeCA ${esc(dc.codigo || '')}</span>` : '';
-  return sgaAlbEstadoBase(a) + chipDeca;
+  const cm = a.tipo === 'salida' ? sgaCmrDeExpedicion(a.id) : null;
+  const chipCmr = cm ? ` <span class="cfg-chip" style="cursor:pointer;color:var(--primary);background:color-mix(in srgb, var(--primary) 12%, var(--panel));margin-left:4px;" onclick="sgaCmrAbrir('${cm.id}')" title="Abrir el CMR de esta expedición en PDF">${esc(cm.codigo || 'CMR')}</span>` : '';
+  return sgaAlbEstadoBase(a) + chipDeca + chipCmr;
 }
 function sgaAlbEstadoBase(a){
   if (a.estado === 'anulado') return chipHtml('Anulada', 'var(--danger)', a.anuladoMotivo ? 'Motivo: ' + a.anuladoMotivo : '');
@@ -7459,6 +7461,7 @@ function sgaAlbMenuItems(a){
   const it = [];
   if (conf && a.tipo === 'salida' && a.borrador) it.push(['Imprimir albarán', 'file', `sgaAlbaranImprimir('${a.id}')`]);
   if (conf && a.tipo === 'salida') it.push(['Etiqueta de envío', 'tag', `sgaEtiquetaAbrir('${a.id}')`]);
+  if (conf && a.tipo === 'salida' && sgaCmrDeExpedicion(a.id)) it.push(['CMR', 'file', `sgaCmrAbrirDeAlbaran('${a.id}')`]);
   if (conf && (a.tipo === 'salida' || a.tipo === 'entrada' || a.tipo === 'apertura' || a.tipo === 'regularizacion') && puede) it.push(['Editar', 'edit', `${a.tipo === 'salida' ? 'sgaSalidaEditar' : a.tipo === 'regularizacion' ? 'sgaRegulEditar' : 'sgaEntradaEditar'}('${a.id}')`]);
   if (conf && a.tipo === 'salida' && !a.borrador && puede) it.push(['Volver a borrador', 'clock', `sgaSalidaABorrador('${a.id}')`]);
   if (conf && a.tipo !== 'regularizacion' && puede) it.push(['Anular albarán', 'trash', `sgaAnularAbrir('${a.id}')`, true]);
@@ -12722,6 +12725,7 @@ function sgaSalidaRefrescar(){
   try {
     sgaSalidaDecaRefrescar();
     sgaSalidaOcRefrescar();
+    sgaSalidaCmrRefrescar();
     const numEl = document.getElementById('sl-num');
     if (numEl) numEl.value = sgaNumeroSalidaPrevisto(d.clienteId, d.fecha);
     const el = document.getElementById('sl-resumen');
@@ -12811,6 +12815,10 @@ function tplStockSalidaPage(){
         <div class="deca-card-body">${sgaSalidaDecaHtml()}</div>
       </div>
       <div class="card deca-card">
+        ${decaCardHead('file', 'CMR', 'Carta de porte internacional · se propone sola cuando el envío sale de un país a otro')}
+        <div class="deca-card-body">${sgaSalidaCmrHtml()}</div>
+      </div>
+      <div class="card deca-card">
         ${decaCardHead('file', 'Orden de carga', 'Opcional · se vincula a esta expedición y se crea en Transporte')}
         <div class="deca-card-body">${sgaSalidaOcHtml()}</div>
       </div>
@@ -12881,6 +12889,9 @@ async function sgaSalidaConfirmar(comoBorrador){
   // Orden de carga: igual, solo al confirmar y comprobada antes de guardar
   const conOc = !!(document.getElementById('sl-oc-on') && document.getElementById('sl-oc-on').checked);
   if (conOc) errores.push(...sgaSalidaOcErrores(d));
+  // CMR: igual; si la expedición ya tenía el suyo se actualiza con lo que haya ahora en el formulario
+  const conCmr = !!((document.getElementById('sl-cmr-on') || {}).checked || (window.__slEdit && sgaCmrDeExpedicion(window.__slEdit.id)));
+  if (conCmr) errores.push(...sgaSalidaCmrErrores(d));
   if (errores.length) { errEl.textContent = errores.join('\n'); return; }
   const servicios = d.servicios.filter(s => s.productoId).map(s => ({ producto_id: s.productoId, cantidad: sgaNumero(s.cantidadTxt), nota: s.nota }));
   const fifo = sgaSalidaFifo(d.clienteId, d.items);
@@ -12930,6 +12941,12 @@ async function sgaSalidaConfirmar(comoBorrador){
       const oc = await sgaCrearOcExpedicion(albDeca, d, sale, decaCreadoId);
       appToast(oc.sinVincular ? `Orden ${ocRef(oc)} creada, pero sin vincular a la expedición: falta ejecutar el SQL «orden-carga-expedicion.sql» en Supabase.` : `Orden de carga ${ocRef(oc)} creada y vinculada a la expedición.`, oc.sinVincular ? 'error' : 'ok');
     } catch (err) { appToast('La expedición se ha guardado, pero la orden de carga no se pudo crear: ' + (err && err.message ? err.message : 'error desconocido.') + ' Ábrela con «Editar» para reintentarlo.', 'error'); }
+  }
+  if (conCmr && albDeca) {
+    try {
+      const r = await sgaGuardarCmrExpedicion(albDeca, d, sale);
+      appToast(`CMR ${r.doc.codigo} ${r.nuevo ? 'creado y vinculado a la expedición' : 'actualizado'}. Ábrelo desde el menú «⋯» de la expedición.`, 'ok');
+    } catch (err) { appToast('La expedición se ha guardado, pero el CMR no se pudo guardar: ' + (err && err.message ? err.message : 'error desconocido.') + ' Ábrela con «Editar» para reintentarlo.', 'error'); }
   }
   if (edit) { try { await sgaOcSincronizarExpedicion(edit, d, sale, total); } catch (err) { appToast('La expedición se ha guardado, pero no se pudo actualizar su orden de carga: ' + (err && err.message ? err.message : 'error desconocido.'), 'error'); } }
   if (albDeca) await sgaFranjaExpedicionSync(albDeca, d, numAlb || (edit ? sgaNumAlbaran(edit.albaran) : ''));   // franja horaria del día de salida (borrador o confirmada)
@@ -14019,6 +14036,253 @@ async function sgaEtiquetaImprimir(id){
   const doc = f.contentWindow.document; doc.open(); doc.write(html); doc.close();
   try { localStorage.setItem('qualified.sga.etqPos', String(((pos - 1 + n) % 4) + 1)); } catch (e) { /* sin almacenamiento: no pasa nada */ }
   setTimeout(() => imprimirIframe(f), 250);
+}
+/* ---- CMR (carta de porte internacional) dentro de la expedición ----
+   Una expedición es internacional cuando el país del almacén de salida no es el del destinatario. En ese caso el formulario propone «Generar el CMR»
+   (casilla ya marcada, se puede quitar) y, al guardar, se crea el CMR con su número CMR-AAAA-NNNN, ligado a la expedición. El remitente es el cliente de
+   la expedición; el PDF es la plantilla convencional de 24 casillas en castellano, A4, con 3 ejemplares (remitente, destinatario y transportista).
+   La forma de pago, el reembolso y lo que se paga quedan en blanco. En un envío internacional no hace falta DeCA. */
+let cmrDocumentos = [];
+const cmrDeFila = r => ({ id: r.id, codigo: r.codigo || '', albaranId: r.albaran_id || '', campos: r.campos || {}, createdAt: r.created_at });
+async function loadCmrDocumentos(){
+  try {
+    const { data, error } = await supabaseClient.from('cmr_documentos').select('*').order('created_at', { ascending: false });
+    cmrDocumentos = error ? [] : (data || []).map(cmrDeFila);
+  } catch (e) { cmrDocumentos = []; }
+}
+function sgaCmrDeExpedicion(albaranId){ return cmrDocumentos.find(c => c.albaranId === albaranId) || null; }
+// País de origen (el almacén) y de destino (la dirección del destinatario, de Direcciones o escrita a mano) con los nombres de la lista de países de la web
+function sgaSalidaPaises(d){
+  const w = allWarehouses.find(x => x.id === sgaSalidaWh()) || null;
+  const dd = d.destinatario ? sgaDireccionPorNombre(d.destinatario) : null;
+  const man = dd || !d.destinatario ? null : sgaDestinoManual(d.destinatario, d.destinatarioDireccion);
+  const origen = w ? ocPaisDeLista(w.pais) : '', destino = ocPaisDeLista(dd ? dd.pais : (man ? man.pais : ''));
+  return { w, dd, man, origen, destino, internacional: !!(origen && destino && origen !== destino) };
+}
+function sgaSalidaCmrHtml(){
+  const edit = window.__slEdit;
+  const ya = edit ? sgaCmrDeExpedicion(edit.id) : null, c = ya ? ya.campos : {};
+  const aviso = '<div id="sl-cmr-aviso" style="font-size:12.5px;margin-top:10px;"></div>';
+  const m = ya ? ' data-manual="1"' : '';
+  const campos = `<div id="sl-cmr-campos" style="${ya ? '' : 'display:none;'}margin-top:14px;">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div class="field" style="flex:1;min-width:170px;max-width:240px;margin-bottom:12px;"><label>Peso bruto <span class="dc-req">*</span></label>${decaInputIcon('weight', `<input id="sl-cmr-peso" inputmode="decimal" maxlength="12" placeholder="Ej. 12500" value="${esc(c.pesoKg || '')}"${m} oninput="this.dataset.manual='1'" />`, 'kg')}<div id="sl-cmr-peso-ayuda" style="font-size:11.5px;color:var(--mutedFaint);margin-top:4px;"></div></div>
+        <div class="field" style="flex:1;min-width:150px;max-width:200px;margin-bottom:12px;"><label>Clase de embalaje</label><input id="sl-cmr-emb" maxlength="40" placeholder="Palets" value="${esc(c.embalaje || '')}"${m} oninput="this.dataset.manual='1'" /></div>
+        <div class="field" style="flex:1;min-width:130px;max-width:170px;margin-bottom:12px;"><label>Volumen <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></label>${decaInputIcon('box', `<input id="sl-cmr-vol" inputmode="decimal" maxlength="10" placeholder="Ej. 33" value="${esc(c.volumen || '')}" />`, 'm³')}</div>
+        <div class="field" style="flex:1;min-width:150px;max-width:200px;margin-bottom:12px;"><label>Nº estadístico <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></label><input id="sl-cmr-est" maxlength="30" value="${esc(c.estadistico || '')}" /></div>
+        <div class="field" style="flex:1;min-width:150px;max-width:240px;margin-bottom:12px;"><label>Marcas y números <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></label><input id="sl-cmr-marcas" maxlength="80" value="${esc(c.marcas || '')}" /></div>
+      </div>
+      <div class="field" style="margin:0;"><label>Instrucciones del remitente <small style="color:var(--mutedFaint);font-weight:400;">· opcional</small></label><textarea id="sl-cmr-ins" rows="2" maxlength="400" placeholder="Aduanas, horarios de entrega, avisos al conductor…" style="width:100%;resize:vertical;">${esc(c.instrucciones || '')}</textarea></div>
+      <div style="font-size:12px;color:var(--mutedFaint);margin-top:8px;">El remitente es el cliente de la expedición. También hace falta el transportista y el destinatario con su país. Forma de pago, reembolso y lo que se paga salen en blanco.</div>
+    </div>`;
+  if (ya) return `<div style="font-size:13.5px;">Esta expedición ya tiene su CMR: <button type="button" class="deca-code-pill" style="cursor:pointer;border:none;" onclick="sgaCmrAbrir('${ya.id}')" title="Abrir el CMR en PDF">${esc(ya.codigo || 'CMR')}</button> <span style="color:var(--muted);font-size:12.5px;">· al guardar la expedición se actualiza con sus datos.</span></div>${campos}`;
+  return `<label style="display:flex;align-items:flex-start;gap:10px;font-size:13.5px;cursor:pointer;"><input type="checkbox" class="switch" id="sl-cmr-on" onchange="this.dataset.manual='1'; sgaSalidaCmrToggle()" style="margin-top:2px;" />
+      <span><b>Generar el CMR</b><br><span style="font-size:12px;color:var(--muted);">Carta de porte internacional con el cliente como remitente. Se marca sola cuando el país del almacén y el del destinatario son distintos; se crea al guardar la expedición y desde su menú se abre en PDF (3 ejemplares).</span></span></label>${aviso}${campos}`;
+}
+function sgaSalidaCmrToggle(){
+  const on = (document.getElementById('sl-cmr-on') || {}).checked;
+  const box = document.getElementById('sl-cmr-campos');
+  if (box) box.style.display = on ? '' : 'none';
+  sgaSalidaCmrRefrescar();
+}
+function sgaSalidaCmrRefrescar(){
+  const campos = document.getElementById('sl-cmr-campos');
+  if (!campos) return;
+  const d = window.__slCache || sgaSalidaLeer(), P = sgaSalidaPaises(d);
+  const on = document.getElementById('sl-cmr-on');
+  const av = document.getElementById('sl-cmr-aviso');
+  if (av) {
+    let t, c = 'var(--muted)';
+    if (!d.destinatario) t = 'Elige el destinatario para saber si el envío es internacional.';
+    else if (!P.origen) { t = 'El almacén de salida no tiene un país válido en su ficha.'; c = 'var(--danger)'; }
+    else if (!P.destino) { t = 'No se puede leer el país del destinatario (si lo escribes a mano, acaba su dirección con el país).'; c = 'var(--danger)'; }
+    else if (P.internacional) { t = `Envío internacional: ${P.origen} → ${P.destino}. Hace falta CMR.`; c = 'var(--success)'; }
+    else t = `Envío nacional (${P.origen}): no hace falta CMR. Si es de transporte, lleva DeCA.`;
+    av.style.color = c; av.textContent = t;
+  }
+  // La casilla sigue al envío (internacional → marcada) mientras nadie la toque a mano
+  if (on && on.dataset.manual !== '1' && on.checked !== P.internacional) { on.checked = P.internacional; campos.style.display = P.internacional ? '' : 'none'; }
+  if (campos.style.display === 'none') return;
+  const peso = document.getElementById('sl-cmr-peso'), emb = document.getElementById('sl-cmr-emb');
+  const calc = sgaSalidaPesoCalculado(d.items);
+  if (peso && peso.dataset.manual !== '1') peso.value = calc ? String(calc) : '';
+  const ay = document.getElementById('sl-cmr-peso-ayuda');
+  if (ay) ay.textContent = calc ? `Calculado con el peso por palet de los artículos: ${sgaNumTxt(calc)} kg.` : 'Ningún artículo de lo que sale tiene peso: escríbelo.';
+  if (emb && emb.dataset.manual !== '1') emb.value = d.clienteId ? sgaCap(sgaUnidadCfg(d.clienteId).p) : '';
+}
+// Lo que hay que comprobar antes de guardar la expedición con CMR (devuelve los errores)
+function sgaSalidaCmrErrores(d){
+  const e = [], P = sgaSalidaPaises(d), v = id => ((document.getElementById(id) || {}).value || '').trim();
+  if (!d.transportista) e.push('CMR: escribe el transportista.');
+  if (!d.destinatario) e.push('CMR: elige el destinatario.');
+  else if (!P.destino) e.push('CMR: no se puede leer el país del destinatario (si lo escribes a mano, acaba su dirección con el país).');
+  if (!P.origen) e.push('CMR: el almacén de salida no tiene un país válido en su ficha.');
+  if (!(Number(v('sl-cmr-peso').replace(',', '.')) > 0)) e.push('CMR: indica el peso bruto.');
+  return e;
+}
+// Los datos del CMR tal y como salen ahora del formulario (se guardan así y de ahí se dibuja el PDF)
+function sgaCmrCampos(d, sale, numAlbaran){
+  const v = id => ((document.getElementById(id) || {}).value || '').trim();
+  const P = sgaSalidaPaises(d), w = P.w || {};
+  const cli = contactos.find(c => c.id === d.clienteId) || {};
+  const tc = sgaTransportistaContacto(d.transportista), mat = sgaMatriculaSplit(d.matricula);
+  const manualLineas = String(d.destinatarioDireccion || '').split(/\s*,\s*/).map(s => s.trim()).filter(Boolean);
+  const destLineas = P.dd ? sgaDirLineas(P.dd) : manualLineas;
+  const nombres = new Map();
+  sale.forEach(x => { const n = String(x.p.descripcion || sgaProdTxt(x.p.productoId) || '').trim(); if (n) nombres.set(n, (nombres.get(n) || 0) + x.n); });
+  const total = sale.reduce((s, x) => s + x.n, 0), kg = Number(v('sl-cmr-peso').replace(',', '.')) || 0, vol = v('sl-cmr-vol');
+  return {
+    remitente: { nombre: cli.nombre || '', lineas: [...sgaDirLineas(cli), cli.nif ? 'NIF: ' + cli.nif : ''].filter(Boolean) },
+    destinatario: { nombre: P.dd ? P.dd.nombre : d.destinatario, lineas: destLineas },
+    entrega: destLineas,
+    carga: [[w.name, w.ciudad].filter(Boolean).join(' · '), P.origen, 'Fecha de carga: ' + fmtDateDMY(d.fecha)].filter(Boolean),
+    documentos: numAlbaran ? ['Albarán ' + numAlbaran] : [],
+    transportista: { nombre: tc ? tc.nombre : d.transportista, lineas: [...(tc ? sgaDirLineas(tc) : []), tc && tc.nif ? 'NIF: ' + tc.nif : ''].filter(Boolean), tractora: mat.tractora || '', remolque: mat.remolque || '' },
+    marcas: v('sl-cmr-marcas'), bultos: total ? sgaNumTxt(total) : '', embalaje: v('sl-cmr-emb'),
+    naturaleza: [...nombres].map(([n, q]) => `${n} (${sgaNumTxt(q)})`),
+    estadistico: v('sl-cmr-est'), pesoKg: kg ? String(kg) : '', peso: kg ? sgaNumTxt(kg) : '', volumen: vol,
+    instrucciones: v('sl-cmr-ins'),
+    formalizado: { lugar: w.ciudad || '', fecha: d.fecha },
+  };
+}
+async function sgaGuardarCmrExpedicion(albaranId, d, sale){
+  const num = (sgaAlbaranes.find(x => x.id === albaranId) || {}).numeroTexto || '';
+  const campos = sgaCmrCampos(d, sale, num);
+  const previo = sgaCmrDeExpedicion(albaranId);
+  const falta = e => new Error(/cmr_documentos|does not exist|schema cache/i.test((e && e.message) || '') ? 'falta ejecutar el SQL «cmr-expedicion.sql» en Supabase.' : ((e && e.message) || 'error desconocido.'));
+  if (previo) {
+    const { data, error } = await supabaseClient.from('cmr_documentos').update({ campos, updated_at: new Date().toISOString() }).eq('id', previo.id).select().single();
+    if (error || !data) throw falta(error);
+    const i = cmrDocumentos.findIndex(x => x.id === previo.id); if (i > -1) cmrDocumentos[i] = cmrDeFila(data);
+    return { doc: cmrDeFila(data), nuevo: false };
+  }
+  const { data, error } = await supabaseClient.from('cmr_documentos').insert({ albaran_id: albaranId, campos, created_by: currentUserEmail() }).select().single();
+  if (error || !data) throw falta(error);
+  const doc = cmrDeFila(data); cmrDocumentos.unshift(doc);
+  return { doc, nuevo: true };
+}
+// Abre el CMR en PDF (en el móvil se comparte o se descarga)
+async function sgaCmrAbrir(id){
+  const doc = cmrDocumentos.find(x => x.id === id);
+  if (!doc) { appToast('No se encuentra el CMR.', 'error'); return; }
+  if (!window.PDFLib) { appToast('No se ha cargado el generador de PDF: recarga la página (Ctrl+Shift+R).', 'error'); return; }
+  appToast('Preparando el CMR…', 'info');
+  try {
+    const bytes = await sgaCmrPdfBytes(doc.codigo, doc.campos);
+    const nombre = `${doc.codigo || 'CMR'}.pdf`;
+    if (esMovilTactil()) { await guardarPdfMovil(bytes, nombre); return; }
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+    if (!window.open(url, '_blank')) { const a = document.createElement('a'); a.href = url; a.download = nombre; document.body.appendChild(a); a.click(); a.remove(); }
+    setTimeout(() => URL.revokeObjectURL(url), 300000);
+  } catch (e) { appToast('No se pudo generar el CMR: ' + ((e && e.message) || 'error desconocido') + '.', 'error'); }
+}
+function sgaCmrAbrirDeAlbaran(albaranId){ const c = sgaCmrDeExpedicion(albaranId); if (c) sgaCmrAbrir(c.id); }
+// PDF: plantilla convencional de 24 casillas, A4, en castellano, 3 ejemplares (remitente, destinatario y transportista)
+async function sgaCmrPdfBytes(codigo, c){
+  const { PDFDocument, StandardFonts, rgb } = PDFLib;
+  const pdf = await PDFDocument.create();
+  pdf.setTitle(`CMR ${codigo}`); pdf.setAuthor(ocCfgEmpresa().nombre);
+  const font = await pdf.embedFont(StandardFonts.Helvetica), bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const NG = rgb(0.07, 0.07, 0.07), GR = rgb(0.4, 0.4, 0.4), LN = rgb(0.15, 0.15, 0.15);
+  const PW = 595.28, PH = 841.89, M = 28, W = PW - 2 * M, T = ocPdfTxt;
+  const tw = (s, size, b) => (b ? bold : font).widthOfTextAtSize(T(s), size);
+  const wrap = (s, size, maxW, b) => {   // texto partido en líneas que caben (una palabra más ancha que la casilla se parte)
+    const f = b ? bold : font, out = [];
+    String(s == null ? '' : s).split(/\r?\n/).forEach(par => {
+      let line = '';
+      par.split(/\s+/).filter(Boolean).forEach(word => {
+        let wd = T(word);
+        while (f.widthOfTextAtSize(wd, size) > maxW && wd.length > 1) {
+          let n = wd.length - 1;
+          while (n > 1 && f.widthOfTextAtSize(wd.slice(0, n), size) > maxW) n--;
+          if (line) { out.push(line); line = ''; }
+          out.push(wd.slice(0, n)); wd = wd.slice(n);
+        }
+        const test = line ? line + ' ' + wd : wd;
+        if (line && f.widthOfTextAtSize(test, size) > maxW) { out.push(line); line = wd; } else line = test;
+      });
+      out.push(line);
+    });
+    return out;
+  };
+  let page;
+  const draw = (s, x, y, size, o) => { o = o || {}; page.drawText(T(s), { x: o.right ? x - tw(s, size, o.bold) : o.center ? x - tw(s, size, o.bold) / 2 : x, y, size, font: o.bold ? bold : font, color: o.color || NG }); };
+  const rect = (x, yTop, w, h, bw) => page.drawRectangle({ x, y: yTop - h, width: w, height: h, borderColor: LN, borderWidth: bw || 0.8 });
+  // Casilla numerada: número, título y contenido (líneas de texto o {t, b}); la letra baja de 9 a 6,4 pt si no cabe
+  const caja = (x, yTop, w, h, num, label, items) => {
+    rect(x, yTop, w, h);
+    page.drawRectangle({ x: x + 3, y: yTop - 12, width: 11, height: 9, borderColor: LN, borderWidth: 0.6 });
+    draw(String(num), x + 8.5, yTop - 9.8, 6.5, { bold: true, center: true });
+    const lab = wrap(label, 6.3, w - 24).slice(0, 2);
+    lab.forEach((l, i) => draw(l, x + 18, yTop - 9.4 - i * 7, 6.3, { color: GR }));
+    const top = yTop - 12 - lab.length * 7 + 4, avail = h - (12 + lab.length * 7 - 4) - 5;
+    const norm = (items || []).map(it => typeof it === 'string' ? { t: it } : it).filter(it => it && String(it.t || '').trim());
+    let fs = 9, lines = [];
+    for (; fs >= 6.4; fs -= 0.4) { lines = norm.flatMap(it => wrap(it.t, fs, w - 10, it.b).map(t => ({ t, b: it.b }))); if (lines.length * (fs + 2.4) <= avail) break; }
+    lines.slice(0, Math.max(1, Math.floor(avail / (fs + 2.4)))).forEach((l, i) => draw(l.t, x + 5, top - fs - 2 - i * (fs + 2.4), fs, { bold: l.b }));
+  };
+  const copias = [['1', 'Ejemplar del remitente'], ['2', 'Ejemplar del destinatario'], ['3', 'Ejemplar del transportista']];
+  const lista = a => (Array.isArray(a) ? a : []).filter(Boolean);
+  const rem = c.remitente || {}, des = c.destinatario || {}, tra = c.transportista || {}, form = c.formalizado || {};
+  const LW = 268, GAP = 4, RW = W - LW - GAP, XR = M + LW + GAP;
+  copias.forEach(([n, texto]) => {
+    page = pdf.addPage([PW, PH]);
+    draw('CARTA DE PORTE INTERNACIONAL', M, PH - M - 14, 14.5, { bold: true });
+    draw('Convenio relativo al contrato de transporte internacional de mercancías por carretera (CMR)', M, PH - M - 26, 6.8, { color: GR });
+    draw('Nº ' + codigo, M, PH - M - 41, 9.5, { bold: true });
+    draw(`EJEMPLAR ${n} · ${texto.toUpperCase()}`, PW - M, PH - M - 9, 8, { right: true, bold: true });
+    draw('CMR', PW - M, PH - M - 36, 24, { right: true, bold: true });
+    let y = PH - M - 54;
+    // Bloque superior: remitente, destinatario, entrega, carga y documentos (izquierda) · transportista, sucesivos y reservas (derecha)
+    const alturasI = [70, 70, 50, 50, 50], alturasD = [92, 46, 152];
+    let yi = y;
+    [['1', 'Remitente (nombre, domicilio, país)', [{ t: rem.nombre, b: true }, ...lista(rem.lineas)]],
+      ['2', 'Destinatario (nombre, domicilio, país)', [{ t: des.nombre, b: true }, ...lista(des.lineas)]],
+      ['3', 'Lugar de entrega de la mercancía (lugar, país)', lista(c.entrega)],
+      ['4', 'Lugar y fecha de carga de la mercancía (lugar, país, fecha)', lista(c.carga)],
+      ['5', 'Documentos anexos', lista(c.documentos)]].forEach(([num, lab, it], i) => { caja(M, yi, LW, alturasI[i], num, lab, it); yi -= alturasI[i]; });
+    let yd = y;
+    const matr = [tra.tractora ? 'Matrícula tractora: ' + tra.tractora : '', tra.remolque ? 'Matrícula remolque: ' + tra.remolque : ''].filter(Boolean);
+    [['16', 'Transportista (nombre, domicilio, país)', [{ t: tra.nombre, b: true }, ...lista(tra.lineas), ...matr]],
+      ['17', 'Transportistas sucesivos (nombre, domicilio, país)', []],
+      ['18', 'Reservas y observaciones del transportista', []]].forEach(([num, lab, it], i) => { caja(XR, yd, RW, alturasD[i], num, lab, it); yd -= alturasD[i]; });
+    y -= 290 + 6;
+    // Mercancía: casillas 6 a 12
+    const anchos = [82, 58, 80, 148, 54, 60, W - 82 - 58 - 80 - 148 - 54 - 60];
+    let x = M;
+    [['6', 'Marcas y números', [c.marcas]], ['7', 'Número de bultos', [{ t: c.bultos, b: true }]], ['8', 'Clase de embalaje', [c.embalaje]],
+      ['9', 'Naturaleza de la mercancía', lista(c.naturaleza)], ['10', 'Nº estadístico', [c.estadistico]], ['11', 'Peso bruto, kg', [{ t: c.peso, b: true }]], ['12', 'Volumen, m³', [c.volumen]]]
+      .forEach(([num, lab, it], i) => { caja(x, y, anchos[i], 130, num, lab, it); x += anchos[i]; });
+    y -= 130 + 6;
+    // Instrucciones, forma de pago y reembolso (izquierda) · estipulaciones y «a pagar por» (derecha)
+    caja(M, y, LW, 72, '13', 'Instrucciones del remitente', [c.instrucciones]);
+    caja(M, y - 72, LW, 42, '14', 'Forma de pago', []);
+    caja(M, y - 114, LW, 36, '15', 'Reembolso', []);
+    caja(XR, y, RW, 56, '19', 'Estipulaciones particulares', []);
+    caja(XR, y - 56, RW, 94, '20', 'A pagar por', []);
+    { // cuadrícula de la casilla 20 (en blanco)
+      const gx = XR + 6, gw = RW - 12, ly = y - 56 - 24, cols = [gx + 94, gx + 94 + (gw - 94) / 2];
+      draw('Remitente', (cols[0] + cols[1]) / 2, ly, 6.6, { center: true, color: GR }); draw('Consignatario', (cols[1] + gx + gw) / 2, ly, 6.6, { center: true, color: GR });
+      ['Porte', 'Descuentos', 'Saldo', 'Suplementos', 'Gastos accesorios', 'Otros', 'Total'].forEach((t, i) => {
+        const yy = ly - 6 - i * 8.4;
+        draw(t, gx, yy - 6.4, 6.6, { color: GR });
+        page.drawLine({ start: { x: gx, y: yy - 9 }, end: { x: gx + gw, y: yy - 9 }, thickness: 0.4, color: LN });
+      });
+      [cols[0], cols[1]].forEach(cx => page.drawLine({ start: { x: cx, y: ly + 5 }, end: { x: cx, y: ly - 6 - 7 * 8.4 }, thickness: 0.4, color: LN }));
+    }
+    y -= 150 + 6;
+    // Formalizado y firmas
+    caja(M, y, W, 40, '21', 'Formalizado en', [[form.lugar, form.fecha ? 'el ' + fmtDateDMY(form.fecha) : ''].filter(Boolean).join(', ')]);
+    y -= 40;
+    const aw = W / 3;
+    caja(M, y, aw, 84, '22', 'Firma y sello del remitente', []);
+    caja(M + aw, y, aw, 84, '23', 'Firma y sello del transportista', []);
+    caja(M + 2 * aw, y, aw, 84, '24', 'Recibo de la mercancía', ['Lugar:', 'Fecha:']);
+    draw('Firma y sello del destinatario', M + 2 * aw + 5, y - 79, 6.3, { color: GR });
+    draw(`Qualified Logistics & Transport · ${codigo}`, M, 14, 7, { color: GR });
+    draw(`Ejemplar ${n} de 3`, PW - M, 14, 7, { right: true, color: GR });
+  });
+  return await pdf.save();
 }
 /* ---- DeCA dentro de la expedición ----
    Como en la orden de carga: en el formulario hay un interruptor «Generar también el DeCA». Al confirmar la expedición se crea el DeCA
@@ -39507,7 +39771,7 @@ if (isRecoveryFlow) window.location.replace('reset-password.html' + window.locat
   // Se mide lo que tarda cada carga (todas arrancan a la vez; la pantalla espera a la más lenta). Se puede ver en la consola del navegador (F12): «__tiempos».
   const t0Carga = performance.now(); window.__tiempos = {};
   const medir = (nombre, f) => Promise.resolve().then(f).finally(() => { window.__tiempos[nombre] = Math.round(performance.now() - t0Carga) + ' ms'; });
-  await Promise.all([['loadWarehouseModuleData', loadWarehouseModuleData], ['loadAutonomosModuleData', loadAutonomosModuleData], ['loadDecaDocuments', loadDecaDocuments], ['loadOrdenesCarga', loadOrdenesCarga], ['loadOcFiltros', loadOcFiltros], ['loadTransporteConfig', loadTransporteConfig], ['loadContactos', loadContactos], ['loadDirecciones', loadDirecciones], ['loadFlota', loadFlota], ['loadTarifas', loadTarifas], ['loadOperativas', loadOperativas], ['loadSgaConfig', loadSgaConfig], ['loadSgaStock', loadSgaStock], ['loadTransportistaRutas', loadTransportistaRutas], ['loadTransportistaContactos', loadTransportistaContactos], ['loadAlmacenajeTarifas', loadAlmacenajeTarifas], ['loadAlmacenajeProductos', loadAlmacenajeProductos]].map(([n, f]) => medir(n, f)));
+  await Promise.all([['loadWarehouseModuleData', loadWarehouseModuleData], ['loadAutonomosModuleData', loadAutonomosModuleData], ['loadDecaDocuments', loadDecaDocuments], ['loadCmrDocumentos', loadCmrDocumentos], ['loadOrdenesCarga', loadOrdenesCarga], ['loadOcFiltros', loadOcFiltros], ['loadTransporteConfig', loadTransporteConfig], ['loadContactos', loadContactos], ['loadDirecciones', loadDirecciones], ['loadFlota', loadFlota], ['loadTarifas', loadTarifas], ['loadOperativas', loadOperativas], ['loadSgaConfig', loadSgaConfig], ['loadSgaStock', loadSgaStock], ['loadTransportistaRutas', loadTransportistaRutas], ['loadTransportistaContactos', loadTransportistaContactos], ['loadAlmacenajeTarifas', loadAlmacenajeTarifas], ['loadAlmacenajeProductos', loadAlmacenajeProductos]].map(([n, f]) => medir(n, f)));
   window.__tiempos['TOTAL'] = Math.round(performance.now() - t0Carga) + ' ms';
   try { console.info('[Carga] lo que ha tardado cada cosa al arrancar', window.__tiempos); } catch (e) { /* sin consola */ }
   // Ctrl + Alt + T: enseña en una ventana lo que ha tardado cada carga al abrir la web (para saber qué hay que acelerar), sin usar la consola
